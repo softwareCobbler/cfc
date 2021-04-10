@@ -179,25 +179,7 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.KW_WHILE]:             "while",
 } as const;
 
-class SourceRange {
-    fromInclusive: number;
-    toExclusive: number;
-
-    constructor(fromInclusive: number, toExclusive: number) {
-        this.fromInclusive = fromInclusive;
-        this.toExclusive = toExclusive;
-    }
-
-    static Nil() {
-        return new SourceRange(-1, -1);
-    }
-
-    isNil() {
-        return this.fromInclusive == -1 && this.toExclusive == -1;
-    }
-}
-
-class Token {
+export class Token {
     type: TokenType;
     range: SourceRange;
 
@@ -215,6 +197,10 @@ class Token {
 
     static Nil() {
         return new Token(TokenType.NIL, SourceRange.Nil());
+    }
+
+    isNil() {
+        return this.range.fromInclusive === -1 && this.range.toExclusive === -1;
     }
 }
 
@@ -240,10 +226,26 @@ export class Tokenizer {
         return this.scanner_.getIndex();
     }
 
-    consumeCurrentCharAs(type: TokenType) {
+    restoreIndex(index: number) {
+        this.scanner_.restoreIndex(index);
+    }
+
+    private consumeCurrentCharAs(type: TokenType) {
         const from = this.getIndex();
         this.scanner_.next();
         return this.setToken(type, from, this.getIndex());
+    }
+
+    getTokenText(token: Token) {
+        const saveIndex = this.getIndex();
+        const result : string[] = [];
+        this.restoreIndex(token.range.fromInclusive);
+        while(this.getIndex() != token.range.toExclusive) {
+            result.push(
+                String.fromCharCode(this.scanner_.next().codepoint))
+        }
+        this.restoreIndex(saveIndex);
+        return result.join("");
     }
 
     private lexeme() {
@@ -413,9 +415,19 @@ export class Tokenizer {
                 if (this.scanner_.maybeEat(/\d+e[+-]?\d+(\.\d+)?|\d+(\.\d+)?/iy)) return this.setToken(TokenType.NUMBER, from, this.getIndex());
                 return this.lexeme();
         }
-        console.log("no match");
-        this.scanner_.next();
-        return this.token_;
+    }
+
+    peek(jump: number, mode: TokenizerMode) : Token {
+        const saveIndex = this.getIndex();
+        let result : Token;
+
+        do {
+            result = this.next(mode);
+        } while (--jump);
+
+        this.restoreIndex(saveIndex);
+
+        return result;
     }
 }
 }

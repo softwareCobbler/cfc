@@ -2,6 +2,7 @@
   "files": [
     "src/scanner.ts",
     "src/tokenizer.ts",
+    "src/parser.ts",
     "src/index.ts"
   ],
   "compilerOptions": {

@@ -57,6 +57,24 @@ export interface AnnotatedChar {
     line: number
 }
 
+export class SourceRange {
+    fromInclusive: number;
+    toExclusive: number;
+
+    constructor(fromInclusive: number, toExclusive: number) {
+        this.fromInclusive = fromInclusive;
+        this.toExclusive = toExclusive;
+    }
+
+    static Nil() {
+        return new SourceRange(-1, -1);
+    }
+
+    isNil() {
+        return this.fromInclusive == -1 && this.toExclusive == -1;
+    }
+}
+
 export class Scanner {
     private annotatedChars_ : AnnotatedChar[];
     private sourceText_ : string;
@@ -105,6 +123,9 @@ export class Scanner {
 
     getIndex() {
         return this.index_;
+    }
+    restoreIndex(index: number) {
+        this.index_ = index;
     }
 
     hasNext(jump: number = 0) : boolean {
