@@ -69,6 +69,7 @@ export const enum TokenType {
     LIT_LTE,
     LIT_MOD,
     LIT_NEQ,
+    LIT_OR,
     LIT_XOR,
 
     KW_BREAK,
@@ -159,6 +160,7 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.LIT_LTE]:              "lte",
     [TokenType.LIT_MOD]:              "mod",
     [TokenType.LIT_NEQ]:              "neq",
+    [TokenType.LIT_OR]:               "or",
     [TokenType.LIT_XOR]:              "xor",
 
     [TokenType.KW_BREAK]:             "break",
@@ -389,6 +391,10 @@ export class Tokenizer {
                 if (this.scanner_.maybeEat(/neq/iy)) return this.setToken(TokenType.LIT_NEQ, from, this.getIndex());
                 else if (this.scanner_.maybeEat(/new/iy)) return this.setToken(TokenType.KW_NEW, from, this.getIndex());
                 else return this.lexeme();
+            case AsciiMap.o: // [[fallthrough]];
+            case AsciiMap.O:
+                if (this.scanner_.maybeEat(/or/iy)) return this.setToken(TokenType.LIT_OR, from, this.getIndex());
+                else return this.lexeme();
             case AsciiMap.r: // [[fallthrough]];
             case AsciiMap.R:
                 if (script && this.scanner_.maybeEat(/return/iy)) return this.setToken(TokenType.KW_RETURN, from, this.getIndex());
@@ -423,7 +429,7 @@ export class Tokenizer {
 
         do {
             result = this.next(mode);
-        } while (--jump);
+        } while (jump--);
 
         this.restoreIndex(saveIndex);
 
