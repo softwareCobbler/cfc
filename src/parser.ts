@@ -1120,13 +1120,13 @@ export function Parser(tokenizer: Tokenizer, mode: TokenizerMode = TokenizerMode
         const result = new NodeList<CfTag.TagBase>();
         let tagTextRange = SourceRange.Nil();
 
-        const startOrContinueTagTextRange = () => {
+        function startOrContinueTagTextRange() {
             if (tagTextRange.isNil()) {
                 const index = tokenizer_.getIndex();
                 tagTextRange = new SourceRange(index, index+1);
             }
         }
-        const finishTagTextRange = () => {
+        function finishTagTextRange() {
             if (tagTextRange.isNil()) {
                 return;
             }
@@ -1189,7 +1189,7 @@ export function Parser(tokenizer: Tokenizer, mode: TokenizerMode = TokenizerMode
         const result = new NodeList<NodeBase>();
         let textSourceRange = SourceRange.Nil();
 
-        const startOrContinueTextRange = () => {
+        function startOrContinueTextRange() {
             if (textSourceRange.isNil()) {
                 const index = tokenizer_.getIndex();
                 textSourceRange = new SourceRange(index, index+1);
@@ -1197,7 +1197,7 @@ export function Parser(tokenizer: Tokenizer, mode: TokenizerMode = TokenizerMode
             // continuing is a no-op; when we finish the text range, we'll update the "toExclusive"
             // with the tokenizer's current index
         }
-        const finishTextRange = () => {
+        function finishTextRange() {
             // if we hadn't started a range yet, we're done
             if (textSourceRange.isNil()) {
                 return;
