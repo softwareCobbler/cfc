@@ -48,8 +48,6 @@ function mergeRanges(...nodes : (NodeBase|null)[]) : SourceRange {
         }
     }
 
-    if (result.fromInclusive == -1 || result.toExclusive == -1) throw "bad range merge ?"
-
     return result;
 }
 
@@ -215,14 +213,11 @@ export namespace CfTag {
     export class Comment extends TagBase { // nested <!--- ... ---> blocks
         body: NodeList<TagBase>;
         constructor(
-            which: "start",
             tagStart: Terminal,
-            tagName: Terminal,
-            voidSlash: Terminal | null,
-            tagEnd: Terminal,
-            canonicalName: string,
-            body: NodeList<TagBase>) {
-            super(which, tagStart, tagName, voidSlash, tagEnd, canonicalName);
+            body: NodeList<TagBase>,
+            tagEnd: Terminal) {
+            const nilTerminal = Terminal.Nil();
+            super("start", tagStart, nilTerminal, nilTerminal, tagEnd, "");
             this.body = body;
         }
     }
@@ -514,7 +509,7 @@ export class Parser {
     }
 
     parseExpectedTerminal(type: TokenType, parseOptions: ParseOptions) : Terminal {
-        const maybeTerminal = this.parseExpectedTerminal(type, parseOptions);
+        const maybeTerminal = this.parseOptionalTerminal(type, parseOptions);
         if (maybeTerminal) {
             return maybeTerminal;
         }
@@ -525,8 +520,64 @@ export class Parser {
         }
     }
 
+    parseTagComment() : CfTag.Comment {
+        const commentStart = this.parseExpectedTerminal(TokenType.CF_TAG_COMMENT_START, ParseOptions.noTrivia);
+        const commentBody = this.parseTagTrivia();
+        const commentEnd = this.parseExpectedTerminal(TokenType.CF_TAG_COMMENT_END, ParseOptions.noTrivia);
+
+        // if no comment end, emit an error
+
+        return new CfTag.Comment(commentStart, commentBody, commentEnd);
+    }
+
+    parseScriptSingleLineComment() : NodeBase {
+        throw "nyi";
+    }
+
+    parseScriptMultiLineComment() : NodeBase {
+        throw "nyi";
+    }
+
     parseTrivia() : NodeList<NodeBase> {
-        return new NodeList<NodeBase>();
+        if (this.tagMode()) {
+            return this.parseTagTrivia();
+        }
+
+        const result = new NodeList<NodeBase>();
+        while (true) {
+            switch (this.lookahead()) {
+                case TokenType.DBL_FORWARD_SLASH:
+                    result.list.push(this.parseScriptSingleLineComment());
+                    continue;
+                case TokenType.FORWARD_SLASH_STAR:
+                    result.list.push(this.parseScriptMultiLineComment());
+                    continue;
+                case TokenType.WHITESPACE:
+                    result.list.push(new TextSpan(this.next().range));
+                    continue;
+            }
+            break;
+        }
+        return result;
+    }
+
+    parseTagTrivia() : NodeList<CfTag.TagBase> {
+        const result = new NodeList<CfTag.TagBase>();
+        while (true) {
+            switch (this.lookahead()) {
+                case TokenType.CF_TAG_COMMENT_START: {
+                    result.list.push(this.parseTagComment());
+                    continue;
+                }
+                case TokenType.WHITESPACE: {
+                    result.list.push(new CfTag.Text(this.next().range));
+                    continue;
+                }
+            }
+            // if we didn't match tag comment start or whitespace, we're done
+            break;
+        }
+        return result;
     }
 
     parseCfStartTag() {
@@ -621,13 +672,17 @@ export class Parser {
                     else {
                         result.list.push(tag);
                     }
+                    break;
                 }
                 case TokenType.CF_END_TAG_START: {
                     finishTagTextRange();
                     result.list.push(this.parseCfEndTag());
+                    break;
                 }
                 case TokenType.CF_TAG_COMMENT_START: {
                     finishTagTextRange();
+                    result.list.push(this.parseTagComment());
+                    break;
                 }
                 default: {
                     startOrContinueTagTextRange();
