@@ -1,7 +1,7 @@
 namespace cf {
 export const enum TokenType {
     NIL,
-    EOF, // like EOF but the EOF macro is reserved
+    EOF,
     BOM_UTF_8, // ef bb ef
 
     WHITESPACE,
@@ -230,6 +230,16 @@ export class Tokenizer {
 
     restoreIndex(index: number) {
         this.scanner_.restoreIndex(index);
+    }
+
+    getArtificalEndLimit() {
+        return this.scanner_.getArtificalEndLimit();
+    }
+    setArtificialEndLimit(offset: number) {
+        this.scanner_.setArtificialEndLimit(offset);
+    }
+    clearArtificalEndLimit() {
+        this.scanner_.clearArtificalEndLimit();
     }
 
     private consumeCurrentCharAs(type: TokenType) {

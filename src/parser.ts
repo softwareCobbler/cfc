@@ -1,4 +1,87 @@
 namespace cf {
+
+const enum TagFact {
+    ALLOW_VOID		= 0x00000001, // tag can be void, e.g., <cfhttp> can be loose, or have a body like <cfhttp><cfhttpparam></cfhttp>
+	REQUIRE_VOID    = 0x00000002, // tag is always just a loose tag, whether marked with a void-slash or not
+	DISALLOW_VOID   = 0x00000004, // the body can be length 0, but it needs to have a matching end tag
+
+	// helpful "inverse" aliases
+	ALLOW_BODY = ALLOW_VOID,
+	REQUIRE_BODY = DISALLOW_VOID,
+	DISALLOW_BODY = REQUIRE_VOID
+}
+const tagFacts = {
+    // the "cf" prefix is implied
+    abort:          TagFact.DISALLOW_BODY,
+    application:    TagFact.DISALLOW_BODY,
+    argument:       TagFact.DISALLOW_BODY,
+    break:          TagFact.DISALLOW_BODY,
+    catch:          TagFact.DISALLOW_BODY,
+    content:        TagFact.DISALLOW_BODY,
+    continue:       TagFact.DISALLOW_BODY,
+    cookie:         TagFact.DISALLOW_BODY,
+    directory:      TagFact.DISALLOW_BODY,
+    documentitem:   TagFact.DISALLOW_BODY,
+    dump:           TagFact.DISALLOW_BODY,
+    error:          TagFact.DISALLOW_BODY,
+    exit:           TagFact.DISALLOW_BODY,
+    file:           TagFact.ALLOW_BODY,
+    function:       TagFact.REQUIRE_BODY,
+    header:         TagFact.DISALLOW_BODY,
+    http:           TagFact.ALLOW_BODY,
+    httpparam:      TagFact.DISALLOW_BODY,
+    include:        TagFact.DISALLOW_BODY,
+    input:          TagFact.DISALLOW_BODY,
+    invoke:         TagFact.ALLOW_BODY,
+    invokeargument: TagFact.DISALLOW_BODY,
+    location:       TagFact.DISALLOW_BODY,
+    log:            TagFact.DISALLOW_BODY,
+    mail:           TagFact.REQUIRE_BODY,
+    mailparam:      TagFact.DISALLOW_BODY,
+    output:         TagFact.REQUIRE_BODY,
+    param:          TagFact.DISALLOW_BODY,
+    pdf:            TagFact.ALLOW_BODY,
+    pdfform:        TagFact.DISALLOW_BODY,
+    pdfformparam:   TagFact.DISALLOW_BODY,
+    pdfparam:       TagFact.DISALLOW_BODY,
+    procparam:      TagFact.DISALLOW_BODY,
+    procresult:     TagFact.DISALLOW_BODY,
+    property:       TagFact.DISALLOW_BODY,
+    queryparam:     TagFact.DISALLOW_BODY,
+    query:          TagFact.REQUIRE_BODY,
+    reportparam:    TagFact.DISALLOW_BODY,
+    rethrow:        TagFact.DISALLOW_BODY,
+    return:         TagFact.DISALLOW_BODY,
+    set:            TagFact.DISALLOW_BODY,
+    setting:        TagFact.DISALLOW_BODY,
+    spreadsheet:    TagFact.DISALLOW_BODY,
+    storedproc:     TagFact.ALLOW_BODY,
+    throw:          TagFact.DISALLOW_BODY,
+    trace:          TagFact.DISALLOW_BODY,
+    transaction:    TagFact.ALLOW_BODY,
+    wddx:           TagFact.ALLOW_BODY,
+    zip:            TagFact.ALLOW_BODY,
+    zipparam:       TagFact.DISALLOW_BODY,
+} as const;
+
+function getTagFacts(tag: CfTag.TagBase) : TagFact | null {
+    if (tagFacts.hasOwnProperty(tag.canonicalName)) {
+        return tagFacts[tag.canonicalName as keyof typeof tagFacts]
+    }
+    return null;
+}
+
+function requiresEndTag(tag: CfTag.TagBase) : boolean {
+	const facts = getTagFacts(tag);
+    return !!facts && !!(facts & TagFact.REQUIRE_BODY);
+}
+
+function allowTagBody(tag: CfTag.TagBase) {
+    const facts = getTagFacts(tag);
+    return !!facts && (
+        (facts & TagFact.ALLOW_BODY) || !!(facts & TagFact.REQUIRE_BODY));
+}
+
 const enum NodeFlags {
     none    = 0,
     error   = 0x00000001,
@@ -132,18 +215,19 @@ class TagAttribute extends NodeBase {
 }
 
 export namespace CfTag {
+    export const enum Which { start, end };
     //
     // end tags are expected to be "common" tags; they should not have attributes or etc.
     //
     export abstract class TagBase extends NodeBase {
-        which: "start" | "end";
+        which: Which;
         tagStart: Terminal;         // <cf | </cf
         tagName: Terminal;          // terminal for "script" | "if" | "param", etc.; the "cf" is implied
         voidSlash: Terminal | null; // trailing "/" in "/>", if present
         tagEnd: Terminal;           // ">"
         canonicalName: string;      // string representation of tagName
         constructor(
-            which: "start" | "end",
+            which: Which,
             tagStart: Terminal,
             tagName: Terminal,
             voidSlash: Terminal | null,
@@ -160,10 +244,10 @@ export namespace CfTag {
     }
     export class Common extends TagBase { // most tags
         attrs: NodeList<TagAttribute>;
-        constructor(which: "start", tagStart: Terminal, tagName: Terminal, voidSlash: Terminal | null, tagEnd: Terminal, canonicalName: string, attrs: NodeList<TagAttribute>);
-        constructor(which: "end", tagStart: Terminal, tagName: Terminal, voidSlash: Terminal | null, tagEnd: Terminal, canonicalName: string);
+        constructor(which: Which.start, tagStart: Terminal, tagName: Terminal, voidSlash: Terminal | null, tagEnd: Terminal, canonicalName: string, attrs: NodeList<TagAttribute>);
+        constructor(which: Which.end, tagStart: Terminal, tagName: Terminal, voidSlash: Terminal | null, tagEnd: Terminal, canonicalName: string);
         constructor(
-            which: "start" | "end",
+            which: Which,
             tagStart: Terminal,
             tagName: Terminal,
             voidSlash: Terminal | null,
@@ -177,7 +261,7 @@ export namespace CfTag {
     export class ScriptLike extends TagBase { // cfif, cfset
         expr: NodeBase;
         constructor(
-            which: "start",
+            which: Which.start,
             tagStart: Terminal,
             tagName: Terminal,
             voidSlash: Terminal | null,
@@ -191,14 +275,13 @@ export namespace CfTag {
     export class Script extends TagBase { // cfscript
         stmtList: NodeList<NodeBase>;
         constructor(
-            which: "start",
             tagStart: Terminal,
             tagName: Terminal,
             voidSlash: Terminal | null,
             tagEnd: Terminal,
             canonicalName: string,
             stmtList: NodeList<NodeBase>) {
-            super(which, tagStart, tagName, voidSlash, tagEnd, canonicalName);
+            super(Which.start, tagStart, tagName, voidSlash, tagEnd, canonicalName);
             this.stmtList = stmtList;
         }
     }
@@ -206,7 +289,7 @@ export namespace CfTag {
         // just interested in the node's range and uniquely identifying it as tag-text
         constructor(range: SourceRange) {
             const nilTerminal = Terminal.Nil();
-            super("start", nilTerminal, nilTerminal, null, nilTerminal, "");
+            super(Which.start, nilTerminal, nilTerminal, null, nilTerminal, "");
             this.range = range;
         }
     }
@@ -217,9 +300,21 @@ export namespace CfTag {
             body: NodeList<TagBase>,
             tagEnd: Terminal) {
             const nilTerminal = Terminal.Nil();
-            super("start", tagStart, nilTerminal, nilTerminal, tagEnd, "");
+            super(Which.start, tagStart, nilTerminal, nilTerminal, tagEnd, "");
             this.body = body;
         }
+    }
+    export function assertIsScriptLike(tag: TagBase) : asserts tag is ScriptLike {
+        if (tag instanceof ScriptLike) return;
+        else throw "tag was expected to be ScriptLike";
+    }
+    export function assertIsCommon(tag: TagBase) : asserts tag is Common {
+        if (tag instanceof Common) return;
+        else throw "tag was expected to be Common";
+    }
+    export function assertIsScript(tag: TagBase) : asserts tag is Script {
+        if (tag instanceof Script) return;
+        else throw "tag was expected to be Script";
     }
 }
 
@@ -353,6 +448,85 @@ class BinaryOperator extends NodeBase {
     }
 }
 
+const enum ConditionalSubtype { if, elseif, else };
+class Conditional extends NodeBase {
+    ifToken     : Terminal | null;
+    elseToken   : Terminal | null;
+    leftParen   : Terminal | null;
+    expr        : NodeBase | null;
+    rightParen  : Terminal | null;
+    consequent  : NodeList<NodeBase>;
+    alternative : Conditional | null;
+
+    constructor(subtype: ConditionalSubtype, fromTag: CfTag.TagBase, consequent: NodeList<NodeBase>) {
+        super(fromTag.range);
+        this.ifToken     = null;
+        this.elseToken   = null;
+        this.leftParen   = null;
+        this.rightParen  = null;
+        this.consequent  = consequent;
+        this.alternative = null;
+        this.tagOrigin.startTag = fromTag;
+
+        if (subtype === ConditionalSubtype.if || subtype === ConditionalSubtype.elseif) {
+            CfTag.assertIsScriptLike(fromTag);
+            this.expr = fromTag.expr;
+        }
+        else /* tag is an else tag */ {
+            this.expr = null;
+        }
+    }
+}
+
+class Statement extends NodeBase {
+    stmt : NodeBase | null;
+    semicolon : Terminal | null;
+    constructor(tag: CfTag.TagBase) {
+        super(tag.range);
+        CfTag.assertIsCommon(tag);
+        this.stmt = null;
+        this.tagOrigin.startTag = tag;
+        this.semicolon = null;
+        //
+		// will probably need to determine which of the "cf-built-in" statements this is;
+		// or maybe the caller will have to do that, and constructing from "any start tag" doesn't make sense
+		//
+    }
+}
+
+class NamedBlock extends NodeBase {
+    name: Terminal | null;
+    attrs: NodeList<NodeBase> | null;
+    leftBrace: Terminal | null;
+    stmtList: NodeList<NodeBase>;
+    rightBrace: Terminal | null;
+
+    constructor(startTag: CfTag.TagBase, endTag: CfTag.TagBase);
+    constructor(startTag: CfTag.TagBase, stmtList: NodeList<NodeBase>, endTag: CfTag.TagBase);
+    constructor(startTag: CfTag.TagBase, endTagOrStmtList: CfTag.TagBase | NodeList<NodeBase>, endTag?: CfTag.TagBase) {
+        if (endTag) {
+            super(mergeRanges(startTag, endTag));
+            this.tagOrigin.startTag = startTag;
+            this.tagOrigin.endTag = endTag;
+            this.name = null;
+            this.attrs = null;
+            this.leftBrace = null;
+            this.stmtList = endTagOrStmtList as NodeList<NodeBase>;
+            this.rightBrace = null;
+        }
+        else {
+            super(mergeRanges(startTag, endTagOrStmtList));
+            this.tagOrigin.startTag = startTag;
+            this.tagOrigin.endTag = endTagOrStmtList;
+            this.name = null;
+            this.attrs = null;
+            this.leftBrace = null;
+            this.stmtList = new NodeList<NodeBase>();
+            this.rightBrace = null;
+        }
+    }
+}
+
 class StringLiteral extends NodeBase {
     //
     // it is possible to have an "unquoted" string literal, e.g.,
@@ -452,52 +626,88 @@ const enum ParseOptions {
     undelimitedString = 0x00000004,
 };
 
-export class Parser {
-    private tokenizer_ : Tokenizer;
-    private mode_: TokenizerMode;
-    private lookahead_ : TokenType;
-    private parseErrorBeforeNextFinishedNode = false;
+function TagContext() {
+    return {
+        depth: {
+            output: 0,
+            mail: 0,
+            query: 0
+        },
+        inTextInterpolationContext() {
+            return this.depth.output > 0
+                || this.depth.mail > 0
+                || this.depth.query > 0;
+        }
+    }
+}
+type TagContext = ReturnType<typeof TagContext>;
+interface TokenizerState {
+    mode : TokenizerMode;
+    index: number;
+    artificialEndLimit: number | undefined;
+}
 
-    constructor(tokenizer: Tokenizer, mode: TokenizerMode = TokenizerMode.tag) {
-        this.tokenizer_ = tokenizer;
-        this.mode_ = mode;
-        this.lookahead_ = this.peek().type;
+export function Parser(tokenizer: Tokenizer, mode: TokenizerMode = TokenizerMode.tag) {
+    let tokenizer_ : Tokenizer = tokenizer;
+    let mode_: TokenizerMode = mode;
+    let lookahead_ : TokenType = peek().type;
+    let parseErrorBeforeNextFinishedNode = false;
+
+    function peek(jump: number = 0) {
+        return tokenizer_.peek(jump, mode_);
     }
 
-    peek(jump: number = 0) {
-        return this.tokenizer_.peek(jump, this.mode_);
+    function lookahead() {
+        return lookahead_;
     }
-    lookahead() {
-        return this.lookahead_;
-    }
-    next() {
-        const result = this.tokenizer_.next(this.mode_);
-        this.lookahead_ = this.peek().type;
+
+    function next() {
+        const result = tokenizer_.next(mode_);
+        lookahead_ = peek().type;
         return result;
     }
 
-    tagMode() : boolean {
-        return this.mode_ === TokenizerMode.tag;
-    }
-    scriptMode() : boolean {
-        return this.mode_ === TokenizerMode.script;
+    function getTokenizerState() : TokenizerState {
+        return {
+            index: tokenizer_.getIndex(),
+            mode: mode_,
+            artificialEndLimit: tokenizer_.getArtificalEndLimit()
+        }
     }
 
-    parseErrorAtCurrentPos(msg: string) : void {
+    function restoreTokenizerState(state: TokenizerState) {
+        tokenizer_.restoreIndex(state.index);
+        mode_ = state.mode;
+        if (state.artificialEndLimit) {
+            tokenizer_.setArtificialEndLimit(state.artificialEndLimit);
+        }
+        else {
+            tokenizer_.clearArtificalEndLimit();
+        }
+    }
+
+    function tagMode() : boolean {
+        return mode_ === TokenizerMode.tag;
+    }
+    function scriptMode() : boolean {
+        return mode_ === TokenizerMode.script;
+    }
+
+    function parseErrorAtCurrentPos(msg: string) : void {
         console.error("parse error at current pos; not yet impl'd");
-        this.parseErrorBeforeNextFinishedNode = true;
+        parseErrorBeforeNextFinishedNode = true;
     }
 
-    createMissingNode<T extends NodeBase>(node: T) {
+    function createMissingNode<T extends NodeBase>(node: T) {
         node.flags |= NodeFlags.error | NodeFlags.missing;
         return node;
     }
 
-    parseOptionalTerminal(type: TokenType, parseOptions: ParseOptions) : Terminal | null {
-        if (this.lookahead() === type) {
-            const token = this.next();
+    function parseOptionalTerminal(type: TokenType, parseOptions: ParseOptions) : Terminal | null {
+        if (lookahead() === type) {
+            const token = next();
             if (parseOptions & ParseOptions.withTrivia) {
-                return new Terminal(token, this.parseTrivia());
+                return new Terminal(token, parseTrivia());
             }
             else {
                 return new Terminal(token);
@@ -508,52 +718,52 @@ export class Parser {
         }
     }
 
-    parseExpectedTerminal(type: TokenType, parseOptions: ParseOptions) : Terminal {
-        const maybeTerminal = this.parseOptionalTerminal(type, parseOptions);
+    function parseExpectedTerminal(type: TokenType, parseOptions: ParseOptions) : Terminal {
+        const maybeTerminal = parseOptionalTerminal(type, parseOptions);
         if (maybeTerminal) {
             return maybeTerminal;
         }
         else {
-            this.parseErrorAtCurrentPos("Expected a <??> here");
+            parseErrorAtCurrentPos("Expected a <??> here");
             const phonyToken : Token = new Token(type, SourceRange.Nil());
-            return this.createMissingNode(new Terminal(phonyToken));
+            return createMissingNode(new Terminal(phonyToken));
         }
     }
 
-    parseTagComment() : CfTag.Comment {
-        const commentStart = this.parseExpectedTerminal(TokenType.CF_TAG_COMMENT_START, ParseOptions.noTrivia);
-        const commentBody = this.parseTagTrivia();
-        const commentEnd = this.parseExpectedTerminal(TokenType.CF_TAG_COMMENT_END, ParseOptions.noTrivia);
+    function parseTagComment() : CfTag.Comment {
+        const commentStart = parseExpectedTerminal(TokenType.CF_TAG_COMMENT_START, ParseOptions.noTrivia);
+        const commentBody = parseTagTrivia();
+        const commentEnd = parseExpectedTerminal(TokenType.CF_TAG_COMMENT_END, ParseOptions.noTrivia);
 
         // if no comment end, emit an error
 
         return new CfTag.Comment(commentStart, commentBody, commentEnd);
     }
 
-    parseScriptSingleLineComment() : NodeBase {
+    function parseScriptSingleLineComment() : NodeBase {
         throw "nyi";
     }
 
-    parseScriptMultiLineComment() : NodeBase {
+    function parseScriptMultiLineComment() : NodeBase {
         throw "nyi";
     }
 
-    parseTrivia() : NodeList<NodeBase> {
-        if (this.tagMode()) {
-            return this.parseTagTrivia();
+    function parseTrivia() : NodeList<NodeBase> {
+        if (tagMode()) {
+            return parseTagTrivia();
         }
 
         const result = new NodeList<NodeBase>();
         while (true) {
-            switch (this.lookahead()) {
+            switch (lookahead()) {
                 case TokenType.DBL_FORWARD_SLASH:
-                    result.list.push(this.parseScriptSingleLineComment());
+                    result.list.push(parseScriptSingleLineComment());
                     continue;
                 case TokenType.FORWARD_SLASH_STAR:
-                    result.list.push(this.parseScriptMultiLineComment());
+                    result.list.push(parseScriptMultiLineComment());
                     continue;
                 case TokenType.WHITESPACE:
-                    result.list.push(new TextSpan(this.next().range));
+                    result.list.push(new TextSpan(next().range));
                     continue;
             }
             break;
@@ -561,16 +771,16 @@ export class Parser {
         return result;
     }
 
-    parseTagTrivia() : NodeList<CfTag.TagBase> {
+    function parseTagTrivia() : NodeList<CfTag.TagBase> {
         const result = new NodeList<CfTag.TagBase>();
         while (true) {
-            switch (this.lookahead()) {
+            switch (lookahead()) {
                 case TokenType.CF_TAG_COMMENT_START: {
-                    result.list.push(this.parseTagComment());
+                    result.list.push(parseTagComment());
                     continue;
                 }
                 case TokenType.WHITESPACE: {
-                    result.list.push(new CfTag.Text(this.next().range));
+                    result.list.push(new CfTag.Text(next().range));
                     continue;
                 }
             }
@@ -580,54 +790,54 @@ export class Parser {
         return result;
     }
 
-    parseCfStartTag() {
-        const tagStart = this.parseExpectedTerminal(TokenType.CF_START_TAG_START, ParseOptions.noTrivia);
-        const tagName = this.parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
-        const canonicalName = this.tokenizer_.getTokenText(tagName.token).toLowerCase();
+    function parseCfStartTag() {
+        const tagStart = parseExpectedTerminal(TokenType.CF_START_TAG_START, ParseOptions.noTrivia);
+        const tagName = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
+        const canonicalName = tokenizer_.getTokenText(tagName.token).toLowerCase();
 
         if (canonicalName === "if" || canonicalName === "elseif") {
-            const expr = this.parseExpression();
-            const rightAngle = this.parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
-            return new CfTag.ScriptLike("start", tagStart, tagName, null, rightAngle, canonicalName, expr);
+            const expr = parseExpression();
+            const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
+            return new CfTag.ScriptLike(CfTag.Which.start, tagStart, tagName, null, rightAngle, canonicalName, expr);
         }
         else if (canonicalName === "set") {
-            const expr = this.parseAssignmentOrLower();
-            const rightAngle = this.parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
-            return new CfTag.ScriptLike("start", tagStart, tagName, null, rightAngle, canonicalName, expr);
+            const expr = parseAssignmentOrLower();
+            const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
+            return new CfTag.ScriptLike(CfTag.Which.start, tagStart, tagName, null, rightAngle, canonicalName, expr);
         }
         else {
-            const tagAttrs = this.parseTagAttributes();
-            const maybeVoidSlash = this.parseOptionalTerminal(TokenType.FORWARD_SLASH, ParseOptions.withTrivia);
-            const rightAngle = this.parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);
-            return new CfTag.Common("start", tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, tagAttrs);
+            const tagAttrs = parseTagAttributes();
+            const maybeVoidSlash = parseOptionalTerminal(TokenType.FORWARD_SLASH, ParseOptions.withTrivia);
+            const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);
+            return new CfTag.Common(CfTag.Which.start, tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, tagAttrs);
         }
     }
 
-    parseCfEndTag() {
-        const tagStart = this.parseExpectedTerminal(TokenType.CF_END_TAG_START, ParseOptions.noTrivia);
-        const tagName = this.parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
-        const rightAngle = this.parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
+    function parseCfEndTag() {
+        const tagStart = parseExpectedTerminal(TokenType.CF_END_TAG_START, ParseOptions.noTrivia);
+        const tagName = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
+        const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
 
         let canonicalName = "";
         if (!(tagName.flags & NodeFlags.missing)) {
-            canonicalName = this.tokenizer_.getTokenText(tagName.token).toLowerCase();
+            canonicalName = tokenizer_.getTokenText(tagName.token).toLowerCase();
         }
-        return new CfTag.Common("end", tagStart, tagName, null, rightAngle, canonicalName);
+        return new CfTag.Common(CfTag.Which.end, tagStart, tagName, null, rightAngle, canonicalName);
     }
 
-    parseTagAttributes() : NodeList<TagAttribute> {
+    function parseTagAttributes() : NodeList<TagAttribute> {
         const result = new NodeList<TagAttribute>();
 
-        while (this.lookahead() === TokenType.LEXEME) {
-            const attrName = this.parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
-            if (this.lookahead() === TokenType.EQUAL) {
-                const equal = this.parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
+        while (lookahead() === TokenType.LEXEME) {
+            const attrName = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
+            if (lookahead() === TokenType.EQUAL) {
+                const equal = parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
                 let value : NodeBase;
-                if (this.lookahead() === TokenType.LEXEME) {
-                    value = this.parseStringLiteral(ParseOptions.undelimitedString);
+                if (lookahead() === TokenType.LEXEME) {
+                    value = parseStringLiteral(ParseOptions.undelimitedString);
                 }
                 else {
-                    value = this.parseExpression();
+                    value = parseExpression();
                 }
                 result.list.push(new TagAttribute(attrName, equal, value));
             }
@@ -639,16 +849,280 @@ export class Parser {
         return result;
     }
 
-    parseTags() : NodeList<CfTag.TagBase> {
-        const saveMode = this.mode_;
-        this.mode_ = TokenizerMode.tag;
+    function parseTags() : NodeList<NodeBase> {
+        //
+        // tag treeifier
+        // after parsing tags, we end up with just a list of tags
+        // we need to go through a second time and turn them into a tree
+        // we convert text spans into interpolated text spans here if necessary
+        // as well as convert all tags into either blocks or statements;
+        // a tag with children becomes a block, a single tag (like a <cfset ...> or just a loose <cffile ...> ) becomes a statement
+        // this also gives us the opportunity to emit diagnostics for unbalanced start or end tags
+        //
+        function treeifyTagList(tagList: NodeList<CfTag.TagBase>) : NodeList<NodeBase> {
+            const tagContext = TagContext();
+            let index = 0;
+
+            const enum ReductionScheme { default, return };
+            interface ReductionInstruction {
+                onHitWhich: CfTag.Which,
+                onHitName: string,
+                reduction: ReductionScheme;
+            }
+            const reductionInstructions = {
+                cfif: <readonly ReductionInstruction[]>[
+                    { onHitWhich: CfTag.Which.start, onHitName: "elseif", reduction: ReductionScheme.return },
+                    { onHitWhich: CfTag.Which.start, onHitName: "else",   reduction: ReductionScheme.return },
+                    { onHitWhich: CfTag.Which.end,   onHitName: "if",     reduction: ReductionScheme.return }
+                ],
+                cfelseif: <readonly ReductionInstruction[]>[
+                    { onHitWhich: CfTag.Which.start, onHitName: "elseif", reduction: ReductionScheme.return },
+                    { onHitWhich: CfTag.Which.start, onHitName: "else",   reduction: ReductionScheme.return },
+                    { onHitWhich: CfTag.Which.end,   onHitName: "if",     reduction: ReductionScheme.return }
+                ],
+                cfelse: <readonly ReductionInstruction[]>[
+                    {onHitWhich: CfTag.Which.end, onHitName: "if", reduction: ReductionScheme.return }
+                ],
+                default: <readonly ReductionInstruction[]>[]
+            };
+
+            function updateTagContext(tag: CfTag.TagBase) {
+                let bumpDir = tag.which === CfTag.Which.start ? 1 : -1;
+                switch (tag.canonicalName) {
+                    case "output":
+                    case "mail":
+                    case "query": {
+                        tagContext.depth[tag.canonicalName] += bumpDir;
+                    }
+                }
+            }
+
+            function stopAt(which: CfTag.Which, name: string, reduction: ReductionScheme) : ReductionInstruction[] {
+                return [{
+                    onHitWhich: which,
+                    onHitName: name,
+                    reduction: reduction
+                }]
+            }
+
+            function getReductionScheme(tag: CfTag.TagBase, instructions: readonly ReductionInstruction[]) : ReductionScheme {
+                for (const instr of instructions) {
+                    if (instr.onHitWhich === tag.which && instr.onHitName === tag.canonicalName) {
+                        return instr.reduction;
+                    }
+                }
+                return ReductionScheme.default;
+            }
+
+            function hasNextTag() : boolean {
+                return index < tagList.list.length;
+            }
+            function nextTag() {
+                return tagList.list[index++];
+            }
+            function currentTag() {
+                return tagList.list[index];
+            }
+
+            function parseOptionalTag(which: CfTag.Which, canonicalName: string) : CfTag.TagBase | null {
+                if (hasNextTag() && tagList.list[index].which === which && tagList.list[index].canonicalName === canonicalName) {
+                    return nextTag();
+                }
+                else {
+                    return null;
+                }
+            }
+
+            function parseExpectedTag(which: CfTag.Which, canonicalName: string) : CfTag.TagBase {
+                const tag = parseOptionalTag(which, canonicalName);
+                if (tag) {
+                    return tag;
+                }
+                else {
+                    // emit diagnostic ...
+                    // create fake tag ...
+                    throw "nyi";
+                }
+            }
+
+            function treeifyConditionalTag() {
+                const ifTag = parseExpectedTag(CfTag.Which.start, "if");
+                const rootConsequent = treeifyTags(reductionInstructions.cfif);
+                let root = new Conditional(ConditionalSubtype.if, ifTag, rootConsequent);
+
+                let working = root;
+
+                while (true) {
+                    const elseIfTag = parseOptionalTag(CfTag.Which.start, "elseif");
+                    if (elseIfTag) {
+                        const consequent = treeifyTags(reductionInstructions.cfelseif);
+                        working.alternative = new Conditional(ConditionalSubtype.elseif, elseIfTag, consequent);
+                        working = root.alternative!;
+                        continue;
+                    }
+                    const elseTag = parseOptionalTag(CfTag.Which.start, "else");
+                    if (elseTag) {
+                        const consequent = treeifyTags(reductionInstructions.cfelse);
+                        working.alternative = new Conditional(ConditionalSubtype.else, elseTag, consequent);
+                    }
+                    break;
+                }
+
+                root.tagOrigin.endTag = parseExpectedTag(CfTag.Which.end, "if");
+                return root;
+            }
+
+            function treeifyTags(reductionInstructions: readonly ReductionInstruction[]) : NodeList<NodeBase> {
+                const result = new NodeList<NodeBase>();
+
+                // any CfTags left in the result, which were in there to act as anchors that end tags could match against,
+                // get turned into statements
+                // all text and comments by now should have been turned into TextSpans
+                // is returning an r-value reasonable? goal is to use this as the return statement, like `return finalize();`
+                function finalize(from = 0) {
+                    for (let i = from; i < result.list.length; i++) {
+                        if (result.list[i] instanceof CfTag.TagBase) {
+                            result.list[i] = new Statement(result.list[i] as CfTag.TagBase);
+                        }
+                    }
+                    return result;
+                }
+
+                function localStackFindMatchingStartTag(tag: CfTag.TagBase) : number | null {
+                    for (let i = result.list.length - 1; i >= 0; i--) {
+                        if (result.list[i] instanceof CfTag.TagBase) {
+                            const stackTag = result.list[i] as CfTag.TagBase;
+                            if (stackTag.which === CfTag.Which.end && stackTag.canonicalName === tag.canonicalName) {
+                                return i;
+                            }
+                        }
+                    }
+                    return null;
+                }
+
+                while (hasNextTag()) {
+                    const tag = currentTag();
+                    updateTagContext(tag);
+
+                    if (tag instanceof CfTag.Text) {
+                        parseTextInTagContext(tag.range, tagContext);
+                        continue;
+                    }
+                    else if (tag.which === CfTag.Which.start) {
+                        const reductionScheme = getReductionScheme(tag, reductionInstructions);
+                        switch (reductionScheme) {
+                            case ReductionScheme.return:
+                                return finalize();
+                            case ReductionScheme.default:
+                                // ok, no-op: the default reduction scheme for a start tag is to do nothing
+                                break;
+                        }
+
+                        if (tag.canonicalName === "if") {
+                            result.list.push(treeifyConditionalTag());
+                            continue;
+                        }
+                        else if (tag.canonicalName === "set") {
+                            CfTag.assertIsScriptLike(tag);
+                            const expr = tag.expr;
+                            expr.tagOrigin.startTag = tag;
+                            result.list.push(expr);
+                            nextTag();
+                            continue;
+                        }
+                        else if (tag.canonicalName === "script") {
+                            // same as handling set, except there is an end tag to consume
+                            CfTag.assertIsScript(tag);
+                            const stmtList = tag.stmtList;
+                            stmtList.tagOrigin.startTag = tag;
+                            nextTag();
+                            stmtList.tagOrigin.endTag = parseExpectedTag(CfTag.Which.end, "script");
+
+                            // so our result now has at least one list in it, looking something like (node | node[])[]
+                            result.list.push(stmtList);
+                            continue;
+                        }
+                        else {
+                            if (requiresEndTag(tag)) {
+                                const startTag = tag;
+                                nextTag();
+                                const blockChildren = treeifyTags(stopAt(CfTag.Which.end, startTag.canonicalName, ReductionScheme.default));
+                                if (!hasNextTag()) {
+                                    parseErrorAtCurrentPos("no matching end tag for " + tag.canonicalName);
+                                    throw "nyi";
+                                }
+                                else {
+                                    const endTag = parseExpectedTag(CfTag.Which.end, startTag.canonicalName);
+                                    updateTagContext(endTag);
+                                    result.list.push(new NamedBlock(startTag, blockChildren, endTag));
+                                }
+                            }
+                            else {
+                                // a single loose tag
+                                // it will become a statement
+                                // e.g., <cfhttp args /> is essentially a call to a fictitious "cfhttp(args)" function, except it is a statement instead of a value producing expression
+                                // but first we push it into the result as a tag, so that any possible matching end tags can walk up the local results list
+                                // and find it 
+                                result.list.push(tag);
+                                nextTag();
+                            }
+                        }
+                    }
+                    else if (tag.which === CfTag.Which.end) {
+                        const reductionScheme = getReductionScheme(tag, reductionInstructions);
+                        if (reductionScheme === ReductionScheme.return) {
+                                return finalize();
+                        }
+
+                        // if we can't find the target tag in our local result, this tag has no matching start tag
+                        // if this tag isn't allowed to have a block body, it's an error, and gets discarded
+                        if (!allowTagBody(tag)) {
+                            // parse error - end tag for tag type that does not support tag bodys (like cfargument)
+                            nextTag();
+                            continue;
+                        }
+
+                        const maybeMatchingStartTagIndex = localStackFindMatchingStartTag(tag);
+                        if (maybeMatchingStartTagIndex) {
+                            const matchingStartTagIndex = maybeMatchingStartTagIndex;
+                            const matchingStartTag = result.list[matchingStartTagIndex] as CfTag.TagBase;
+
+                            //
+                            // finalize so any remaining loose tag bodies are statement-ized
+                            // move (matching_tag + 0) to be the head of a new block
+                            // move everything from (matching_tag+1) into the new block as children
+                            // use current tag as end of tag block
+                            // once everything has been moved into their new homes, drop the original references
+                            // from our local results list
+                            //
+					        
+                            finalize(matchingStartTagIndex + 1);
+                            const blockChildren = new NodeList<NodeBase>(result.list.slice(matchingStartTagIndex + 1));
+                            result.list.splice(matchingStartTagIndex)
+                            result.list.push(new NamedBlock(matchingStartTag, blockChildren, tag));
+                        }
+                        else {
+                            // parse error, end tag with no matching start tag
+                        }
+                        nextTag();
+                    }
+                }
+
+                return finalize();
+            }
+
+            return treeifyTags(reductionInstructions.default);
+        }
+
+        const saveMode = mode_;
+        mode_ = TokenizerMode.tag;
 
         const result = new NodeList<CfTag.TagBase>();
         let tagTextRange = SourceRange.Nil();
 
         const startOrContinueTagTextRange = () => {
             if (tagTextRange.isNil()) {
-                const index = this.tokenizer_.getIndex();
+                const index = tokenizer_.getIndex();
                 tagTextRange = new SourceRange(index, index+1);
             }
         }
@@ -656,16 +1130,16 @@ export class Parser {
             if (tagTextRange.isNil()) {
                 return;
             }
-            tagTextRange.toExclusive = this.tokenizer_.getIndex() + 1;
+            tagTextRange.toExclusive = tokenizer_.getIndex() + 1;
             result.list.push(new CfTag.Text(tagTextRange))
             tagTextRange = SourceRange.Nil();
         }
 
-        while (this.lookahead_ != TokenType.EOF) {
-            switch (this.lookahead_) {
+        while (lookahead_ != TokenType.EOF) {
+            switch (lookahead_) {
                 case TokenType.CF_START_TAG_START: {
                     finishTagTextRange();
-                    const tag = this.parseCfStartTag();
+                    const tag = parseCfStartTag();
                     if (tag.canonicalName === "script") {
                         // parse cfscript ...
                     }
@@ -676,32 +1150,48 @@ export class Parser {
                 }
                 case TokenType.CF_END_TAG_START: {
                     finishTagTextRange();
-                    result.list.push(this.parseCfEndTag());
+                    result.list.push(parseCfEndTag());
                     break;
                 }
                 case TokenType.CF_TAG_COMMENT_START: {
                     finishTagTextRange();
-                    result.list.push(this.parseTagComment());
+                    result.list.push(parseTagComment());
                     break;
                 }
                 default: {
                     startOrContinueTagTextRange();
-                    this.next();
+                    next();
                 }
             }
         }
 
-        this.mode_ = saveMode;
+        mode_ = saveMode;
+
+        return treeifyTagList(result);
+    }
+
+    function parseTextInTagContext(range: SourceRange, tagContext: TagContext) {
+        if (!tagContext.inTextInterpolationContext()) {
+            return new TextSpan(range);
+        }
+        const saveTokenizerState = getTokenizerState();
+        restoreTokenizerState({
+            index: range.fromInclusive,
+            mode: TokenizerMode.tag,
+            artificialEndLimit: range.toExclusive});
+        
+        const result = parseTextWithPossibleInterpolations();
+        restoreTokenizerState(saveTokenizerState);
         return result;
     }
 
-    parseTextWithPossibleInterpolations(quoteDelimiter?: TokenType.QUOTE_SINGLE | TokenType.QUOTE_DOUBLE) {
+    function parseTextWithPossibleInterpolations(quoteDelimiter?: TokenType.QUOTE_SINGLE | TokenType.QUOTE_DOUBLE) {
         const result = new NodeList<NodeBase>();
         let textSourceRange = SourceRange.Nil();
 
         const startOrContinueTextRange = () => {
             if (textSourceRange.isNil()) {
-                const index = this.tokenizer_.getIndex();
+                const index = tokenizer_.getIndex();
                 textSourceRange = new SourceRange(index, index+1);
             }
             // continuing is a no-op; when we finish the text range, we'll update the "toExclusive"
@@ -712,17 +1202,22 @@ export class Parser {
             if (textSourceRange.isNil()) {
                 return;
             }
-            textSourceRange.toExclusive = this.tokenizer_.getIndex() + 1;
+            textSourceRange.toExclusive = tokenizer_.getIndex() + 1;
             result.list.push(new TextSpan(textSourceRange));
             textSourceRange = SourceRange.Nil();
         }
 
-        while (this.lookahead() != TokenType.EOF) {
-            switch (this.lookahead()) {
+        //
+        // there is no anchor to stop at other than EOF if the delimiter undefined
+        // we rely on the caller setting the tokenizer to have an artifical range limit, such that we
+        // eat only some pre-determined range of what we consider to be valid text
+        //
+        while (lookahead() != TokenType.EOF) {
+            switch (lookahead()) {
                 case quoteDelimiter: { // doubled-up delimiter; meaning it is an escaped quote
-                    if (this.peek(1).type === quoteDelimiter) {
+                    if (peek(1).type === quoteDelimiter) {
                         startOrContinueTextRange();
-                        this.next(), this.next();
+                        next(), next();
                         continue;
                     }
                     else { // single delimiter; we're done, don't eat it because the caller will need it
@@ -731,23 +1226,23 @@ export class Parser {
                     }
                 }
                 case TokenType.HASH: {
-                    if (this.peek(1).type === TokenType.HASH) { // doubled up hash, meaning it is an escaped hash symbol
+                    if (peek(1).type === TokenType.HASH) { // doubled up hash, meaning it is an escaped hash symbol
                         startOrContinueTextRange();
-                        this.next(), this.next();
+                        next(), next();
                         continue;
                     }
                     else { // single hash, meaning this is an interpolated string element
                         finishTextRange();
-                        const leftHash = this.parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
-                        const expr = this.parseExpression();
-                        const rightHash = this.parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
+                        const leftHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
+                        const expr = parseExpression();
+                        const rightHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
                         result.list.push(new HashWrappedExpr(leftHash, expr, rightHash));
                         continue;
                     }
                 }
                 default: {
                     startOrContinueTextRange();
-                    this.next();
+                    next();
                 }
             }
         }
@@ -756,27 +1251,27 @@ export class Parser {
         return result;
     }
 
-    isAssignmentTarget<T extends NodeBase>(node: T) : boolean {
+    function isAssignmentTarget<T extends NodeBase>(node: T) : boolean {
         switch (node.constructor) {
             case IndexedAccess:
             case Identifier:
                 return true;
             case HashWrappedExpr:
-                return this.isAssignmentTarget((node as unknown as HashWrappedExpr).expr);
+                return isAssignmentTarget((node as unknown as HashWrappedExpr).expr);
             default:
                 return false;
         }
     }
 
-    parseAssignmentOrLower() : NodeBase {
-        const finalModifier = this.parseOptionalTerminal(TokenType.KW_FINAL, ParseOptions.withTrivia);
-        const varModifier = this.parseOptionalTerminal(TokenType.KW_VAR, ParseOptions.withTrivia);
-        const root = this.parseCallExpressionOrLower();
+    function parseAssignmentOrLower() : NodeBase {
+        const finalModifier = parseOptionalTerminal(TokenType.KW_FINAL, ParseOptions.withTrivia);
+        const varModifier = parseOptionalTerminal(TokenType.KW_VAR, ParseOptions.withTrivia);
+        const root = parseCallExpressionOrLower();
 
-        if (this.lookahead() != TokenType.EQUAL) {
+        if (lookahead() != TokenType.EQUAL) {
             return root;
         }
-        if (!this.isAssignmentTarget(root)) {
+        if (!isAssignmentTarget(root)) {
             // if we had a final or var modifer we need to mark an error, but this is otherwise OK
 		    // "left-hand side of an assignment must be an assignment target"
             return root;
@@ -785,22 +1280,22 @@ export class Parser {
         const assignmentChain : Assignee[] = [];
         do {
             assignmentChain.push({
-                equals: this.parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia),
-                value: this.parseExpression()
+                equals: parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia),
+                value: parseExpression()
             });
-        } while (this.lookahead() === TokenType.EQUAL && this.isAssignmentTarget(assignmentChain[assignmentChain.length-1].value));
+        } while (lookahead() === TokenType.EQUAL && isAssignmentTarget(assignmentChain[assignmentChain.length-1].value));
 
         return new Assignment(finalModifier, varModifier, root, assignmentChain);
     }
 
-    parseExpression() : NodeBase {
-        let root = this.parseBooleanExpression();
+    function parseExpression() : NodeBase {
+        let root = parseBooleanExpression();
 
         while (true) {
-            if (this.tagMode() && this.lookahead() === TokenType.LEFT_ANGLE || this.lookahead() === TokenType.RIGHT_ANGLE) {
+            if (tagMode() && lookahead() === TokenType.LEFT_ANGLE || lookahead() === TokenType.RIGHT_ANGLE) {
                 break;
             }
-            switch (this.lookahead()) {
+            switch (lookahead()) {
                 case TokenType.DBL_EQUAL:      		// [[fallthrough]];
                 case TokenType.LIT_EQ:        		// [[fallthrough]];
                 case TokenType.EXCLAMATION_EQUAL:	// [[fallthrough]];
@@ -817,8 +1312,8 @@ export class Parser {
                 case TokenType.RIGHT_ANGLE_EQUAL: 	// [[fallthrough]];
                 case TokenType.LIT_GTE:				// [[fallthrough]];
                 case TokenType.LIT_GE: {
-                    const op = this.parseExpectedTerminal(this.lookahead(), ParseOptions.withTrivia);
-                    const right = this.parseExpression();
+                    const op = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
+                    const right = parseExpression();
                     root = new BinaryOperator(root, op, right);
                     continue;
                 }
@@ -830,25 +1325,25 @@ export class Parser {
         return root;
     }
 
-    parseBooleanExpression(descendIntoOr = true) : NodeBase {
-        let root = this.parseAddition();
+    function parseBooleanExpression(descendIntoOr = true) : NodeBase {
+        let root = parseAddition();
 
         outer:
         while (true) {
-            switch (this.lookahead()) {
+            switch (lookahead()) {
                 case TokenType.DBL_PIPE:
                 case TokenType.LIT_OR:
                 case TokenType.LIT_XOR: {
                     if (!descendIntoOr) break outer;
-                    const op = this.parseExpectedTerminal(this.lookahead(), ParseOptions.withTrivia);
-                    const expr = this.parseAddition();
+                    const op = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
+                    const expr = parseAddition();
                     root = new BinaryOperator(root, op, expr);
                     continue;
                 }
                 case TokenType.DBL_AMPERSAND:
                 case TokenType.LIT_AND: {
-                    const op = this.parseExpectedTerminal(this.lookahead(), ParseOptions.withTrivia);
-                    const expr = this.parseBooleanExpression(/*descendIntoOr*/ false);
+                    const op = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
+                    const expr = parseBooleanExpression(/*descendIntoOr*/ false);
                     root = new BinaryOperator(root, op, expr);
                     continue;
                 }
@@ -860,16 +1355,16 @@ export class Parser {
         return root;
     }
 
-    parseAddition() {
-        let root = this.parseMultiplication();
+    function parseAddition() {
+        let root = parseMultiplication();
 
         while (true) {
-            switch (this.lookahead()) {
+            switch (lookahead()) {
                 case TokenType.PLUS:
                 case TokenType.MINUS:
                 case TokenType.AMPERSAND: {
-                    const op = this.parseExpectedTerminal(this.lookahead(), ParseOptions.withTrivia);
-                    const expr = this.parseMultiplication();
+                    const op = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
+                    const expr = parseMultiplication();
                     root = new BinaryOperator(root, op, expr);
                     continue;
                 }
@@ -881,7 +1376,7 @@ export class Parser {
         return root;
     }
 
-    parseMultiplication() : NodeBase {
+    function parseMultiplication() : NodeBase {
         const stack : NodeBase[] = [];
 
         // bind "^" (exponentiation) right
@@ -900,21 +1395,21 @@ export class Parser {
             }
         }
 
-        stack.push(this.parseParentheticalOrUnaryPrefix());
+        stack.push(parseParentheticalOrUnaryPrefix());
 
         while (true) {
-            switch (this.lookahead()) {
+            switch (lookahead()) {
                 case TokenType.STAR:
                 case TokenType.FORWARD_SLASH: {
                     reduceRight();
-                    const op = this.parseExpectedTerminal(this.lookahead(), ParseOptions.withTrivia);
-                    const expr = this.parseParentheticalOrUnaryPrefix();
+                    const op = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
+                    const expr = parseParentheticalOrUnaryPrefix();
                     stack.push(op, expr);
                     continue;
                 }
                 case TokenType.CARET: {
-                    const op = this.parseExpectedTerminal(this.lookahead(), ParseOptions.withTrivia);
-                    const expr = this.parseParentheticalOrUnaryPrefix();
+                    const op = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
+                    const expr = parseParentheticalOrUnaryPrefix();
                     stack.push(op, expr);
                     continue;
                 }
@@ -939,55 +1434,55 @@ export class Parser {
         }
     }
 
-    parseParentheticalOrUnaryPrefix() : NodeBase {
-        switch (this.lookahead()) {
+    function parseParentheticalOrUnaryPrefix() : NodeBase {
+        switch (lookahead()) {
             case TokenType.LEFT_PAREN: {
-                const leftParen = this.parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
-                const expr = this.parseExpression();
-                const rightParen = this.parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+                const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
+                const expr = parseExpression();
+                const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
                 return new Parenthetical(leftParen, expr, rightParen);
             }
             case TokenType.DBL_MINUS: // [[fallthrough]];
             case TokenType.DBL_PLUS: {
-                const op = this.parseExpectedTerminal(this.lookahead(), ParseOptions.withTrivia);
-                const expr = this.parseCallExpressionOrLower();
+                const op = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
+                const expr = parseCallExpressionOrLower();
                 return new UnaryOperator(op, expr);
             }
-            default: return this.parseCallExpressionOrLower();
+            default: return parseCallExpressionOrLower();
         }
     }
 
-    parseCallExpressionOrLower() : NodeBase {
-        switch(this.lookahead()) {
-            case TokenType.NUMBER: return this.parseNumericLiteral();
+    function parseCallExpressionOrLower() : NodeBase {
+        switch(lookahead()) {
+            case TokenType.NUMBER: return parseNumericLiteral();
             case TokenType.QUOTE_DOUBLE: // fallthrough
-            case TokenType.QUOTE_SINGLE: return this.parseStringLiteral()
+            case TokenType.QUOTE_SINGLE: return parseStringLiteral()
             default: break;
         }
 
-        let root = this.parseIdentifier(ParseOptions.allowHashWrapped);
+        let root = parseIdentifier(ParseOptions.allowHashWrapped);
         if (root instanceof HashWrappedExpr) {
             return root;
         }
 
-        while (this.lookahead() != TokenType.EOF) {
-            switch(this.lookahead()) {
+        while (lookahead() != TokenType.EOF) {
+            switch(lookahead()) {
                 case TokenType.LEFT_BRACE:
                 case TokenType.DOT:
-                    root = this.parseIndexedAccess(root);
+                    root = parseIndexedAccess(root);
                     continue;
                 case TokenType.LEFT_PAREN:
-                    root = this.parseCallExpression(root);
+                    root = parseCallExpression(root);
                     continue;
             }
             break;
         }
 
         if (root instanceof CallExpression) {
-            switch (this.lookahead()) {
+            switch (lookahead()) {
                 case TokenType.DBL_PLUS:
                 case TokenType.DBL_MINUS:
-                    const unaryOp = this.parseExpectedTerminal(this.lookahead(), ParseOptions.withTrivia);
+                    const unaryOp = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
                     root = new UnaryOperator(root, unaryOp);
             }
         }
@@ -995,13 +1490,13 @@ export class Parser {
         return root;
     }
 
-    parseIndexedAccess(root: NodeBase) : NodeBase {
-        while (this.lookahead() != TokenType.EOF) {
-            switch (this.lookahead()) {
+    function parseIndexedAccess(root: NodeBase) : NodeBase {
+        while (lookahead() != TokenType.EOF) {
+            switch (lookahead()) {
                 case TokenType.LEFT_BRACKET: {
-                    const leftBracket = this.parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
-                    const expr = this.parseExpression();
-                    const rightBracket = this.parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
+                    const leftBracket = parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
+                    const expr = parseExpression();
+                    const rightBracket = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
 
                     if (!(root instanceof IndexedAccess)) {
                         root = new IndexedAccess(root);
@@ -1011,8 +1506,8 @@ export class Parser {
                     continue;
                 }
                 case TokenType.DOT: {
-                    const dot = this.parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
-                    const propertyName = this.parseStringLiteral(ParseOptions.undelimitedString);
+                    const dot = parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
+                    const propertyName = parseStringLiteral(ParseOptions.undelimitedString);
                     if (!(root instanceof IndexedAccess)) {
                         root = new IndexedAccess(root);
                     }
@@ -1025,29 +1520,29 @@ export class Parser {
         return root;
     }
 
-    parseCallExpression(root: NodeBase) {
-        const leftParen = this.parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
+    function parseCallExpression(root: NodeBase) {
+        const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
         const args = new NodeList<CallArgument>();
-        while (this.lookahead() != TokenType.EOF && this.lookahead() != TokenType.RIGHT_PAREN) {
-            const expr = this.parseExpression();
-            const comma = this.parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+        while (lookahead() != TokenType.EOF && lookahead() != TokenType.RIGHT_PAREN) {
+            const expr = parseExpression();
+            const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
             args.list.push(new CallArgument(expr, comma));
         }
-        const rightParen = this.parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+        const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
         return new CallExpression(root, leftParen, args, rightParen);
     }
 
-    parseIdentifier(parseOptions : ParseOptions) : NodeBase {
+    function parseIdentifier(parseOptions : ParseOptions) : NodeBase {
         let leftHash : Terminal | null = null;
         if (parseOptions & ParseOptions.allowHashWrapped) {
-            leftHash = this.parseOptionalTerminal(TokenType.HASH, ParseOptions.withTrivia);
+            leftHash = parseOptionalTerminal(TokenType.HASH, ParseOptions.withTrivia);
         }
 
-        const identifier = this.parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
-        const name = this.tokenizer_.getTokenText(identifier.token);
+        const identifier = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
+        const name = tokenizer_.getTokenText(identifier.token);
 
         if (parseOptions & ParseOptions.allowHashWrapped && leftHash) {
-            const rightHash = this.parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
+            const rightHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
             return new HashWrappedExpr(
                 leftHash,
                 new Identifier(identifier, name),
@@ -1058,27 +1553,31 @@ export class Parser {
         }
     }
 
-    parseStringLiteral(parseOptions: ParseOptions = ParseOptions.none) : StringLiteral {
+    function parseStringLiteral(parseOptions: ParseOptions = ParseOptions.none) : StringLiteral {
         if (parseOptions & ParseOptions.undelimitedString) { // e.g., 'foo' in `<cfwhatever attr=foo>`
-            const unquotedString = this.parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
+            const unquotedString = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
             return new StringLiteral(unquotedString);
         }
         else {
-            const quoteType = this.lookahead();
+            const quoteType = lookahead();
             if (quoteType !== TokenType.QUOTE_SINGLE && quoteType !== TokenType.QUOTE_DOUBLE) {
                 // will a lookahead or speculate ever trigger this ... ?
                 throw "AssertionFailure: parseStringLiteral called on input without valid string delimiter";
             }
 
-            const leftQuote = this.parseExpectedTerminal(quoteType, ParseOptions.noTrivia);
-            const stringElements = this.parseTextWithPossibleInterpolations();
-            const rightQuote = this.parseExpectedTerminal(quoteType, ParseOptions.withTrivia);
+            const leftQuote = parseExpectedTerminal(quoteType, ParseOptions.noTrivia);
+            const stringElements = parseTextWithPossibleInterpolations();
+            const rightQuote = parseExpectedTerminal(quoteType, ParseOptions.withTrivia);
             return new StringLiteral(quoteType, leftQuote, stringElements, rightQuote);
         }
     }
 
-    parseNumericLiteral() {
-        return new NumericLiteral(this.parseExpectedTerminal(TokenType.NUMBER, ParseOptions.withTrivia));
+    function parseNumericLiteral() {
+        return new NumericLiteral(parseExpectedTerminal(TokenType.NUMBER, ParseOptions.withTrivia));
+    }
+
+    return {
+        parseTags
     }
 }
 }

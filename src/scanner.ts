@@ -78,10 +78,12 @@ export class SourceRange {
 export class Scanner {
     private annotatedChars_ : AnnotatedChar[];
     private sourceText_ : string;
+    private end_ : number;
     private index_ = 0;
     constructor(sourceText : string) {
         this.sourceText_ = sourceText;
         this.annotatedChars_ = this.annotate(this.sourceText_);
+        this.end_ = this.annotatedChars_.length;
     }
 
     //
@@ -128,8 +130,18 @@ export class Scanner {
         this.index_ = index;
     }
 
+    getArtificalEndLimit() {
+        return this.end_;
+    }
+    setArtificialEndLimit(offset: number) {
+        this.end_ = offset;
+    }
+    clearArtificalEndLimit() {
+        this.end_ = this.annotatedChars_.length;
+    }
+
     hasNext(jump: number = 0) : boolean {
-        return this.index_ + jump < this.annotatedChars_.length;
+        return this.index_ + jump < this.end_;
     }
     peek(jump: number = 0) : AnnotatedChar | null {
         if (this.hasNext(jump)) {
