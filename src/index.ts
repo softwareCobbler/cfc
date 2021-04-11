@@ -1,4 +1,6 @@
-namespace cf {
+import { Scanner } from "./scanner";
+import { Tokenizer } from "./tokenizer";
+import { Parser } from "./parser";
 
 const scanner = Scanner("<cfif x EQ 4></cfhttp>")
 const tokenizer = new Tokenizer(scanner);
@@ -11,4 +13,3 @@ for (const diagnostic of parser.getDiagnostics()) {
 
 console.log("fin")
 
-}

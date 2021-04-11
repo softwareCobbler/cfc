@@ -1,4 +1,5 @@
-namespace cf {
+import { AsciiMap, SourceRange, Scanner } from "./scanner";
+
 export const enum TokenType {
     NIL,
     EOF,
@@ -445,5 +446,4 @@ export class Tokenizer {
 
         return result;
     }
-}
 }

@@ -1,4 +1,3 @@
-namespace cf {
 export const enum AsciiMap {
     TAB = 9,
     LF = 10, // \n
@@ -181,4 +180,3 @@ export function Scanner(sourceText_: string) {
     }
 }
 export type Scanner = ReturnType<typeof Scanner>;
-} // namespace cf

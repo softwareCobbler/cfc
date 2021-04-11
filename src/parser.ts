@@ -1,4 +1,5 @@
-namespace cf {
+import { SourceRange } from "./scanner";
+import { Token, TokenType, TokenizerMode, Tokenizer } from "./tokenizer";
 
 const enum TagFact {
     ALLOW_VOID		= 0x00000001, // tag can be void, e.g., <cfhttp> can be loose, or have a body like <cfhttp><cfhttpparam></cfhttp>
@@ -662,6 +663,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
 
     const diagnostics : Diagnostic[] = [];
     let parseErrorBeforeNextFinishedNode = false;
+    parseErrorBeforeNextFinishedNode;
 
     function peek(jump: number = 0) {
         return tokenizer.peek(jump, mode);
@@ -699,9 +701,9 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
     function tagMode() : boolean {
         return mode === TokenizerMode.tag;
     }
-    function scriptMode() : boolean {
+    /*function scriptMode() : boolean {
         return mode === TokenizerMode.script;
-    }
+    }*/
 
 
     function parseErrorAtRange(range: SourceRange, msg?: string) : void;
@@ -1630,5 +1632,4 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
         parseTags,
         getDiagnostics
     }
-}
 }
