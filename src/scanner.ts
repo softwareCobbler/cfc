@@ -57,6 +57,11 @@ export interface AnnotatedChar {
     line: number
 }
 
+//
+// @fixme -- instead of a 'Nil' token; just use null; but this requires some wide reaching changes,
+// and we'd rather not have to write `range!` everywhere to declare that it is non-null, so a design that guarantees a source range is not null
+// from within the type system would be nice
+//
 export class SourceRange {
     fromInclusive: number;
     toExclusive: number;
@@ -75,22 +80,17 @@ export class SourceRange {
     }
 }
 
-export class Scanner {
-    private annotatedChars_ : AnnotatedChar[];
-    private sourceText_ : string;
-    private end_ : number;
-    private index_ = 0;
-    constructor(sourceText : string) {
-        this.sourceText_ = sourceText;
-        this.annotatedChars_ = this.annotate(this.sourceText_);
-        this.end_ = this.annotatedChars_.length;
-    }
+export function Scanner(sourceText_: string) {
+    const sourceText = sourceText_;
+    const annotatedChars = annotate(sourceText);
+    let end = annotatedChars.length;
+    let index = 0;
 
     //
     // @fixme:
     // will work for ascii or utf16, but multibyte utf8 will probably break
     //
-    private annotate(text: string) {
+    function annotate(text: string) {
         let index = 0;
         let col = 0;
         let line = 0;
@@ -123,49 +123,62 @@ export class Scanner {
         return result;
     }
 
-    getIndex() {
-        return this.index_;
+    function getIndex() {
+        return index;
     }
-    restoreIndex(index: number) {
-        this.index_ = index;
-    }
-
-    getArtificalEndLimit() {
-        return this.end_;
-    }
-    setArtificialEndLimit(offset: number) {
-        this.end_ = offset;
-    }
-    clearArtificalEndLimit() {
-        this.end_ = this.annotatedChars_.length;
+    function restoreIndex(restoreIndex: number) {
+        index = restoreIndex;
     }
 
-    hasNext(jump: number = 0) : boolean {
-        return this.index_ + jump < this.end_;
+    function getArtificalEndLimit() {
+        return end;
     }
-    peek(jump: number = 0) : AnnotatedChar | null {
-        if (this.hasNext(jump)) {
-            return this.annotatedChars_[this.index_ + jump];
+    function setArtificialEndLimit(offset: number) {
+        end = offset;
+    }
+    function clearArtificalEndLimit() {
+        end = annotatedChars.length;
+    }
+
+    function hasNext(jump: number = 0) : boolean {
+        return index + jump < end;
+    }
+    function peek(jump: number = 0) : AnnotatedChar | null {
+        if (hasNext(jump)) {
+            return annotatedChars[index + jump];
         }
         return null;
     }
-    next() : AnnotatedChar {
-        if (!this.hasNext()) {
+    function next() : AnnotatedChar {
+        if (!hasNext()) {
             throw "scanner : call to next after EOF"
         }
-        return this.annotatedChars_[this.index_++];
+        return annotatedChars[index++];
     }
 
-    maybeEat(pattern: RegExp) {
-        pattern.lastIndex = this.index_;
-        const match = pattern.exec(this.sourceText_);
+    function maybeEat(pattern: RegExp) {
+        pattern.lastIndex = index;
+        const match = pattern.exec(sourceText);
         if (match) {
-            this.index_ += match[0].length;
+            index += match[0].length;
             return true;
         }
         else {
             return false;
         }
     }
+
+    return {
+        getIndex,
+        peek,
+        hasNext,
+        next,
+        setArtificialEndLimit,
+        getArtificalEndLimit,
+        clearArtificalEndLimit,
+        restoreIndex,
+        maybeEat,
+    }
 }
+export type Scanner = ReturnType<typeof Scanner>;
 } // namespace cf

@@ -206,7 +206,7 @@ export class Token {
     }
 }
 
-export const enum TokenizerMode { tag, script };
+export const enum TokenizerMode { tag, script }
 
 export class Tokenizer {
     private scanner_ : Scanner;

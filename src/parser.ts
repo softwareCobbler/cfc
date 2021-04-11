@@ -647,14 +647,24 @@ interface TokenizerState {
     artificialEndLimit: number | undefined;
 }
 
-export function Parser(tokenizer: Tokenizer, mode: TokenizerMode = TokenizerMode.tag) {
-    let tokenizer_ : Tokenizer = tokenizer;
-    let mode_: TokenizerMode = mode;
+export interface Diagnostic {
+    fileName: string;
+    fromInclusive: number;
+    toExclusive: number;
+    msg: string;
+}
+
+export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMode.tag) {
+    let tokenizer : Tokenizer = tokenizer_;
+    let mode: TokenizerMode = mode_;
     let lookahead_ : TokenType = peek().type;
+    let globalDiagnosticMsg : string | null = null;
+
+    const diagnostics : Diagnostic[] = [];
     let parseErrorBeforeNextFinishedNode = false;
 
     function peek(jump: number = 0) {
-        return tokenizer_.peek(jump, mode_);
+        return tokenizer.peek(jump, mode);
     }
 
     function lookahead() {
@@ -662,40 +672,64 @@ export function Parser(tokenizer: Tokenizer, mode: TokenizerMode = TokenizerMode
     }
 
     function next() {
-        const result = tokenizer_.next(mode_);
+        const result = tokenizer.next(mode);
         lookahead_ = peek().type;
         return result;
     }
 
     function getTokenizerState() : TokenizerState {
         return {
-            index: tokenizer_.getIndex(),
-            mode: mode_,
-            artificialEndLimit: tokenizer_.getArtificalEndLimit()
+            index: tokenizer.getIndex(),
+            mode: mode,
+            artificialEndLimit: tokenizer.getArtificalEndLimit()
         }
     }
 
     function restoreTokenizerState(state: TokenizerState) {
-        tokenizer_.restoreIndex(state.index);
-        mode_ = state.mode;
+        tokenizer.restoreIndex(state.index);
+        mode = state.mode;
         if (state.artificialEndLimit) {
-            tokenizer_.setArtificialEndLimit(state.artificialEndLimit);
+            tokenizer.setArtificialEndLimit(state.artificialEndLimit);
         }
         else {
-            tokenizer_.clearArtificalEndLimit();
+            tokenizer.clearArtificalEndLimit();
         }
     }
 
     function tagMode() : boolean {
-        return mode_ === TokenizerMode.tag;
+        return mode === TokenizerMode.tag;
     }
     function scriptMode() : boolean {
-        return mode_ === TokenizerMode.script;
+        return mode === TokenizerMode.script;
     }
 
-    function parseErrorAtCurrentPos(msg: string) : void {
-        console.error("parse error at current pos; not yet impl'd");
+
+    function parseErrorAtRange(range: SourceRange, msg?: string) : void;
+    function parseErrorAtRange(fromInclusive: number, toExclusive: number, msg?: string) : void;
+    function parseErrorAtRange(fromInclusiveOrRange: number | SourceRange, toExclusiveOrMsg?: number | string, msg?: string) : void {
         parseErrorBeforeNextFinishedNode = true;
+        const diagnosticMsg =
+            typeof msg === "string"
+            ? msg
+            : typeof toExclusiveOrMsg === "string"
+            ? toExclusiveOrMsg
+            : undefined;
+
+        diagnostics.push({
+            fileName: "<NYI>",
+            fromInclusive: typeof fromInclusiveOrRange === "number"
+                ? fromInclusiveOrRange
+                : fromInclusiveOrRange.fromInclusive,
+            toExclusive: typeof toExclusiveOrMsg === "number"
+                ? toExclusiveOrMsg
+                : (fromInclusiveOrRange as SourceRange).toExclusive,
+            msg: diagnosticMsg ?? globalDiagnosticMsg!
+        });
+    }
+
+    function parseErrorAtCurrentToken(msg?: string) : void {
+        const sourceRange = peek().range;
+        parseErrorAtRange(sourceRange.fromInclusive, sourceRange.toExclusive, msg);
     }
 
     function createMissingNode<T extends NodeBase>(node: T) {
@@ -724,7 +758,7 @@ export function Parser(tokenizer: Tokenizer, mode: TokenizerMode = TokenizerMode
             return maybeTerminal;
         }
         else {
-            parseErrorAtCurrentPos("Expected a <??> here");
+            parseErrorAtCurrentToken(globalDiagnosticMsg ?? "Expected a <??> here");
             const phonyToken : Token = new Token(type, SourceRange.Nil());
             return createMissingNode(new Terminal(phonyToken));
         }
@@ -793,7 +827,7 @@ export function Parser(tokenizer: Tokenizer, mode: TokenizerMode = TokenizerMode
     function parseCfStartTag() {
         const tagStart = parseExpectedTerminal(TokenType.CF_START_TAG_START, ParseOptions.noTrivia);
         const tagName = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
-        const canonicalName = tokenizer_.getTokenText(tagName.token).toLowerCase();
+        const canonicalName = tokenizer.getTokenText(tagName.token).toLowerCase();
 
         if (canonicalName === "if" || canonicalName === "elseif") {
             const expr = parseExpression();
@@ -820,7 +854,7 @@ export function Parser(tokenizer: Tokenizer, mode: TokenizerMode = TokenizerMode
 
         let canonicalName = "";
         if (!(tagName.flags & NodeFlags.missing)) {
-            canonicalName = tokenizer_.getTokenText(tagName.token).toLowerCase();
+            canonicalName = tokenizer.getTokenText(tagName.token).toLowerCase();
         }
         return new CfTag.Common(CfTag.Which.end, tagStart, tagName, null, rightAngle, canonicalName);
     }
@@ -920,7 +954,7 @@ export function Parser(tokenizer: Tokenizer, mode: TokenizerMode = TokenizerMode
             function nextTag() {
                 return tagList.list[index++];
             }
-            function currentTag() {
+            function peekTag() {
                 return tagList.list[index];
             }
 
@@ -939,9 +973,21 @@ export function Parser(tokenizer: Tokenizer, mode: TokenizerMode = TokenizerMode
                     return tag;
                 }
                 else {
-                    // emit diagnostic ...
-                    // create fake tag ...
-                    throw "nyi";
+                    // emit diagnostic
+                    const msg = `Expected a <${which === CfTag.Which.end ? "/" : ""}${canonicalName}> tag here`;
+                    let range = hasNextTag() ? peekTag().range : tagList.list[tagList.list.length-1].range;
+                    parseErrorAtRange(range, msg);
+
+                    // create fake placeholder tag
+                    let missingTag : CfTag.Common;
+                    if (which === CfTag.Which.start) {
+                        missingTag = new CfTag.Common(which, Terminal.Nil(), Terminal.Nil(), null, Terminal.Nil(), canonicalName, new NodeList<TagAttribute>())
+                    }
+                    else {
+                        missingTag = new CfTag.Common(which, Terminal.Nil(), Terminal.Nil(), null, Terminal.Nil(), canonicalName)
+                    }
+                    createMissingNode(missingTag);
+                    return missingTag;
                 }
             }
 
@@ -1001,7 +1047,7 @@ export function Parser(tokenizer: Tokenizer, mode: TokenizerMode = TokenizerMode
                 }
 
                 while (hasNextTag()) {
-                    const tag = currentTag();
+                    const tag = peekTag();
                     updateTagContext(tag);
 
                     if (tag instanceof CfTag.Text) {
@@ -1048,7 +1094,7 @@ export function Parser(tokenizer: Tokenizer, mode: TokenizerMode = TokenizerMode
                                 nextTag();
                                 const blockChildren = treeifyTags(stopAt(CfTag.Which.end, startTag.canonicalName, ReductionScheme.default));
                                 if (!hasNextTag()) {
-                                    parseErrorAtCurrentPos("no matching end tag for " + tag.canonicalName);
+                                    parseErrorAtCurrentToken("no matching end tag for " + tag.canonicalName);
                                     throw "nyi";
                                 }
                                 else {
@@ -1102,7 +1148,7 @@ export function Parser(tokenizer: Tokenizer, mode: TokenizerMode = TokenizerMode
                             result.list.push(new NamedBlock(matchingStartTag, blockChildren, tag));
                         }
                         else {
-                            // parse error, end tag with no matching start tag
+                            parseErrorAtRange(tag.range, "End tag without a matching start tag (cf" + tag.canonicalName + ")")
                         }
                         nextTag();
                     }
@@ -1114,15 +1160,15 @@ export function Parser(tokenizer: Tokenizer, mode: TokenizerMode = TokenizerMode
             return treeifyTags(reductionInstructions.default);
         }
 
-        const saveMode = mode_;
-        mode_ = TokenizerMode.tag;
+        const saveMode = mode;
+        mode = TokenizerMode.tag;
 
         const result = new NodeList<CfTag.TagBase>();
         let tagTextRange = SourceRange.Nil();
 
         function startOrContinueTagTextRange() {
             if (tagTextRange.isNil()) {
-                const index = tokenizer_.getIndex();
+                const index = tokenizer.getIndex();
                 tagTextRange = new SourceRange(index, index+1);
             }
         }
@@ -1130,7 +1176,7 @@ export function Parser(tokenizer: Tokenizer, mode: TokenizerMode = TokenizerMode
             if (tagTextRange.isNil()) {
                 return;
             }
-            tagTextRange.toExclusive = tokenizer_.getIndex() + 1;
+            tagTextRange.toExclusive = tokenizer.getIndex() + 1;
             result.list.push(new CfTag.Text(tagTextRange))
             tagTextRange = SourceRange.Nil();
         }
@@ -1165,7 +1211,7 @@ export function Parser(tokenizer: Tokenizer, mode: TokenizerMode = TokenizerMode
             }
         }
 
-        mode_ = saveMode;
+        mode = saveMode;
 
         return treeifyTagList(result);
     }
@@ -1191,7 +1237,7 @@ export function Parser(tokenizer: Tokenizer, mode: TokenizerMode = TokenizerMode
 
         function startOrContinueTextRange() {
             if (textSourceRange.isNil()) {
-                const index = tokenizer_.getIndex();
+                const index = tokenizer.getIndex();
                 textSourceRange = new SourceRange(index, index+1);
             }
             // continuing is a no-op; when we finish the text range, we'll update the "toExclusive"
@@ -1202,7 +1248,7 @@ export function Parser(tokenizer: Tokenizer, mode: TokenizerMode = TokenizerMode
             if (textSourceRange.isNil()) {
                 return;
             }
-            textSourceRange.toExclusive = tokenizer_.getIndex() + 1;
+            textSourceRange.toExclusive = tokenizer.getIndex() + 1;
             result.list.push(new TextSpan(textSourceRange));
             textSourceRange = SourceRange.Nil();
         }
@@ -1539,7 +1585,7 @@ export function Parser(tokenizer: Tokenizer, mode: TokenizerMode = TokenizerMode
         }
 
         const identifier = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
-        const name = tokenizer_.getTokenText(identifier.token);
+        const name = tokenizer.getTokenText(identifier.token);
 
         if (parseOptions & ParseOptions.allowHashWrapped && leftHash) {
             const rightHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
@@ -1576,8 +1622,13 @@ export function Parser(tokenizer: Tokenizer, mode: TokenizerMode = TokenizerMode
         return new NumericLiteral(parseExpectedTerminal(TokenType.NUMBER, ParseOptions.withTrivia));
     }
 
+    function getDiagnostics() : readonly Diagnostic[] {
+        return diagnostics;
+    }
+
     return {
-        parseTags
+        parseTags,
+        getDiagnostics
     }
 }
 }
