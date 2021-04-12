@@ -21,8 +21,8 @@
 			"request": "launch",
 			"name": "Launch cfls client",
 			"runtimeExecutable": "${execPath}",
-			"args": ["--extensionDevelopmentPath=${workspaceRoot}/cfls-vscode/"],
-			"outFiles": ["${workspaceRoot}/cfls-vscode/extension/**/*.js"],
+			"args": ["--extensionDevelopmentPath=${workspaceRoot}/cflsp-vscode/"],
+			"outFiles": ["${workspaceRoot}/cflsp-vscode/extension/**/*.js"],
 		},
     ]
 }

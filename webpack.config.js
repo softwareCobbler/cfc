@@ -1,49 +1,43 @@
 const path = require('path');
 
-module.exports = {
-  mode: "development", // "production" | "development" | "none"
-  // Chosen mode tells webpack to use its built-in optimizations accordingly.
-  entry: "./out/lang-server/client/extension.js", // string | object | array
-  // defaults to ./src
-  // Here the application starts executing
-  // and webpack starts bundling
-  output: {
-    // options related to how webpack emits results
-    path: path.resolve("./cfls-vscode/extension/"), // string (default)
-    // the target directory for all output files
-    // must be an absolute path (use the Node.js path module)
-    filename: "cfls.js", // string (default)
-    // the filename template for entry chunks
-    //publicPath: "/assets/", // string
-    // the url to the output directory resolved relative to the HTML page
-    library: {
-      type: "commonjs2",
-    },
-    /*
-    library: { // There is also an old syntax for this available (click to show)
-      type: "umd", // universal module definition
-      // the type of the exported library
-      name: "MyLibrary", // string | string[]
-      // the name of the exported library
+const TsconfigPathsPlugin = require('tsconfig-paths-webpack-plugin');
 
-      
-    },*/
-    uniqueName: "cflsp", // (defaults to package.json "name")
-    // unique name for this build to avoid conflicts with other builds in the same HTML
-  },
-  resolve: {
-    alias: {
-      compiler: path.resolve("./out/compiler"),
+module.exports = {
+    mode: "development", // "production" | "development" | "none"
+    target: "node",
+    entry: "./src/lang-server/client/src/extension.ts",
+    output: {
+        path: path.resolve("./cflsp-vscode/out/"), // string (default)
+        filename: "cflsp.js", // string (default)
+        library: {
+            type: "commonjs2",
+        },
+        uniqueName: "cflsp", // (defaults to package.json "name")
     },
-    modules: [
-      path.resolve("./src/lang-server/client/node_modules/"),
-      path.resolve("./src/lang-server/server/node_modules/"),
-      "node_modules"
-    ]
-  },
-  externals: {
-    vscode: 'commonjs vscode', // the vscode-module is created on-the-fly and must be excluded. Add other modules that cannot be webpack'ed, 📖 -> https://webpack.js.org/configuration/externals/
-    path: "commonjs path"
-  },
-  devtool: "source-map",
+    resolve: {
+        extensions: [".ts", ".tsx", ".js"],
+        plugins: [new TsconfigPathsPlugin({ configFile: "./src/lang-server/client/tsconfig.json" })]
+    },
+    externals: {
+        // https://github.com/microsoft/vscode/issues/102314
+        // the vscode-module is created on-the-fly and must be excluded.
+        // Add other modules that cannot be webpack'ed, 📖 -> https://webpack.js.org/configuration/externals/
+        vscode: 'commonjs vscode',
+    },
+    module: {
+        rules: [
+            // all files with a `.ts` or `.tsx` extension will be handled by `ts-loader`
+            {
+                test: /\.tsx?$/,
+                use: {
+                    loader: "ts-loader",
+                    options: {
+                        projectReferences: true,
+                        configFile: "tsconfig.json"
+                    }
+                }
+            }
+        ]
+    },
+    devtool: "source-map",
 }

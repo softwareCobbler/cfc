@@ -19,7 +19,7 @@
 	"activationEvents": [
 		"onLanguage:plaintext"
 	],
-	"main": "./extension/cfls.js",
+	"main": "./out/cflsp.js",
 	"contributes": {
 		"configuration": {
 			"type": "object",

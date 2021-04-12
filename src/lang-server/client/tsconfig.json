@@ -1,5 +1,4 @@
 {
-	
 	"compilerOptions": {
 		"module": "commonjs",
 		"target": "es6",
@@ -7,6 +6,7 @@
 		"outDir": "../../../out/lang-server/client/",
 		"sourceMap": true,
 		"baseUrl": "./",
+		"composite": true,
 		"paths": {
 			"compiler": ["../../compiler/"]
 		}
