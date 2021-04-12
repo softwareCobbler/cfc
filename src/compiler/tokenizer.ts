@@ -319,11 +319,11 @@ export class Tokenizer {
                 if (this.scanner_.maybeEat(/\|\|/iy)) return this.setToken(TokenType.DBL_PIPE, from, this.getIndex());
                 else return this.consumeCurrentCharAs(TokenType.PIPE);
             case AsciiMap.DOT:
-                if (this.scanner_.maybeEat(/\\.\\d+/iy)) return this.setToken(TokenType.NUMBER, from, this.getIndex());
+                if (this.scanner_.maybeEat(/\.\d+/iy)) return this.setToken(TokenType.NUMBER, from, this.getIndex());
                 return this.consumeCurrentCharAs(TokenType.DOT);
             case AsciiMap.PLUS:
-                if (this.scanner_.maybeEat(/++/iy)) return this.setToken(TokenType.DBL_PLUS, from, this.getIndex());
-                if (this.scanner_.maybeEat(/+=/iy)) return this.setToken(TokenType.PLUS_EQUAL, from, this.getIndex());
+                if (this.scanner_.maybeEat(/\+\+/iy)) return this.setToken(TokenType.DBL_PLUS, from, this.getIndex());
+                if (this.scanner_.maybeEat(/\+=/iy)) return this.setToken(TokenType.PLUS_EQUAL, from, this.getIndex());
                 else return this.consumeCurrentCharAs(TokenType.PLUS);
             case AsciiMap.MINUS:
                 if (this.scanner_.maybeEat(/--->/iy)) return this.setToken(TokenType.CF_TAG_COMMENT_END, from, this.getIndex());
@@ -359,7 +359,7 @@ export class Tokenizer {
                 else return this.lexeme();
             case AsciiMap.d: // [[fallthrough]];
             case AsciiMap.D:
-                if (this.scanner_.maybeEat(/does\\s+not\\s+contain/iy)) return this.setToken(TokenType.LIT_DOES_NOT_CONTAIN, from, this.getIndex());
+                if (this.scanner_.maybeEat(/does\s+not\s+contain/iy)) return this.setToken(TokenType.LIT_DOES_NOT_CONTAIN, from, this.getIndex());
                 else if (script && this.scanner_.maybeEat(/default/iy)) return this.setToken(TokenType.KW_DEFAULT, from, this.getIndex());
                 else if (script && this.scanner_.maybeEat(/do/iy)) return this.setToken(TokenType.KW_DO, from, this.getIndex());
                 else return this.lexeme();

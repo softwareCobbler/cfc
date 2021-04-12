@@ -15,6 +15,14 @@
             "outFiles": [
                 "${workspaceFolder}/**/*.js"
             ]
-        }
+        },
+        {
+			"type": "extensionHost",
+			"request": "launch",
+			"name": "Launch cfls client",
+			"runtimeExecutable": "${execPath}",
+			"args": ["--extensionDevelopmentPath=${workspaceRoot}/cfls-vscode/"],
+			"outFiles": ["${workspaceRoot}/cfls-vscode/extension/**/*.js"],
+		},
     ]
 }
