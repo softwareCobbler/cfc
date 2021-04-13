@@ -5,16 +5,10 @@
 		"moduleResolution": "node",
 		"outDir": "../../../out/lang-server/client/",
 		"sourceMap": true,
-		"baseUrl": "./",
 		"composite": true,
-		"paths": {
-			"compiler": ["../../compiler/"]
-		}
+		"baseUrl": "./"
 	},
 	"files": [
 		"src/extension.ts"
 	],
-	"references": [
-		{"path": "../../compiler"}
-	]
 }

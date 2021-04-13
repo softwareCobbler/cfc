@@ -21,6 +21,8 @@ import {
 	TextDocument
 } from 'vscode-languageserver-textdocument';
 
+import { naiveGetDiagnostics } from "compiler";
+
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
 let connection = createConnection(ProposedFeatures.all);
@@ -139,12 +141,28 @@ async function validateTextDocument(textDocument: TextDocument): Promise<void> {
 	let settings = await getDocumentSettings(textDocument.uri);
 
 	// The validator creates diagnostics for all uppercase words length 2 and more
+	const cfDiagnostics = naiveGetDiagnostics(textDocument.getText());
+
+
 	let text = textDocument.getText();
 	let pattern = /\b[A-Z]{2,}\b/g;
 	let m: RegExpExecArray | null;
 
 	let problems = 0;
 	let diagnostics: Diagnostic[] = [];
+
+	for (const diagnostic of cfDiagnostics) {
+		diagnostics.push({
+			severity: DiagnosticSeverity.Error,
+			range: {
+				start: textDocument.positionAt(diagnostic.fromInclusive),
+				end: textDocument.positionAt(diagnostic.toExclusive)
+			},
+			message: diagnostic.msg,
+			source: "cfls"
+		});
+	}
+	/*
 	while ((m = pattern.exec(text)) && problems < settings.maxNumberOfProblems) {
 		problems++;
 		let diagnostic: Diagnostic = {
@@ -175,7 +193,7 @@ async function validateTextDocument(textDocument: TextDocument): Promise<void> {
 			];
 		}
 		diagnostics.push(diagnostic);
-	}
+	}*/
 
 	// Send the computed diagnostics to VSCode.
 	connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });

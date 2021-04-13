@@ -3,6 +3,7 @@
     "scanner.ts",
     "tokenizer.ts",
     "parser.ts",
+    "lang-server.ts",
     "index.ts"
   ],
   "compilerOptions": {

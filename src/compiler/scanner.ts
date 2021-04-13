@@ -122,6 +122,11 @@ export function Scanner(sourceText_: string) {
         return result;
     }
 
+    // for now this is really just utf8 position for just ascii...
+    function getUtf16Position(index: number) {
+        return annotatedChars[index];
+    }
+
     function getIndex() {
         return index;
     }
@@ -177,6 +182,7 @@ export function Scanner(sourceText_: string) {
         clearArtificalEndLimit,
         restoreIndex,
         maybeEat,
+        getUtf16Position
     }
 }
 export type Scanner = ReturnType<typeof Scanner>;

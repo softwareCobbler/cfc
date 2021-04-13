@@ -957,7 +957,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                 return tagList.list[index++];
             }
             function peekTag() {
-                return tagList.list[index];
+                return hasNextTag() ? tagList.list[index] : null;
             }
 
             function parseOptionalTag(which: CfTag.Which, canonicalName: string) : CfTag.TagBase | null {
@@ -977,7 +977,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                 else {
                     // emit diagnostic
                     const msg = `Expected a <${which === CfTag.Which.end ? "/" : ""}${canonicalName}> tag here`;
-                    let range = hasNextTag() ? peekTag().range : tagList.list[tagList.list.length-1].range;
+                    let range = hasNextTag() ? peekTag()!.range : tagList.list[tagList.list.length-1].range;
                     parseErrorAtRange(range, msg);
 
                     // create fake placeholder tag
@@ -1016,7 +1016,15 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                     break;
                 }
 
-                root.tagOrigin.endTag = parseExpectedTag(CfTag.Which.end, "if");
+                if (hasNextTag()) {
+                    const nextTag = peekTag()!;
+                    if (nextTag.canonicalName === "if" && nextTag.which === CfTag.Which.end) {
+                        root.tagOrigin.endTag = parseExpectedTag(CfTag.Which.end, "if");
+                        return root;
+                    }
+                }
+
+                parseErrorAtRange(root.range, "Missing </cfif> tag");
                 return root;
             }
 
@@ -1049,11 +1057,12 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                 }
 
                 while (hasNextTag()) {
-                    const tag = peekTag();
+                    const tag = peekTag()!;
                     updateTagContext(tag);
 
                     if (tag instanceof CfTag.Text) {
                         parseTextInTagContext(tag.range, tagContext);
+                        nextTag()
                         continue;
                     }
                     else if (tag.which === CfTag.Which.start) {
@@ -1094,10 +1103,9 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                             if (requiresEndTag(tag)) {
                                 const startTag = tag;
                                 nextTag();
-                                const blockChildren = treeifyTags(stopAt(CfTag.Which.end, startTag.canonicalName, ReductionScheme.default));
+                                const blockChildren = treeifyTags(stopAt(CfTag.Which.end, startTag.canonicalName, ReductionScheme.return));
                                 if (!hasNextTag()) {
-                                    parseErrorAtCurrentToken("no matching end tag for " + tag.canonicalName);
-                                    throw "nyi";
+                                    parseErrorAtRange(tag.range, "no matching end tag for cf" + tag.canonicalName);
                                 }
                                 else {
                                     const endTag = parseExpectedTag(CfTag.Which.end, startTag.canonicalName);

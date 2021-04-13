@@ -4,25 +4,34 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
-        {
-            "type": "node",
-            "request": "launch",
-            "name": "Launch Program",
-            "skipFiles": [
-                "<node_internals>/**"
-            ],
-            "program": "${workspaceFolder}\\src\\index.ts",
-            "outFiles": [
-                "${workspaceFolder}/**/*.js"
-            ]
-        },
+		{
+			"type": "node",
+			"request": "launch",
+			"name": "test scratchpad",
+			"outFiles": ["${workspaceRoot}/out/**/*.js"],
+			"program": "${workspaceRoot}/out/test/scratch.js"
+		},
         {
 			"type": "extensionHost",
 			"request": "launch",
-			"name": "Launch cfls client",
+			"name": "Launch cflsp (client plugin)",
 			"runtimeExecutable": "${execPath}",
 			"args": ["--extensionDevelopmentPath=${workspaceRoot}/cflsp-vscode/"],
-			"outFiles": ["${workspaceRoot}/cflsp-vscode/extension/**/*.js"],
+			"outFiles": ["${workspaceRoot}/cflsp-vscode/out/**/*.js"],
 		},
-    ]
+        {
+			"type": "node",
+			"request": "attach",
+			"name": "Attach to cfls (server process)",
+			"port": 6009,
+			"restart": true,
+			"outFiles": ["${workspaceRoot}/cflsp-vscode/out/**/*.js"]
+		},
+    ],
+    "compounds": [
+		{
+			"name": "Client + Server",
+			"configurations": ["Launch cflsp (client plugin)", "Attach to cfls (server process)"]
+		}
+	]
 }
