@@ -1,5 +1,5 @@
 import { SourceRange } from "./scanner";
-import { Token, TokenType, TokenizerMode, Tokenizer } from "./tokenizer";
+import { Token, TokenType, TokenizerMode, Tokenizer, TokenTypeUiString } from "./tokenizer";
 
 const enum TagFact {
     ALLOW_VOID		= 0x00000001, // tag can be void, e.g., <cfhttp> can be loose, or have a body like <cfhttp><cfhttpparam></cfhttp>
@@ -89,12 +89,12 @@ const enum NodeFlags {
     missing = 0x00000002
 }
 
-class NodeBase {
+export class NodeBase {
     parent: NodeBase | null;
     range: SourceRange;
     tagOrigin: {
-        startTag: NodeBase | null,
-        endTag: NodeBase | null
+        startTag: CfTag.TagBase | null,
+        endTag: CfTag.TagBase | null
     };
     flags: NodeFlags = NodeFlags.none;
 
@@ -135,7 +135,7 @@ function mergeRanges(...nodes : (NodeBase|null)[]) : SourceRange {
     return result;
 }
 
-class NodeList<T extends NodeBase> extends NodeBase {    
+export class NodeList<T extends NodeBase> extends NodeBase {    
     list : T[];
     constructor(list: T[] = []) {
         super(SourceRange.Nil());
@@ -157,21 +157,17 @@ class Terminal extends NodeBase {
     }
 
     static Nil() {
-        return new Terminal(
-            new Token(
-                TokenType.NIL,
-                SourceRange.Nil()));
+        return new Terminal(Token.Nil());
     }
 }
 
-class TextSpan extends NodeBase {
-    // all we're interested in is range
+export class TextSpan extends NodeBase {
     constructor(sourceRange: SourceRange) {
         super(sourceRange);
     }
 }
 
-class HashWrappedExpr extends NodeBase {
+export class HashWrappedExpr extends NodeBase {
     leftHash: Terminal;
     expr: NodeBase;
     rightHash: Terminal;
@@ -183,7 +179,7 @@ class HashWrappedExpr extends NodeBase {
     }
 }
 
-class Parenthetical extends NodeBase {
+export class Parenthetical extends NodeBase {
     leftParen: Terminal;
     expr: NodeBase;
     rightParen: Terminal;
@@ -195,14 +191,16 @@ class Parenthetical extends NodeBase {
     }
 }
 
-class TagAttribute extends NodeBase {
+export class TagAttribute extends NodeBase {
     name: Terminal;
     equals: Terminal | null;
     expr: NodeBase | null;
 
-    constructor(name: Terminal);
-    constructor(name: Terminal, equals: Terminal, expr: NodeBase);
-    constructor(name: Terminal, equals?: Terminal, expr?: NodeBase | undefined) {
+    lcName: string;
+
+    constructor(name: Terminal, lcName: string);
+    constructor(name: Terminal, lcName: string, equals: Terminal, expr: NodeBase);
+    constructor(name: Terminal, lcName: string, equals?: Terminal, expr?: NodeBase | undefined) {
         if (name && equals && expr) {
             super(mergeRanges(name, expr));
         }
@@ -212,6 +210,7 @@ class TagAttribute extends NodeBase {
         this.name = name;
         this.equals = equals ?? null;
         this.expr = expr ?? null;
+        this.lcName = lcName;
     }
 }
 
@@ -227,6 +226,7 @@ export namespace CfTag {
         voidSlash: Terminal | null; // trailing "/" in "/>", if present
         tagEnd: Terminal;           // ">"
         canonicalName: string;      // string representation of tagName
+
         constructor(
             which: Which,
             tagStart: Terminal,
@@ -479,7 +479,7 @@ class Conditional extends NodeBase {
     }
 }
 
-class Statement extends NodeBase {
+export class Statement extends NodeBase {
     stmt : NodeBase | null;
     semicolon : Terminal | null;
     constructor(tag: CfTag.TagBase) {
@@ -495,9 +495,9 @@ class Statement extends NodeBase {
     }
 }
 
-class NamedBlock extends NodeBase {
+export class NamedBlock extends NodeBase {
     name: Terminal | null;
-    attrs: NodeList<NodeBase> | null;
+    attrs: NodeList<TagAttribute>;
     leftBrace: Terminal | null;
     stmtList: NodeList<NodeBase>;
     rightBrace: Terminal | null;
@@ -510,7 +510,7 @@ class NamedBlock extends NodeBase {
             this.tagOrigin.startTag = startTag;
             this.tagOrigin.endTag = endTag;
             this.name = null;
-            this.attrs = null;
+            this.attrs = new NodeList<TagAttribute>();
             this.leftBrace = null;
             this.stmtList = endTagOrStmtList as NodeList<NodeBase>;
             this.rightBrace = null;
@@ -518,9 +518,9 @@ class NamedBlock extends NodeBase {
         else {
             super(mergeRanges(startTag, endTagOrStmtList));
             this.tagOrigin.startTag = startTag;
-            this.tagOrigin.endTag = endTagOrStmtList;
+            this.tagOrigin.endTag = endTagOrStmtList as CfTag.TagBase;
             this.name = null;
-            this.attrs = null;
+            this.attrs = new NodeList<TagAttribute>();
             this.leftBrace = null;
             this.stmtList = new NodeList<NodeBase>();
             this.rightBrace = null;
@@ -528,7 +528,10 @@ class NamedBlock extends NodeBase {
     }
 }
 
-class StringLiteral extends NodeBase {
+// BasicString
+// InterpolatedString
+
+export class StringLiteral extends NodeBase {
     //
     // it is possible to have an "unquoted" string literal, e.g.,
     // for tag attribute values like <cffunction name="x" foo=bar>
@@ -537,7 +540,7 @@ class StringLiteral extends NodeBase {
     //
     delimiter: TokenType.QUOTE_DOUBLE | TokenType.QUOTE_SINGLE | null;
     leftQuote: Terminal | null;
-    elements: NodeList<NodeBase>;
+    elements: NodeList<NodeBase>; // TextSpan | HashWrappedExpr
     rightQuote: Terminal | null;
 
     constructor(unquotedStringLike: Terminal);
@@ -560,7 +563,7 @@ class StringLiteral extends NodeBase {
     }
 }
 
-class NumericLiteral extends NodeBase {
+export class NumericLiteral extends NodeBase {
     literal: Terminal;
     constructor(literal: Terminal) {
         super(literal.range);
@@ -619,6 +622,51 @@ class IndexedAccess extends NodeBase {
     }
 }
 
+class FunctionParameter extends NodeBase {
+    type: null;
+    requiredTerminal: Terminal | null;
+    identifier: Identifier | null;
+    equals: Terminal | null;
+    defaultValue: NodeBase | null;
+    comma: Terminal | null;
+
+    name: string | null;
+    required: boolean;
+
+    constructor(tag: CfTag.Common, paramName: string | null, required: boolean) {
+        super(tag.range);
+        this.tagOrigin.startTag = tag;
+
+        this.type = null;
+        this.requiredTerminal = null;
+        this.identifier = null;
+        this.equals = null;
+
+        this.defaultValue = null; // findAttr(tag.attrs, "default") ?? null;
+        this.comma = null;
+
+        this.name = paramName;
+        this.required = required;
+    }
+}
+
+class FunctionDefinition extends NodeBase {
+    attrs: TagAttribute[];
+    params: FunctionParameter[];
+
+    name: string;
+
+    constructor(startTag: CfTag.Common, params: FunctionParameter[], body: NodeList<NodeBase>, endTag: CfTag.Common, name: string) {
+        super(mergeRanges(startTag, endTag));
+        this.tagOrigin.startTag = startTag;
+        this.tagOrigin.endTag = endTag;
+
+        this.attrs = startTag.attrs.list;
+        this.params = params;
+        this.name = name;
+    }
+}
+
 const enum ParseOptions {
     none     = 0,
     noTrivia = 0,
@@ -659,7 +707,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
     let tokenizer : Tokenizer = tokenizer_;
     let mode: TokenizerMode = mode_;
     let lookahead_ : TokenType = peek().type;
-    let globalDiagnosticMsg : string | null = null;
+    let globalDiagnosticEmitter : (() => void) | null = null;
 
     const diagnostics : Diagnostic[] = [];
     let parseErrorBeforeNextFinishedNode = false;
@@ -696,6 +744,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
         else {
             tokenizer.clearArtificalEndLimit();
         }
+        lookahead_ = peek().type;
     }
 
     function tagMode() : boolean {
@@ -706,17 +755,10 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
     }*/
 
 
-    function parseErrorAtRange(range: SourceRange, msg?: string) : void;
-    function parseErrorAtRange(fromInclusive: number, toExclusive: number, msg?: string) : void;
-    function parseErrorAtRange(fromInclusiveOrRange: number | SourceRange, toExclusiveOrMsg?: number | string, msg?: string) : void {
+    function parseErrorAtRange(range: SourceRange, msg: string) : void;
+    function parseErrorAtRange(fromInclusive: number, toExclusive: number, msg: string) : void;
+    function parseErrorAtRange(fromInclusiveOrRange: number | SourceRange, toExclusiveOrMsg: number | string, msg?: string) : void {
         parseErrorBeforeNextFinishedNode = true;
-        const diagnosticMsg =
-            typeof msg === "string"
-            ? msg
-            : typeof toExclusiveOrMsg === "string"
-            ? toExclusiveOrMsg
-            : undefined;
-
         diagnostics.push({
             fileName: "<NYI>",
             fromInclusive: typeof fromInclusiveOrRange === "number"
@@ -725,11 +767,11 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
             toExclusive: typeof toExclusiveOrMsg === "number"
                 ? toExclusiveOrMsg
                 : (fromInclusiveOrRange as SourceRange).toExclusive,
-            msg: diagnosticMsg ?? globalDiagnosticMsg!
+            msg: msg ?? (toExclusiveOrMsg as string)
         });
     }
 
-    function parseErrorAtCurrentToken(msg?: string) : void {
+    function parseErrorAtCurrentToken(msg: string) : void {
         const sourceRange = peek().range;
         parseErrorAtRange(sourceRange.fromInclusive, sourceRange.toExclusive, msg);
     }
@@ -754,14 +796,22 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
         }
     }
 
-    function parseExpectedTerminal(type: TokenType, parseOptions: ParseOptions) : Terminal {
+    function parseExpectedTerminal(type: TokenType, parseOptions: ParseOptions, localDiagnosticEmitter?: () => void) : Terminal {
         const maybeTerminal = parseOptionalTerminal(type, parseOptions);
         if (maybeTerminal) {
             return maybeTerminal;
         }
         else {
-            parseErrorAtCurrentToken(globalDiagnosticMsg ?? "Expected a <??> here");
-            const phonyToken : Token = new Token(type, SourceRange.Nil());
+            if (localDiagnosticEmitter) {
+                localDiagnosticEmitter();
+            }
+            else if (globalDiagnosticEmitter) {
+                globalDiagnosticEmitter();
+            }
+            else {
+                parseErrorAtCurrentToken("Expected a " + TokenTypeUiString[type] + " here");
+            }
+            const phonyToken : Token = new Token(type, "", SourceRange.Nil());
             return createMissingNode(new Terminal(phonyToken));
         }
     }
@@ -799,7 +849,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                     result.list.push(parseScriptMultiLineComment());
                     continue;
                 case TokenType.WHITESPACE:
-                    result.list.push(new TextSpan(next().range));
+                    result.list.push(new TextSpan(next().range)); // not really any need to store the whitespace
                     continue;
             }
             break;
@@ -844,7 +894,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
         else {
             const tagAttrs = parseTagAttributes();
             const maybeVoidSlash = parseOptionalTerminal(TokenType.FORWARD_SLASH, ParseOptions.withTrivia);
-            const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);
+            const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
             return new CfTag.Common(CfTag.Which.start, tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, tagAttrs);
         }
     }
@@ -875,10 +925,10 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                 else {
                     value = parseExpression();
                 }
-                result.list.push(new TagAttribute(attrName, equal, value));
+                result.list.push(new TagAttribute(attrName, tokenizer_.getTokenText(attrName.token).toLowerCase(), equal, value));
             }
             else {
-                result.list.push(new TagAttribute(attrName));
+                result.list.push(new TagAttribute(attrName, tokenizer_.getTokenText(attrName.token).toLowerCase()));
             }
         }
 
@@ -969,16 +1019,20 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                 }
             }
 
-            function parseExpectedTag(which: CfTag.Which, canonicalName: string) : CfTag.TagBase {
+            function parseExpectedTag(which: CfTag.Which, canonicalName: string, diagnosticEmitter?: () => void) : CfTag.TagBase {
                 const tag = parseOptionalTag(which, canonicalName);
                 if (tag) {
                     return tag;
                 }
                 else {
-                    // emit diagnostic
-                    const msg = `Expected a <${which === CfTag.Which.end ? "/" : ""}${canonicalName}> tag here`;
-                    let range = hasNextTag() ? peekTag()!.range : tagList.list[tagList.list.length-1].range;
-                    parseErrorAtRange(range, msg);
+                    if (diagnosticEmitter) {
+                        diagnosticEmitter();
+                    }
+                    else {
+                        const msg = `Expected a <${which === CfTag.Which.end ? "/" : ""}${canonicalName}> tag here`;
+                        let range = hasNextTag() ? peekTag()!.range : tagList.list[tagList.list.length-1].range;
+                        parseErrorAtRange(range, msg);
+                    }
 
                     // create fake placeholder tag
                     let missingTag : CfTag.Common;
@@ -1028,6 +1082,57 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                 return root;
             }
 
+            /*function parseTagFunctionParameter() {
+                const tag = parseExpectedTag(CfTag.Which.start, "argument") as CfTag.Common; // <cfargument ...> defines the function's parameters
+                const name = findAttr(tag.attrs, "name");
+                if (!name) {
+                    parseErrorAtRange(tag.range, "<cfargument> requires a 'name' attribute");
+                }
+                //
+                // check that the name is a string, after stripping off parens and hashes
+                // if (isStaticallyComputableStringValue(name)) ... or something like that
+                // then (isValidIdentifier(name)) !!
+                //
+                const required = findAttr(tag.attrs, "required");
+                required;
+                //
+                // need something like "isStaticallyComputableBoolean(value)" and then get the value
+                //
+                //
+
+                const validatedName = "<statically-computable|null>";
+                const validatedRequired = false;
+
+                return new FunctionParameter(tag, validatedName, validatedRequired);
+            }*/
+
+            /*function parseTagFunction() : NodeBase {
+                const startTag = parseExpectedTag(CfTag.Which.start, "function") as CfTag.Common;
+                const params : FunctionParameter[] = [];
+
+                while (true) {
+                    if (peekTag()?.canonicalName === "argument") {
+                        params.push(parseTagFunctionParameter());
+                    }
+                    else {
+                        break;
+                    }
+                }
+
+                const body = treeifyTags(stopAt(CfTag.Which.end, "function", ReductionScheme.return));
+                const endTag = parseExpectedTag(CfTag.Which.end, "function", () => parseErrorAtRange(startTag.range, "Missing </cffunction> tag")) as CfTag.Common;
+
+                //
+                // if !isStaticallyVerifiable(name)....
+                //
+                const name = findAttr(startTag.attrs, "name");
+                if (!name) {
+                    parseErrorAtRange(startTag.range, "<cffunction> requires a 'name' attribute")
+                }
+                const validatedName = "<some-name|null>"
+                return new FunctionDefinition(startTag, params, body, endTag, validatedName);
+            }*/
+
             function treeifyTags(reductionInstructions: readonly ReductionInstruction[]) : NodeList<NodeBase> {
                 const result = new NodeList<NodeBase>();
 
@@ -1035,12 +1140,14 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                 // get turned into statements
                 // all text and comments by now should have been turned into TextSpans
                 // is returning an r-value reasonable? goal is to use this as the return statement, like `return finalize();`
+                //
+                // probably want to leave the tags ... then we can match on them
                 function finalize(from = 0) {
-                    for (let i = from; i < result.list.length; i++) {
+                    /*for (let i = from; i < result.list.length; i++) {
                         if (result.list[i] instanceof CfTag.TagBase) {
                             result.list[i] = new Statement(result.list[i] as CfTag.TagBase);
                         }
-                    }
+                    }*/
                     return result;
                 }
 
@@ -1075,52 +1182,54 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                                 break;
                         }
 
-                        if (tag.canonicalName === "if") {
-                            result.list.push(treeifyConditionalTag());
-                            continue;
-                        }
-                        else if (tag.canonicalName === "set") {
-                            CfTag.assertIsScriptLike(tag);
-                            const expr = tag.expr;
-                            expr.tagOrigin.startTag = tag;
-                            result.list.push(expr);
-                            nextTag();
-                            continue;
-                        }
-                        else if (tag.canonicalName === "script") {
-                            // same as handling set, except there is an end tag to consume
-                            CfTag.assertIsScript(tag);
-                            const stmtList = tag.stmtList;
-                            stmtList.tagOrigin.startTag = tag;
-                            nextTag();
-                            stmtList.tagOrigin.endTag = parseExpectedTag(CfTag.Which.end, "script");
-
-                            // so our result now has at least one list in it, looking something like (node | node[])[]
-                            result.list.push(stmtList);
-                            continue;
-                        }
-                        else {
-                            if (requiresEndTag(tag)) {
-                                const startTag = tag;
+                        switch (tag.canonicalName) {
+                            case "if": {
+                                result.list.push(treeifyConditionalTag());
+                                continue;
+                            }
+                            case "set": {
+                                CfTag.assertIsScriptLike(tag);
+                                const expr = tag.expr;
+                                expr.tagOrigin.startTag = tag;
+                                result.list.push(expr);
                                 nextTag();
-                                const blockChildren = treeifyTags(stopAt(CfTag.Which.end, startTag.canonicalName, ReductionScheme.return));
-                                if (!hasNextTag()) {
-                                    parseErrorAtRange(tag.range, "no matching end tag for cf" + tag.canonicalName);
+                                continue;
+                            }
+                            case "script": {
+                                // same as handling set, except there is an end tag to consume
+                                CfTag.assertIsScript(tag);
+                                const stmtList = tag.stmtList;
+                                stmtList.tagOrigin.startTag = tag;
+                                nextTag();
+                                stmtList.tagOrigin.endTag = parseExpectedTag(CfTag.Which.end, "script");
+
+                                // so our result now has at least one list in it, looking something like (node | node[])[]
+                                result.list.push(stmtList);
+                                continue;
+                            }
+                            default: {
+                                if (requiresEndTag(tag)) {
+                                    const startTag = tag;
+                                    nextTag();
+                                    const blockChildren = treeifyTags(stopAt(CfTag.Which.end, startTag.canonicalName, ReductionScheme.return));
+                                    if (!hasNextTag()) {
+                                        parseErrorAtRange(tag.range, "no matching end tag for cf" + tag.canonicalName);
+                                    }
+                                    else {
+                                        const endTag = parseExpectedTag(CfTag.Which.end, startTag.canonicalName);
+                                        updateTagContext(endTag);
+                                        result.list.push(new NamedBlock(startTag, blockChildren, endTag));
+                                    }
                                 }
                                 else {
-                                    const endTag = parseExpectedTag(CfTag.Which.end, startTag.canonicalName);
-                                    updateTagContext(endTag);
-                                    result.list.push(new NamedBlock(startTag, blockChildren, endTag));
+                                    // a single loose tag
+                                    // it will become a statement
+                                    // e.g., <cfhttp args /> is essentially a call to a fictitious "cfhttp(args)" function, except it is a statement instead of a value producing expression
+                                    // but first we push it into the result as a tag, so that any possible matching end tags can walk up the local results list
+                                    // and find it 
+                                    result.list.push(tag);
+                                    nextTag();
                                 }
-                            }
-                            else {
-                                // a single loose tag
-                                // it will become a statement
-                                // e.g., <cfhttp args /> is essentially a call to a fictitious "cfhttp(args)" function, except it is a statement instead of a value producing expression
-                                // but first we push it into the result as a tag, so that any possible matching end tags can walk up the local results list
-                                // and find it 
-                                result.list.push(tag);
-                                nextTag();
                             }
                         }
                     }
@@ -1186,7 +1295,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
             if (tagTextRange.isNil()) {
                 return;
             }
-            tagTextRange.toExclusive = tokenizer.getIndex() + 1;
+            tagTextRange.toExclusive = tokenizer.getIndex(); // does not include current; so, no "+1"
             result.list.push(new CfTag.Text(tagTextRange))
             tagTextRange = SourceRange.Nil();
         }
@@ -1258,7 +1367,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
             if (textSourceRange.isNil()) {
                 return;
             }
-            textSourceRange.toExclusive = tokenizer.getIndex() + 1;
+            textSourceRange.toExclusive = tokenizer.getIndex(); // current index is NOT included, so, no '+1'
             result.list.push(new TextSpan(textSourceRange));
             textSourceRange = SourceRange.Nil();
         }
@@ -1345,6 +1454,10 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
     }
 
     function parseExpression() : NodeBase {
+        const saveDiagnosticEmitter = globalDiagnosticEmitter;
+        const currentPos = tokenizer_.getIndex();
+        globalDiagnosticEmitter = () => parseErrorAtRange(currentPos, tokenizer_.getIndex(), "Expected an expression");
+
         let root = parseBooleanExpression();
 
         while (true) {
@@ -1377,6 +1490,8 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
             // if we didn't match any of the above tokens, we're done
             break;
         }
+
+        globalDiagnosticEmitter = saveDiagnosticEmitter;
 
         return root;
     }
@@ -1598,7 +1713,14 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
         const name = tokenizer.getTokenText(identifier.token);
 
         if (parseOptions & ParseOptions.allowHashWrapped && leftHash) {
-            const rightHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
+            const rightHash = parseExpectedTerminal(
+                TokenType.HASH,
+                ParseOptions.withTrivia,
+                () => parseErrorAtRange(
+                    leftHash!.range.fromInclusive,
+                    tokenizer_.getIndex(),
+                    "Unterminated hash wrapped expression"));
+
             return new HashWrappedExpr(
                 leftHash,
                 new Identifier(identifier, name),
@@ -1622,7 +1744,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
             }
 
             const leftQuote = parseExpectedTerminal(quoteType, ParseOptions.noTrivia);
-            const stringElements = parseTextWithPossibleInterpolations();
+            const stringElements = parseTextWithPossibleInterpolations(quoteType);
             const rightQuote = parseExpectedTerminal(quoteType, ParseOptions.withTrivia);
             return new StringLiteral(quoteType, leftQuote, stringElements, rightQuote);
         }

@@ -84,6 +84,7 @@ export function Scanner(sourceText_: string) {
     const annotatedChars = annotate(sourceText);
     let end = annotatedChars.length;
     let index = 0;
+    let text = "";
 
     //
     // @fixme:
@@ -165,6 +166,7 @@ export function Scanner(sourceText_: string) {
         const match = pattern.exec(sourceText);
         if (match) {
             index += match[0].length;
+            text = match[0]; // any perf boost to taking a slice of sourceText? is match[0] already a ref to sourceText's underlying storage?
             return true;
         }
         else {
@@ -173,6 +175,7 @@ export function Scanner(sourceText_: string) {
     }
 
     return {
+        getText: () => text,
         getIndex,
         peek,
         hasNext,

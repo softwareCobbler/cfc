@@ -185,11 +185,13 @@ export const TokenTypeUiString : Record<TokenType, string> = {
 export class Token {
     type: TokenType;
     range: SourceRange;
+    text: string;
 
-    constructor(type: TokenType, fromInclusive: number, toExclusive: number);
-    constructor(type: TokenType, range: SourceRange);
-    constructor(type: TokenType, fromOrRange: number | SourceRange, toExclusive?: number) {
+    constructor(type: TokenType, text: string, fromInclusive: number, toExclusive: number);
+    constructor(type: TokenType, text: string, range: SourceRange);
+    constructor(type: TokenType, text: string, fromOrRange: number | SourceRange, toExclusive?: number) {
         this.type = type;
+        this.text = text;
         if (typeof fromOrRange === "number") {
             this.range = new SourceRange(fromOrRange, toExclusive!);
         }
@@ -199,7 +201,7 @@ export class Token {
     }
 
     static Nil() {
-        return new Token(TokenType.NIL, SourceRange.Nil());
+        return new Token(TokenType.NIL, "", SourceRange.Nil());
     }
 
     isNil() {
@@ -221,7 +223,7 @@ export class Tokenizer {
     }
 
     private setToken(type: TokenType, from: number, to: number) {
-        this.token_ = new Token(type, from, to);
+        this.token_ = new Token(type, this.scanner_.getText(), from, to);
         return this.token_;
     }
 
@@ -269,7 +271,14 @@ export class Tokenizer {
 
     next(mode: TokenizerMode) : Token {
         if (!this.scanner_.hasNext()) {
-            return this.token_;
+            // we've already seen a fin token;
+            // or, we've hit the artificial end limit
+            // either way, the only valid result is now FIN
+            return new Token(
+                TokenType.EOF,
+                "",
+                this.token_.range
+            );
         }
 
         const tag = mode == TokenizerMode.tag;
