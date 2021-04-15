@@ -89,7 +89,14 @@ const enum NodeFlags {
     missing = 0x00000002
 }
 
-export class NodeBase {
+const enum NodeType {
+    terminal, list, textSpan, comment, hashWrappedExpr, parenthetical, tagAttribute,
+    tag, callExpression, callArgument, assignment, unaryOperator, binaryOperator,
+    conditional, statement, namedBlock, simpleStringLiteral, interpolatedStringLiteral, numericLiteral, booleanLiteral,
+    identifier, indexedAccess, functionParamater, functionDefinition
+}
+
+export abstract class NodeBase {
     parent: NodeBase | null;
     range: SourceRange;
     tagOrigin: {
@@ -97,6 +104,8 @@ export class NodeBase {
         endTag: CfTag.TagBase | null
     };
     flags: NodeFlags = NodeFlags.none;
+
+    abstract type : NodeType;
 
     constructor(sourceRange: SourceRange) {
         this.parent = null;
@@ -137,6 +146,7 @@ function mergeRanges(...nodes : (NodeBase|null)[]) : SourceRange {
 
 export class NodeList<T extends NodeBase> extends NodeBase {    
     list : T[];
+    type = NodeType.list;
     constructor(list: T[] = []) {
         super(SourceRange.Nil());
         this.list = list;
@@ -150,6 +160,7 @@ export class NodeList<T extends NodeBase> extends NodeBase {
 class Terminal extends NodeBase {
     token: Token;
     trivia: NodeList<NodeBase>;
+    type = NodeType.terminal;
     constructor(token: Token, trivia?: NodeList<NodeBase>) {
         super(token.range);
         this.token = token;
@@ -161,9 +172,22 @@ class Terminal extends NodeBase {
     }
 }
 
+const enum CommentType { tag, scriptSingleLine, scriptMultiLine };
+export class Comment extends NodeBase {
+    type = NodeType.comment;
+    commentType : CommentType;
+    constructor(commentType: CommentType, range: SourceRange) {
+        super(range);
+        this.commentType = commentType;
+    }
+}
+
 export class TextSpan extends NodeBase {
-    constructor(sourceRange: SourceRange) {
+    type = NodeType.textSpan;
+    text: string;
+    constructor(sourceRange: SourceRange, text: string) {
         super(sourceRange);
+        this.text = text;
     }
 }
 
@@ -171,6 +195,7 @@ export class HashWrappedExpr extends NodeBase {
     leftHash: Terminal;
     expr: NodeBase;
     rightHash: Terminal;
+    type = NodeType.hashWrappedExpr;
     constructor(leftHash: Terminal, expr: NodeBase, rightHash: Terminal) {
         super(mergeRanges(leftHash, expr, rightHash));
         this.leftHash = leftHash;
@@ -183,6 +208,9 @@ export class Parenthetical extends NodeBase {
     leftParen: Terminal;
     expr: NodeBase;
     rightParen: Terminal;
+
+    type = NodeType.parenthetical;
+
     constructor(leftParen: Terminal, expr: NodeBase, rightParen: Terminal) {
         super(mergeRanges(leftParen, expr, rightParen));
         this.leftParen = leftParen;
@@ -198,6 +226,8 @@ export class TagAttribute extends NodeBase {
 
     lcName: string;
 
+    type : NodeType;
+
     constructor(name: Terminal, lcName: string);
     constructor(name: Terminal, lcName: string, equals: Terminal, expr: NodeBase);
     constructor(name: Terminal, lcName: string, equals?: Terminal, expr?: NodeBase | undefined) {
@@ -207,6 +237,7 @@ export class TagAttribute extends NodeBase {
         else {
             super(name.range);
         }
+        this.type = NodeType.tagAttribute;
         this.name = name;
         this.equals = equals ?? null;
         this.expr = expr ?? null;
@@ -226,6 +257,8 @@ export namespace CfTag {
         voidSlash: Terminal | null; // trailing "/" in "/>", if present
         tagEnd: Terminal;           // ">"
         canonicalName: string;      // string representation of tagName
+
+        type = NodeType.tag;
 
         constructor(
             which: Which,
@@ -325,6 +358,8 @@ class CallExpression extends NodeBase {
     args: NodeList<CallArgument>;
     rightParen: Terminal;
 
+    type = NodeType.callExpression;
+
     constructor(identifier: NodeBase, leftParen: Terminal, args: NodeList<CallArgument>, rightParen: Terminal) {
         super(mergeRanges(identifier, rightParen));
         this.identifier = identifier;
@@ -337,6 +372,9 @@ class CallExpression extends NodeBase {
 class CallArgument extends NodeBase {
     expr: NodeBase;
     comma: Terminal | null;
+
+    type = NodeType.callArgument;
+
     constructor(expr: NodeBase, comma: Terminal | null) {
         super(mergeRanges(expr, comma));
         this.expr = expr;
@@ -353,10 +391,15 @@ class Assignment extends NodeBase {
     varModifier: Terminal | null;
     baseTarget: NodeBase;
     assignmentChain: Assignee[];
+
+    type : NodeType;
+
     constructor(finalModifier: Terminal | null, varModifier: Terminal | null, baseTarget: NodeBase, assignmentChain: Assignee[]) {
         if (assignmentChain.length == 0) throw "assignment chain must have at least one element";
 
         super(mergeRanges(finalModifier, varModifier, baseTarget, assignmentChain[assignmentChain.length-1].value));
+
+        this.type = NodeType.assignment
 
         this.finalModifier = finalModifier;
         this.varModifier = varModifier;
@@ -372,6 +415,9 @@ class UnaryOperator extends NodeBase {
     optype: UnaryOpType;
     operator: Terminal;
     expr: NodeBase;
+
+    type = NodeType.unaryOperator;
+
     constructor(expr: NodeBase, op: Terminal);
     constructor(op: Terminal, expr: NodeBase);
     constructor(lexicallyFirst: Terminal | NodeBase, lexicallyAfter: Terminal | NodeBase) {
@@ -408,6 +454,8 @@ class BinaryOperator extends NodeBase {
     left: NodeBase;
     operator: Terminal;
     right: NodeBase;
+
+    type = NodeType.binaryOperator;
 
     constructor(left: NodeBase, operator: Terminal, right: NodeBase) {
         super(mergeRanges(left, right));
@@ -459,6 +507,8 @@ class Conditional extends NodeBase {
     consequent  : NodeList<NodeBase>;
     alternative : Conditional | null;
 
+    type = NodeType.conditional;
+
     constructor(subtype: ConditionalSubtype, fromTag: CfTag.TagBase, consequent: NodeList<NodeBase>) {
         super(fromTag.range);
         this.ifToken     = null;
@@ -482,6 +532,7 @@ class Conditional extends NodeBase {
 export class Statement extends NodeBase {
     stmt : NodeBase | null;
     semicolon : Terminal | null;
+    type = NodeType.statement;
     constructor(tag: CfTag.TagBase) {
         super(tag.range);
         CfTag.assertIsCommon(tag);
@@ -501,6 +552,8 @@ export class NamedBlock extends NodeBase {
     leftBrace: Terminal | null;
     stmtList: NodeList<NodeBase>;
     rightBrace: Terminal | null;
+
+    type: NodeType;
 
     constructor(startTag: CfTag.TagBase, endTag: CfTag.TagBase);
     constructor(startTag: CfTag.TagBase, stmtList: NodeList<NodeBase>, endTag: CfTag.TagBase);
@@ -525,11 +578,32 @@ export class NamedBlock extends NodeBase {
             this.stmtList = new NodeList<NodeBase>();
             this.rightBrace = null;
         }
+
+        this.type = NodeType.namedBlock;
     }
 }
 
 // BasicString
 // InterpolatedString
+
+export class SimpleStringLiteral extends NodeBase {
+    type = NodeType.simpleStringLiteral;
+
+    leftQuote : Terminal;
+    textSpan : TextSpan;
+    rightQuote: Terminal;
+
+    constructor(
+        quoteType: TokenType.QUOTE_SINGLE | TokenType.QUOTE_DOUBLE,
+        leftQuote: Terminal,
+        textSpan: TextSpan,
+        rightQuote: Terminal) {
+        super(mergeRanges(leftQuote, rightQuote));
+        this.leftQuote = leftQuote;
+        this.textSpan = textSpan;
+        this.rightQuote = rightQuote;
+    }
+}
 
 export class StringLiteral extends NodeBase {
     //
@@ -542,6 +616,8 @@ export class StringLiteral extends NodeBase {
     leftQuote: Terminal | null;
     elements: NodeList<NodeBase>; // TextSpan | HashWrappedExpr
     rightQuote: Terminal | null;
+
+    type: NodeType;
 
     constructor(unquotedStringLike: Terminal);
     constructor(quoteType: TokenType.QUOTE_DOUBLE | TokenType.QUOTE_SINGLE, leftQuote: Terminal, elements: NodeList<NodeBase>, rightQuote: Terminal);
@@ -560,11 +636,22 @@ export class StringLiteral extends NodeBase {
             this.elements = elements!;
             this.rightQuote = rightQuote!;
         }
+        this.type = NodeType.interpolatedStringLiteral;
     }
 }
 
 export class NumericLiteral extends NodeBase {
     literal: Terminal;
+    type = NodeType.numericLiteral;
+    constructor(literal: Terminal) {
+        super(literal.range);
+        this.literal = literal;
+    }
+}
+
+export class BooleanLiteral extends NodeBase {
+    literal: Terminal;
+    type = NodeType.booleanLiteral;
     constructor(literal: Terminal) {
         super(literal.range);
         this.literal = literal;
@@ -574,6 +661,7 @@ export class NumericLiteral extends NodeBase {
 class Identifier extends NodeBase {
     identifier: Terminal;
     canonicalName: string;
+    type = NodeType.identifier;
     constructor(identifier: Terminal, name: string) {
         super(identifier.range);
         this.identifier = identifier;
@@ -598,14 +686,15 @@ interface BracketAccess {
 class IndexedAccess extends NodeBase {
     root: NodeBase;
     accessElements: AccessElement[] = [];
+    type = NodeType.indexedAccess;
     constructor(root: NodeBase) {
         super(root.range);
         this.root = root;
     }
 
-    pushAccessElement(dot: Terminal, propertyName: StringLiteral) : void;
+    pushAccessElement(dot: Terminal, propertyName: Terminal) : void;
     pushAccessElement(leftBracket: Terminal, expr: NodeBase, rightBracket: Terminal) : void;
-    pushAccessElement(dotOrBracket: Terminal, expr: NodeBase | StringLiteral, rightBracket?: Terminal) : void {
+    pushAccessElement(dotOrBracket: Terminal, expr: NodeBase | Terminal, rightBracket?: Terminal) : void {
         if (rightBracket) { // bracket access
             this.accessElements.push({
                 leftBracket: dotOrBracket,
@@ -623,7 +712,7 @@ class IndexedAccess extends NodeBase {
 }
 
 class FunctionParameter extends NodeBase {
-    type: null;
+    returnType: null;
     requiredTerminal: Terminal | null;
     identifier: Identifier | null;
     equals: Terminal | null;
@@ -633,11 +722,13 @@ class FunctionParameter extends NodeBase {
     name: string | null;
     required: boolean;
 
+    type = NodeType.functionParamater;
+
     constructor(tag: CfTag.Common, paramName: string | null, required: boolean) {
         super(tag.range);
         this.tagOrigin.startTag = tag;
 
-        this.type = null;
+        this.returnType = null;
         this.requiredTerminal = null;
         this.identifier = null;
         this.equals = null;
@@ -656,6 +747,8 @@ class FunctionDefinition extends NodeBase {
 
     name: string;
 
+    type = NodeType.functionDefinition;
+
     constructor(startTag: CfTag.Common, params: FunctionParameter[], body: NodeList<NodeBase>, endTag: CfTag.Common, name: string) {
         super(mergeRanges(startTag, endTag));
         this.tagOrigin.startTag = startTag;
@@ -672,8 +765,12 @@ const enum ParseOptions {
     noTrivia = 0,
     withTrivia        = 0x00000001,
     allowHashWrapped  = 0x00000002,
-    undelimitedString = 0x00000004,
 };
+
+const enum ParseFlags {
+    none = 0,
+    inHashWrappedExpr = 0x00000001
+}
 
 function TagContext() {
     return {
@@ -703,9 +800,86 @@ export interface Diagnostic {
     msg: string;
 }
 
+/**
+ * a string is trivially computable if, possibly stripping outer hash-wrapper and
+ * any number of parentheses, we arrive at:
+ *      a string with 1 element, which is a TextSpan | Terminal (StringLiteral | NumericLiteral)
+ *      an integer numeric literal
+ */
+ function getTriviallyComputableString(node: NodeBase | undefined | null) : string | null {
+    if (!node) return null;
+
+    if (node instanceof SimpleStringLiteral) {
+        return node.textSpan.text;
+    }
+    else if (node instanceof NumericLiteral) {
+        return node.literal.token.text;
+    }
+    else if (node instanceof HashWrappedExpr || node instanceof Parenthetical) {
+        return getTriviallyComputableString(node.expr);
+    }
+
+    return null;
+}
+
+function getTriviallyComputableBoolean(node: NodeBase | undefined | null) : boolean | null {
+    if (!node) return null
+
+    if (node instanceof SimpleStringLiteral) {
+        const textVal = node.textSpan.text;
+        if (textVal.length <= 3) {
+            const lowerCase = textVal.toLowerCase();
+            if (lowerCase === "yes") return true;
+            else if (lowerCase === "no") return false;
+
+            // there are cases where a negative value is simply unaccepted
+            // by the cf engine in certain positions, like <cfargument name="foo" required="-1">
+            const maybeNumeric = parseFloat(lowerCase);
+            return isNaN(maybeNumeric)
+                ? null
+                : maybeNumeric !== 0;
+        }
+    }
+    else if (node instanceof BooleanLiteral) {
+        return node.literal.token.type === TokenType.KW_TRUE;
+    }
+    else if (node instanceof NumericLiteral) {
+        return parseFloat(node.literal.token.text) !== 0;
+    }
+    else if (node instanceof HashWrappedExpr || node instanceof Parenthetical) {
+        return getTriviallyComputableBoolean(node.expr);
+    }
+
+    return null;
+}
+
+/**
+ * get the value for some attribute
+ * returns:
+ *      the attributes value if found,
+ *      undefined if the attribute exists but there is no expression associated with the attribute,
+ *      null if not found
+ */
+ function getAttributeValue(attrs: NodeList<TagAttribute>, name: string) : NodeBase | undefined | null {
+    for (const attr of attrs.list) {
+        if (attr.lcName === name) {
+            return attr.expr
+                ? attr.expr
+                : undefined;
+        }
+    }
+    return null;
+}
+
+function isFromTag(node: NodeBase) {
+    return node.tagOrigin.startTag !== null;
+}
+isFromTag;
+
 export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMode.tag) {
     let tokenizer : Tokenizer = tokenizer_;
     let mode: TokenizerMode = mode_;
+    let parseFlags : ParseFlags = ParseFlags.none;
     let lookahead_ : TokenType = peek().type;
     let globalDiagnosticEmitter : (() => void) | null = null;
 
@@ -753,6 +927,9 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
     /*function scriptMode() : boolean {
         return mode === TokenizerMode.script;
     }*/
+    function inHashWrappedExpr() : boolean {
+        return !!(parseFlags & ParseFlags.inHashWrappedExpr);
+    }
 
 
     function parseErrorAtRange(range: SourceRange, msg: string) : void;
@@ -796,14 +973,19 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
         }
     }
 
-    function parseExpectedTerminal(type: TokenType, parseOptions: ParseOptions, localDiagnosticEmitter?: () => void) : Terminal {
+    function parseExpectedTerminal(type: TokenType, parseOptions: ParseOptions, localDiagnosticEmitter?: (() => void) | string) : Terminal {
         const maybeTerminal = parseOptionalTerminal(type, parseOptions);
         if (maybeTerminal) {
             return maybeTerminal;
         }
         else {
             if (localDiagnosticEmitter) {
-                localDiagnosticEmitter();
+                if (typeof localDiagnosticEmitter === "string") {
+                    parseErrorAtCurrentToken(localDiagnosticEmitter);
+                }
+                else {
+                    localDiagnosticEmitter();
+                }
             }
             else if (globalDiagnosticEmitter) {
                 globalDiagnosticEmitter();
@@ -811,6 +993,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
             else {
                 parseErrorAtCurrentToken("Expected a " + TokenTypeUiString[type] + " here");
             }
+
             const phonyToken : Token = new Token(type, "", SourceRange.Nil());
             return createMissingNode(new Terminal(phonyToken));
         }
@@ -849,7 +1032,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                     result.list.push(parseScriptMultiLineComment());
                     continue;
                 case TokenType.WHITESPACE:
-                    result.list.push(new TextSpan(next().range)); // not really any need to store the whitespace
+                    result.list.push(new TextSpan(next().range, "")); // not really any need to store the whitespace
                     continue;
             }
             break;
@@ -920,7 +1103,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                 const equal = parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
                 let value : NodeBase;
                 if (lookahead() === TokenType.LEXEME) {
-                    value = parseStringLiteral(ParseOptions.undelimitedString);
+                    value = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
                 }
                 else {
                     value = parseExpression();
@@ -1133,6 +1316,60 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                 return new FunctionDefinition(startTag, params, body, endTag, validatedName);
             }*/
 
+            function treeifyTagFunction(startTag: CfTag.Common, body: NodeList<NodeBase>, endTag: CfTag.Common) {
+                function parseParam(tag: CfTag.Common) : FunctionParameter {
+                    const nameAttr = getAttributeValue(tag.attrs, "name");
+                    let name = "";
+                    if (!nameAttr) {
+                        parseErrorAtRange(tag.range, "<cfargument> requires a 'name' attribute");
+                    }
+                    else {
+                        const nameVal = getTriviallyComputableString(nameAttr);
+                        if (!nameVal) {
+                            //parseErrorAtRange(tag.attrs.name.range, "<cfargument> 'name' attribute must be a non-dynamic string value")
+                        }
+                        else {
+                            name = nameVal;
+                        }
+                    }
+
+                    const requiredAttr = getAttributeValue(tag.attrs, "required");
+                    let isRequired = false;
+                    if (requiredAttr) {
+                        const boolVal = getTriviallyComputableBoolean(requiredAttr);
+                        if (boolVal === null) {
+                            //parseErrorAtRange(tag.attrs.required.range, "<cfargument> 'required' attribute must be a non-dynamic boolean value");
+                        }
+                        isRequired = boolVal ?? false;
+                    }
+
+                    return new FunctionParameter(tag, name, isRequired);
+                }
+
+                const functionNameExpr = getAttributeValue(startTag.attrs, "name");
+                let functionName = getTriviallyComputableString(functionNameExpr);
+                if (!functionName) {
+                    parseErrorAtRange(startTag.range, "<cffunction> requires a name attribute")
+                }
+            
+                const params : FunctionParameter[] = [];
+                let i = 0;
+                for (; i < body.list.length; i++) {
+                    const node = body.list[i];
+                    if (node.type === NodeType.textSpan || node.type === NodeType.comment) {
+                        continue;
+                    }
+                    if (node.type === NodeType.tag && node instanceof CfTag.Common && node.canonicalName === "argument") {
+                        params.push(parseParam(node));
+                        continue;
+                    }
+                    break;
+                }
+
+                body.list = body.list.splice(i); // drop all the params and whitespace that we consumed as FunctionParameters
+                return new FunctionDefinition(startTag, params, body, endTag, functionName ?? "");
+            }
+
             function treeifyTags(reductionInstructions: readonly ReductionInstruction[]) : NodeList<NodeBase> {
                 const result = new NodeList<NodeBase>();
 
@@ -1168,8 +1405,21 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                     updateTagContext(tag);
 
                     if (tag instanceof CfTag.Text) {
-                        parseTextInTagContext(tag.range, tagContext);
+                        const text = parseTextInTagContext(tag.range, tagContext);
+
+                        if (text instanceof NodeList) {
+                            result.list.push(...text.list);
+                        }
+                        else {
+                            result.list.push(text);
+                        }
+
                         nextTag()
+                        continue;
+                    }
+                    else if (tag instanceof CfTag.Comment) {
+                        result.list.push(new Comment(CommentType.tag, tag.range));
+                        nextTag();
                         continue;
                     }
                     else if (tag.which === CfTag.Which.start) {
@@ -1194,6 +1444,12 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                                 result.list.push(expr);
                                 nextTag();
                                 continue;
+                            }
+                            case "function": {
+                                const startTag = parseExpectedTag(CfTag.Which.start, "function");
+                                const body = treeifyTags(stopAt(CfTag.Which.end, "function", ReductionScheme.return));
+                                const endTag = parseExpectedTag(CfTag.Which.end, "function", () => parseErrorAtRange(startTag.range, "Missing </cffunction> tag"))
+                                result.list.push(treeifyTagFunction(startTag as CfTag.Common, body, endTag as CfTag.Common));
                             }
                             case "script": {
                                 // same as handling set, except there is an end tag to consume
@@ -1337,7 +1593,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
 
     function parseTextInTagContext(range: SourceRange, tagContext: TagContext) {
         if (!tagContext.inTextInterpolationContext()) {
-            return new TextSpan(range);
+            return new TextSpan(range, tokenizer_.getTextSlice(range));
         }
         const saveTokenizerState = getTokenizerState();
         restoreTokenizerState({
@@ -1368,7 +1624,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                 return;
             }
             textSourceRange.toExclusive = tokenizer.getIndex(); // current index is NOT included, so, no '+1'
-            result.list.push(new TextSpan(textSourceRange));
+            result.list.push(new TextSpan(textSourceRange, tokenizer_.getTextSlice(textSourceRange)));
             textSourceRange = SourceRange.Nil();
         }
 
@@ -1398,10 +1654,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                     }
                     else { // single hash, meaning this is an interpolated string element
                         finishTextRange();
-                        const leftHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
-                        const expr = parseExpression();
-                        const rightHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
-                        result.list.push(new HashWrappedExpr(leftHash, expr, rightHash));
+                        result.list.push(parseHashWrappedExpression());
                         continue;
                     }
                 }
@@ -1623,11 +1876,35 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
         }
     }
 
+    function parseHashWrappedExpression() {
+        if (inHashWrappedExpr()) throw "parseHashWrappedExpr cannot be nested";
+
+        parseFlags |= ParseFlags.inHashWrappedExpr;
+
+        const leftHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
+        const expr = parseBooleanExpression();
+        const rightHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia, "Unterminated hash-wrapped expression");
+
+        parseFlags &= ~ParseFlags.inHashWrappedExpr;
+
+        return new HashWrappedExpr(leftHash, expr, rightHash);
+    }
+
     function parseCallExpressionOrLower() : NodeBase {
         switch(lookahead()) {
-            case TokenType.NUMBER: return parseNumericLiteral();
+            case TokenType.NUMBER:
+                return parseNumericLiteral();
             case TokenType.QUOTE_DOUBLE: // fallthrough
-            case TokenType.QUOTE_SINGLE: return parseStringLiteral()
+            case TokenType.QUOTE_SINGLE:
+                return parseStringLiteral();
+            case TokenType.KW_TRUE:
+            case TokenType.KW_FALSE:
+                return new BooleanLiteral(parseExpectedTerminal(lookahead(), ParseOptions.withTrivia));
+            case TokenType.HASH:
+                if (!inHashWrappedExpr()) {
+                    return parseHashWrappedExpression();
+                }
+                // [[fallthrough]];
             default: break;
         }
 
@@ -1678,7 +1955,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                 }
                 case TokenType.DOT: {
                     const dot = parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
-                    const propertyName = parseStringLiteral(ParseOptions.undelimitedString);
+                    const propertyName = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
                     if (!(root instanceof IndexedAccess)) {
                         root = new IndexedAccess(root);
                     }
@@ -1705,7 +1982,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
 
     function parseIdentifier(parseOptions : ParseOptions) : NodeBase {
         let leftHash : Terminal | null = null;
-        if (parseOptions & ParseOptions.allowHashWrapped) {
+        if (parseOptions & ParseOptions.allowHashWrapped && !inHashWrappedExpr()) {
             leftHash = parseOptionalTerminal(TokenType.HASH, ParseOptions.withTrivia);
         }
 
@@ -1731,21 +2008,20 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
         }
     }
 
-    function parseStringLiteral(parseOptions: ParseOptions = ParseOptions.none) : StringLiteral {
-        if (parseOptions & ParseOptions.undelimitedString) { // e.g., 'foo' in `<cfwhatever attr=foo>`
-            const unquotedString = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
-            return new StringLiteral(unquotedString);
+    function parseStringLiteral() : NodeBase {
+        const quoteType = lookahead();
+        if (quoteType !== TokenType.QUOTE_SINGLE && quoteType !== TokenType.QUOTE_DOUBLE) {
+            // will a lookahead or speculate ever trigger this ... ?
+            throw "AssertionFailure: parseStringLiteral called on input without valid string delimiter";
+        }
+
+        const leftQuote = parseExpectedTerminal(quoteType, ParseOptions.noTrivia);
+        const stringElements = parseTextWithPossibleInterpolations(quoteType);
+        const rightQuote = parseExpectedTerminal(quoteType, ParseOptions.withTrivia);
+        if (stringElements.list.length === 1 && stringElements.list[0] instanceof TextSpan) {
+            return new SimpleStringLiteral(quoteType, leftQuote, stringElements.list[0] as TextSpan, rightQuote);
         }
         else {
-            const quoteType = lookahead();
-            if (quoteType !== TokenType.QUOTE_SINGLE && quoteType !== TokenType.QUOTE_DOUBLE) {
-                // will a lookahead or speculate ever trigger this ... ?
-                throw "AssertionFailure: parseStringLiteral called on input without valid string delimiter";
-            }
-
-            const leftQuote = parseExpectedTerminal(quoteType, ParseOptions.noTrivia);
-            const stringElements = parseTextWithPossibleInterpolations(quoteType);
-            const rightQuote = parseExpectedTerminal(quoteType, ParseOptions.withTrivia);
             return new StringLiteral(quoteType, leftQuote, stringElements, rightQuote);
         }
     }

@@ -3,12 +3,9 @@ import { parse } from "node:path";
 import { Scanner, Tokenizer, Parser } from "../compiler";
 
 const scanner = Scanner(`
-<cfoutput>
-    #x + y + z#
-</cfoutput>
-
-<cffunction name="UH">
-    <cfargument x>
+<cffunction name=#true#>
+    <cfargument name="x" required=#true#>
+    <cfoutput>#x + #</cfoutput>
 </cffunction>
 `);
 

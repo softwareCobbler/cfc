@@ -79,6 +79,7 @@ export const enum TokenType {
     KW_DEFAULT,
     KW_DO,
     KW_ELSE,
+    KW_FALSE,
     KW_FINAL,
     KW_FOR,
     KW_FUNCTION,
@@ -86,6 +87,7 @@ export const enum TokenType {
     KW_IMPORT,
     KW_NEW,
     KW_RETURN,
+    KW_TRUE,
     KW_TRY,
     KW_VAR,
     KW_WHILE,
@@ -170,6 +172,7 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.KW_DEFAULT]:           "default",
     [TokenType.KW_DO]:                "do",
     [TokenType.KW_ELSE]:              "else",
+    [TokenType.KW_FALSE]:             "false",
     [TokenType.KW_FINAL]:             "final",
     [TokenType.KW_FOR]:               "for",
     [TokenType.KW_FUNCTION]:          "function",
@@ -177,6 +180,7 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.KW_IMPORT]:            "import",
     [TokenType.KW_NEW]:               "new",
     [TokenType.KW_RETURN]:            "return",
+    [TokenType.KW_TRUE]:              "true",
     [TokenType.KW_TRY]:               "try",
     [TokenType.KW_VAR]:               "var",
     [TokenType.KW_WHILE]:             "while",
@@ -223,7 +227,7 @@ export class Tokenizer {
     }
 
     private setToken(type: TokenType, from: number, to: number) {
-        this.token_ = new Token(type, this.scanner_.getText(), from, to);
+        this.token_ = new Token(type, this.scanner_.getLastScannedText(), from, to);
         return this.token_;
     }
 
@@ -379,7 +383,8 @@ export class Tokenizer {
                 else return this.lexeme();
             case AsciiMap.f: // [[fallthrough]];
             case AsciiMap.F:
-                if (this.scanner_.maybeEat(/final/iy)) return this.setToken(TokenType.KW_FINAL, from, this.getIndex());
+                if (this.scanner_.maybeEat(/false/iy)) return this.setToken(TokenType.KW_FALSE, from, this.getIndex());
+                else if (this.scanner_.maybeEat(/final/iy)) return this.setToken(TokenType.KW_FINAL, from, this.getIndex());
                 else if (script && this.scanner_.maybeEat(/for/iy)) return this.setToken(TokenType.KW_FOR, from, this.getIndex());
                 else if (script && this.scanner_.maybeEat(/function/iy)) return this.setToken(TokenType.KW_FUNCTION, from, this.getIndex());
                 else return this.lexeme();
@@ -421,7 +426,8 @@ export class Tokenizer {
                 else return this.lexeme();
             case AsciiMap.t: // [[fallthrough]];
             case AsciiMap.T:
-                if (script && this.scanner_.maybeEat(/try/iy)) return this.setToken(TokenType.KW_TRY, from, this.getIndex());
+                if (this.scanner_.maybeEat(/true/iy)) return this.setToken(TokenType.KW_TRUE, from, this.getIndex());
+                else if (script && this.scanner_.maybeEat(/try/iy)) return this.setToken(TokenType.KW_TRY, from, this.getIndex());
                 else return this.lexeme();
             case AsciiMap.v: // [[fallthrough]];
             case AsciiMap.V:
@@ -454,5 +460,9 @@ export class Tokenizer {
         this.restoreIndex(saveIndex);
 
         return result;
+    }
+
+    getTextSlice(range: SourceRange) {
+        return this.scanner_.getTextSlice(range);
     }
 }
