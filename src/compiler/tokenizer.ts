@@ -226,8 +226,8 @@ export class Tokenizer {
         // ?
     }
 
-    private setToken(type: TokenType, from: number, to: number) {
-        this.token_ = new Token(type, this.scanner_.getLastScannedText(), from, to);
+    private setToken(type: TokenType, from: number, to: number, text = this.scanner_.getLastScannedText()) {
+        this.token_ = new Token(type, text, from, to);
         return this.token_;
     }
 
@@ -252,7 +252,7 @@ export class Tokenizer {
     private consumeCurrentCharAs(type: TokenType) {
         const from = this.getIndex();
         this.scanner_.next();
-        return this.setToken(type, from, this.getIndex());
+        return this.setToken(type, from, this.getIndex(), this.getTextSlice(new SourceRange(from, from+1)));
     }
 
     getTokenText(token: Token) {

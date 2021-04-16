@@ -123,7 +123,7 @@ type Node =
 
 interface NodeBase {
     type: NodeType;
-    parent: NodeBase | null,
+    parent: Node | null,
     range: SourceRange,
     tagOrigin: {
         startTag: CfTag | null,
@@ -145,7 +145,7 @@ export function NodeBase<T extends NodeBase>(type: NodeType, range: SourceRange 
     return result as T;
 }
 
-function mergeRanges(...nodes : (SourceRange|NodeBase|NodeBase[]|undefined|null)[]) : SourceRange {
+function mergeRanges(...nodes : (SourceRange | Node | Node[] | undefined | null )[]) : SourceRange {
     const result = SourceRange.Nil();
     if (nodes.length === 0) {
         return result;
@@ -157,9 +157,7 @@ function mergeRanges(...nodes : (SourceRange|NodeBase|NodeBase[]|undefined|null)
 
         let thisRange : SourceRange;
         if (Array.isArray(node)) {
-            thisRange = mergeRanges(...node);
-        }
-        else if (Array.isArray(node)) {
+            if (node.length === 0) continue;
             thisRange = mergeRanges(...node);
         }
         else if (node instanceof SourceRange) {
@@ -171,6 +169,7 @@ function mergeRanges(...nodes : (SourceRange|NodeBase|NodeBase[]|undefined|null)
 
         if (!gotStart) {
             result.fromInclusive = thisRange.fromInclusive;
+            result.toExclusive = thisRange.toExclusive;
             gotStart = true;
         }
         else {
@@ -364,7 +363,7 @@ export namespace CfTag {
 
     export interface Script extends TagBase {
         tagType: TagType.script;
-        stmtList: NodeBase[];
+        stmtList: Node[];
     }
     export function Script(
         tagStart: Terminal,
@@ -372,7 +371,7 @@ export namespace CfTag {
         voidSlash: Terminal | null,
         tagEnd: Terminal,
         canonicalName: string,
-        stmtList: NodeBase[]) : Script {
+        stmtList: Node[]) : Script {
         const v = TagBase<Script>(Which.start, TagType.script, tagStart, tagName, voidSlash, tagEnd, canonicalName);
         v.stmtList = stmtList;
         return v;
@@ -405,13 +404,13 @@ export namespace CfTag {
 
 export interface CallExpression extends NodeBase {
     type: NodeType.callExpression;
-    identifier: NodeBase;
+    identifier: Node;
     leftParen: Terminal;
     args: CallArgument[];
     rightParen: Terminal;
 
 }
-export function CallExpression(identifier: NodeBase, leftParen: Terminal, args: CallArgument[], rightParen: Terminal) {
+export function CallExpression(identifier: Node, leftParen: Terminal, args: CallArgument[], rightParen: Terminal) {
     const v = NodeBase<CallExpression>(NodeType.callExpression, mergeRanges(identifier, rightParen));
     v.identifier = identifier;
     v.leftParen = leftParen;
@@ -422,11 +421,11 @@ export function CallExpression(identifier: NodeBase, leftParen: Terminal, args: 
 
 export interface CallArgument extends NodeBase {
     type: NodeType.callArgument;
-    expr: NodeBase;
+    expr: Node;
     comma: Terminal | null;
 }
 
-export function CallArgument(expr: NodeBase, comma: Terminal | null) : CallArgument {
+export function CallArgument(expr: Node, comma: Terminal | null) : CallArgument {
     const v = NodeBase<CallArgument>(NodeType.callArgument, mergeRanges(expr, comma));
     v.expr = expr;
     v.comma = comma;
@@ -435,17 +434,17 @@ export function CallArgument(expr: NodeBase, comma: Terminal | null) : CallArgum
 
 export interface Assignee {
     equals: Terminal;
-    value: NodeBase;
+    value: Node;
 }
 export interface Assignment extends NodeBase {
     type: NodeType.assignment;
     finalModifier: Terminal | null;
     varModifier: Terminal | null;
-    baseTarget: NodeBase;
+    baseTarget: Node;
     assignmentChain: Assignee[];
 }
 
-export function Assignment(finalModifier: Terminal | null, varModifier: Terminal | null, baseTarget: NodeBase, assignmentChain: Assignee[]) : Assignment {
+export function Assignment(finalModifier: Terminal | null, varModifier: Terminal | null, baseTarget: Node, assignmentChain: Assignee[]) : Assignment {
     if (assignmentChain.length == 0) throw "assignment chain must have at least one element";
     const v = NodeBase<Assignment>(NodeType.assignment, mergeRanges(finalModifier, varModifier, baseTarget, assignmentChain[assignmentChain.length-1].value));
     v.finalModifier = finalModifier;
@@ -462,7 +461,7 @@ export interface UnaryOperator extends NodeBase {
     pos: UnaryOperatorPos;
     optype: UnaryOpType;
     operator: Terminal;
-    expr: NodeBase;
+    expr: Node;
 }
 
 export function UnaryOperator(expr: Node, op: Terminal) : UnaryOperator;
@@ -503,12 +502,12 @@ export const enum BinaryOpType {
 export interface BinaryOperator extends NodeBase {
     type: NodeType.binaryOperator;
     optype: BinaryOpType;
-    left: NodeBase;
+    left: Node;
     operator: Terminal;
-    right: NodeBase;
+    right: Node;
 }
 
-export function BinaryOperator(left: NodeBase, operator: Terminal, right: NodeBase) : BinaryOperator {
+export function BinaryOperator(left: Node, operator: Terminal, right: Node) : BinaryOperator {
     const v = NodeBase<BinaryOperator>(NodeType.binaryOperator, mergeRanges(left, right));
     v.left = left;
     v.operator = operator;
@@ -529,8 +528,10 @@ export function tokenTypeToBinaryOpType(tokenType: TokenType) {
 
         case TokenType.DBL_EQUAL:       	return BinaryOpType.eq;
         case TokenType.LIT_EQ:        		return BinaryOpType.eq;
+        case TokenType.LIT_IS:              return BinaryOpType.eq;
         case TokenType.EXCLAMATION_EQUAL:	return BinaryOpType.neq;
         case TokenType.LIT_NEQ:				return BinaryOpType.neq;
+        case TokenType.LIT_IS_NOT:          return BinaryOpType.neq;
 
         case TokenType.LEFT_ANGLE:    		return BinaryOpType.lt;
         case TokenType.LIT_LT:              return BinaryOpType.lt;
@@ -554,13 +555,13 @@ export interface Conditional extends NodeBase {
     ifToken     : Terminal | null;
     elseToken   : Terminal | null;
     leftParen   : Terminal | null;
-    expr        : NodeBase | null;
+    expr        : Node | null;
     rightParen  : Terminal | null;
-    consequent  : NodeBase[];
+    consequent  : Node[];
     alternative : Conditional | null;
 }
 
-export function Conditional(subtype: ConditionalSubtype, fromTag: CfTag, consequent: NodeBase[]) : Conditional {
+export function Conditional(subtype: ConditionalSubtype, fromTag: CfTag, consequent: Node[]) : Conditional {
     const v = NodeBase<Conditional>(NodeType.conditional, fromTag.range);
     v.ifToken     = null;
     v.elseToken   = null;
@@ -583,7 +584,7 @@ export function Conditional(subtype: ConditionalSubtype, fromTag: CfTag, consequ
 
 export interface Statement extends NodeBase {
     type: NodeType.statement;
-    stmt: NodeBase | null;
+    stmt: Node | null;
     semicolon : Terminal | null;
 }
 
@@ -604,13 +605,13 @@ export interface NamedBlock extends NodeBase {
     name: Terminal | null;
     attrs: TagAttribute[];
     leftBrace: Terminal | null;
-    stmtList: NodeBase[];
+    stmtList: Node[];
     rightBrace: Terminal | null;
 }
 
 export function NamedBlock(startTag: CfTag, endTag: CfTag) : NamedBlock;
-export function NamedBlock(startTag: CfTag, stmtList: NodeBase[], endTag: CfTag) : NamedBlock;
-export function NamedBlock(startTag: CfTag, endTagOrStmtList: CfTag | NodeBase[], endTag?: CfTag) {
+export function NamedBlock(startTag: CfTag, stmtList: Node[], endTag: CfTag) : NamedBlock;
+export function NamedBlock(startTag: CfTag, endTagOrStmtList: CfTag | Node[], endTag?: CfTag) {
     if (endTag) {
         const v = NodeBase<NamedBlock>(NodeType.namedBlock, mergeRanges(startTag, endTag));
         v.tagOrigin.startTag = startTag;
@@ -722,25 +723,25 @@ export interface DotAccess {
 
 export interface BracketAccess {
     leftBracket: Terminal;
-    expr: NodeBase;
+    expr: Node;
     rightBracket: Terminal;
 }
 
 export interface IndexedAccess extends NodeBase {
     type: NodeType.indexedAccess;
-    root: NodeBase;
+    root: Node;
     accessElements: AccessElement[];
 }
 
-export function IndexedAccess(root: NodeBase) : IndexedAccess {
+export function IndexedAccess(root: Node) : IndexedAccess {
     const v = NodeBase<IndexedAccess>(NodeType.indexedAccess, root.range);
     v.root = root;
     return v;
 }
 
 export function pushAccessElement(base: IndexedAccess, dot: Terminal, propertyName: Terminal) : void;
-export function pushAccessElement(base: IndexedAccess, leftBracket: Terminal, expr: NodeBase, rightBracket: Terminal) : void;
-export function pushAccessElement(base: IndexedAccess, dotOrBracket: Terminal, expr: NodeBase | Terminal, rightBracket?: Terminal) : void {
+export function pushAccessElement(base: IndexedAccess, leftBracket: Terminal, expr: Node, rightBracket: Terminal) : void;
+export function pushAccessElement(base: IndexedAccess, dotOrBracket: Terminal, expr: Node | Terminal, rightBracket?: Terminal) : void {
     if (rightBracket) { // bracket access
         (<BracketAccess[]>base.accessElements).push({
             leftBracket: dotOrBracket,
@@ -762,7 +763,7 @@ export interface FunctionParameter extends NodeBase {
     requiredTerminal: Terminal | null;
     identifier: Identifier | null;
     equals: Terminal | null;
-    defaultValue: NodeBase | null;
+    defaultValue: Node | null;
     comma: Terminal | null;
     name: string | null;
     required: boolean;
@@ -910,7 +911,7 @@ function getTriviallyComputableBoolean(node: Node | undefined | null) : boolean 
     return null;
 }
 
-function isFromTag(node: NodeBase) {
+function isFromTag(node: Node) {
     return node.tagOrigin.startTag !== null;
 }
 isFromTag;
@@ -1385,12 +1386,18 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                     return FunctionParameter(tag, name, isRequired);
                 }
 
+                let functionName = "";
                 const functionNameExpr = getAttributeValue(startTag.attrs, "name");
-                let functionName = getTriviallyComputableString(functionNameExpr);
-                if (!functionName) {
+                if (!functionNameExpr) {
                     parseErrorAtRange(startTag.range, "<cffunction> requires a name attribute")
                 }
-            
+                else {
+                    let functionName = getTriviallyComputableString(functionNameExpr);
+                    if (!functionName) {
+                        parseErrorAtRange(functionNameExpr.range, "<cffunction> name attribute must be a constant")
+                    }
+                }
+
                 const params : FunctionParameter[] = [];
                 let i = 0;
                 for (; i < body.length; i++) {
@@ -1406,7 +1413,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                 }
 
                 body = body.splice(i); // drop all the params and whitespace that we consumed as FunctionParameters
-                return FunctionDefinition(startTag, params, body, endTag, functionName ?? "");
+                return FunctionDefinition(startTag, params, body, endTag, functionName);
             }
 
             function treeifyTags(reductionInstructions: readonly ReductionInstruction[]) : Node[] {
@@ -1488,6 +1495,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                                 const body = treeifyTags(stopAt(CfTag.Which.end, "function", ReductionScheme.return));
                                 const endTag = parseExpectedTag(CfTag.Which.end, "function", () => parseErrorAtRange(startTag.range, "Missing </cffunction> tag"))
                                 result.push(treeifyTagFunction(startTag as CfTag.Common, body, endTag as CfTag.Common));
+                                continue;
                             }
                             case "script": {
                                 // same as handling set, except there is an end tag to consume
@@ -1754,7 +1762,9 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
             switch (lookahead()) {
                 case TokenType.DBL_EQUAL:      		// [[fallthrough]];
                 case TokenType.LIT_EQ:        		// [[fallthrough]];
+                case TokenType.LIT_IS:              // [[fallthrough]];
                 case TokenType.EXCLAMATION_EQUAL:	// [[fallthrough]];
+                case TokenType.LIT_IS_NOT:          // [[fallthrough]];
                 case TokenType.LIT_NEQ:           	// [[fallthrough]];
     
                 case TokenType.LEFT_ANGLE:    		// [[fallthrough]]; // invalid in tag mode, but we've already checked for it
@@ -1916,7 +1926,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
         parseFlags |= ParseFlags.inHashWrappedExpr;
 
         const leftHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
-        const expr = parseBooleanExpression();
+        const expr = parseExpression();
         const rightHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia, "Unterminated hash-wrapped expression");
 
         parseFlags &= ~ParseFlags.inHashWrappedExpr;
@@ -2002,7 +2012,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
         return root;
     }
 
-    function parseCallExpression(root: NodeBase) {
+    function parseCallExpression(root: Node) {
         const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
         const args : CallArgument[] = [];
         while (lookahead() != TokenType.EOF && lookahead() != TokenType.RIGHT_PAREN) {
