@@ -24,6 +24,8 @@ const tagFacts = {
     directory:      TagFact.DISALLOW_BODY,
     documentitem:   TagFact.DISALLOW_BODY,
     dump:           TagFact.DISALLOW_BODY,
+    else:           TagFact.REQUIRE_BODY,
+    elseif:         TagFact.REQUIRE_BODY,
     error:          TagFact.DISALLOW_BODY,
     exit:           TagFact.DISALLOW_BODY,
     file:           TagFact.ALLOW_BODY,
@@ -31,6 +33,7 @@ const tagFacts = {
     header:         TagFact.DISALLOW_BODY,
     http:           TagFact.ALLOW_BODY,
     httpparam:      TagFact.DISALLOW_BODY,
+    if:             TagFact.REQUIRE_BODY,
     include:        TagFact.DISALLOW_BODY,
     input:          TagFact.DISALLOW_BODY,
     invoke:         TagFact.ALLOW_BODY,
@@ -1170,7 +1173,15 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
         //
         function treeifyTagList(tagList: CfTag[]) : Node[] {
             const tagContext = TagContext();
+            const openTagStack : string[] = [];
             let index = 0;
+
+            function openTagStackFindMatchingStartTag(tagCanonicalName: string) : number | null {
+                for (let i = openTagStack.length-1; i >= 0; i--) {
+                    if (openTagStack[i] === tagCanonicalName) return i;
+                }
+                return null;
+            }
 
             const enum ReductionScheme { default, return };
             interface ReductionInstruction {
@@ -1252,7 +1263,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                         diagnosticEmitter();
                     }
                     else {
-                        const msg = `Expected a <${which === CfTag.Which.end ? "/" : ""}${canonicalName}> tag here`;
+                        const msg = `Expected a <${which === CfTag.Which.end ? "/" : ""}cf${canonicalName}> tag here`;
                         let range = hasNextTag() ? peekTag()!.range : tagList[tagList.length-1].range;
                         parseErrorAtRange(range, msg);
                     }
@@ -1272,10 +1283,12 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
 
             function treeifyConditionalTag() {
                 const ifTag = parseExpectedTag(CfTag.Which.start, "if");
+                openTagStack.push("if");
                 const rootConsequent = treeifyTags(reductionInstructions.cfif);
                 let root = Conditional(ConditionalSubtype.if, ifTag, rootConsequent);
 
                 let working = root;
+
 
                 while (true) {
                     const elseIfTag = parseOptionalTag(CfTag.Which.start, "elseif");
@@ -1293,6 +1306,8 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                     break;
                 }
 
+                openTagStack.pop();
+
                 if (hasNextTag()) {
                     const nextTag = peekTag()!;
                     if (nextTag.canonicalName === "if" && nextTag.which === CfTag.Which.end) {
@@ -1304,57 +1319,6 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                 parseErrorAtRange(root.range, "Missing </cfif> tag");
                 return root;
             }
-
-            /*function parseTagFunctionParameter() {
-                const tag = parseExpectedTag(CfTag.Which.start, "argument") as CfTag.Common; // <cfargument ...> defines the function's parameters
-                const name = findAttr(tag.attrs, "name");
-                if (!name) {
-                    parseErrorAtRange(tag.range, "<cfargument> requires a 'name' attribute");
-                }
-                //
-                // check that the name is a string, after stripping off parens and hashes
-                // if (isStaticallyComputableStringValue(name)) ... or something like that
-                // then (isValidIdentifier(name)) !!
-                //
-                const required = findAttr(tag.attrs, "required");
-                required;
-                //
-                // need something like "isStaticallyComputableBoolean(value)" and then get the value
-                //
-                //
-
-                const validatedName = "<statically-computable|null>";
-                const validatedRequired = false;
-
-                return new FunctionParameter(tag, validatedName, validatedRequired);
-            }*/
-
-            /*function parseTagFunction() : Node {
-                const startTag = parseExpectedTag(CfTag.Which.start, "function") as CfTag.Common;
-                const params : FunctionParameter[] = [];
-
-                while (true) {
-                    if (peekTag()?.canonicalName === "argument") {
-                        params.push(parseTagFunctionParameter());
-                    }
-                    else {
-                        break;
-                    }
-                }
-
-                const body = treeifyTags(stopAt(CfTag.Which.end, "function", ReductionScheme.return));
-                const endTag = parseExpectedTag(CfTag.Which.end, "function", () => parseErrorAtRange(startTag.range, "Missing </cffunction> tag")) as CfTag.Common;
-
-                //
-                // if !isStaticallyVerifiable(name)....
-                //
-                const name = findAttr(startTag.attrs, "name");
-                if (!name) {
-                    parseErrorAtRange(startTag.range, "<cffunction> requires a 'name' attribute")
-                }
-                const validatedName = "<some-name|null>"
-                return new FunctionDefinition(startTag, params, body, endTag, validatedName);
-            }*/
 
             function treeifyTagFunction(startTag: CfTag.Common, body: Node[], endTag: CfTag.Common) {
                 function parseParam(tag: CfTag.Common) : FunctionParameter {
@@ -1419,21 +1383,6 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
             function treeifyTags(reductionInstructions: readonly ReductionInstruction[]) : Node[] {
                 const result : Node[] = [];
 
-                // any CfTags left in the result, which were in there to act as anchors that end tags could match against,
-                // get turned into statements
-                // all text and comments by now should have been turned into TextSpans
-                // is returning an r-value reasonable? goal is to use this as the return statement, like `return finalize();`
-                //
-                // probably want to leave the tags ... then we can match on them
-                function finalize(from = 0) {
-                    /*for (let i = from; i < result.list.length; i++) {
-                        if (result.list[i] instanceof CfTag) {
-                            result.list[i] = new Statement(result.list[i] as CfTag);
-                        }
-                    }*/
-                    return result;
-                }
-
                 function localStackFindMatchingStartTag(tag: CfTag) : number | null {
                     for (let i = result.length - 1; i >= 0; i--) {
                         if (result[i].type === NodeType.tag) {
@@ -1472,7 +1421,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                         const reductionScheme = getReductionScheme(tag, reductionInstructions);
                         switch (reductionScheme) {
                             case ReductionScheme.return:
-                                return finalize();
+                                return result;
                             case ReductionScheme.default:
                                 // ok, no-op: the default reduction scheme for a start tag is to do nothing
                                 break;
@@ -1491,9 +1440,11 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                                 continue;
                             }
                             case "function": {
+                                openTagStack.push("function");
                                 const startTag = parseExpectedTag(CfTag.Which.start, "function");
                                 const body = treeifyTags(stopAt(CfTag.Which.end, "function", ReductionScheme.return));
                                 const endTag = parseExpectedTag(CfTag.Which.end, "function", () => parseErrorAtRange(startTag.range, "Missing </cffunction> tag"))
+                                openTagStack.pop();
                                 result.push(treeifyTagFunction(startTag as CfTag.Common, body, endTag as CfTag.Common));
                                 continue;
                             }
@@ -1507,17 +1458,17 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                             }
                             default: {
                                 if (requiresEndTag(tag)) {
+                                    openTagStack.push(tag.canonicalName);
+
                                     const startTag = tag;
                                     nextTag();
                                     const blockChildren = treeifyTags(stopAt(CfTag.Which.end, startTag.canonicalName, ReductionScheme.return));
-                                    if (!hasNextTag()) {
-                                        parseErrorAtRange(tag.range, "no matching end tag for cf" + tag.canonicalName);
-                                    }
-                                    else {
-                                        const endTag = parseExpectedTag(CfTag.Which.end, startTag.canonicalName);
-                                        updateTagContext(endTag);
-                                        result.push(NamedBlock(startTag, blockChildren, endTag));
-                                    }
+
+                                    openTagStack.pop();
+
+                                    const endTag = parseExpectedTag(CfTag.Which.end, startTag.canonicalName, () => parseErrorAtRange(startTag.range, "Missing </cf" + startTag.canonicalName + ">"));
+                                    updateTagContext(endTag);
+                                    result.push(NamedBlock(startTag, blockChildren, endTag));
                                 }
                                 else {
                                     // a single loose tag
@@ -1534,7 +1485,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                     else if (tag.which === CfTag.Which.end) {
                         const reductionScheme = getReductionScheme(tag, reductionInstructions);
                         if (reductionScheme === ReductionScheme.return) {
-                                return finalize();
+                                return result;
                         }
 
                         // if we can't find the target tag in our local result, this tag has no matching start tag
@@ -1559,19 +1510,28 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                             // from our local results list
                             //
 					        
-                            finalize(matchingStartTagIndex + 1);
                             const blockChildren = result.slice(matchingStartTagIndex + 1);
                             result.splice(matchingStartTagIndex)
                             result.push(NamedBlock(matchingStartTag, blockChildren, tag));
                         }
                         else {
-                            parseErrorAtRange(tag.range, "End tag without a matching start tag (cf" + tag.canonicalName + ")")
+                            // this tag might be a mismatched tag,
+                            // in which case we return the current results, but do not consume the current tag
+                            // this will naturally result in an "unmatched tag" error in the caller
+                            const matchingOpenTagIndex = openTagStackFindMatchingStartTag(tag.canonicalName);
+                            if (matchingOpenTagIndex !== null) {
+                                return result;
+                            }
+                            else {
+                                parseErrorAtRange(tag.range, "End tag without a matching start tag (cf" + tag.canonicalName + ")")
+                            }
                         }
+
                         nextTag();
                     }
                 }
 
-                return finalize();
+                return result;
             }
 
             return treeifyTags(reductionInstructions.default);
@@ -1711,13 +1671,13 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
         return result;
     }
 
-    function isAssignmentTarget<T extends NodeBase>(node: T) : boolean {
-        switch (node.constructor) {
-            case IndexedAccess:
-            case Identifier:
+    function isAssignmentTarget(node: Node) : boolean {
+        switch (node.type) {
+            case NodeType.indexedAccess:
+            case NodeType.identifier:
                 return true;
-            case HashWrappedExpr:
-                return isAssignmentTarget((node as unknown as HashWrappedExpr).expr);
+            case NodeType.hashWrappedExpr:
+                return isAssignmentTarget(node.expr);
             default:
                 return false;
         }
