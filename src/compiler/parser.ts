@@ -135,7 +135,7 @@ interface NodeBase {
     flags: NodeFlags,
 }
 
-export function NodeBase<T extends NodeBase>(type: NodeType, range: SourceRange = SourceRange.Nil()) : T{
+export function NodeBase<T extends NodeBase>(type: T["type"], range: SourceRange = SourceRange.Nil()) : T {
     const result : Partial<T> = {};
     result.type = type;
     result.parent = null;
@@ -187,7 +187,6 @@ export interface Terminal extends NodeBase {
     type: NodeType.terminal;
     token: Token;
     trivia: Node[];
-    x: number;
 }
 
 export function Terminal(token: Token, trivia: Node[] = []) : Terminal {
@@ -197,16 +196,13 @@ export function Terminal(token: Token, trivia: Node[] = []) : Terminal {
     return terminal;
 }
 
-const _NilTerminal : Terminal = (() => {
+const NilTerminal : Readonly<Terminal> = (() => {
     const terminal = NodeBase<Terminal>(NodeType.terminal, SourceRange.Nil());
     terminal.token = Token.Nil();
     terminal.trivia = [];
     return terminal;
 })();
 
-export function NilTerminal() : Terminal {
-    return _NilTerminal;
-}
 
 export const enum CommentType { tag, scriptSingleLine, scriptMultiLine };
 
@@ -384,7 +380,7 @@ export namespace CfTag {
         tagType: TagType.text;
     }
     export function Text(range: SourceRange) : Text {
-        const nilTerminal = NilTerminal();
+        const nilTerminal = NilTerminal;
         const v = TagBase<Text>(Which.start, TagType.text, nilTerminal, nilTerminal, null, nilTerminal, "");
         v.range = range;
         return v;
@@ -398,7 +394,7 @@ export namespace CfTag {
         tagStart: Terminal,
         body: TagBase[],
         tagEnd: Terminal) : Comment {
-        const nilTerminal = NilTerminal();
+        const nilTerminal = NilTerminal;
         const v = TagBase<Comment>(Which.start, TagType.comment, tagStart, nilTerminal, nilTerminal, tagEnd, "");
         v.body = body;
         return v;
@@ -1271,10 +1267,10 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                     // create fake placeholder tag
                     let missingTag : CfTag.Common;
                     if (which === CfTag.Which.start) {
-                        missingTag = CfTag.Common(which, NilTerminal(), NilTerminal(), null, NilTerminal(), canonicalName, [])
+                        missingTag = CfTag.Common(which, NilTerminal, NilTerminal, null, NilTerminal, canonicalName, [])
                     }
                     else {
-                        missingTag = CfTag.Common(which, NilTerminal(), NilTerminal(), null, NilTerminal(), canonicalName)
+                        missingTag = CfTag.Common(which, NilTerminal, NilTerminal, null, NilTerminal, canonicalName)
                     }
                     createMissingNode(missingTag);
                     return missingTag;
@@ -1753,7 +1749,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
         return root;
     }
 
-    function parseBooleanExpression(descendIntoOr = true) : Node {
+    function parseBooleanExpression(descendIntoOr = true) : Node { // i think this binds the &&'s correctly
         let root = parseAddition();
 
         outer:
