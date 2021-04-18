@@ -86,6 +86,13 @@ function allowTagBody(tag: CfTag) {
         (facts & TagFact.ALLOW_BODY) || !!(facts & TagFact.REQUIRE_BODY));
 }
 
+function isLexemeLikeToken(token: Token) : boolean {
+    const val = token.type;
+    return val === TokenType.LEXEME
+        || (val > TokenType._FIRST_KW && val < TokenType._LAST_KW)
+        || (val > TokenType._FIRST_LIT && val < TokenType._LAST_LIT);
+}
+
 const enum NodeFlags {
     none    = 0,
     error   = 0x00000001,
@@ -93,10 +100,12 @@ const enum NodeFlags {
 }
 
 const enum NodeType {
-    terminal, list, textSpan, comment, hashWrappedExpr, parenthetical, tagAttribute,
+    terminal, textSpan, comment, hashWrappedExpr, parenthetical, tagAttribute,
     tag, callExpression, callArgument, assignment, unaryOperator, binaryOperator,
     conditional, statement, namedBlock, simpleStringLiteral, interpolatedStringLiteral, numericLiteral, booleanLiteral,
-    identifier, indexedAccess, functionParameter, functionDefinition
+    identifier, indexedAccess,
+    functionDefinition, arrowFunctionDefinition, functionParameter,
+    dottedPath
 }
 
 type Node =
@@ -114,7 +123,7 @@ type Node =
     | BinaryOperator
     | Conditional
     | Statement
-    | NamedBlock
+    | Block
     | SimpleStringLiteral
     | InterpolatedStringLiteral
     | NumericLiteral
@@ -123,6 +132,8 @@ type Node =
     | IndexedAccess
     | FunctionParameter
     | FunctionDefinition
+    | ArrowFunctionDefinition
+    | DottedPath<any>
 
 interface NodeBase {
     type: NodeType;
@@ -587,6 +598,14 @@ export interface Statement extends NodeBase {
     semicolon : Terminal | null;
 }
 
+export function Statement(node: Node | null, semicolon: Terminal | null) : Statement {
+    const v = NodeBase<Statement>(NodeType.statement, mergeRanges(node, semicolon));
+    v.stmt = node;
+    v.semicolon = semicolon;
+    return v;
+}
+
+namespace FromTag {
 export function Statement(tag: CfTag) : Statement {
     const stmt = NodeBase<Statement>(NodeType.statement, tag.range);
     stmt.stmt = null;
@@ -598,21 +617,33 @@ export function Statement(tag: CfTag) : Statement {
     // or maybe the caller will have to do that, and constructing from "any start tag" doesn't make sense
     //
 }
+}
 
-export interface NamedBlock extends NodeBase {
+export interface Block extends NodeBase {
     type: NodeType.namedBlock;
-    name: Terminal | null;
-    attrs: TagAttribute[];
+    name: Terminal | null; // cf blocks may be named, e.g, `savecontent variable='foo' { ... }` the name is 'savecontent'
+    attrs: TagAttribute[]; // cf blocks may have attributes just like their tag counterparts, e.g, `variable='foo'` in the above
     leftBrace: Terminal | null;
     stmtList: Node[];
     rightBrace: Terminal | null;
 }
 
-export function NamedBlock(startTag: CfTag, endTag: CfTag) : NamedBlock;
-export function NamedBlock(startTag: CfTag, stmtList: Node[], endTag: CfTag) : NamedBlock;
-export function NamedBlock(startTag: CfTag, endTagOrStmtList: CfTag | Node[], endTag?: CfTag) {
+export function Block(leftBrace: Terminal, stmtList: Node[], rightBrace: Terminal) : Block {
+    const v = NodeBase<Block>(NodeType.namedBlock, mergeRanges(leftBrace, rightBrace));
+    v.name = null;
+    v.attrs = [];
+    v.leftBrace = leftBrace;
+    v.stmtList = stmtList;
+    v.rightBrace = rightBrace;
+    return v;
+}
+
+namespace FromTag {
+export function Block(startTag: CfTag, endTag: CfTag) : Block;
+export function Block(startTag: CfTag, stmtList: Node[], endTag: CfTag) : Block;
+export function Block(startTag: CfTag, endTagOrStmtList: CfTag | Node[], endTag?: CfTag) {
     if (endTag) {
-        const v = NodeBase<NamedBlock>(NodeType.namedBlock, mergeRanges(startTag, endTag));
+        const v = NodeBase<Block>(NodeType.namedBlock, mergeRanges(startTag, endTag));
         v.tagOrigin.startTag = startTag;
         v.tagOrigin.endTag = endTag;
         v.name = null;
@@ -623,7 +654,7 @@ export function NamedBlock(startTag: CfTag, endTagOrStmtList: CfTag | Node[], en
         return v;
     }
     else {
-        const v = NodeBase<NamedBlock>(NodeType.namedBlock, mergeRanges(startTag, endTagOrStmtList));
+        const v = NodeBase<Block>(NodeType.namedBlock, mergeRanges(startTag, endTagOrStmtList));
         v.tagOrigin.startTag = startTag;
         v.tagOrigin.endTag = endTagOrStmtList as CfTag;
         v.name = null;
@@ -633,6 +664,7 @@ export function NamedBlock(startTag: CfTag, endTagOrStmtList: CfTag | Node[], en
         v.rightBrace = null;
         return v;
     }
+}
 }
 
 export interface SimpleStringLiteral extends NodeBase {
@@ -700,13 +732,13 @@ export function BooleanLiteral(literal: Terminal) {
 
 export interface Identifier extends NodeBase {
     type: NodeType.identifier;
-    identifier: Terminal;
+    lexeme: Terminal;
     canonicalName: string;
 }
 
 export function Identifier(identifier: Terminal, name: string) {
     const v = NodeBase<Identifier>(NodeType.identifier, identifier.range);
-    v.identifier = identifier;
+    v.lexeme = identifier;
     v.canonicalName = name.toLowerCase();
     return v;
 }
@@ -758,35 +790,61 @@ export function pushAccessElement(base: IndexedAccess, dotOrBracket: Terminal, e
 
 export interface FunctionParameter extends NodeBase {
     type: NodeType.functionParameter;
-    returnType: null;
     requiredTerminal: Terminal | null;
+    javaLikeTypename: DottedPath<Terminal> | null;
     identifier: Identifier | null;
     equals: Terminal | null;
     defaultValue: Node | null;
     comma: Terminal | null;
-    name: string | null;
+    canonicalName: string | null;
     required: boolean;
 }
 
-export function FunctionParameter(tag: CfTag.Common, paramName: string | null, required: boolean) : FunctionParameter {
+export function FunctionParameter(
+    requiredTerminal : Terminal | null,
+    javaLikeTypename: DottedPath<Terminal> | null,
+    identifier: Identifier,
+    equals: Terminal | null,
+    defaultValue: Node | null,
+    comma: Terminal | null) : FunctionParameter {
+    const v = NodeBase<FunctionParameter>(NodeType.functionParameter, mergeRanges(requiredTerminal, javaLikeTypename, identifier, defaultValue, comma));
+    v.requiredTerminal = requiredTerminal;
+    v.javaLikeTypename = javaLikeTypename;
+    v.identifier = identifier;
+    v.equals = equals;
+    v.defaultValue = defaultValue;
+    v.comma = comma;
+    v.canonicalName = identifier.canonicalName;
+    v.required = !!requiredTerminal;
+    return v;
+}
+
+namespace FromTag {
+export function FunctionParameter(tag: CfTag.Common, canonicalName: string | null, required: boolean, defaultValue: Node | null) : FunctionParameter {
     const v = NodeBase<FunctionParameter>(NodeType.functionParameter, tag.range);
     v.tagOrigin.startTag = tag;
-    v.returnType = null;
     v.requiredTerminal = null;
+    v.javaLikeTypename = null;
     v.identifier = null;
     v.equals = null;
-    v.defaultValue = null; // findAttr(tag.attrs, "default") ?? null;
+    v.defaultValue = defaultValue;
     v.comma = null;
-    v.name = paramName;
+    v.canonicalName = canonicalName;
     v.required = required;
     return v;
+}
 }
 
 export interface FunctionDefinition extends NodeBase {
     type: NodeType.functionDefinition;
+    // return type
+    // access modifier ? 
     attrs: TagAttribute[];
+    // left paren
     params: FunctionParameter[];
+    // right paren
     name: string;
+    // body block
 }
 
 export function FunctionDefinition(startTag: CfTag.Common, params: FunctionParameter[], body: Node[], endTag: CfTag.Common, name: string) : FunctionDefinition {
@@ -796,6 +854,35 @@ export function FunctionDefinition(startTag: CfTag.Common, params: FunctionParam
     v.attrs = startTag.attrs;
     v.params = params;
     v.name = name;
+    return v;
+}
+
+export interface ArrowFunctionDefinition extends NodeBase {
+    type: NodeType.arrowFunctionDefinition;
+    parens: {left: Terminal, right: Terminal} | null,
+    params: FunctionParameter[];
+    fatArrow: Terminal,
+    body: Statement;
+}
+
+export function ArrowFunctionDefinition(leftParen: Terminal | null, params: FunctionParameter[], rightParen: Terminal | null, fatArrow: Terminal, body: Statement) : ArrowFunctionDefinition {
+    const v = NodeBase<ArrowFunctionDefinition>(NodeType.arrowFunctionDefinition);
+    v.range = mergeRanges(leftParen, body);
+    v.parens = (leftParen && rightParen) ? {left: leftParen, right: rightParen} : null,
+    v.params = params;
+    v.fatArrow = fatArrow;
+    v.body = body;
+    return v;
+};
+
+export interface DottedPath<T extends NodeBase> extends NodeBase {
+    type: NodeType.dottedPath;
+    leadingName: T;
+    rest: {dot: Terminal, name: T}[]
+}
+export function DottedPath<T extends NodeBase>(leadingName: T) : DottedPath<T> {
+    const v = NodeBase<DottedPath<T>>(NodeType.dottedPath, leadingName.range);
+    v.rest = [];
     return v;
 }
 
@@ -915,6 +1002,7 @@ function isFromTag(node: Node) {
 }
 isFromTag;
 
+// @fixme: don't take params, use a "setMode()", "setScanner", etc.
 export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMode.tag) {
     let tokenizer : Tokenizer = tokenizer_;
     let mode: TokenizerMode = mode_;
@@ -963,9 +1051,9 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
     function tagMode() : boolean {
         return mode === TokenizerMode.tag;
     }
-    /*function scriptMode() : boolean {
+    function scriptMode() : boolean {
         return mode === TokenizerMode.script;
-    }*/
+    }
     function inHashWrappedExpr() : boolean {
         return !!(parseFlags & ParseFlags.inHashWrappedExpr);
     }
@@ -1038,6 +1126,30 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
         }
     }
 
+    // tag names like "function" (any others?) are also keywords
+    // if they were only keywords in script mode, we wouldn't have to worry about it,
+    // but they are also keywords in tag mode, e.g, `<cfset x = function() { ... }>`
+    // and it is also a tagname; so when parsing a tag name we may not get a lexeme, but instead a keyword,
+    // which `parseExpectedTerminal` is not equipped to handle (it expects to parse exactly one type of token per call)
+    // so here, we don't care about the token type and instead just parse whatever follows as though it were a lexeme
+    //
+    // <cfswitch> is similar, but is not a keyword in tag mode so it could still be matched with `parseExpectedTerminal` looking for a lexeme;
+    // <cftry> as well, and etc; really <cffunction> is the big offender
+    //
+    function parseExpectedTagName() {
+        const token = next();
+        if (!isLexemeLikeToken(token)) {
+            parseErrorAtRange(token.range, "Expected a cftag name here");
+        }
+        else if (!/^[_a-z]+$/i.test(token.text)) {
+            parseErrorAtRange(token.range, "Invalid cftag name");
+        }
+
+        const trivia = parseTrivia();
+        const forcedLexemeToken = new Token(TokenType.LEXEME, token.text, token.range.fromInclusive, token.range.toExclusive);
+        return Terminal(forcedLexemeToken, trivia);
+    }
+
     function parseTagComment() : CfTag.Comment {
         const commentStart = parseExpectedTerminal(TokenType.CF_TAG_COMMENT_START, ParseOptions.noTrivia);
         const commentBody = parseTagTrivia();
@@ -1100,8 +1212,8 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
 
     function parseCfStartTag() {
         const tagStart = parseExpectedTerminal(TokenType.CF_START_TAG_START, ParseOptions.noTrivia);
-        const tagName = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
-        const canonicalName = tokenizer.getTokenText(tagName.token).toLowerCase();
+        const tagName = parseExpectedTagName();
+        const canonicalName = tagName.token.text.toLowerCase();
 
         if (canonicalName === "if" || canonicalName === "elseif") {
             const expr = parseExpression();
@@ -1123,7 +1235,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
 
     function parseCfEndTag() {
         const tagStart = parseExpectedTerminal(TokenType.CF_END_TAG_START, ParseOptions.noTrivia);
-        const tagName = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
+        const tagName = parseExpectedTagName();
         const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
 
         let canonicalName = "";
@@ -1343,7 +1455,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                         isRequired = boolVal ?? false;
                     }
 
-                    return FunctionParameter(tag, name, isRequired);
+                    return FromTag.FunctionParameter(tag, name, isRequired, /*FIXME*/ null);
                 }
 
                 let functionName = "";
@@ -1449,7 +1561,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                                 const stmtList = (<CfTag.Script>tag).stmtList;
                                 nextTag();
                                 const endTag = parseExpectedTag(CfTag.Which.end, "script");
-                                result.push(NamedBlock(tag, stmtList, endTag));
+                                result.push(FromTag.Block(tag, stmtList, endTag));
                                 continue;
                             }
                             default: {
@@ -1464,7 +1576,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
 
                                     const endTag = parseExpectedTag(CfTag.Which.end, startTag.canonicalName, () => parseErrorAtRange(startTag.range, "Missing </cf" + startTag.canonicalName + ">"));
                                     updateTagContext(endTag);
-                                    result.push(NamedBlock(startTag, blockChildren, endTag));
+                                    result.push(FromTag.Block(startTag, blockChildren, endTag));
                                 }
                                 else {
                                     // a single loose tag
@@ -1498,7 +1610,6 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                             const matchingStartTag = result[matchingStartTagIndex] as CfTag;
 
                             //
-                            // finalize so any remaining loose tag bodies are statement-ized
                             // move (matching_tag + 0) to be the head of a new block
                             // move everything from (matching_tag+1) into the new block as children
                             // use current tag as end of tag block
@@ -1508,7 +1619,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
 					        
                             const blockChildren = result.slice(matchingStartTagIndex + 1);
                             result.splice(matchingStartTagIndex)
-                            result.push(NamedBlock(matchingStartTag, blockChildren, tag));
+                            result.push(FromTag.Block(matchingStartTag, blockChildren, tag));
                         }
                         else {
                             // this tag might be a mismatched tag,
@@ -1685,23 +1796,39 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
         const root = parseCallExpressionOrLower();
 
         if (lookahead() != TokenType.EQUAL) {
+            if (finalModifier || varModifier) {
+                parseErrorAtRange(root.range, "final/var declaration modifier on non-declaring expression");
+            }
             return root;
         }
+
         if (!isAssignmentTarget(root)) {
-            // if we had a final or var modifer we need to mark an error, but this is otherwise OK
-		    // "left-hand side of an assignment must be an assignment target"
-            return root;
+            parseErrorAtRange(root.range, "left-hand side of assignment is not a valid assignment target");
         }
 
         const assignmentChain : Assignee[] = [];
         do {
             assignmentChain.push({
                 equals: parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia),
-                value: parseExpression()
+                value: parseAnonymousFunctionDefinitionOrExpression()
             });
         } while (lookahead() === TokenType.EQUAL && isAssignmentTarget(assignmentChain[assignmentChain.length-1].value));
 
         return Assignment(finalModifier, varModifier, root, assignmentChain);
+    }
+
+    function parseAnonymousFunctionDefinitionOrExpression() : Node {
+        if (lookahead() === TokenType.KW_FUNCTION) {
+            throw "nyi";
+            //return parseAnonymousFunctionDefinition();
+        }
+
+        const maybeArrowFunction = SpeculationHelper.speculate(tryParseArrowFunctionDefinition);
+        if (maybeArrowFunction) {
+            return maybeArrowFunction;
+        }
+
+        return parseExpression();
     }
 
     function parseExpression() : Node {
@@ -1908,8 +2035,8 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
             default: break;
         }
 
-        let root = parseIdentifier(ParseOptions.allowHashWrapped);
-        if (root instanceof HashWrappedExpr) {
+        let root : Node = parseIdentifier(ParseOptions.allowHashWrapped);
+        if (root.type === NodeType.hashWrappedExpr) {
             return root;
         }
 
@@ -1980,7 +2107,9 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
         return CallExpression(root, leftParen, args, rightParen);
     }
 
-    function parseIdentifier(parseOptions : ParseOptions) : Node {
+    function parseIdentifier(parseOptions : ParseOptions.none) : Identifier;
+    function parseIdentifier(parseOptions : ParseOptions) : Identifier | HashWrappedExpr;
+    function parseIdentifier(parseOptions : ParseOptions) : Identifier | HashWrappedExpr {
         let leftHash : Terminal | null = null;
         if (parseOptions & ParseOptions.allowHashWrapped && !inHashWrappedExpr()) {
             leftHash = parseOptionalTerminal(TokenType.HASH, ParseOptions.withTrivia);
@@ -2031,6 +2160,220 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
 
     function parseNumericLiteral() {
         return NumericLiteral(parseExpectedTerminal(TokenType.NUMBER, ParseOptions.withTrivia));
+    }
+
+    const SpeculationHelper = (function() {
+        //
+        // run a boolean returning worker, and always rollback changes to parser state when done
+        //
+        function lookahead(lookaheadWorker: () => boolean) {
+            const saveTokenizerState = getTokenizerState();
+            const saveParseErrorBeforeNextFinishedNode = parseErrorBeforeNextFinishedNode;
+
+            const result = lookaheadWorker();
+
+            restoreTokenizerState(saveTokenizerState);
+            parseErrorBeforeNextFinishedNode = saveParseErrorBeforeNextFinishedNode;
+            return result;
+        }
+        //
+        // if speculationWorker returns a truthy `T`, we return that;
+        // otherwise, rollback any changes to parser state made by the speculation worker and return null
+        //
+        function speculate<T>(speculationWorker: () => T) : T | null {
+            const saveTokenizerState = getTokenizerState();
+            const saveParseErrorBeforeNextFinishedNode = parseErrorBeforeNextFinishedNode;
+
+            const result = speculationWorker();
+
+            if (result) {
+                return result;
+            }
+            else {
+                parseErrorBeforeNextFinishedNode = saveParseErrorBeforeNextFinishedNode;
+                restoreTokenizerState(saveTokenizerState);
+                return null;
+            }
+        }
+        return {
+            lookahead,
+            speculate
+        }
+    })();
+
+    function isJavaLikeTypenameThenName() : boolean {
+        if (lookahead() !== TokenType.LEXEME) {
+            return false;
+        }
+
+        next();
+
+        while (lookahead() === TokenType.DOT) {
+            next();
+            if (lookahead() === TokenType.LEXEME) next();
+            else return false;    
+        }
+
+        parseTrivia();
+        return lookahead() === TokenType.LEXEME;
+    }
+
+    function isIdentifierThenFatArrow() : boolean {
+        if (lookahead() !== TokenType.LEXEME) return false;
+        next();
+        parseTrivia();
+        if (lookahead() !== TokenType.EQUAL_RIGHT_ANGLE) return false;
+        return true;
+    }
+
+    function parseDottedPathTypename() : DottedPath<Terminal> {
+        const result = DottedPath<Terminal>(parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia));
+        while (lookahead() === TokenType.DOT) {
+            result.rest.push({
+                dot: parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia),
+                name: parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia)
+            })
+        }
+        return result;
+    }
+
+    function tryParseFunctionDefinitionParameters() : FunctionParameter[] | null {
+        const result : FunctionParameter[] = [];
+        while (lookahead() !== TokenType.RIGHT_PAREN && lookahead() !== TokenType.EOF) {
+            let requiredTerminal : Terminal | null = null;
+            let javaLikeTypename : DottedPath<Terminal> | null = null;
+            let name : Identifier;
+            let equal : Terminal | null = null;
+            let defaultValue : Node | null = null;
+            let comma : Terminal | null = null;
+
+            //
+            // required is not a keyword, it just has a special use in exactly this position
+            //
+            // function foo(required (type(.name)*)? name (= defaultExpr)?) { ... }
+            //              ^^^^^^^^
+            if (peek().text.toLowerCase() === "required") {
+                requiredTerminal = parseOptionalTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
+            }
+
+            // function foo((required)? type(.name)* name (= defaultExpr)?) { ... }
+            //                          ^^^^^^^^^^^^^
+            if (SpeculationHelper.lookahead(isJavaLikeTypenameThenName)) {
+                javaLikeTypename = parseDottedPathTypename();
+                name = parseIdentifier(ParseOptions.none);
+            }
+            // function foo((required)? name (= defaultExpr)?) { ... }
+            //                          ^^^^
+            else if (lookahead() === TokenType.LEXEME) {
+                name = parseIdentifier(ParseOptions.none);
+            }
+            // didn't match anything
+            else {
+                return null;
+            }
+            
+            if (lookahead() === TokenType.LEXEME) {
+                const discardedLexemesStartPos = tokenizer_.getIndex();
+                do {
+                    next();
+                } while (lookahead() === TokenType.LEXEME);
+                
+                // @fixme: should be a warning
+                parseErrorAtRange(discardedLexemesStartPos, tokenizer_.getIndex(), "Names in this position will be discarded at runtime; are you missing a comma?")
+            }
+
+            equal = parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
+            if (equal) {
+                defaultValue = parseExpression();
+            }
+
+            comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+            result.push(FunctionParameter(requiredTerminal, javaLikeTypename, name, equal, defaultValue, comma));
+        }
+
+        return result;
+    }
+
+    function tryParseArrowFunctionDefinition() : ArrowFunctionDefinition | null {
+        let leftParen : Terminal | null = null;
+        let params : FunctionParameter[];
+        let rightParen : Terminal | null = null;
+        let fatArrow : Terminal;
+
+        if (SpeculationHelper.lookahead(isIdentifierThenFatArrow)) {
+            params = [
+                FunctionParameter(
+                    null,
+                    null,
+                    parseIdentifier(ParseOptions.none),
+                    null,
+                    null,
+                    null)
+            ];
+        }
+        else if (lookahead() === TokenType.LEFT_PAREN) {
+            leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
+            const maybeParams = SpeculationHelper.speculate(tryParseFunctionDefinitionParameters);
+            if (!maybeParams) {
+                return null;
+            }
+            params = maybeParams;
+            rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+        }
+        else {
+            return null;
+        }
+
+        fatArrow = parseExpectedTerminal(TokenType.EQUAL_RIGHT_ANGLE, ParseOptions.withTrivia);
+
+        //
+        // we enter script mode IF we are entering a braced-block;
+        // otherwise, we don't change modes;
+        // <cfset identity_lambda = x => <!--- still in tag mode ---> x>
+        // <cfset identity_lambda = x => { /* entered script mode */ return x; }>
+        //
+        const saveMode = mode;
+        if (lookahead() === TokenType.LEFT_BRACE) {
+            mode = TokenizerMode.script;
+        }
+        const stmtOrBlock = parseStatement();
+        mode = saveMode;
+
+        return ArrowFunctionDefinition(leftParen, params, rightParen, fatArrow, stmtOrBlock);
+    }
+
+    function parseStatementList(stopToken: TokenType = TokenType.RIGHT_BRACE) : Statement[] {
+        const result : Statement[] = [];
+
+        do {
+            result.push(parseStatement());
+        } while (lookahead() !== stopToken && lookahead() !== TokenType.EOF);
+
+        return result;
+    }
+
+    function parseStatement() : Statement {
+        while (lookahead() !== TokenType.EOF) {
+            switch (lookahead()) {
+                case TokenType.LEFT_BRACE: {
+                    const leftBrace = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
+                    const body = parseStatementList();
+                    const rightBrace = parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
+                    const semicolon = null;
+                    return Statement(
+                        Block(leftBrace, body, rightBrace),
+                        semicolon);
+                }
+                case TokenType.NUMBER: {
+                    const expr = parseExpression();
+                    const semicolon = scriptMode() ? parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia) : null;
+                    return Statement(expr, semicolon);
+                }
+                default: throw "unsupported statement / nyi";
+            }
+        }
+
+        throw "should never get here -- hit EOF while parsing a statement";
     }
 
     function getDiagnostics() : readonly Diagnostic[] {

@@ -12,6 +12,7 @@ export const enum TokenType {
     AMPERSAND,
     AMPERSAND_EQUAL,
     CARET,
+    COLON,
     COMMA,
     DBL_AMPERSAND,
     DBL_EQUAL,
@@ -46,6 +47,7 @@ export const enum TokenType {
     RIGHT_BRACE,
     RIGHT_BRACKET,
     RIGHT_PAREN,
+    SEMICOLON,
     STAR,
     STAR_EQUAL,
 
@@ -55,6 +57,7 @@ export const enum TokenType {
     CF_TAG_COMMENT_START,
     CF_TAG_COMMENT_END,
 
+    _FIRST_LIT,
     LIT_AND,
     LIT_CONTAINS,
     LIT_DOES_NOT_CONTAIN,
@@ -72,7 +75,9 @@ export const enum TokenType {
     LIT_NEQ,
     LIT_OR,
     LIT_XOR,
+    _LAST_LIT,
 
+    _FIRST_KW,
     KW_BREAK,
     KW_CASE,
     KW_CATCH,
@@ -91,6 +96,7 @@ export const enum TokenType {
     KW_TRY,
     KW_VAR,
     KW_WHILE,
+    _LAST_KW,
 };
 
 export const TokenTypeUiString : Record<TokenType, string> = {
@@ -105,6 +111,7 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.AMPERSAND]:            "&",
     [TokenType.AMPERSAND_EQUAL]:      "&=",
     [TokenType.CARET]:                "^",
+    [TokenType.COLON]:                ":",
     [TokenType.COMMA]:                ",",
     [TokenType.DBL_AMPERSAND]:        "&&",
     [TokenType.DBL_EQUAL]:            "==",
@@ -139,6 +146,7 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.RIGHT_BRACE]:          "}",
     [TokenType.RIGHT_BRACKET]:        "]",
     [TokenType.RIGHT_PAREN]:          ")",
+    [TokenType.SEMICOLON]:            ";",
     [TokenType.STAR]:                 "*",
     [TokenType.STAR_EQUAL]:           "*=",
 
@@ -148,6 +156,7 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.CF_TAG_COMMENT_START]: "<!---",
     [TokenType.CF_TAG_COMMENT_END]:   "--->",
 
+    [TokenType._FIRST_LIT]:           "<<IMMEDIATELY-BEFORE-FIRST-LITERAL>>",
     [TokenType.LIT_AND]:              "and",
     [TokenType.LIT_CONTAINS]:         "contains",
     [TokenType.LIT_DOES_NOT_CONTAIN]: "does not contain",
@@ -165,7 +174,9 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.LIT_NEQ]:              "neq",
     [TokenType.LIT_OR]:               "or",
     [TokenType.LIT_XOR]:              "xor",
+    [TokenType._LAST_LIT]:            "<<IMMEDIATELY-AFTER-LAST-LITERAL>>",
 
+    [TokenType._FIRST_KW]:            "<<IMMEDIATELY-BEFORE-FIRST-KW>>",
     [TokenType.KW_BREAK]:             "break",
     [TokenType.KW_CASE]:              "case",
     [TokenType.KW_CATCH]:             "catch",
@@ -184,6 +195,7 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.KW_TRY]:               "try",
     [TokenType.KW_VAR]:               "var",
     [TokenType.KW_WHILE]:             "while",
+    [TokenType._LAST_KW]:            "<<IMMEDIATELY-AFTER-LAST-KW>>",
 } as const;
 
 export class Token {
@@ -318,6 +330,8 @@ export class Tokenizer {
             case AsciiMap.QUOTE_SINGLE:  return this.consumeCurrentCharAs(TokenType.QUOTE_SINGLE);
             case AsciiMap.QUOTE_DOUBLE:  return this.consumeCurrentCharAs(TokenType.QUOTE_DOUBLE);
             case AsciiMap.COMMA:         return this.consumeCurrentCharAs(TokenType.COMMA);
+            case AsciiMap.COLON:         return this.consumeCurrentCharAs(TokenType.COLON);
+            case AsciiMap.SEMICOLON:     return this.consumeCurrentCharAs(TokenType.SEMICOLON);
             case AsciiMap.SPACE: //    [[fallthrough]];
             case AsciiMap.TAB:   // \t [[fallthrough]];
             case AsciiMap.CR:    // \r [[fallthrough]];
@@ -386,7 +400,7 @@ export class Tokenizer {
                 if (this.scanner_.maybeEat(/false/iy)) return this.setToken(TokenType.KW_FALSE, from, this.getIndex());
                 else if (this.scanner_.maybeEat(/final/iy)) return this.setToken(TokenType.KW_FINAL, from, this.getIndex());
                 else if (script && this.scanner_.maybeEat(/for/iy)) return this.setToken(TokenType.KW_FOR, from, this.getIndex());
-                else if (script && this.scanner_.maybeEat(/function/iy)) return this.setToken(TokenType.KW_FUNCTION, from, this.getIndex());
+                else if (this.scanner_.maybeEat(/function/iy)) return this.setToken(TokenType.KW_FUNCTION, from, this.getIndex());
                 else return this.lexeme();
             case AsciiMap.g: // [[fallthrough]];
             case AsciiMap.G:
