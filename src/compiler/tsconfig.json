@@ -2,6 +2,7 @@
   "files": [
     "scanner.ts",
     "tokenizer.ts",
+    "node.ts",
     "parser.ts",
     "binder.ts",
     "lang-server.ts",

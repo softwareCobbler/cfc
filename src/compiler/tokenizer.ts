@@ -198,38 +198,40 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType._LAST_KW]:            "<<IMMEDIATELY-AFTER-LAST-KW>>",
 } as const;
 
-export class Token {
+export interface Token {
     type: TokenType;
     range: SourceRange;
     text: string;
+}
 
-    constructor(type: TokenType, text: string, fromInclusive: number, toExclusive: number);
-    constructor(type: TokenType, text: string, range: SourceRange);
-    constructor(type: TokenType, text: string, fromOrRange: number | SourceRange, toExclusive?: number) {
-        this.type = type;
-        this.text = text;
-        if (typeof fromOrRange === "number") {
-            this.range = new SourceRange(fromOrRange, toExclusive!);
-        }
-        else {
-            this.range = fromOrRange;
+export function Token(type: TokenType, text: string, fromInclusive: number, toExclusive: number) : Token;
+export function Token(type: TokenType, text: string, range: SourceRange) : Token;
+export function Token(type: TokenType, text: string, fromOrRange: number | SourceRange, toExclusive?: number) : Token {
+    type = type;
+    text = text;
+    if (typeof fromOrRange === "number") {
+        return {
+            type,
+            text,
+            range: new SourceRange(fromOrRange, toExclusive!)
         }
     }
-
-    static Nil() {
-        return new Token(TokenType.NIL, "", SourceRange.Nil());
-    }
-
-    isNil() {
-        return this.range.fromInclusive === -1 && this.range.toExclusive === -1;
+    else {
+        return {
+            type,
+            text,
+            range: fromOrRange
+        }
     }
 }
+
+export const NilToken : Readonly<Token> = Token(TokenType.NIL, "", SourceRange.Nil());
 
 export const enum TokenizerMode { tag, script }
 
 export class Tokenizer {
     private scanner_ : Scanner;
-    private token_ : Token = Token.Nil();
+    private token_ : Token = NilToken;
     constructor(scanner: Scanner) {
         this.scanner_ = scanner;
     }
@@ -239,7 +241,7 @@ export class Tokenizer {
     }
 
     private setToken(type: TokenType, from: number, to: number, text = this.scanner_.getLastScannedText()) {
-        this.token_ = new Token(type, text, from, to);
+        this.token_ = Token(type, text, from, to);
         return this.token_;
     }
 
@@ -290,7 +292,7 @@ export class Tokenizer {
             // we've already seen a fin token;
             // or, we've hit the artificial end limit
             // either way, the only valid result is now FIN
-            return new Token(
+            return Token(
                 TokenType.EOF,
                 "",
                 this.token_.range
