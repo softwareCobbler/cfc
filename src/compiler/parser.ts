@@ -1,11 +1,14 @@
-import { CfTag, Node, NodeType, TagAttribute, NodeFlags, Terminal, Comment, TextSpan, NilTerminal,
+import {
+    setDebug as setNodeFactoryDebug,
+    CfTag, Node, NodeType, TagAttribute, NodeFlags, Terminal, Comment, TextSpan, NilTerminal,
     Conditional, ConditionalSubtype, FunctionParameter, FromTag, FunctionDefinition, CommentType,
     HashWrappedExpr, Assignee, Assignment, BinaryOperator, Parenthetical, UnaryOperator, BooleanLiteral,
     CallExpression, IndexedAccess, pushAccessElement, CallArgument, Identifier, SimpleStringLiteral, InterpolatedStringLiteral,
-    NumericLiteral, DottedPath, ArrowFunctionDefinition, Statement, Block } from "./node";
+    NumericLiteral, DottedPath, ArrowFunctionDefinition, Statement, Block, Switch, NamedBlockFromBlock,
+    SwitchCase, } from "./node";
 import { SourceRange } from "./scanner";
 import { Token, TokenType, TokenizerMode, Tokenizer, TokenTypeUiString } from "./tokenizer";
-import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString } from "./utils";
+import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, isNamedBlockName } from "./utils";
 
 const enum ParseOptions {
     none     = 0,
@@ -50,17 +53,88 @@ export interface Diagnostic {
 }
 
 // @fixme: don't take params, use a "setMode()", "setScanner", etc.
-export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMode.tag) {
-    let tokenizer : Tokenizer = tokenizer_;
-    let mode: TokenizerMode = mode_;
-    let parseFlags : ParseFlags = ParseFlags.none;
-    let lookahead_ : TokenType = peek().type;
+export function Parser() {
+    function setTokenizer(tokenizer_: Tokenizer, mode_: TokenizerMode) {
+        tokenizer = tokenizer_;
+        mode = mode_;
+        lookahead_ = peek().type;
+        parseFlags = ParseFlags.none;
+        return self_;
+    }
+    function setMode(mode_: TokenizerMode) {
+        mode = mode_;
+        return self_;
+    }
+    function setDebug(isDebug: boolean) {
+        setNodeFactoryDebug(isDebug);
+        return self_;
+    }
+
+    let tokenizer : Tokenizer;
+    let mode: TokenizerMode;
+    let parseFlags : ParseFlags;
+    let lookahead_ : TokenType;
+    
     let globalDiagnosticEmitter : (() => void) | null = null;
 
     const diagnostics : Diagnostic[] = [];
     let parseErrorBeforeNextFinishedNode = false;
     parseErrorBeforeNextFinishedNode;
 
+    const SpeculationHelper = (function() {
+        //
+        // run a boolean returning worker, and always rollback changes to parser state when done
+        //
+        function lookahead(lookaheadWorker: () => boolean) {
+            const saveTokenizerState = getTokenizerState();
+            const saveParseErrorBeforeNextFinishedNode = parseErrorBeforeNextFinishedNode;
+
+            const result = lookaheadWorker();
+
+            restoreTokenizerState(saveTokenizerState);
+            parseErrorBeforeNextFinishedNode = saveParseErrorBeforeNextFinishedNode;
+            return result;
+        }
+        //
+        // if speculationWorker returns a truthy `T`, we return that;
+        // otherwise, rollback any changes to parser state made by the speculation worker and return null
+        //
+        function speculate<
+            F extends (...args: any) => any,
+            Args extends Parameters<F> = Parameters<F>>(speculationWorker: F, ...args: Args) : ReturnType<F> | null {
+            const saveTokenizerState = getTokenizerState();
+            const saveParseErrorBeforeNextFinishedNode = parseErrorBeforeNextFinishedNode;
+
+            const result = speculationWorker(...args as [...Args]);
+
+            if (result) {
+                return result;
+            }
+            else {
+                parseErrorBeforeNextFinishedNode = saveParseErrorBeforeNextFinishedNode;
+                restoreTokenizerState(saveTokenizerState);
+                return null;
+            }
+        }
+        return {
+            lookahead,
+            speculate
+        }
+    })();
+
+    const self_ = {
+        setTokenizer,
+        setMode,
+        setDebug,
+        parseTags,
+        getDiagnostics
+    };
+
+    return self_;
+
+    /*********************************
+    /* impl
+    /********************************/
     function peek(jump: number = 0) {
         return tokenizer.peek(jump, mode);
     }
@@ -123,8 +197,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
     }
 
     function parseErrorAtCurrentToken(msg: string) : void {
-        const sourceRange = peek().range;
-        parseErrorAtRange(sourceRange.fromInclusive, sourceRange.toExclusive, msg);
+        parseErrorAtRange(tokenizer.currentToken().range, msg);
     }
 
     function createMissingNode<T extends Node>(node: T) {
@@ -194,6 +267,31 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
 
         const trivia = parseTrivia();
         const forcedLexemeToken = Token(TokenType.LEXEME, token.text, token.range.fromInclusive, token.range.toExclusive);
+        return Terminal(forcedLexemeToken, trivia);
+    }
+
+    function parseExpectedLexemeLikeTerminal(consumeOnFailure: boolean, errorMsg?: string) : Terminal {
+        const labelLike = peek();
+        let trivia : Node[] = [];
+        if (!isLexemeLikeToken(labelLike)) {
+            if (errorMsg) {
+                parseErrorAtRange(labelLike.range, errorMsg);
+            }
+            else {
+                if (globalDiagnosticEmitter) globalDiagnosticEmitter();
+                else parseErrorAtRange(labelLike.range, "Expected a lexeme-like token here");
+            }
+            
+            if (consumeOnFailure) {
+                next();
+                trivia = parseTrivia();
+            }
+        }
+        else {
+            next();
+            trivia = parseTrivia();
+        }
+        const forcedLexemeToken = Token(TokenType.LEXEME, labelLike.text, labelLike.range.fromInclusive, labelLike.range.toExclusive);
         return Terminal(forcedLexemeToken, trivia);
     }
 
@@ -306,10 +404,10 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                 else {
                     value = parseExpression();
                 }
-                result.push(TagAttribute(attrName, tokenizer_.getTokenText(attrName.token).toLowerCase(), equal, value));
+                result.push(TagAttribute(attrName, tokenizer.getTokenText(attrName.token).toLowerCase(), equal, value));
             }
             else {
-                result.push(TagAttribute(attrName, tokenizer_.getTokenText(attrName.token).toLowerCase()));
+                result.push(TagAttribute(attrName, tokenizer.getTokenText(attrName.token).toLowerCase()));
             }
         }
 
@@ -440,23 +538,29 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                 const ifTag = parseExpectedTag(CfTag.Which.start, "if");
                 openTagStack.push("if");
                 const rootConsequent = treeifyTags(reductionInstructions.cfif);
-                let root = Conditional(ConditionalSubtype.if, ifTag, rootConsequent);
 
+                const consequentAsBlock = Block(null, rootConsequent, null);
+                consequentAsBlock.tagOrigin.startTag = ifTag;
+
+                let root = FromTag.Conditional(ConditionalSubtype.if, ifTag, consequentAsBlock);
                 let working = root;
-
 
                 while (true) {
                     const elseIfTag = parseOptionalTag(CfTag.Which.start, "elseif");
                     if (elseIfTag) {
                         const consequent = treeifyTags(reductionInstructions.cfelseif);
-                        working.alternative = Conditional(ConditionalSubtype.elseif, elseIfTag, consequent);
+                        const consequentAsBlock = Block(null, consequent, null);
+                        consequentAsBlock.tagOrigin.startTag = elseIfTag;
+                        working.alternative = FromTag.Conditional(ConditionalSubtype.elseif, elseIfTag, consequentAsBlock);
                         working = root.alternative!;
                         continue;
                     }
                     const elseTag = parseOptionalTag(CfTag.Which.start, "else");
                     if (elseTag) {
                         const consequent = treeifyTags(reductionInstructions.cfelse);
-                        working.alternative = Conditional(ConditionalSubtype.else, elseTag, consequent);
+                        const consequentAsBlock = Block(null, consequent, null);
+                        consequentAsBlock.tagOrigin.startTag = elseTag;
+                        working.alternative = FromTag.Conditional(ConditionalSubtype.else, elseTag, consequentAsBlock);
                     }
                     break;
                 }
@@ -543,7 +647,12 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                 }
 
                 body = body.splice(i); // drop all the params and whitespace that we consumed as FunctionParameters
-                return FunctionDefinition(startTag, params, body, endTag, functionName);
+                return FromTag.FunctionDefinition(
+                    startTag,
+                    params,
+                    Block(null, body, null), // there are no braces on a tag-originating function
+                    endTag,
+                    functionName);
             }
 
             function treeifyTags(reductionInstructions: readonly ReductionInstruction[]) : Node[] {
@@ -760,7 +869,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
 
     function parseTextInTagContext(range: SourceRange, tagContext: TagContext) {
         if (!tagContext.inTextInterpolationContext()) {
-            return TextSpan(range, tokenizer_.getTextSlice(range));
+            return TextSpan(range, tokenizer.getTextSlice(range));
         }
         const saveTokenizerState = getTokenizerState();
         restoreTokenizerState({
@@ -791,7 +900,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                 return;
             }
             textSourceRange.toExclusive = tokenizer.getIndex(); // current index is NOT included, so, no '+1'
-            result.push(TextSpan(textSourceRange, tokenizer_.getTextSlice(textSourceRange)));
+            result.push(TextSpan(textSourceRange, tokenizer.getTextSlice(textSourceRange)));
             textSourceRange = SourceRange.Nil();
         }
 
@@ -877,8 +986,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
 
     function parseAnonymousFunctionDefinitionOrExpression() : Node {
         if (lookahead() === TokenType.KW_FUNCTION) {
-            throw "nyi";
-            //return parseAnonymousFunctionDefinition();
+            return parseAnonymousFunctionDefinition();
         }
 
         const maybeArrowFunction = SpeculationHelper.speculate(tryParseArrowFunctionDefinition);
@@ -891,8 +999,8 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
 
     function parseExpression() : Node {
         const saveDiagnosticEmitter = globalDiagnosticEmitter;
-        const currentPos = tokenizer_.getIndex();
-        globalDiagnosticEmitter = () => parseErrorAtRange(currentPos, tokenizer_.getIndex(), "Expected an expression");
+        const currentPos = tokenizer.getIndex();
+        globalDiagnosticEmitter = () => parseErrorAtRange(currentPos, tokenizer.getIndex(), "Expected an expression");
 
         let root = parseBooleanExpression();
 
@@ -1051,6 +1159,12 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                 const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
                 return Parenthetical(leftParen, expr, rightParen);
             }
+            case TokenType.LIT_NOT: // [[fallthrough]];
+            case TokenType.EXCLAMATION: {
+                const op = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
+                const expr = parseParentheticalOrUnaryPrefix(); // for unary NOT operator, recurse to support !!x and similar
+                return UnaryOperator(op, expr);
+            }
             case TokenType.DBL_MINUS: // [[fallthrough]];
             case TokenType.DBL_PLUS: {
                 const op = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
@@ -1112,13 +1226,11 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
             break;
         }
 
-        if (root instanceof CallExpression) {
-            switch (lookahead()) {
-                case TokenType.DBL_PLUS:
-                case TokenType.DBL_MINUS:
-                    const unaryOp = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
-                    root = UnaryOperator(root, unaryOp);
-            }
+        switch (lookahead()) {
+            case TokenType.DBL_PLUS:
+            case TokenType.DBL_MINUS:
+                const unaryOp = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
+                root = UnaryOperator(root, unaryOp);
         }
 
         return root;
@@ -1166,33 +1278,38 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
         return CallExpression(root, leftParen, args, rightParen);
     }
 
-    function parseIdentifier(parseOptions : ParseOptions.none) : Identifier;
-    function parseIdentifier(parseOptions : ParseOptions) : Identifier | HashWrappedExpr;
-    function parseIdentifier(parseOptions : ParseOptions) : Identifier | HashWrappedExpr {
+    function parseIdentifier() : Identifier;
+    function parseIdentifier(parseOptions: ParseOptions.allowHashWrapped) : Identifier | HashWrappedExpr;
+    function parseIdentifier(parseOptions?: ParseOptions.allowHashWrapped) : Identifier | HashWrappedExpr {
         let leftHash : Terminal | null = null;
-        if (parseOptions & ParseOptions.allowHashWrapped && !inHashWrappedExpr()) {
+        if (parseOptions && parseOptions & ParseOptions.allowHashWrapped && !inHashWrappedExpr()) {
             leftHash = parseOptionalTerminal(TokenType.HASH, ParseOptions.withTrivia);
         }
 
-        const identifier = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
-        const name = tokenizer.getTokenText(identifier.token);
+        const identifier = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false);
 
-        if (parseOptions & ParseOptions.allowHashWrapped && leftHash) {
+        // @fixme: make sure the identifier name is valid
+        // for example, "var" is a valid identifier, but "and" and "final" are not
+        // in cf2021 they tightened it a bit, so 'function' is no longer a valid identifier, probably others
+        
+        const canonicalName = identifier.token.text.toLowerCase();
+
+        if (leftHash && parseOptions! & ParseOptions.allowHashWrapped) {
             const rightHash = parseExpectedTerminal(
                 TokenType.HASH,
                 ParseOptions.withTrivia,
                 () => parseErrorAtRange(
                     leftHash!.range.fromInclusive,
-                    tokenizer_.getIndex(),
+                    tokenizer.getIndex(),
                     "Unterminated hash wrapped expression"));
 
             return HashWrappedExpr(
                 leftHash,
-                Identifier(identifier, name),
+                Identifier(identifier, canonicalName),
                 rightHash);
         }
         else {
-            return Identifier(identifier, name);
+            return Identifier(identifier, canonicalName);
         }
     }
 
@@ -1203,14 +1320,22 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
             throw "AssertionFailure: parseStringLiteral called on input without valid string delimiter";
         }
 
+        // when we enter a new string literal, we can reset our hashWrappedExpr flag;
+        // hash wrapped expressions don't nest directly, but indirectly is ok; e.g,
+        // #someVal & "some-string-literal #nesting_here_is_ok#" & trying_to_nest_here_is_an_error #
+        const savedFlags = parseFlags;
+        parseFlags &= ~ParseFlags.inHashWrappedExpr;
+
         const leftQuote = parseExpectedTerminal(quoteType, ParseOptions.noTrivia);
         const stringElements = parseTextWithPossibleInterpolations(quoteType);
         const rightQuote = parseExpectedTerminal(quoteType, ParseOptions.withTrivia);
 
+        parseFlags = savedFlags;
+
         if (stringElements.length === 1) {
             const onlyElement = stringElements[0];
             if (onlyElement.type === NodeType.textSpan) {
-                return SimpleStringLiteral(quoteType, leftQuote, onlyElement, rightQuote);
+                return SimpleStringLiteral(leftQuote, onlyElement, rightQuote);
             }
         }
 
@@ -1219,49 +1344,10 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
 
     function parseNumericLiteral() {
         return NumericLiteral(parseExpectedTerminal(TokenType.NUMBER, ParseOptions.withTrivia));
-    }
+    }  
 
-    const SpeculationHelper = (function() {
-        //
-        // run a boolean returning worker, and always rollback changes to parser state when done
-        //
-        function lookahead(lookaheadWorker: () => boolean) {
-            const saveTokenizerState = getTokenizerState();
-            const saveParseErrorBeforeNextFinishedNode = parseErrorBeforeNextFinishedNode;
-
-            const result = lookaheadWorker();
-
-            restoreTokenizerState(saveTokenizerState);
-            parseErrorBeforeNextFinishedNode = saveParseErrorBeforeNextFinishedNode;
-            return result;
-        }
-        //
-        // if speculationWorker returns a truthy `T`, we return that;
-        // otherwise, rollback any changes to parser state made by the speculation worker and return null
-        //
-        function speculate<T>(speculationWorker: () => T) : T | null {
-            const saveTokenizerState = getTokenizerState();
-            const saveParseErrorBeforeNextFinishedNode = parseErrorBeforeNextFinishedNode;
-
-            const result = speculationWorker();
-
-            if (result) {
-                return result;
-            }
-            else {
-                parseErrorBeforeNextFinishedNode = saveParseErrorBeforeNextFinishedNode;
-                restoreTokenizerState(saveTokenizerState);
-                return null;
-            }
-        }
-        return {
-            lookahead,
-            speculate
-        }
-    })();
-
-    function isJavaLikeTypenameThenName() : boolean {
-        if (lookahead() !== TokenType.LEXEME) {
+    function isJavaLikeTypename() {
+        if (!isLexemeLikeToken(peek())) {
             return false;
         }
 
@@ -1269,12 +1355,27 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
 
         while (lookahead() === TokenType.DOT) {
             next();
-            if (lookahead() === TokenType.LEXEME) next();
+            if (isLexemeLikeToken(peek())) next();
             else return false;    
         }
 
+        // @fixme - handle the case of a trailing dot here ?
+        // `x.y.z.`
+        //       ^ this is probably OK in this predicate; parser has to handle it though
+
+        return true;
+    }
+
+    function isJavaLikeTypenameThenName() : boolean {
+        if (!isJavaLikeTypename()) return false;
         parseTrivia();
-        return lookahead() === TokenType.LEXEME;
+        return isLexemeLikeToken(peek());
+    }
+
+    function isJavaLikeTypenameThenFunction() : boolean {
+        if (!isJavaLikeTypename()) return false;
+        parseTrivia();
+        return lookahead() === TokenType.KW_FUNCTION;
     }
 
     function isIdentifierThenFatArrow() : boolean {
@@ -1283,6 +1384,15 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
         parseTrivia();
         if (lookahead() !== TokenType.EQUAL_RIGHT_ANGLE) return false;
         return true;
+    }
+
+    function isAccessModifier() : boolean {
+        const peekedText = peek().text;
+        const accessModifiers = ["public", "private", "package", "remote"];
+        for (const accessModifier of accessModifiers) {
+            if (peekedText === accessModifier) return true;
+        }
+        return false;
     }
 
     function parseDottedPathTypename() : DottedPath<Terminal> {
@@ -1296,7 +1406,14 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
         return result;
     }
 
-    function tryParseFunctionDefinitionParameters() : FunctionParameter[] | null {
+    // speculative overload is last in overload set so speculation-forwarder can see it
+    // this might not be maintainable in the long run ? the alternative is to not overload, and
+    // use definite! syntax at non-speculative call-
+    // the speculative mode is to support disambiguating arrow-function calls, which often look like other valid expressions
+    // until we get a full parameter definition parse followed by `) <trivia>? =>`
+    function tryParseFunctionDefinitionParameters(speculative: false) : FunctionParameter[];
+    function tryParseFunctionDefinitionParameters(speculative: true) : FunctionParameter[] | null;
+    function tryParseFunctionDefinitionParameters(speculative: boolean) : FunctionParameter[] | null {
         const result : FunctionParameter[] = [];
         while (lookahead() !== TokenType.RIGHT_PAREN && lookahead() !== TokenType.EOF) {
             let requiredTerminal : Terminal | null = null;
@@ -1319,26 +1436,33 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
             //                          ^^^^^^^^^^^^^
             if (SpeculationHelper.lookahead(isJavaLikeTypenameThenName)) {
                 javaLikeTypename = parseDottedPathTypename();
-                name = parseIdentifier(ParseOptions.none);
+                name = parseIdentifier();
             }
             // function foo((required)? name (= defaultExpr)?) { ... }
             //                          ^^^^
-            else if (lookahead() === TokenType.LEXEME) {
-                name = parseIdentifier(ParseOptions.none);
+            else if (isLexemeLikeToken(peek())) {
+                name = parseIdentifier();
             }
             // didn't match anything
             else {
-                return null;
+                if (speculative) {
+                    return null;
+                }
+                else {
+                    next();
+                    parseTrivia();
+                    name = createMissingNode(Identifier(NilTerminal, ""));
+                }
             }
             
             if (lookahead() === TokenType.LEXEME) {
-                const discardedLexemesStartPos = tokenizer_.getIndex();
+                const discardedLexemesStartPos = tokenizer.getIndex();
                 do {
                     next();
                 } while (lookahead() === TokenType.LEXEME);
                 
                 // @fixme: should be a warning
-                parseErrorAtRange(discardedLexemesStartPos, tokenizer_.getIndex(), "Names in this position will be discarded at runtime; are you missing a comma?")
+                parseErrorAtRange(discardedLexemesStartPos, tokenizer.getIndex(), "Names in this position will be discarded at runtime; are you missing a comma?")
             }
 
             equal = parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
@@ -1357,14 +1481,13 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
         let leftParen : Terminal | null = null;
         let params : FunctionParameter[];
         let rightParen : Terminal | null = null;
-        let fatArrow : Terminal;
 
         if (SpeculationHelper.lookahead(isIdentifierThenFatArrow)) {
             params = [
                 FunctionParameter(
                     null,
                     null,
-                    parseIdentifier(ParseOptions.none),
+                    parseIdentifier(),
                     null,
                     null,
                     null)
@@ -1372,7 +1495,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
         }
         else if (lookahead() === TokenType.LEFT_PAREN) {
             leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
-            const maybeParams = SpeculationHelper.speculate(tryParseFunctionDefinitionParameters);
+            const maybeParams = SpeculationHelper.speculate(tryParseFunctionDefinitionParameters, /*speculative*/ true);
             if (!maybeParams) {
                 return null;
             }
@@ -1383,7 +1506,18 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
             return null;
         }
 
-        fatArrow = parseExpectedTerminal(TokenType.EQUAL_RIGHT_ANGLE, ParseOptions.withTrivia);
+        //
+        // we're in a position where the caller determined the production can descend into an arrow function
+        // we got a valid parameters list; but a fat arrow here is what completes the deal
+        // e.g,
+        // <cfset x = (y)>
+        // is a valid assignment of `(y)` to `x`; but it also looks like the start of an arrow function
+        //
+
+        const fatArrow = parseOptionalTerminal(TokenType.EQUAL_RIGHT_ANGLE, ParseOptions.withTrivia);
+        if (!fatArrow) {
+            return null;
+        }
 
         //
         // we enter script mode IF we are entering a braced-block;
@@ -1401,46 +1535,245 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
         return ArrowFunctionDefinition(leftParen, params, rightParen, fatArrow, stmtOrBlock);
     }
 
-    function parseStatementList(stopToken: TokenType = TokenType.RIGHT_BRACE) : Statement[] {
-        const result : Statement[] = [];
+    function parseSwitch() {
+        const switchToken = parseExpectedTerminal(TokenType.KW_SWITCH, ParseOptions.withTrivia);
+        const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
+        const expr = parseExpression();
+        const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+        const leftBrace = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
 
-        do {
+        const cases : SwitchCase[] = [];
+
+        while (lookahead() !== TokenType.EOF) {
+            let thisCase : SwitchCase;
+            if (lookahead() === TokenType.RIGHT_BRACE) {
+                break;
+            }
+            else if (lookahead() === TokenType.KW_CASE) {
+                const caseToken = parseExpectedTerminal(TokenType.KW_CASE, ParseOptions.withTrivia);
+                const caseExpr = parseExpression();
+                const colon = parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
+                thisCase = SwitchCase.Case(caseToken, caseExpr, colon, []);
+            }
+            else if (lookahead() === TokenType.KW_DEFAULT) {
+                const defaultToken = parseExpectedTerminal(TokenType.KW_DEFAULT, ParseOptions.withTrivia);
+                const colon = parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
+                thisCase = SwitchCase.Default(defaultToken, colon, []);
+            }
+            else {
+                parseErrorAtCurrentToken("Expected a switch case or default here");
+                break;
+            }
+
+            // eat statements up to the switch statement's closing brace or the next case
+            while (lookahead() !== TokenType.KW_CASE && lookahead() !== TokenType.KW_DEFAULT && lookahead() !== TokenType.RIGHT_BRACE) {
+                thisCase.statements.push(parseStatement());
+            }
+            cases.push(thisCase);
+        }
+
+        const rightBrace = parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
+        return Switch(switchToken, leftParen, expr, rightParen, leftBrace, cases, rightBrace);
+    }
+
+    function parseConditional() : Conditional {
+        const ifToken = parseExpectedTerminal(TokenType.KW_IF, ParseOptions.withTrivia);
+        const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
+        const expr = parseExpression();
+        const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+        const stmt = parseStatement();
+
+        const root = Conditional.If(ifToken, leftParen, expr, rightParen, stmt);
+        let workingRoot = root;
+
+        while (lookahead() === TokenType.KW_ELSE) {
+            const elseToken = parseExpectedTerminal(TokenType.KW_ELSE, ParseOptions.withTrivia);
+            const maybeIfToken = parseExpectedTerminal(TokenType.KW_IF, ParseOptions.withTrivia);
+            if (maybeIfToken) {
+                const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
+                const expr = parseExpression();
+                const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+                const stmt = parseStatement();
+                workingRoot.alternative = Conditional.ElseIf(elseToken, maybeIfToken, leftParen, expr, rightParen, stmt);
+                workingRoot = workingRoot.alternative!;
+            }
+            else {
+                workingRoot.alternative = Conditional.Else(elseToken, parseStatement());
+                break;
+            }
+        }
+
+        return root;
+    }
+
+    function parseAnonymousFunctionDefinition() {
+        let accessModifier = null;
+        let returnType     = null;
+        let functionToken  : Terminal;
+        let nameToken      = null;
+        let leftParen      : Terminal;
+        let params         : FunctionParameter[];
+        let rightParen     : Terminal;
+        let attrs          : TagAttribute[];
+        let body           : Block;
+        
+        functionToken = parseExpectedTerminal(TokenType.KW_FUNCTION, ParseOptions.withTrivia);
+
+        // try to be helpful in this case:
+        // <cfset f = function a_name_here_is_an_error() { ... }
+        //                     ~~~~~~~~~~~~~~~~~~~~~~~
+        if (isLexemeLikeToken(peek())) {
+            parseErrorAtCurrentToken("An anonymous function definition cannot have a name.");
+            next();
+            parseTrivia();
+        }
+
+        leftParen  = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
+        params     = tryParseFunctionDefinitionParameters(/*speculative*/ false);
+        rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+        attrs      = parseTagAttributes();
+        body       = parseBlock(TokenizerMode.script);
+
+        return FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body);
+    }
+
+    function tryParseNamedFunctionDefinition(speculative: false) : Node;
+    function tryParseNamedFunctionDefinition(speculative: true) : Node | null;
+    function tryParseNamedFunctionDefinition(speculative: boolean) : Node | null {
+        let accessModifier: Terminal | null = null;
+        let returnType    : DottedPath<Terminal> | null = null;
+        let functionToken : Terminal | null;
+        let nameToken     : Terminal;
+        let leftParen     : Terminal;
+        let params        : FunctionParameter[];
+        let rightParen    : Terminal;
+        let attrs         : TagAttribute[];
+        let body          : Block;
+        
+        if (SpeculationHelper.lookahead(isAccessModifier)) {
+            accessModifier = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true);
+        }
+        if (SpeculationHelper.lookahead(isJavaLikeTypenameThenFunction)) {
+            returnType = parseDottedPathTypename();
+        }
+
+        if (speculative) {
+            functionToken = parseOptionalTerminal(TokenType.KW_FUNCTION, ParseOptions.withTrivia);
+            if (!functionToken) {
+                return null;
+            }
+        }
+        else {
+            functionToken = parseExpectedTerminal(TokenType.KW_FUNCTION, ParseOptions.withTrivia);
+        }
+
+        nameToken     = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false);
+        leftParen     = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
+        params        = tryParseFunctionDefinitionParameters(/*speculative*/ false);
+        rightParen    = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+        attrs         = parseTagAttributes();
+        body          = parseBlock(TokenizerMode.script);
+
+        return FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body);
+    }
+
+    function parseStatementList(stopToken: TokenType = TokenType.RIGHT_BRACE) : Node[] {
+        const result : Node[] = [];
+
+        while (lookahead() !== stopToken && lookahead() !== TokenType.EOF) {
             result.push(parseStatement());
-        } while (lookahead() !== stopToken && lookahead() !== TokenType.EOF);
+        }
 
         return result;
     }
 
-    function parseStatement() : Statement {
+    function parseBlock(parseBlockInMode: TokenizerMode) {
+        const savedMode = mode;
+        mode = parseBlockInMode;
+        const leftBrace = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
+        const body = parseStatementList();
+        const rightBrace = parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
+        mode = savedMode;
+        return Block(leftBrace, body, rightBrace);
+    }
+
+    function parseStatement() : Node {
         while (lookahead() !== TokenType.EOF) {
             switch (lookahead()) {
+                case TokenType.WHITESPACE: {
+                    // @fixme: attach this to a node somehow to get a beter round-trip
+                    continue;
+                }
                 case TokenType.LEFT_BRACE: {
-                    const leftBrace = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
-                    const body = parseStatementList();
-                    const rightBrace = parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
-                    const semicolon = null;
-                    return Statement(
-                        Block(leftBrace, body, rightBrace),
-                        semicolon);
+                    // will we *ever* parse a block in tag mode ... ?
+                    // anyway, just forward current mode; which is assumed to be script mode, if we're parsing a statement
+                    return parseBlock(mode);
                 }
                 case TokenType.NUMBER: {
                     const expr = parseExpression();
                     const semicolon = scriptMode() ? parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia) : null;
                     return Statement(expr, semicolon);
                 }
-                default: throw "unsupported statement / nyi";
+                case TokenType.KW_SWITCH: {
+                    return parseSwitch();
+                }
+                case TokenType.KW_IF: {
+                    return parseConditional();
+                }
+                case TokenType.KW_FUNCTION: {
+                    return tryParseNamedFunctionDefinition(/*speculative*/ false);
+                }
+                /*
+                case TokenType.KW_FOR: {
+                    return parseFor();
+                }
+                case TokenType.KW_DO: {
+                    return parseDo();
+                }
+                case TokenType.KW_WHILE: {
+                    return parseWhile();
+                }
+                */
+                default: {
+                    const peeked = peek();
+                    if (isLexemeLikeToken(peeked)) {
+                        const maybeFunction = SpeculationHelper.speculate(tryParseNamedFunctionDefinition, /*speculative*/ true);
+                        if (maybeFunction) {
+                            return maybeFunction;
+                        }
+                    }
+
+                    if (isNamedBlockName(peeked.text)) {
+                        const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true);
+                        const attrs = parseTagAttributes();
+                        const block = parseBlock(mode);
+                        return NamedBlockFromBlock(name, attrs, block);
+                    }
+                    else {
+                        // we can just skip it, there was an error earlier and this is some token that should be part of another
+                        // production but is now loose
+                        // should we mark an error?; note that we're not returning, we're t
+                        parseErrorAtCurrentToken("unrecognized construct here");
+                        next();
+                        parseTrivia();
+                        continue;
+                    }
+                }
             }
         }
 
-        throw "should never get here -- hit EOF while parsing a statement";
+        //
+        // hit EOF
+        // something like `if (x y z <EOF>`, y and z are discarded as not being recognized, and we keep advancing looking
+        // for a recognizable statement; then we hit EOF
+        // return nil statement
+        //
+        const nilStatement = Statement(null, null);
+        nilStatement.range = tokenizer.currentToken().range;
+        return nilStatement;
     }
 
     function getDiagnostics() : readonly Diagnostic[] {
         return diagnostics;
-    }
-
-    return {
-        parseTags,
-        getDiagnostics
     }
 }

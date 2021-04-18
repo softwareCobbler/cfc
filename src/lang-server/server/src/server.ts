@@ -21,7 +21,16 @@ import {
 	TextDocument
 } from 'vscode-languageserver-textdocument';
 
-import { naiveGetDiagnostics } from "compiler";
+import { Scanner, Tokenizer, Parser, Diagnostic as cfcDiagnostic, TokenizerMode } from "compiler";
+
+function naiveGetDiagnostics(text: string) : readonly cfcDiagnostic[] {
+	// how to tell if we were launched in debug mode ?
+    const scanner = Scanner(text);
+    const tokenizer = new Tokenizer(scanner);
+    const parser = Parser().setTokenizer(tokenizer, TokenizerMode.tag).setDebug(true);
+    parser.parseTags();
+    return parser.getDiagnostics();
+}
 
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.

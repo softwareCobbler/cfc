@@ -1,22 +1,24 @@
+import { Scanner, Tokenizer, TokenizerMode, Parser } from "../compiler";
 
-import { parse } from "node:path";
-import { Scanner, Tokenizer, Parser } from "../compiler";
+//const scanner = Scanner(`<cfset x = function foo(a, b = 42 & 0){}>`);
+const scanner = Scanner(`
+<cfset x = function() {
+    switch (foo) {
+        case x: 0;
+        case y: {
 
-const scanner = Scanner(`<cf! name="#x#">
-<cfargument name="foo" required=#x#>
-<cfargument name="bar" required=#y#>
-<cfargument name="baz" required=#z#>
-<cfset v = (x + ) => 4>
-<cfif x IS 4>
-    <cfoutput>
-        <cfif X EQ 4>
-        </cfif>
-    </cfoutPut>
-</cfif>
-</cffunction>`);
+        }
+        depfault: {
+
+        }
+    }
+}>`);
 
 const tokenizer = new Tokenizer(scanner);
-const parser = Parser(tokenizer);
+const parser = Parser()
+    .setTokenizer(tokenizer, TokenizerMode.tag)
+    .setDebug(true);
+
 parser.parseTags();
 for (const diag of parser.getDiagnostics()) {
     console.log(diag);

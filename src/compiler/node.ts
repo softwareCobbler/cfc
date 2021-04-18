@@ -1,5 +1,11 @@
-import { TokenType, Token, NilToken } from "./tokenizer";
+import { TokenType, Token, NilToken, TokenTypeUiString } from "./tokenizer";
 import { SourceRange } from "./scanner";
+
+let debug = false;
+
+export function setDebug(isDebug: boolean) {
+    debug = isDebug;
+}
 
 export const enum NodeFlags {
     none    = 0,
@@ -13,8 +19,38 @@ export const enum NodeType {
     conditional, statement, namedBlock, simpleStringLiteral, interpolatedStringLiteral, numericLiteral, booleanLiteral,
     identifier, indexedAccess,
     functionDefinition, arrowFunctionDefinition, functionParameter,
-    dottedPath
+    dottedPath, switch, switchCase
 }
+
+const NodeTypeUiString : Record<NodeType, string> = {
+    [NodeType.terminal]: "terminal",
+    [NodeType.textSpan]: "textSpan",
+    [NodeType.comment]: "comment",
+    [NodeType.hashWrappedExpr]: "hashWrappedExpr",
+    [NodeType.parenthetical]: "parenthetical",
+    [NodeType.tagAttribute]: "tagAttribute",
+    [NodeType.tag]: "tag",
+    [NodeType.callExpression]: "callExpression",
+    [NodeType.callArgument]: "callArgument",
+    [NodeType.assignment]: "assignment",
+    [NodeType.unaryOperator]: "unaryOperator",
+    [NodeType.binaryOperator]: "binaryOperator",
+    [NodeType.conditional]: "conditional",
+    [NodeType.statement]: "statement",
+    [NodeType.namedBlock]: "namedBlock",
+    [NodeType.simpleStringLiteral]: "simpleStringLiteral",
+    [NodeType.interpolatedStringLiteral]: "interpolatedStringLiteral",
+    [NodeType.numericLiteral]: "numericLiteral",
+    [NodeType.booleanLiteral]: "booleanLiteral",
+    [NodeType.identifier]: "identifier",
+    [NodeType.indexedAccess]: "indexedAccess",
+    [NodeType.functionDefinition]: "functionDefinition",
+    [NodeType.arrowFunctionDefinition]: "arrowFunctionDefinition",
+    [NodeType.functionParameter]: "functionParameter",
+    [NodeType.dottedPath]: "dottedPath",
+    [NodeType.switch]: "switch",
+    [NodeType.switchCase]: "switchCase",
+};
 
 export type Node =
     | Terminal
@@ -41,7 +77,9 @@ export type Node =
     | FunctionParameter
     | FunctionDefinition
     | ArrowFunctionDefinition
-    | DottedPath<any>
+    | DottedPath<any> // `"x"."x"` in a struct literal, `x.x` in a function parameter declaration, maybe others 
+    | Switch
+    | SwitchCase
 
 interface NodeBase {
     type: NodeType;
@@ -52,6 +90,7 @@ interface NodeBase {
         endTag: CfTag | null,
     }
     flags: NodeFlags,
+    __debug_type?: string;
 }
 
 export function NodeBase<T extends NodeBase>(type: T["type"], range: SourceRange = SourceRange.Nil()) : T {
@@ -64,6 +103,11 @@ export function NodeBase<T extends NodeBase>(type: T["type"], range: SourceRange
         endTag: null,
     }
     result.flags = NodeFlags.none;
+
+    if (debug) {
+        result.__debug_type = NodeTypeUiString[type];
+    }
+
     return result as T;
 }
 
@@ -106,13 +150,19 @@ export interface Terminal extends NodeBase {
     type: NodeType.terminal;
     token: Token;
     trivia: Node[];
+    __debug_tokenType?: string;
 }
 
 export function Terminal(token: Token, trivia: Node[] = []) : Terminal {
-    const terminal = NodeBase<Terminal>(NodeType.terminal, mergeRanges(token.range, trivia));
-    terminal.token = token;
-    terminal.trivia = trivia;
-    return terminal;
+    const v = NodeBase<Terminal>(NodeType.terminal, mergeRanges(token.range, trivia));
+    v.token = token;
+    v.trivia = trivia;
+
+    if (debug) {
+        v.__debug_tokenType = TokenTypeUiString[token.type];
+    }
+
+    return v;
 }
 
 export const NilTerminal : Readonly<Terminal> = Terminal(NilToken);
@@ -366,7 +416,7 @@ export function Assignment(finalModifier: Terminal | null, varModifier: Terminal
 }
 
 export const enum UnaryOperatorPos { pre, post };
-export const enum UnaryOpType { inc, dec, pos, neg };
+export const enum UnaryOpType { inc, dec, pos, neg, not };
 export interface UnaryOperator extends NodeBase {
     type: NodeType.unaryOperator;
     pos: UnaryOperatorPos;
@@ -397,10 +447,12 @@ export function UnaryOperator(lexicallyFirst: Node, lexicallyAfter: Node) {
 
 export function tokenTypeToUnaryOpType(tokenType: TokenType) {
     switch (tokenType) {
-        case TokenType.DBL_MINUS: return UnaryOpType.dec;
-        case TokenType.DBL_PLUS:  return UnaryOpType.inc;
-        case TokenType.MINUS:     return UnaryOpType.neg;
-        case TokenType.PLUS:      return UnaryOpType.pos;
+        case TokenType.EXCLAMATION: return UnaryOpType.not;
+        case TokenType.LIT_NOT:     return UnaryOpType.not;
+        case TokenType.DBL_MINUS:   return UnaryOpType.dec;
+        case TokenType.DBL_PLUS:    return UnaryOpType.inc;
+        case TokenType.MINUS:       return UnaryOpType.neg;
+        case TokenType.PLUS:        return UnaryOpType.pos;
         default: break;
     }
     throw "bad unary op type transform";
@@ -463,34 +515,72 @@ export function tokenTypeToBinaryOpType(tokenType: TokenType) {
 export const enum ConditionalSubtype { if, elseif, else };
 export interface Conditional extends NodeBase {
     type: NodeType.conditional;
-    ifToken     : Terminal | null;
     elseToken   : Terminal | null;
+    ifToken     : Terminal | null;
     leftParen   : Terminal | null;
     expr        : Node | null;
     rightParen  : Terminal | null;
-    consequent  : Node[];
+    consequent  : Node;
     alternative : Conditional | null;
 }
 
-export function Conditional(subtype: ConditionalSubtype, fromTag: CfTag, consequent: Node[]) : Conditional {
-    const v = NodeBase<Conditional>(NodeType.conditional, fromTag.range);
-    v.ifToken     = null;
-    v.elseToken   = null;
-    v.leftParen   = null;
-    v.rightParen  = null;
-    v.consequent  = consequent;
-    v.alternative = null;
-    v.tagOrigin.startTag = fromTag;
-
-    if (subtype === ConditionalSubtype.if || subtype === ConditionalSubtype.elseif) {
-        if (fromTag.tagType !== CfTag.TagType.scriptLike) throw "conditional created from tag must be created from a script-like tag";
-        v.expr = fromTag.expr;
+export namespace Conditional {
+    export function If(ifToken: Terminal, leftParen: Terminal, expr: Node, rightParen: Terminal, consequent: Node) : Conditional {
+        const v       = NodeBase<Conditional>(NodeType.conditional, mergeRanges(ifToken, consequent));
+        v.elseToken   = null;
+        v.ifToken     = ifToken;
+        v.leftParen   = leftParen;
+        v.expr        = expr;
+        v.rightParen  = rightParen;
+        v.consequent  = consequent;
+        v.alternative = null;
+        return v;
     }
-    else /* tag is an else tag */ {
-        v.expr = null;
+    export function ElseIf(elseToken: Terminal, ifToken: Terminal, leftParen: Terminal, expr: Node, rightParen: Terminal, consequent: Node) : Conditional {
+        const v       = NodeBase<Conditional>(NodeType.conditional, mergeRanges(ifToken, consequent));
+        v.elseToken   = elseToken;
+        v.ifToken     = ifToken;
+        v.leftParen   = leftParen;
+        v.expr        = expr;
+        v.rightParen  = rightParen;
+        v.consequent  = consequent;
+        v.alternative = null;
+        return v;
     }
+    export function Else(elseToken: Terminal, consequent: Node) : Conditional {
+        const v       = NodeBase<Conditional>(NodeType.conditional, mergeRanges(elseToken, consequent));
+        v.elseToken   = elseToken;
+        v.ifToken     = null;
+        v.leftParen   = null;
+        v.expr        = null;
+        v.rightParen  = null;
+        v.consequent  = consequent;
+        v.alternative = null;
+        return v;
+    }
+}
 
-    return v;
+export namespace FromTag {
+    export function Conditional(subtype: ConditionalSubtype, fromTag: CfTag, consequent: Node) : Conditional {
+        const v = NodeBase<Conditional>(NodeType.conditional, fromTag.range);
+        v.ifToken     = null;
+        v.elseToken   = null;
+        v.leftParen   = null;
+        v.rightParen  = null;
+        v.consequent  = consequent;
+        v.alternative = null;
+        v.tagOrigin.startTag = fromTag;
+
+        if (subtype === ConditionalSubtype.if || subtype === ConditionalSubtype.elseif) {
+            if (fromTag.tagType !== CfTag.TagType.scriptLike) throw "conditional created from tag must be created from a script-like tag";
+            v.expr = fromTag.expr;
+        }
+        else /* tag is an else tag */ {
+            v.expr = null;
+        }
+
+        return v;
+    }
 }
 
 export interface Statement extends NodeBase {
@@ -524,17 +614,23 @@ export interface Block extends NodeBase {
     type: NodeType.namedBlock;
     name: Terminal | null; // cf blocks may be named, e.g, `savecontent variable='foo' { ... }` the name is 'savecontent'
     attrs: TagAttribute[]; // cf blocks may have attributes just like their tag counterparts, e.g, `variable='foo'` in the above
-    leftBrace: Terminal | null;
+    leftBrace: Terminal | null; // tag-origin blocks will have no braces
     stmtList: Node[];
     rightBrace: Terminal | null;
 }
 
-export function Block(leftBrace: Terminal, stmtList: Node[], rightBrace: Terminal) : Block {
-    const v = NodeBase<Block>(NodeType.namedBlock, mergeRanges(leftBrace, rightBrace));
-    v.name = null;
-    v.attrs = [];
-    v.leftBrace = leftBrace;
-    v.stmtList = stmtList;
+export function NamedBlockFromBlock(name: Terminal, attrs: TagAttribute[], block: Block) : Block {
+    block.name = name;
+    block.attrs = attrs;
+    return block;
+}
+
+export function Block(leftBrace: Terminal | null, stmtList: Node[], rightBrace: Terminal | null) : Block {
+    const v      = NodeBase<Block>(NodeType.namedBlock, mergeRanges(leftBrace, rightBrace));
+    v.name       = null;
+    v.attrs      = [];
+    v.leftBrace  = leftBrace;
+    v.stmtList   = stmtList;
     v.rightBrace = rightBrace;
     return v;
 }
@@ -576,7 +672,6 @@ export interface SimpleStringLiteral extends NodeBase {
 }
 
 export function SimpleStringLiteral(
-    quoteType: TokenType.QUOTE_SINGLE | TokenType.QUOTE_DOUBLE,
     leftQuote: Terminal,
     textSpan: TextSpan,
     rightQuote: Terminal) : SimpleStringLiteral {
@@ -721,41 +816,77 @@ export function FunctionParameter(
 }
 
 export namespace FromTag {
-export function FunctionParameter(tag: CfTag.Common, canonicalName: string | null, required: boolean, defaultValue: Node | null) : FunctionParameter {
-    const v = NodeBase<FunctionParameter>(NodeType.functionParameter, tag.range);
-    v.tagOrigin.startTag = tag;
-    v.requiredTerminal = null;
-    v.javaLikeTypename = null;
-    v.identifier = null;
-    v.equals = null;
-    v.defaultValue = defaultValue;
-    v.comma = null;
-    v.canonicalName = canonicalName;
-    v.required = required;
-    return v;
+    export function FunctionParameter(tag: CfTag.Common, canonicalName: string | null, required: boolean, defaultValue: Node | null) : FunctionParameter {
+        const v = NodeBase<FunctionParameter>(NodeType.functionParameter, tag.range);
+        v.tagOrigin.startTag = tag;
+        v.requiredTerminal = null;
+        v.javaLikeTypename = null;
+        v.identifier = null;
+        v.equals = null;
+        v.defaultValue = defaultValue;
+        v.comma = null;
+        v.canonicalName = canonicalName;
+        v.required = required;
+        return v;
+    }
 }
-} // namespace FromTag
 
 export interface FunctionDefinition extends NodeBase {
     type: NodeType.functionDefinition;
-    // return type
-    // access modifier ? 
-    attrs: TagAttribute[];
-    // left paren
-    params: FunctionParameter[];
-    // right paren
-    name: string;
-    // body block
+    accessModifier: Terminal | null;
+    returnType    : DottedPath<Terminal> | null;
+    functionToken : Terminal | null;
+    nameToken     : Terminal | null;
+    leftParen     : Terminal | null;
+    params        : FunctionParameter[];
+    rightParen    : Terminal | null;
+    attrs         : TagAttribute[];
+    body          : Block;
+    canonicalName : string | null;
 }
 
-export function FunctionDefinition(startTag: CfTag.Common, params: FunctionParameter[], body: Node[], endTag: CfTag.Common, name: string) : FunctionDefinition {
-    const v = NodeBase<FunctionDefinition>(NodeType.functionDefinition, mergeRanges(startTag, endTag));
-    v.tagOrigin.startTag = startTag;
-    v.tagOrigin.endTag = endTag;
-    v.attrs = startTag.attrs;
-    v.params = params;
-    v.name = name;
+export function FunctionDefinition(
+    accessModifier: Terminal | null,
+    returnType    : DottedPath<Terminal> | null,
+    functionToken : Terminal,
+    nameToken     : Terminal | null,
+    leftParen     : Terminal,
+    params        : FunctionParameter[],
+    rightParen    : Terminal,
+    attrs         : TagAttribute[],
+    body          : Block
+) : FunctionDefinition {
+    const v = NodeBase<FunctionDefinition>(NodeType.functionDefinition, mergeRanges(accessModifier, returnType, functionToken, body));
+    v.accessModifier = accessModifier;
+    v.returnType     = returnType;
+    v.functionToken  = functionToken;
+    v.nameToken      = nameToken;
+    v.leftParen      = leftParen;
+    v.params         = params;
+    v.rightParen     = rightParen;
+    v.attrs          = attrs;
+    v.body           = body;
+    v.canonicalName  = nameToken?.token.text.toLowerCase() ?? null;
     return v;
+}
+
+export namespace FromTag {
+    export function FunctionDefinition(startTag: CfTag.Common, params: FunctionParameter[], body: Block, endTag: CfTag.Common, name: string) : FunctionDefinition {
+        const v = NodeBase<FunctionDefinition>(NodeType.functionDefinition, mergeRanges(startTag, endTag));
+        v.tagOrigin.startTag = startTag;
+        v.tagOrigin.endTag   = endTag;
+        v.accessModifier     = null;
+        v.returnType         = null;
+        v.functionToken      = null;
+        v.nameToken          = null;
+        v.leftParen          = null;
+        v.params             = params;
+        v.rightParen         = null;
+        v.attrs              = startTag.attrs;
+        v.body               = body;
+        v.canonicalName      = name;
+        return v;
+    }
 }
 
 export interface ArrowFunctionDefinition extends NodeBase {
@@ -763,10 +894,10 @@ export interface ArrowFunctionDefinition extends NodeBase {
     parens: {left: Terminal, right: Terminal} | null,
     params: FunctionParameter[];
     fatArrow: Terminal,
-    body: Statement;
+    body: Node;
 }
 
-export function ArrowFunctionDefinition(leftParen: Terminal | null, params: FunctionParameter[], rightParen: Terminal | null, fatArrow: Terminal, body: Statement) : ArrowFunctionDefinition {
+export function ArrowFunctionDefinition(leftParen: Terminal | null, params: FunctionParameter[], rightParen: Terminal | null, fatArrow: Terminal, body: Node) : ArrowFunctionDefinition {
     const v = NodeBase<ArrowFunctionDefinition>(NodeType.arrowFunctionDefinition);
     v.range = mergeRanges(leftParen, body);
     v.parens = (leftParen && rightParen) ? {left: leftParen, right: rightParen} : null,
@@ -785,4 +916,65 @@ export function DottedPath<T extends NodeBase>(leadingName: T) : DottedPath<T> {
     const v = NodeBase<DottedPath<T>>(NodeType.dottedPath, leadingName.range);
     v.rest = [];
     return v;
+}
+
+export interface Switch extends NodeBase {
+    type: NodeType.switch;
+    switchToken: Terminal;
+    leftParen: Terminal;
+    expr: Node;
+    rightParen: Terminal;
+    leftBrace: Terminal;
+    cases: SwitchCase[];
+    rightBrace: Terminal;
+}
+
+export function Switch(
+    switchToken: Terminal,
+    leftParen: Terminal,
+    expr: Node,
+    rightParen: Terminal,
+    leftBrace: Terminal,
+    cases: SwitchCase[],
+    rightBrace: Terminal) : Switch {
+    const v = NodeBase<Switch>(NodeType.switch, mergeRanges(switchToken, rightBrace));
+    v.switchToken = switchToken;
+    v.leftParen = leftParen;
+    v.expr = expr;
+    v.rightParen = rightParen;
+    v.leftBrace = leftBrace;
+    v.cases = cases;
+    v.rightBrace = rightBrace;
+    return v;
+}
+
+export const enum SwitchCaseType { case, default };
+export interface SwitchCase extends NodeBase {
+    type: NodeType.switchCase;
+    caseType: SwitchCaseType;
+    caseOrDefaultToken: Terminal;
+    expr: Node | null;
+    colon: Terminal;
+    statements: Node[];
+}
+
+export namespace SwitchCase {
+    export function Case(caseToken: Terminal, expr: Node, colon: Terminal, statements: Node[]) : SwitchCase {
+        const v = NodeBase<SwitchCase>(NodeType.switchCase, mergeRanges(caseToken, statements));
+        v.caseType = SwitchCaseType.case
+        v.caseOrDefaultToken = caseToken;
+        v.expr = expr;
+        v.colon = colon;
+        v.statements = statements;
+        return v;
+    }
+    export function Default(defaultToken: Terminal, colon: Terminal, statements: Node[]) : SwitchCase {
+        const v = NodeBase<SwitchCase>(NodeType.switchCase, mergeRanges(defaultToken, statements));
+        v.caseType = SwitchCaseType.default;
+        v.caseOrDefaultToken = defaultToken;
+        v.expr = null;
+        v.colon = colon;
+        v.statements = statements;
+        return v;
+    }
 }

@@ -73,6 +73,7 @@ export const enum TokenType {
     LIT_LTE,
     LIT_MOD,
     LIT_NEQ,
+    LIT_NOT,
     LIT_OR,
     LIT_XOR,
     _LAST_LIT,
@@ -92,6 +93,7 @@ export const enum TokenType {
     KW_IMPORT,
     KW_NEW,
     KW_RETURN,
+    KW_SWITCH,
     KW_TRUE,
     KW_TRY,
     KW_VAR,
@@ -172,6 +174,7 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.LIT_LTE]:              "lte",
     [TokenType.LIT_MOD]:              "mod",
     [TokenType.LIT_NEQ]:              "neq",
+    [TokenType.LIT_NOT]:              "not",
     [TokenType.LIT_OR]:               "or",
     [TokenType.LIT_XOR]:              "xor",
     [TokenType._LAST_LIT]:            "<<IMMEDIATELY-AFTER-LAST-LITERAL>>",
@@ -191,6 +194,7 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.KW_IMPORT]:            "import",
     [TokenType.KW_NEW]:               "new",
     [TokenType.KW_RETURN]:            "return",
+    [TokenType.KW_SWITCH]:            "switch",
     [TokenType.KW_TRUE]:              "true",
     [TokenType.KW_TRY]:               "try",
     [TokenType.KW_VAR]:               "var",
@@ -236,10 +240,6 @@ export class Tokenizer {
         this.scanner_ = scanner;
     }
 
-    prime(mode: TokenizerMode) {
-        // ?
-    }
-
     private setToken(type: TokenType, from: number, to: number, text = this.scanner_.getLastScannedText()) {
         this.token_ = Token(type, text, from, to);
         return this.token_;
@@ -247,6 +247,10 @@ export class Tokenizer {
 
     getIndex() {
         return this.scanner_.getIndex();
+    }
+
+    currentToken() {
+        return this.token_;
     }
 
     restoreIndex(index: number) {
@@ -432,6 +436,7 @@ export class Tokenizer {
             case AsciiMap.N:
                 if (this.scanner_.maybeEat(/neq/iy)) return this.setToken(TokenType.LIT_NEQ, from, this.getIndex());
                 else if (this.scanner_.maybeEat(/new/iy)) return this.setToken(TokenType.KW_NEW, from, this.getIndex());
+                else if (this.scanner_.maybeEat(/not/iy)) return this.setToken(TokenType.LIT_NOT, from, this.getIndex());
                 else return this.lexeme();
             case AsciiMap.o: // [[fallthrough]];
             case AsciiMap.O:
@@ -440,6 +445,10 @@ export class Tokenizer {
             case AsciiMap.r: // [[fallthrough]];
             case AsciiMap.R:
                 if (script && this.scanner_.maybeEat(/return/iy)) return this.setToken(TokenType.KW_RETURN, from, this.getIndex());
+                else return this.lexeme();
+            case AsciiMap.s:
+            case AsciiMap.S:
+                if (script && this.scanner_.maybeEat(/switch/iy)) return this.setToken(TokenType.KW_SWITCH, from, this.getIndex());
                 else return this.lexeme();
             case AsciiMap.t: // [[fallthrough]];
             case AsciiMap.T:

@@ -96,6 +96,17 @@ export function isLexemeLikeToken(token: Token) : boolean {
         || (val > TokenType._FIRST_LIT && val < TokenType._LAST_LIT);
 }
 
+const namedBlockNames = new Set<string>(["savecontent", "lock", "transaction"]);
+export function isNamedBlockName(text: string) {
+    return namedBlockNames.has(text);
+}
+
+// based on testing against CF-2021
+const illegalIdentifierNames = new Set<string>(["function", "final", "default"]);
+export function isIllegalIdentifierName(text: string) {
+    return illegalIdentifierNames.has(text);
+}
+
 /**
  * a string is trivially computable if, possibly stripping outer hash-wrapper and
  * any number of parentheses, we arrive at:

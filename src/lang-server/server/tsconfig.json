@@ -9,7 +9,7 @@
 		"composite": true,
 		"baseUrl": "./",
 		"paths": {
-			"compiler": ["../../compiler/"]
+			"compiler": ["../../compiler"]
 		}
 	},
 	"include": ["src/server.ts"],
