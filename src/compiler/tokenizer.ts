@@ -358,6 +358,7 @@ export class Tokenizer {
                 if (this.scanner_.maybeEat(/--->/iy)) return this.setToken(TokenType.CF_TAG_COMMENT_END, from, this.getIndex());
                 if (this.scanner_.maybeEat(/--/iy)) return this.setToken(TokenType.DBL_MINUS, from, this.getIndex());
                 if (this.scanner_.maybeEat(/-=/iy)) return this.setToken(TokenType.MINUS_EQUAL, from, this.getIndex());
+                if (this.tryEatNumber(from)) return this.token_;
                 else return this.consumeCurrentCharAs(TokenType.MINUS);
             case AsciiMap.AMPERSAND:
                 if (this.scanner_.maybeEat(/&&/iy)) return this.setToken(TokenType.DBL_AMPERSAND, from, this.getIndex());
@@ -460,9 +461,16 @@ export class Tokenizer {
             /*case '\xEF':
                 if (this.scanner_.maybeEat(/\xEF\xBB\xBF/, TokenType.BOM_UTF_8)) return token_;*/
             default:
-                if (this.scanner_.maybeEat(/\d+e[+-]?\d+(\.\d+)?|\d+(\.\d+)?/iy)) return this.setToken(TokenType.NUMBER, from, this.getIndex());
+                if (this.tryEatNumber(from)) return this.token_;
                 return this.lexeme();
         }
+    }
+
+    tryEatNumber(from: number) : Token | undefined {
+        if (this.scanner_.maybeEat(/-?\d+e[+-]?\d+(\.\d+)?|-?\d+(\.\d+)?|-?\.\d+/iy)) {
+            return this.setToken(TokenType.NUMBER, from, this.getIndex());
+        }
+        return undefined;
     }
 
     peek(jump: number, mode: TokenizerMode) : Token {

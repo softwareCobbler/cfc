@@ -5,98 +5,7 @@ import { CfTag, Node, NodeType, TagAttribute, NodeFlags, Terminal, Comment, Text
     NumericLiteral, DottedPath, ArrowFunctionDefinition, Statement, Block } from "./node";
 import { SourceRange } from "./scanner";
 import { Token, TokenType, TokenizerMode, Tokenizer, TokenTypeUiString } from "./tokenizer";
-
-const enum TagFact {
-    ALLOW_VOID		= 0x00000001, // tag can be void, e.g., <cfhttp> can be loose, or have a body like <cfhttp><cfhttpparam></cfhttp>
-	REQUIRE_VOID    = 0x00000002, // tag is always just a loose tag, whether marked with a void-slash or not
-	DISALLOW_VOID   = 0x00000004, // the body can be length 0, but it needs to have a matching end tag
-
-	// helpful "inverse" aliases
-	ALLOW_BODY = ALLOW_VOID,
-	REQUIRE_BODY = DISALLOW_VOID,
-	DISALLOW_BODY = REQUIRE_VOID
-}
-const tagFacts = {
-    // the "cf" prefix is implied
-    abort:          TagFact.DISALLOW_BODY,
-    application:    TagFact.DISALLOW_BODY,
-    argument:       TagFact.DISALLOW_BODY,
-    break:          TagFact.DISALLOW_BODY,
-    catch:          TagFact.DISALLOW_BODY,
-    content:        TagFact.DISALLOW_BODY,
-    continue:       TagFact.DISALLOW_BODY,
-    cookie:         TagFact.DISALLOW_BODY,
-    directory:      TagFact.DISALLOW_BODY,
-    documentitem:   TagFact.DISALLOW_BODY,
-    dump:           TagFact.DISALLOW_BODY,
-    else:           TagFact.REQUIRE_BODY,
-    elseif:         TagFact.REQUIRE_BODY,
-    error:          TagFact.DISALLOW_BODY,
-    exit:           TagFact.DISALLOW_BODY,
-    file:           TagFact.ALLOW_BODY,
-    function:       TagFact.REQUIRE_BODY,
-    header:         TagFact.DISALLOW_BODY,
-    http:           TagFact.ALLOW_BODY,
-    httpparam:      TagFact.DISALLOW_BODY,
-    if:             TagFact.REQUIRE_BODY,
-    include:        TagFact.DISALLOW_BODY,
-    input:          TagFact.DISALLOW_BODY,
-    invoke:         TagFact.ALLOW_BODY,
-    invokeargument: TagFact.DISALLOW_BODY,
-    location:       TagFact.DISALLOW_BODY,
-    log:            TagFact.DISALLOW_BODY,
-    mail:           TagFact.REQUIRE_BODY,
-    mailparam:      TagFact.DISALLOW_BODY,
-    output:         TagFact.REQUIRE_BODY,
-    param:          TagFact.DISALLOW_BODY,
-    pdf:            TagFact.ALLOW_BODY,
-    pdfform:        TagFact.DISALLOW_BODY,
-    pdfformparam:   TagFact.DISALLOW_BODY,
-    pdfparam:       TagFact.DISALLOW_BODY,
-    procparam:      TagFact.DISALLOW_BODY,
-    procresult:     TagFact.DISALLOW_BODY,
-    property:       TagFact.DISALLOW_BODY,
-    queryparam:     TagFact.DISALLOW_BODY,
-    query:          TagFact.REQUIRE_BODY,
-    reportparam:    TagFact.DISALLOW_BODY,
-    rethrow:        TagFact.DISALLOW_BODY,
-    return:         TagFact.DISALLOW_BODY,
-    set:            TagFact.DISALLOW_BODY,
-    setting:        TagFact.DISALLOW_BODY,
-    spreadsheet:    TagFact.DISALLOW_BODY,
-    storedproc:     TagFact.ALLOW_BODY,
-    throw:          TagFact.DISALLOW_BODY,
-    trace:          TagFact.DISALLOW_BODY,
-    transaction:    TagFact.ALLOW_BODY,
-    wddx:           TagFact.ALLOW_BODY,
-    zip:            TagFact.ALLOW_BODY,
-    zipparam:       TagFact.DISALLOW_BODY,
-} as const;
-
-function getTagFacts(tag: CfTag) : TagFact | null {
-    if (tagFacts.hasOwnProperty(tag.canonicalName)) {
-        return tagFacts[tag.canonicalName as keyof typeof tagFacts]
-    }
-    return null;
-}
-
-function requiresEndTag(tag: CfTag) : boolean {
-	const facts = getTagFacts(tag);
-    return !!facts && !!(facts & TagFact.REQUIRE_BODY);
-}
-
-function allowTagBody(tag: CfTag) {
-    const facts = getTagFacts(tag);
-    return !!facts && (
-        (facts & TagFact.ALLOW_BODY) || !!(facts & TagFact.REQUIRE_BODY));
-}
-
-function isLexemeLikeToken(token: Token) : boolean {
-    const val = token.type;
-    return val === TokenType.LEXEME
-        || (val > TokenType._FIRST_KW && val < TokenType._LAST_KW)
-        || (val > TokenType._FIRST_LIT && val < TokenType._LAST_LIT);
-}
+import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString } from "./utils";
 
 const enum ParseOptions {
     none     = 0,
@@ -124,7 +33,9 @@ function TagContext() {
         }
     }
 }
+
 type TagContext = ReturnType<typeof TagContext>;
+
 interface TokenizerState {
     mode : TokenizerMode;
     index: number;
@@ -137,82 +48,6 @@ export interface Diagnostic {
     toExclusive: number;
     msg: string;
 }
-
-/**
- * a string is trivially computable if, possibly stripping outer hash-wrapper and
- * any number of parentheses, we arrive at:
- *      a string with 1 element, which is a TextSpan | Terminal (InterpolatedStringLiteral | NumericLiteral)
- *      an integer numeric literal
- */
- function getTriviallyComputableString(node: Node | undefined | null) : string | null {
-    if (!node) return null;
-
-    if (node.type === NodeType.simpleStringLiteral) {
-        return node.textSpan.text;
-    }
-    else if (node.type === NodeType.numericLiteral) {
-        return node.literal.token.text;
-    }
-    else if (node.type === NodeType.hashWrappedExpr || node.type === NodeType.parenthetical) {
-        return getTriviallyComputableString(node.expr);
-    }
-
-    return null;
-}
-
-function getTriviallyComputableBoolean(node: Node | undefined | null) : boolean | null {
-    if (!node) return null
-
-    if (node.type === NodeType.simpleStringLiteral) {
-        const textVal = node.textSpan.text;
-        if (textVal.length <= 3) {
-            const lowerCase = textVal.toLowerCase();
-            if (lowerCase === "yes") return true;
-            else if (lowerCase === "no") return false;
-
-            // there are cases where a negative value is simply unaccepted
-            // by the cf engine in certain positions, like <cfargument name="foo" required="-1">
-            const maybeNumeric = parseFloat(lowerCase);
-            return isNaN(maybeNumeric)
-                ? null
-                : maybeNumeric !== 0;
-        }
-    }
-    else if (node.type === NodeType.booleanLiteral) {
-        return node.literal.token.type === TokenType.KW_TRUE;
-    }
-    else if (node.type === NodeType.numericLiteral) {
-        return parseFloat(node.literal.token.text) !== 0;
-    }
-    else if (node.type === NodeType.hashWrappedExpr || node.type === NodeType.parenthetical) {
-        return getTriviallyComputableBoolean(node.expr);
-    }
-
-    return null;
-}
-
-/**
- * get the value for some attribute
- * returns:
- *      the attributes value if found,
- *      undefined if the attribute exists but there is no expression associated with the attribute,
- *      null if not found
- */
- function getAttributeValue(attrs: TagAttribute[], name: string) : Node | undefined | null {
-    for (const attr of attrs) {
-        if (attr.lcName === name) {
-            return attr.expr
-                ? attr.expr
-                : undefined;
-        }
-    }
-    return null;
-}
-
-function isFromTag(node: Node) {
-    return node.tagOrigin.startTag !== null;
-}
-isFromTag;
 
 // @fixme: don't take params, use a "setMode()", "setScanner", etc.
 export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMode.tag) {
@@ -650,7 +485,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                     else {
                         const nameVal = getTriviallyComputableString(nameAttr);
                         if (!nameVal) {
-                            //parseErrorAtRange(tag.attrs.name.range, "<cfargument> 'name' attribute must be a non-dynamic string value")
+                            parseErrorAtRange(nameAttr.range, "<cfargument> 'name' attribute must be a constant string value");
                         }
                         else {
                             name = nameVal;
@@ -660,11 +495,22 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
                     const requiredAttr = getAttributeValue(tag.attrs, "required");
                     let isRequired = false;
                     if (requiredAttr) {
-                        const boolVal = getTriviallyComputableBoolean(requiredAttr);
-                        if (boolVal === null) {
-                            //parseErrorAtRange(tag.attrs.required.range, "<cfargument> 'required' attribute must be a non-dynamic boolean value");
+                        if (parseFloat(getTriviallyComputableString(requiredAttr)!) < 0) {
+                            // parseFloat does accept undefined, but the TS signature is overly-safe
+                            // so we might get a NaN out of it, but that's ok because NaN comparisons always result in false
+                            // if we don't get a NaN, and we are less than 0, report an error, because there is a special rule,
+                            // or more of a actual cf-engine parse-failure, that negative numbers cannot be coerced to boolean
+                            // in the requires attribute of a <cfargument> tag
+                            parseErrorAtRange(requiredAttr.range, "<cfargument> 'required' attribute does not allow coercions to boolean from negative numbers");
+                            isRequired = false;
                         }
-                        isRequired = boolVal ?? false;
+                        else {
+                            const boolVal = getTriviallyComputableBoolean(requiredAttr);
+                            if (boolVal === undefined) { // whatever the value was, it was not coercible to bool
+                                parseErrorAtRange(requiredAttr.range, "<cfargument> 'required' attribute must be a constant boolean value");
+                            }
+                            isRequired = boolVal ?? false;
+                        }
                     }
 
                     return FromTag.FunctionParameter(tag, name, isRequired, /*FIXME*/ null);
@@ -1231,6 +1077,7 @@ export function Parser(tokenizer_: Tokenizer, mode_: TokenizerMode = TokenizerMo
 
     function parseCallExpressionOrLower() : Node {
         switch(lookahead()) {
+            case TokenType.MINUS:
             case TokenType.NUMBER:
                 return parseNumericLiteral();
             case TokenType.QUOTE_DOUBLE: // [[fallthrough]];
