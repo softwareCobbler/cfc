@@ -2,16 +2,8 @@ import { Scanner, Tokenizer, TokenizerMode, Parser } from "../compiler";
 
 //const scanner = Scanner(`<cfset x = function foo(a, b = 42 & 0){}>`);
 const scanner = Scanner(`
-<cfset x = function() {
-    switch (foo) {
-        case x: 0;
-        case y: {
-
-        }
-        depfault: {
-
-        }
-    }
+<cfset f = function() {
+    if (x == 4 || x == 5) {}
 }>`);
 
 const tokenizer = new Tokenizer(scanner);

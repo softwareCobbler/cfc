@@ -40,6 +40,8 @@ export const enum TokenType {
     PIPE,
     PLUS,
     PLUS_EQUAL,
+    QUESTION_MARK,
+    QUESTION_MARK_COLON,
     QUOTE_SINGLE,
     QUOTE_DOUBLE,
     RIGHT_ANGLE,
@@ -49,6 +51,7 @@ export const enum TokenType {
     RIGHT_PAREN,
     SEMICOLON,
     STAR,
+    STAR_FORWARD_SLASH,
     STAR_EQUAL,
 
     CF_START_TAG_START, // <\s*cf
@@ -141,6 +144,8 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.PIPE]:                 "|",
     [TokenType.PLUS]:                 "+",
     [TokenType.PLUS_EQUAL]:           "+=",
+    [TokenType.QUESTION_MARK]:        "?",
+    [TokenType.QUESTION_MARK_COLON]:  "?:",
     [TokenType.QUOTE_SINGLE]:         "'",
     [TokenType.QUOTE_DOUBLE]:         "\"",
     [TokenType.RIGHT_ANGLE]:          ">",
@@ -150,6 +155,7 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.RIGHT_PAREN]:          ")",
     [TokenType.SEMICOLON]:            ";",
     [TokenType.STAR]:                 "*",
+    [TokenType.STAR_FORWARD_SLASH]:   "*/",
     [TokenType.STAR_EQUAL]:           "*=",
 
     [TokenType.CF_START_TAG_START]:   "<cf",
@@ -338,6 +344,11 @@ export class Tokenizer {
             case AsciiMap.COMMA:         return this.consumeCurrentCharAs(TokenType.COMMA);
             case AsciiMap.COLON:         return this.consumeCurrentCharAs(TokenType.COLON);
             case AsciiMap.SEMICOLON:     return this.consumeCurrentCharAs(TokenType.SEMICOLON);
+            case AsciiMap.QUESTION_MARK:
+                // note we do not scan a QUESTION_MARK_COLON token here,
+                // it appears that it is not actually a token, and it is valid to have a comment between the "?" and ":"
+                // so it is generated if necessary during parsing, if we recognize "<question-mark><trivia>?<colon>"
+                return this.consumeCurrentCharAs(TokenType.QUESTION_MARK);
             case AsciiMap.SPACE: //    [[fallthrough]];
             case AsciiMap.TAB:   // \t [[fallthrough]];
             case AsciiMap.CR:    // \r [[fallthrough]];
@@ -370,6 +381,7 @@ export class Tokenizer {
                 else return this.consumeCurrentCharAs(TokenType.AMPERSAND);
             case AsciiMap.STAR:
                 if (this.scanner_.maybeEat(/\*=/iy)) return this.setToken(TokenType.STAR_EQUAL, from, this.getIndex());
+                if (this.scanner_.maybeEat(/\*\//iy)) return this.setToken(TokenType.STAR_FORWARD_SLASH, from, this.getIndex());
                 else return this.consumeCurrentCharAs(TokenType.STAR);
             case AsciiMap.FORWARD_SLASH:
                 if (script && this.scanner_.maybeEat(/\/\//iy)) return this.setToken(TokenType.DBL_FORWARD_SLASH, from, this.getIndex());

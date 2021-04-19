@@ -19,7 +19,7 @@ export const enum NodeType {
     conditional, statement, namedBlock, simpleStringLiteral, interpolatedStringLiteral, numericLiteral, booleanLiteral,
     identifier, indexedAccess,
     functionDefinition, arrowFunctionDefinition, functionParameter,
-    dottedPath, switch, switchCase
+    dottedPath, switch, switchCase, do, while, ternary
 }
 
 const NodeTypeUiString : Record<NodeType, string> = {
@@ -50,6 +50,10 @@ const NodeTypeUiString : Record<NodeType, string> = {
     [NodeType.dottedPath]: "dottedPath",
     [NodeType.switch]: "switch",
     [NodeType.switchCase]: "switchCase",
+    [NodeType.do]: "do",
+    [NodeType.while]: "while",
+    [NodeType.ternary]: "ternary"
+
 };
 
 export type Node =
@@ -80,6 +84,9 @@ export type Node =
     | DottedPath<any> // `"x"."x"` in a struct literal, `x.x` in a function parameter declaration, maybe others 
     | Switch
     | SwitchCase
+    | Do
+    | While
+    | Ternary
 
 interface NodeBase {
     type: NodeType;
@@ -148,13 +155,15 @@ function mergeRanges(...nodes : (SourceRange | Node | Node[] | undefined | null 
 
 export interface Terminal extends NodeBase {
     type: NodeType.terminal;
+    rangeWithTrivia: SourceRange;
     token: Token;
     trivia: Node[];
     __debug_tokenType?: string;
 }
 
 export function Terminal(token: Token, trivia: Node[] = []) : Terminal {
-    const v = NodeBase<Terminal>(NodeType.terminal, mergeRanges(token.range, trivia));
+    const v = NodeBase<Terminal>(NodeType.terminal, token.range);
+    v.rangeWithTrivia = mergeRanges(token.range, trivia);
     v.token = token;
     v.trivia = trivia;
 
@@ -459,8 +468,28 @@ export function tokenTypeToUnaryOpType(tokenType: TokenType) {
 }
 
 export const enum BinaryOpType {
-    add, sub, mul, div, mod, exp, cat, eq, neq, lt, lte, gt, gte, 
+    add, sub, mul, div, mod, exp, cat, eq, neq, lt, lte, gt, gte, nullCoalesce,
+    and, or, xor
 }
+const BinaryOpTypeUiString : Record<BinaryOpType, string> = {
+    [BinaryOpType.add]:          "add",
+    [BinaryOpType.sub]:          "sub",
+    [BinaryOpType.mul]:          "mul",
+    [BinaryOpType.div]:          "div",
+    [BinaryOpType.mod]:          "mod",
+    [BinaryOpType.exp]:          "exp",
+    [BinaryOpType.cat]:          "cat",
+    [BinaryOpType.eq]:           "eq",
+    [BinaryOpType.neq]:          "neq",
+    [BinaryOpType.lt]:           "lt",
+    [BinaryOpType.lte]:          "lte",
+    [BinaryOpType.gt]:           "gt",
+    [BinaryOpType.gte]:          "gte",
+    [BinaryOpType.nullCoalesce]: "nullCoalesce",
+    [BinaryOpType.and]:          "and",
+    [BinaryOpType.or]:           "or",
+    [BinaryOpType.xor]:          "xor",
+};
 
 export interface BinaryOperator extends NodeBase {
     type: NodeType.binaryOperator;
@@ -468,6 +497,7 @@ export interface BinaryOperator extends NodeBase {
     left: Node;
     operator: Terminal;
     right: Node;
+    __debug_opType?: string;
 }
 
 export function BinaryOperator(left: Node, operator: Terminal, right: Node) : BinaryOperator {
@@ -476,6 +506,11 @@ export function BinaryOperator(left: Node, operator: Terminal, right: Node) : Bi
     v.operator = operator;
     v.right = right;
     v.optype = tokenTypeToBinaryOpType(operator.token.type);
+
+    if (debug) {
+        v.__debug_opType = BinaryOpTypeUiString[v.optype];
+    }
+    
     return v;
 }
 
@@ -507,6 +542,14 @@ export function tokenTypeToBinaryOpType(tokenType: TokenType) {
         case TokenType.RIGHT_ANGLE_EQUAL: 	return BinaryOpType.gte;
         case TokenType.LIT_GTE:				return BinaryOpType.gte;
         case TokenType.LIT_GE:				return BinaryOpType.gte;
+
+        case TokenType.DBL_PIPE:            return BinaryOpType.or;
+        case TokenType.LIT_OR:              return BinaryOpType.or;
+        case TokenType.DBL_AMPERSAND:       return BinaryOpType.and;
+        case TokenType.LIT_AND:             return BinaryOpType.and;
+        case TokenType.LIT_XOR:             return BinaryOpType.xor;
+
+        case TokenType.QUESTION_MARK_COLON: return BinaryOpType.nullCoalesce;
         default: break;
     }
     throw "bad binary op type transform";
@@ -977,4 +1020,82 @@ export namespace SwitchCase {
         v.statements = statements;
         return v;
     }
+}
+
+export interface Do extends NodeBase {
+    type: NodeType.do;
+    doToken: Terminal;
+    body: Node;
+    whileToken: Terminal;
+    leftParen: Terminal;
+    expr: Node;
+    rightParen: Terminal;
+    // a trailing semicolon is optional, and should be consumed as part of a null-statement
+}
+
+export function Do(
+    doToken: Terminal,
+    body: Node,
+    whileToken: Terminal,
+    leftParen: Terminal,
+    expr: Node,
+    rightParen: Terminal) : Do
+{
+    const v = NodeBase<Do>(NodeType.do, mergeRanges(doToken, rightParen));
+    v.doToken    = doToken;
+    v.body       = body;
+    v.whileToken = whileToken;
+    v.leftParen  = leftParen;
+    v.expr       = expr;
+    v.rightParen = rightParen;
+    return v;
+}
+
+export interface While extends NodeBase {
+    type: NodeType.while;
+    whileToken: Terminal;
+    leftParen: Terminal;
+    expr: Node;
+    rightParen: Terminal;
+    body: Node;
+}
+
+export function While(
+    whileToken: Terminal,
+    leftParen: Terminal,
+    expr: Node,
+    rightParen: Terminal,
+    body: Node) : While
+{
+    const v = NodeBase<While>(NodeType.while, mergeRanges(whileToken, body));
+    v.whileToken = whileToken;
+    v.leftParen  = leftParen;
+    v.expr       = expr;
+    v.rightParen = rightParen;
+    v.body       = body;
+    return v;
+}
+
+export interface Ternary extends NodeBase {
+    type: NodeType.ternary;
+    expr: Node;
+    questionMark: Terminal;
+    ifTrue: Node;
+    colon: Terminal;
+    ifFalse: Node;
+}
+
+export function Ternary(
+    expr: Node,
+    questionMark: Terminal,
+    ifTrue: Node,
+    colon: Terminal,
+    ifFalse: Node,
+) {
+    const v = NodeBase<Ternary>(NodeType.ternary, mergeRanges(expr, ifFalse));
+    v.questionMark = questionMark;
+    v.ifTrue = ifTrue;
+    v.colon = colon;
+    v.ifFalse = ifFalse;
+    return v;
 }

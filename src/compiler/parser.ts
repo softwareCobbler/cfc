@@ -5,7 +5,10 @@ import {
     HashWrappedExpr, Assignee, Assignment, BinaryOperator, Parenthetical, UnaryOperator, BooleanLiteral,
     CallExpression, IndexedAccess, pushAccessElement, CallArgument, Identifier, SimpleStringLiteral, InterpolatedStringLiteral,
     NumericLiteral, DottedPath, ArrowFunctionDefinition, Statement, Block, Switch, NamedBlockFromBlock,
-    SwitchCase, } from "./node";
+    SwitchCase,
+    Do,
+    While,
+    Ternary, } from "./node";
 import { SourceRange } from "./scanner";
 import { Token, TokenType, TokenizerMode, Tokenizer, TokenTypeUiString } from "./tokenizer";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, isNamedBlockName } from "./utils";
@@ -310,7 +313,12 @@ export function Parser() {
     }
 
     function parseScriptMultiLineComment() : Comment {
-        throw "nyi";
+        const startToken = parseExpectedTerminal(TokenType.FORWARD_SLASH_STAR, ParseOptions.noTrivia);
+        while (lookahead() !== TokenType.STAR_FORWARD_SLASH && lookahead() !== TokenType.EOF) {
+            next();
+        }
+        const endToken = parseExpectedTerminal(TokenType.STAR_FORWARD_SLASH, ParseOptions.noTrivia);
+        return Comment(CommentType.scriptMultiLine, new SourceRange(startToken.range.fromInclusive, endToken.range.toExclusive));
     }
 
     function parseTrivia() : Node[] {
@@ -997,12 +1005,72 @@ export function Parser() {
         return parseExpression();
     }
 
-    function parseExpression() : Node {
+    function parseExpression(descendIntoOr = true) : Node { // i think this binds the &&'s correctly
+        let root = parseComparisonExpressionOrLower();
+
+        outer:
+        while (true) {
+            switch (lookahead()) {
+                case TokenType.DBL_PIPE:
+                case TokenType.LIT_OR:
+                case TokenType.LIT_XOR: {
+                    if (!descendIntoOr) break outer;
+                    const op = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
+                    const expr = parseComparisonExpressionOrLower();
+                    root = BinaryOperator(root, op, expr);
+                    continue;
+                }
+                case TokenType.DBL_AMPERSAND:
+                case TokenType.LIT_AND: {
+                    const op = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
+                    const expr = parseExpression(/*descendIntoOr*/ false);
+                    root = BinaryOperator(root, op, expr);
+                    continue;
+                }
+                case TokenType.QUESTION_MARK: {
+                    const questionMark = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
+
+                    //
+                    // the null coalescing ("elvis") operator does not appear to actually be a token; the following is valid in cf2018+
+                    // `v ? /*comment*/ : 0`, which means the same as `v ?: 0`
+                    // and in tag mode `v ? <!------> : 0`
+                    // so if we matched a "?", followed by trivia, followed by ":", we got a null coalescing operator
+                    // otherwise, we got a ternary operator
+                    //
+
+                    if (lookahead() === TokenType.COLON) {
+                        const colon = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
+                        if (questionMark.range.toExclusive !== colon.range.fromInclusive) {
+                            // @fixme: make this a warning
+                            parseErrorAtRange(questionMark.range.fromInclusive, colon.range.toExclusive, "Consider treating the null coalescing operator as a single token");
+                        }
+
+                        const syntheticOp = Terminal(Token(TokenType.QUESTION_MARK_COLON, "?:", questionMark.range.fromInclusive, colon.range.toExclusive), colon.trivia);
+                        const right = parseExpression();
+                        root = BinaryOperator(root, syntheticOp, right);
+                    }
+                    else {
+                        const ternaryTrue = parseExpression();
+                        const colon = parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
+                        const ternaryFalse = parseExpression();
+                        root = Ternary(root, questionMark, ternaryTrue, colon, ternaryFalse);
+                    }
+                    continue;
+                }
+            }
+            // if we didn't match any of the above operators, we're done
+            break;
+        }
+
+        return root;
+    }
+
+    function parseComparisonExpressionOrLower() : Node {
         const saveDiagnosticEmitter = globalDiagnosticEmitter;
         const currentPos = tokenizer.getIndex();
         globalDiagnosticEmitter = () => parseErrorAtRange(currentPos, tokenizer.getIndex(), "Expected an expression");
 
-        let root = parseBooleanExpression();
+        let root = parseAddition();
 
         while (true) {
             if (tagMode() && lookahead() === TokenType.LEFT_ANGLE || lookahead() === TokenType.RIGHT_ANGLE) {
@@ -1028,46 +1096,17 @@ export function Parser() {
                 case TokenType.LIT_GTE:				// [[fallthrough]];
                 case TokenType.LIT_GE: {
                     const op = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
-                    const right = parseExpression();
+                    const right = parseAddition();
                     root = BinaryOperator(root, op, right);
                     continue;
                 }
             }
+
             // if we didn't match any of the above tokens, we're done
             break;
         }
 
         globalDiagnosticEmitter = saveDiagnosticEmitter;
-
-        return root;
-    }
-
-    function parseBooleanExpression(descendIntoOr = true) : Node { // i think this binds the &&'s correctly
-        let root = parseAddition();
-
-        outer:
-        while (true) {
-            switch (lookahead()) {
-                case TokenType.DBL_PIPE:
-                case TokenType.LIT_OR:
-                case TokenType.LIT_XOR: {
-                    if (!descendIntoOr) break outer;
-                    const op = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
-                    const expr = parseAddition();
-                    root = BinaryOperator(root, op, expr);
-                    continue;
-                }
-                case TokenType.DBL_AMPERSAND:
-                case TokenType.LIT_AND: {
-                    const op = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
-                    const expr = parseBooleanExpression(/*descendIntoOr*/ false);
-                    root = BinaryOperator(root, op, expr);
-                    continue;
-                }
-            }
-            // if we didn't match any of the above operators, we're done
-            break;
-        }
 
         return root;
     }
@@ -1215,7 +1254,7 @@ export function Parser() {
 
         while (lookahead() != TokenType.EOF) {
             switch(lookahead()) {
-                case TokenType.LEFT_BRACE:
+                case TokenType.LEFT_BRACKET:
                 case TokenType.DOT:
                     root = parseIndexedAccess(root);
                     continue;
@@ -1286,7 +1325,7 @@ export function Parser() {
             leftHash = parseOptionalTerminal(TokenType.HASH, ParseOptions.withTrivia);
         }
 
-        const identifier = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false);
+        const identifier = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true);
 
         // @fixme: make sure the identifier name is valid
         // for example, "var" is a valid identifier, but "and" and "final" are not
@@ -1677,6 +1716,25 @@ export function Parser() {
         return FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body);
     }
 
+    function parseDo() {
+        const doToken = parseExpectedTerminal(TokenType.KW_DO, ParseOptions.withTrivia);
+        const body = parseStatement();
+        const whileToken = parseExpectedTerminal(TokenType.KW_WHILE, ParseOptions.withTrivia);
+        const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
+        const expr = parseExpression();
+        const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+        return Do(doToken, body, whileToken, leftParen, expr, rightParen);
+    }
+
+    function parseWhile() {
+        const whileToken = parseExpectedTerminal(TokenType.KW_WHILE, ParseOptions.withTrivia);
+        const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
+        const expr = parseExpression();
+        const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+        const body = parseStatement();
+        return While(whileToken, leftParen, expr, rightParen, body);
+    }
+
     function parseStatementList(stopToken: TokenType = TokenType.RIGHT_BRACE) : Node[] {
         const result : Node[] = [];
 
@@ -1704,6 +1762,10 @@ export function Parser() {
                     // @fixme: attach this to a node somehow to get a beter round-trip
                     continue;
                 }
+                case TokenType.KW_FINAL:
+                case TokenType.KW_VAR: {
+                    return parseAssignmentOrLower();
+                }
                 case TokenType.LEFT_BRACE: {
                     // will we *ever* parse a block in tag mode ... ?
                     // anyway, just forward current mode; which is assumed to be script mode, if we're parsing a statement
@@ -1726,14 +1788,17 @@ export function Parser() {
                 /*
                 case TokenType.KW_FOR: {
                     return parseFor();
-                }
+                }*/
                 case TokenType.KW_DO: {
                     return parseDo();
                 }
                 case TokenType.KW_WHILE: {
                     return parseWhile();
                 }
-                */
+                case TokenType.SEMICOLON: {
+                    // lone semicolons are valid, they are simply null statements
+                    return Statement(null, parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia));
+                }
                 default: {
                     const peeked = peek();
                     if (isLexemeLikeToken(peeked)) {
@@ -1750,13 +1815,14 @@ export function Parser() {
                         return NamedBlockFromBlock(name, attrs, block);
                     }
                     else {
+                        return parseAssignmentOrLower();
                         // we can just skip it, there was an error earlier and this is some token that should be part of another
                         // production but is now loose
                         // should we mark an error?; note that we're not returning, we're t
-                        parseErrorAtCurrentToken("unrecognized construct here");
+                        /*parseErrorAtCurrentToken("unrecognized construct here");
                         next();
                         parseTrivia();
-                        continue;
+                        continue;*/
                     }
                 }
             }
