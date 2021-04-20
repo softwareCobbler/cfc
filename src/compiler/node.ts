@@ -19,7 +19,7 @@ export const enum NodeType {
     conditional, statement, namedBlock, simpleStringLiteral, interpolatedStringLiteral, numericLiteral, booleanLiteral,
     identifier, indexedAccess,
     functionDefinition, arrowFunctionDefinition, functionParameter,
-    dottedPath, switch, switchCase, do, while, ternary
+    dottedPath, switch, switchCase, do, while, ternary, for
 }
 
 const NodeTypeUiString : Record<NodeType, string> = {
@@ -52,7 +52,8 @@ const NodeTypeUiString : Record<NodeType, string> = {
     [NodeType.switchCase]: "switchCase",
     [NodeType.do]: "do",
     [NodeType.while]: "while",
-    [NodeType.ternary]: "ternary"
+    [NodeType.ternary]: "ternary",
+    [NodeType.for]: "for",
 
 };
 
@@ -87,6 +88,7 @@ export type Node =
     | Do
     | While
     | Ternary
+    | For
 
 interface NodeBase {
     type: NodeType;
@@ -1098,4 +1100,73 @@ export function Ternary(
     v.colon = colon;
     v.ifFalse = ifFalse;
     return v;
+}
+
+export const enum ForSubType { for, forIn}
+export interface For extends NodeBase {
+    type: NodeType.for;
+    subType: ForSubType;
+    forToken: Terminal;
+    leftParen: Terminal;
+    for?: {
+        initExpr: Node | null;
+        semi1: Terminal;
+        conditionExpr: Node | null;
+        semi2: Terminal;
+        incrementExpr: Node | null;
+    }
+    forIn?: {
+        init: Node;
+        inToken: Terminal;
+        expr: Node;
+    }
+    rightParen: Terminal;
+    body: Node;
+}
+
+export namespace For {
+    export function For(
+        forToken: Terminal,
+        leftParen: Terminal,
+        initExpr: Node | null,
+        semi1: Terminal,
+        conditionExpr: Node | null,
+        semi2: Terminal,
+        incrementExpr: Node | null,
+        rightParen: Terminal,
+        body: Node) : For {
+        const v = NodeBase<For>(NodeType.for, mergeRanges(forToken, body));
+        v.forToken = forToken;
+        v.leftParen = leftParen;
+        v.for = {
+            initExpr,
+            semi1,
+            conditionExpr,
+            semi2,
+            incrementExpr,
+        }
+        v.rightParen = rightParen;
+        v.body = body;
+        return v;
+    }
+    export function ForIn(
+        forToken: Terminal,
+        leftParen: Terminal,
+        init: Node,
+        inToken: Terminal,
+        expr: Node,
+        rightParen: Terminal,
+        body: Node) : For {
+        const v = NodeBase<For>(NodeType.for, mergeRanges(forToken, body));
+        v.forToken = forToken;
+        v.leftParen = leftParen;
+        v.forIn = {
+            init,
+            inToken,
+            expr,
+        }
+        v.rightParen = rightParen;
+        v.body = body;
+        return v;
+    }
 }

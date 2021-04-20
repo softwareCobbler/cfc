@@ -8,7 +8,8 @@ import {
     SwitchCase,
     Do,
     While,
-    Ternary, } from "./node";
+    Ternary,
+    For, } from "./node";
 import { SourceRange } from "./scanner";
 import { Token, TokenType, TokenizerMode, Tokenizer, TokenTypeUiString } from "./tokenizer";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, isNamedBlockName } from "./utils";
@@ -20,9 +21,11 @@ const enum ParseOptions {
     allowHashWrapped  = 0x00000002,
 };
 
-const enum ParseFlags {
+const enum ParseContext {
     none = 0,
-    inHashWrappedExpr = 0x00000001
+    inHashWrappedExpr = 0x00000001,
+    inCfScriptTagBody = 0x00000002,
+    inFor             = 0x00000004,
 }
 
 function TagContext() {
@@ -61,7 +64,7 @@ export function Parser() {
         tokenizer = tokenizer_;
         mode = mode_;
         lookahead_ = peek().type;
-        parseFlags = ParseFlags.none;
+        parseContext = ParseContext.none;
         return self_;
     }
     function setMode(mode_: TokenizerMode) {
@@ -75,7 +78,7 @@ export function Parser() {
 
     let tokenizer : Tokenizer;
     let mode: TokenizerMode;
-    let parseFlags : ParseFlags;
+    let parseContext : ParseContext;
     let lookahead_ : TokenType;
     
     let globalDiagnosticEmitter : (() => void) | null = null;
@@ -178,10 +181,16 @@ export function Parser() {
     function scriptMode() : boolean {
         return mode === TokenizerMode.script;
     }
-    function inHashWrappedExpr() : boolean {
-        return !!(parseFlags & ParseFlags.inHashWrappedExpr);
+    function isInSomeContext(contextFlags: ParseContext) {
+        return (parseContext & contextFlags) === contextFlags;
     }
-
+    function doInContext<T>(context: ParseContext, f: (() => T)) : T {
+        const savedContext = parseContext;
+        parseContext = context;
+        const result = f();
+        parseContext = savedContext;
+        return result;
+    }
 
     function parseErrorAtRange(range: SourceRange, msg: string) : void;
     function parseErrorAtRange(fromInclusive: number, toExclusive: number, msg: string) : void;
@@ -382,7 +391,19 @@ export function Parser() {
             const tagAttrs = parseTagAttributes();
             const maybeVoidSlash = parseOptionalTerminal(TokenType.FORWARD_SLASH, ParseOptions.withTrivia);
             const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
-            return CfTag.Common(CfTag.Which.start, tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, tagAttrs);
+            if (canonicalName === "script") {
+                const saveMode = mode;
+                mode = TokenizerMode.script;
+
+                // hm, probably mode should be a context flag, too
+                const stmtList = doInContext(ParseContext.inCfScriptTagBody, parseStatementList);
+
+                mode = saveMode;
+                return CfTag.Script(tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, stmtList);
+            }
+            else {
+                return CfTag.Common(CfTag.Which.start, tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, tagAttrs);
+            }
         }
     }
 
@@ -732,11 +753,13 @@ export function Parser() {
                                 continue;
                             }
                             case "script": {
-                                // same as handling set, except there is an end tag to consume
-                                const stmtList = (<CfTag.Script>tag).stmtList;
                                 nextTag();
-                                const endTag = parseExpectedTag(CfTag.Which.end, "script");
-                                result.push(FromTag.Block(tag, stmtList, endTag));
+                                const endTag = parseExpectedTag(CfTag.Which.end, "script", () => parseErrorAtRange(tag.range, "Missing </cfscript> tag"));
+                                result.push(
+                                    FromTag.Block(
+                                        tag,
+                                        (<CfTag.Script>tag).stmtList,
+                                        endTag));
                                 continue;
                             }
                             default: {
@@ -840,17 +863,11 @@ export function Parser() {
             tagTextRange = SourceRange.Nil();
         }
 
-        while (lookahead_ != TokenType.EOF) {
-            switch (lookahead_) {
+        while (lookahead() != TokenType.EOF) {
+            switch (lookahead()) {
                 case TokenType.CF_START_TAG_START: {
                     finishTagTextRange();
-                    const tag = parseCfStartTag();
-                    if (tag.canonicalName === "script") {
-                        // parse cfscript ...
-                    }
-                    else {
-                        result.push(tag);
-                    }
+                    result.push(parseCfStartTag());
                     break;
                 }
                 case TokenType.CF_END_TAG_START: {
@@ -972,9 +989,17 @@ export function Parser() {
 
         if (lookahead() != TokenType.EQUAL) {
             if (finalModifier || varModifier) {
-                parseErrorAtRange(root.range, "final/var declaration modifier on non-declaring expression");
+                // we could probably return a "declaration" here ?
+                // var x;  sure it's semantically meaningless in cf (all var declarations require initializers), but it looks valid
+                // would also be useful in a for-in: `for (var x in y)` where `var x` is a declaration
+                // so we could check if we're in a for-in context
+                parseErrorAtRange(root.range, "variable declarations require initializers");
+                return root;
             }
-            return root;
+            else {
+                // just a plain ol' expr
+                return root;
+            }
         }
 
         if (!isAssignmentTarget(root)) {
@@ -1215,15 +1240,15 @@ export function Parser() {
     }
 
     function parseHashWrappedExpression() {
-        if (inHashWrappedExpr()) throw "parseHashWrappedExpr cannot be nested";
+        if (isInSomeContext(ParseContext.inHashWrappedExpr)) throw "parseHashWrappedExpr cannot be nested";
 
-        parseFlags |= ParseFlags.inHashWrappedExpr;
+        parseContext |= ParseContext.inHashWrappedExpr;
 
         const leftHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
         const expr = parseExpression();
         const rightHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia, "Unterminated hash-wrapped expression");
 
-        parseFlags &= ~ParseFlags.inHashWrappedExpr;
+        parseContext &= ~ParseContext.inHashWrappedExpr;
 
         return HashWrappedExpr(leftHash, expr, rightHash);
     }
@@ -1240,7 +1265,7 @@ export function Parser() {
             case TokenType.KW_FALSE:
                 return BooleanLiteral(parseExpectedTerminal(lookahead(), ParseOptions.withTrivia));
             case TokenType.HASH:
-                if (!inHashWrappedExpr()) {
+                if (!isInSomeContext(ParseContext.inHashWrappedExpr)) {
                     return parseHashWrappedExpression();
                 }
                 // [[fallthrough]];
@@ -1321,7 +1346,7 @@ export function Parser() {
     function parseIdentifier(parseOptions: ParseOptions.allowHashWrapped) : Identifier | HashWrappedExpr;
     function parseIdentifier(parseOptions?: ParseOptions.allowHashWrapped) : Identifier | HashWrappedExpr {
         let leftHash : Terminal | null = null;
-        if (parseOptions && parseOptions & ParseOptions.allowHashWrapped && !inHashWrappedExpr()) {
+        if (parseOptions && (parseOptions & ParseOptions.allowHashWrapped) && !isInSomeContext(ParseContext.inHashWrappedExpr)) {
             leftHash = parseOptionalTerminal(TokenType.HASH, ParseOptions.withTrivia);
         }
 
@@ -1362,14 +1387,14 @@ export function Parser() {
         // when we enter a new string literal, we can reset our hashWrappedExpr flag;
         // hash wrapped expressions don't nest directly, but indirectly is ok; e.g,
         // #someVal & "some-string-literal #nesting_here_is_ok#" & trying_to_nest_here_is_an_error #
-        const savedFlags = parseFlags;
-        parseFlags &= ~ParseFlags.inHashWrappedExpr;
+        const savedFlags = parseContext;
+        parseContext &= ~ParseContext.inHashWrappedExpr;
 
         const leftQuote = parseExpectedTerminal(quoteType, ParseOptions.noTrivia);
         const stringElements = parseTextWithPossibleInterpolations(quoteType);
         const rightQuote = parseExpectedTerminal(quoteType, ParseOptions.withTrivia);
 
-        parseFlags = savedFlags;
+        parseContext = savedFlags;
 
         if (stringElements.length === 1) {
             const onlyElement = stringElements[0];
@@ -1716,7 +1741,7 @@ export function Parser() {
         return FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body);
     }
 
-    function parseDo() {
+    function parseDo() : Do {
         const doToken = parseExpectedTerminal(TokenType.KW_DO, ParseOptions.withTrivia);
         const body = parseStatement();
         const whileToken = parseExpectedTerminal(TokenType.KW_WHILE, ParseOptions.withTrivia);
@@ -1726,7 +1751,7 @@ export function Parser() {
         return Do(doToken, body, whileToken, leftParen, expr, rightParen);
     }
 
-    function parseWhile() {
+    function parseWhile() : While {
         const whileToken = parseExpectedTerminal(TokenType.KW_WHILE, ParseOptions.withTrivia);
         const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
         const expr = parseExpression();
@@ -1735,10 +1760,41 @@ export function Parser() {
         return While(whileToken, leftParen, expr, rightParen, body);
     }
 
-    function parseStatementList(stopToken: TokenType = TokenType.RIGHT_BRACE) : Node[] {
+    function parseFor() : For {
+        const forToken = parseExpectedTerminal(TokenType.KW_FOR, ParseOptions.withTrivia);
+        const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
+        const init = parseAssignmentOrLower();
+        if (peek().text.toLowerCase() === "in") {
+            const inToken = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false);
+            const expr = parseExpression();
+            const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+            const body = parseStatement();
+            return For.ForIn(forToken, leftParen, init, inToken, expr, rightParen, body);
+        }
+        else {
+            const semi1 = parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia);
+            const condition = parseExpression();
+            const semi2 = parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia);
+            const incrementExpr = parseExpression();
+            const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+            const body = parseStatement();
+            return For.For(forToken, leftParen, init, semi1, condition, semi2, incrementExpr, rightParen, body);
+        }
+    }
+
+    function parseStatementList() : Node[] {
         const result : Node[] = [];
 
-        while (lookahead() !== stopToken && lookahead() !== TokenType.EOF) {
+        while (true) {
+            if (lookahead() === TokenType.RIGHT_BRACE || lookahead() === TokenType.EOF) {
+                break;
+            }
+            if (isInSomeContext(ParseContext.inCfScriptTagBody)) {
+                if (lookahead() === TokenType.CF_END_TAG_START) {
+                    break;
+                }
+            }
+
             result.push(parseStatement());
         }
 
@@ -1756,10 +1812,12 @@ export function Parser() {
     }
 
     function parseStatement() : Node {
+        outer:
         while (lookahead() !== TokenType.EOF) {
             switch (lookahead()) {
                 case TokenType.WHITESPACE: {
                     // @fixme: attach this to a node somehow to get a beter round-trip
+                    next();
                     continue;
                 }
                 case TokenType.KW_FINAL:
@@ -1785,10 +1843,9 @@ export function Parser() {
                 case TokenType.KW_FUNCTION: {
                     return tryParseNamedFunctionDefinition(/*speculative*/ false);
                 }
-                /*
                 case TokenType.KW_FOR: {
                     return parseFor();
-                }*/
+                }
                 case TokenType.KW_DO: {
                     return parseDo();
                 }
@@ -1798,6 +1855,16 @@ export function Parser() {
                 case TokenType.SEMICOLON: {
                     // lone semicolons are valid, they are simply null statements
                     return Statement(null, parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia));
+                }
+                case TokenType.CF_END_TAG_START: {
+                    if (isInSomeContext(ParseContext.inCfScriptTagBody)) {
+                        break outer;
+                    }
+                    else {
+                        parseErrorAtCurrentToken("Unexpected </cf token in a statement context");
+                        next();
+                        continue;
+                    }
                 }
                 default: {
                     const peeked = peek();

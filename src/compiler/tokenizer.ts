@@ -319,7 +319,9 @@ export class Tokenizer {
                 return this.setToken(TokenType.EOF, from, from);
             case AsciiMap.LEFT_ANGLE:
                 if (tag && this.scanner_.maybeEat(/<\s*cf/iy)) return this.setToken(TokenType.CF_START_TAG_START, from, this.getIndex());
-                else if (tag && this.scanner_.maybeEat(/<\s*\/\s*cf/iy)) return this.setToken(TokenType.CF_END_TAG_START, from, this.getIndex());
+                // it would be nice to only eat "</cf" in tag mode, but we need to match it in script mode, so we can recognize when
+                // a </cfscript> block is finished
+                else if (this.scanner_.maybeEat(/<\s*\/\s*cf/iy)) return this.setToken(TokenType.CF_END_TAG_START, from, this.getIndex());
                 else if (tag && this.scanner_.maybeEat(/<!---/iy)) return this.setToken(TokenType.CF_TAG_COMMENT_START, from, this.getIndex());
                 else if (this.scanner_.maybeEat(/<=/iy)) return this.setToken(TokenType.LEFT_ANGLE_EQUAL, from, this.getIndex());
                 else return this.consumeCurrentCharAs(TokenType.LEFT_ANGLE);
