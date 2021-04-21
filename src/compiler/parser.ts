@@ -9,7 +9,13 @@ import {
     Do,
     While,
     Ternary,
-    For, } from "./node";
+    For,
+    StructLiteralInitializerMember,
+    StructLiteral,
+    ArrayLiteralInitializerMember,
+    ArrayLiteral,
+    EmptyOrderedStructLiteral,
+    OrderedStructLiteral, } from "./node";
 import { SourceRange } from "./scanner";
 import { Token, TokenType, TokenizerMode, Tokenizer, TokenTypeUiString } from "./tokenizer";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, isNamedBlockName } from "./utils";
@@ -23,9 +29,10 @@ const enum ParseOptions {
 
 const enum ParseContext {
     none = 0,
-    inHashWrappedExpr = 0x00000001,
-    inCfScriptTagBody = 0x00000002,
-    inFor             = 0x00000004,
+    hashWrappedExpr  = 0x00000001,
+    cfScriptTagBody  = 0x00000002,
+    for              = 0x00000004,
+    interpolatedText = 0x00000008,
 }
 
 function TagContext() {
@@ -396,7 +403,7 @@ export function Parser() {
                 mode = TokenizerMode.script;
 
                 // hm, probably mode should be a context flag, too
-                const stmtList = doInContext(ParseContext.inCfScriptTagBody, parseStatementList);
+                const stmtList = doInContext(ParseContext.cfScriptTagBody, parseStatementList);
 
                 mode = saveMode;
                 return CfTag.Script(tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, stmtList);
@@ -908,6 +915,13 @@ export function Parser() {
     }
 
     function parseTextWithPossibleInterpolations(quoteDelimiter?: TokenType.QUOTE_SINGLE | TokenType.QUOTE_DOUBLE) : (TextSpan | HashWrappedExpr)[] {
+        // when we enter a new interpolation context, we can reset our hashWrappedExpr flag;
+        // hash wrapped expressions don't nest directly, but indirectly is ok; e.g,
+        // #someVal & "some-string-literal #nesting_here_is_ok#" & trying_to_nest_here_is_an_error #
+        const savedContext = parseContext;
+        parseContext &= ~ParseContext.hashWrappedExpr;
+        parseContext |= ParseContext.interpolatedText;
+
         const result : (TextSpan | HashWrappedExpr)[] = [];
         let textSourceRange = SourceRange.Nil();
 
@@ -967,6 +981,7 @@ export function Parser() {
         }
         
         finishTextRange();
+        parseContext = savedContext;
         return result;
     }
 
@@ -1240,16 +1255,24 @@ export function Parser() {
     }
 
     function parseHashWrappedExpression() {
-        if (isInSomeContext(ParseContext.inHashWrappedExpr)) throw "parseHashWrappedExpr cannot be nested";
+        if (isInSomeContext(ParseContext.hashWrappedExpr)) throw "parseHashWrappedExpr cannot be nested";
 
-        parseContext |= ParseContext.inHashWrappedExpr;
+        const savedContext = parseContext;
+        parseContext |= ParseContext.hashWrappedExpr;
 
         const leftHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
-        const expr = parseExpression();
+
+        let expr : Node;
+        if (isInSomeContext(ParseContext.interpolatedText)) {
+            expr = parseExpression();
+        }
+        else {
+            expr = parseCallExpressionOrLower()
+        }
+
         const rightHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia, "Unterminated hash-wrapped expression");
 
-        parseContext &= ~ParseContext.inHashWrappedExpr;
-
+        parseContext = savedContext;
         return HashWrappedExpr(leftHash, expr, rightHash);
     }
 
@@ -1264,8 +1287,12 @@ export function Parser() {
             case TokenType.KW_TRUE:
             case TokenType.KW_FALSE:
                 return BooleanLiteral(parseExpectedTerminal(lookahead(), ParseOptions.withTrivia));
+            case TokenType.LEFT_BRACE:
+                return parseStructLiteral();
+            case TokenType.LEFT_BRACKET:
+                return parseArrayLiteralOrOrderedStructLiteral();
             case TokenType.HASH:
-                if (!isInSomeContext(ParseContext.inHashWrappedExpr)) {
+                if (!isInSomeContext(ParseContext.hashWrappedExpr)) {
                     return parseHashWrappedExpression();
                 }
                 // [[fallthrough]];
@@ -1342,11 +1369,121 @@ export function Parser() {
         return CallExpression(root, leftParen, args, rightParen);
     }
 
+    //
+    // @todo - the rules around what is and isn't a valid struct key need to be made more clear
+    //
+    function parseStructLiteralInitializerKey() : Node {
+        let result = parseExpression();
+        switch (result.type) {
+            case NodeType.hashWrappedExpr:
+            case NodeType.simpleStringLiteral:
+            case NodeType.interpolatedStringLiteral:
+                return result;
+            case NodeType.identifier: {
+                result = DottedPath(result);
+                while (lookahead() === TokenType.DOT) {
+                    const dot = parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
+                    const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true);
+                    result.rest.push({dot:dot, key: name});
+                }
+                return result;
+            }
+            default: {
+                parseErrorAtRange(result.range, "Invalid struct initializer key");
+                return result;
+            }
+        }
+    }
+
+    function parseStructLiteral() : Node {
+        const leftBrace = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
+        const kvPairs : StructLiteralInitializerMember[] = [];
+
+        while (lookahead() !== TokenType.RIGHT_BRACE && lookahead() !== TokenType.EOF) {
+            const key = parseStructLiteralInitializerKey();
+            const colon = parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
+            const value = parseExpression();
+            const maybeComma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+
+            if (!maybeComma && lookahead() !== TokenType.RIGHT_BRACE) {
+                parseErrorAtRange(value.range.toExclusive - 1, value.range.toExclusive + 1, "Expected ','");
+            }
+            if (maybeComma && lookahead() === TokenType.RIGHT_BRACE) {
+                parseErrorAtRange(maybeComma.range, "Illegal trailing comma");
+            }
+            kvPairs.push(StructLiteralInitializerMember(key, colon, value, maybeComma));
+        }
+
+        const rightBrace = parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
+        return StructLiteral(leftBrace, kvPairs, rightBrace);
+    }
+
+    /**
+     * supports 3 productions:
+     * [a,b,c]      --> array literal
+     * [a: 1, b: 2] --> ordered struct literal
+     * [:]          --> emptry ordered struct literal
+     * @returns 
+     */
+    function parseArrayLiteralOrOrderedStructLiteral() : Node {
+        const leftBracket = parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
+
+        if (lookahead() === TokenType.COLON) {
+            const colon = parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
+            const rightBracket = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
+            return EmptyOrderedStructLiteral(leftBracket, colon, rightBracket);
+        }        
+
+        function isExpressionThenColon() {
+            parseExpression();
+            return lookahead() === TokenType.COLON;
+        }
+
+        if (SpeculationHelper.lookahead(isExpressionThenColon)) {
+            const structMembers : StructLiteralInitializerMember[] = [];
+            while (lookahead() !== TokenType.RIGHT_BRACKET && lookahead() !== TokenType.EOF) {
+                const key = parseStructLiteralInitializerKey();
+                const colon = parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
+                const expr = parseExpression();
+                const maybeComma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+
+                if (!maybeComma && lookahead() !== TokenType.RIGHT_BRACKET) {
+                    parseErrorAtRange(expr.range.toExclusive-1, expr.range.toExclusive, "Expected ','");
+                }
+                if (maybeComma && lookahead() === TokenType.RIGHT_BRACKET) {
+                    parseErrorAtRange(maybeComma.range, "Illegal trailing comma");
+                }
+                structMembers.push(StructLiteralInitializerMember(key, colon, expr, maybeComma))
+            }
+
+            const rightBracket = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
+            return OrderedStructLiteral(leftBracket, structMembers, rightBracket);
+        }
+        else {
+            const elements : ArrayLiteralInitializerMember[] = [];
+            while (lookahead() !== TokenType.RIGHT_BRACKET && lookahead() !== TokenType.EOF) {
+                const expr = parseExpression();
+                const maybeComma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+
+                if (!maybeComma && lookahead() !== TokenType.RIGHT_BRACKET) {
+                    parseErrorAtRange(expr.range.toExclusive-1, expr.range.toExclusive, "Expected ','");
+                }
+                if (maybeComma && lookahead() === TokenType.RIGHT_BRACKET) {
+                    parseErrorAtRange(maybeComma.range, "Illegal trailing comma");
+                }
+
+                elements.push(ArrayLiteralInitializerMember(expr, maybeComma))
+            }
+            const rightBracket = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
+            return ArrayLiteral(leftBracket, elements, rightBracket);
+        }
+    }
+
     function parseIdentifier() : Identifier;
     function parseIdentifier(parseOptions: ParseOptions.allowHashWrapped) : Identifier | HashWrappedExpr;
     function parseIdentifier(parseOptions?: ParseOptions.allowHashWrapped) : Identifier | HashWrappedExpr {
         let leftHash : Terminal | null = null;
-        if (parseOptions && (parseOptions & ParseOptions.allowHashWrapped) && !isInSomeContext(ParseContext.inHashWrappedExpr)) {
+        if (parseOptions && (parseOptions & ParseOptions.allowHashWrapped) && !isInSomeContext(ParseContext.hashWrappedExpr)) {
             leftHash = parseOptionalTerminal(TokenType.HASH, ParseOptions.withTrivia);
         }
 
@@ -1384,17 +1521,9 @@ export function Parser() {
             throw "AssertionFailure: parseStringLiteral called on input without valid string delimiter";
         }
 
-        // when we enter a new string literal, we can reset our hashWrappedExpr flag;
-        // hash wrapped expressions don't nest directly, but indirectly is ok; e.g,
-        // #someVal & "some-string-literal #nesting_here_is_ok#" & trying_to_nest_here_is_an_error #
-        const savedFlags = parseContext;
-        parseContext &= ~ParseContext.inHashWrappedExpr;
-
         const leftQuote = parseExpectedTerminal(quoteType, ParseOptions.noTrivia);
         const stringElements = parseTextWithPossibleInterpolations(quoteType);
         const rightQuote = parseExpectedTerminal(quoteType, ParseOptions.withTrivia);
-
-        parseContext = savedFlags;
 
         if (stringElements.length === 1) {
             const onlyElement = stringElements[0];
@@ -1464,7 +1593,7 @@ export function Parser() {
         while (lookahead() === TokenType.DOT) {
             result.rest.push({
                 dot: parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia),
-                name: parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia)
+                key: parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia)
             })
         }
         return result;
@@ -1640,7 +1769,7 @@ export function Parser() {
         return Switch(switchToken, leftParen, expr, rightParen, leftBrace, cases, rightBrace);
     }
 
-    function parseConditional() : Conditional {
+    function parseIf() : Conditional {
         const ifToken = parseExpectedTerminal(TokenType.KW_IF, ParseOptions.withTrivia);
         const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
         const expr = parseExpression();
@@ -1789,7 +1918,7 @@ export function Parser() {
             if (lookahead() === TokenType.RIGHT_BRACE || lookahead() === TokenType.EOF) {
                 break;
             }
-            if (isInSomeContext(ParseContext.inCfScriptTagBody)) {
+            if (isInSomeContext(ParseContext.cfScriptTagBody)) {
                 if (lookahead() === TokenType.CF_END_TAG_START) {
                     break;
                 }
@@ -1838,7 +1967,7 @@ export function Parser() {
                     return parseSwitch();
                 }
                 case TokenType.KW_IF: {
-                    return parseConditional();
+                    return parseIf();
                 }
                 case TokenType.KW_FUNCTION: {
                     return tryParseNamedFunctionDefinition(/*speculative*/ false);
@@ -1857,7 +1986,7 @@ export function Parser() {
                     return Statement(null, parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia));
                 }
                 case TokenType.CF_END_TAG_START: {
-                    if (isInSomeContext(ParseContext.inCfScriptTagBody)) {
+                    if (isInSomeContext(ParseContext.cfScriptTagBody)) {
                         break outer;
                     }
                     else {

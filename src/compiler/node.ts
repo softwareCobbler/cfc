@@ -19,7 +19,8 @@ export const enum NodeType {
     conditional, statement, namedBlock, simpleStringLiteral, interpolatedStringLiteral, numericLiteral, booleanLiteral,
     identifier, indexedAccess,
     functionDefinition, arrowFunctionDefinition, functionParameter,
-    dottedPath, switch, switchCase, do, while, ternary, for
+    dottedPath, switch, switchCase, do, while, ternary, for, structLiteral, arrayLiteral,
+    structLiteralInitializerMember, arrayLiteralInitializerMember
 }
 
 const NodeTypeUiString : Record<NodeType, string> = {
@@ -54,6 +55,10 @@ const NodeTypeUiString : Record<NodeType, string> = {
     [NodeType.while]: "while",
     [NodeType.ternary]: "ternary",
     [NodeType.for]: "for",
+    [NodeType.structLiteral]: "structLiteral",
+    [NodeType.arrayLiteral]: "arrayLiteral",
+    [NodeType.structLiteralInitializerMember]: "structLiteralInitializerMember",
+    [NodeType.arrayLiteralInitializerMember]: "arrayLiteralInitializerMember"
 
 };
 
@@ -89,6 +94,10 @@ export type Node =
     | While
     | Ternary
     | For
+    | StructLiteral
+    | StructLiteralInitializerMember
+    | ArrayLiteral
+    | ArrayLiteralInitializerMember
 
 interface NodeBase {
     type: NodeType;
@@ -788,12 +797,15 @@ export type AccessElement =
     | DotAccess
     | BracketAccess;
 
+const enum AccessType { dot, bracket };
 export interface DotAccess {
+    accessType: AccessType.dot;
     dot: Terminal;
-    propertyName: InterpolatedStringLiteral;
+    propertyName: Terminal;
 }
 
 export interface BracketAccess {
+    accessType: AccessType.bracket;
     leftBracket: Terminal;
     expr: Node;
     rightBracket: Terminal;
@@ -808,6 +820,7 @@ export interface IndexedAccess extends NodeBase {
 export function IndexedAccess(root: Node) : IndexedAccess {
     const v = NodeBase<IndexedAccess>(NodeType.indexedAccess, root.range);
     v.root = root;
+    v.accessElements = [];
     return v;
 }
 
@@ -816,6 +829,7 @@ export function pushAccessElement(base: IndexedAccess, leftBracket: Terminal, ex
 export function pushAccessElement(base: IndexedAccess, dotOrBracket: Terminal, expr: Node | Terminal, rightBracket?: Terminal) : void {
     if (rightBracket) { // bracket access
         (<BracketAccess[]>base.accessElements).push({
+            accessType: AccessType.bracket,
             leftBracket: dotOrBracket,
             expr: expr,
             rightBracket: rightBracket
@@ -823,8 +837,9 @@ export function pushAccessElement(base: IndexedAccess, dotOrBracket: Terminal, e
     }
     else { // dot access
         (<DotAccess[]>base.accessElements).push({
+            accessType: AccessType.dot,
             dot: dotOrBracket,
-            propertyName: (expr as InterpolatedStringLiteral)
+            propertyName: (expr as Terminal)
         });
     }
 }
@@ -954,11 +969,12 @@ export function ArrowFunctionDefinition(leftParen: Terminal | null, params: Func
 
 export interface DottedPath<T extends NodeBase> extends NodeBase {
     type: NodeType.dottedPath;
-    leadingName: T;
-    rest: {dot: Terminal, name: T}[]
+    headKey: T;
+    rest: {dot: Terminal, key: T}[]
 }
-export function DottedPath<T extends NodeBase>(leadingName: T) : DottedPath<T> {
-    const v = NodeBase<DottedPath<T>>(NodeType.dottedPath, leadingName.range);
+export function DottedPath<T extends NodeBase>(headKey: T) : DottedPath<T> {
+    const v = NodeBase<DottedPath<T>>(NodeType.dottedPath, headKey.range);
+    v.headKey = headKey;
     v.rest = [];
     return v;
 }
@@ -1169,4 +1185,110 @@ export namespace For {
         v.body = body;
         return v;
     }
+}
+
+export interface StructLiteral extends NodeBase {
+    type: NodeType.structLiteral,
+    ordered: boolean,
+    leftDelimiter: Terminal,
+    members: StructLiteralInitializerMember[],
+    emptyOrderedStructColon?: Terminal,
+    rightDelimiter: Terminal,
+}
+
+export function StructLiteral(
+    leftBrace: Terminal,
+    
+    members: StructLiteralInitializerMember[],
+    rightBrace: Terminal,
+) : StructLiteral {
+    const v = NodeBase<StructLiteral>(NodeType.structLiteral, mergeRanges(leftBrace, rightBrace));
+    v.ordered = false;
+    v.leftDelimiter = leftBrace;
+    v.members = members;
+    v.rightDelimiter = rightBrace;
+    return v;
+}
+
+export function OrderedStructLiteral(
+    leftBracket: Terminal,
+    members: StructLiteralInitializerMember[],
+    rightBracket: Terminal,
+) : StructLiteral {
+    const v = NodeBase<StructLiteral>(NodeType.structLiteral, mergeRanges(leftBracket, rightBracket));
+    v.ordered = true;
+    v.leftDelimiter = leftBracket;
+    v.members = members;
+    v.rightDelimiter = rightBracket;
+    return v;
+}
+
+export function EmptyOrderedStructLiteral(
+    leftBracket: Terminal,
+    colon: Terminal,
+    rightBracket: Terminal,
+) : StructLiteral {
+    const v = NodeBase<StructLiteral>(NodeType.structLiteral, mergeRanges(leftBracket, rightBracket));
+    v.ordered = true;
+    v.leftDelimiter = leftBracket;
+    v.members = [];
+    v.emptyOrderedStructColon = colon;
+    v.rightDelimiter = rightBracket;
+    return v;
+}
+
+export interface StructLiteralInitializerMember extends NodeBase {
+    type: NodeType.structLiteralInitializerMember;
+    key: Node,
+    colon: Terminal,
+    expr: Node,
+    comma: Node | null
+}
+
+export function StructLiteralInitializerMember(
+    key: Node,
+    colon: Terminal,
+    expr: Node,
+    comma: Node | null) : StructLiteralInitializerMember {
+    const v = NodeBase<StructLiteralInitializerMember>(NodeType.structLiteralInitializerMember, mergeRanges(key, expr, comma));
+    v.key = key;
+    v.colon = colon;
+    v.expr = expr;
+    v.comma = comma;
+    return v;
+}
+
+export interface ArrayLiteral extends NodeBase {
+    type: NodeType.arrayLiteral,
+    leftBracket: Terminal;
+    members: ArrayLiteralInitializerMember[];
+    rightBracket: Terminal;
+}
+
+export function ArrayLiteral(
+    leftBracket: Terminal,
+    members: ArrayLiteralInitializerMember[],
+    rightBracket: Terminal
+) : ArrayLiteral {
+    const v = NodeBase<ArrayLiteral>(NodeType.arrayLiteral, mergeRanges(leftBracket, rightBracket));
+    v.leftBracket = leftBracket
+    v.members = members;
+    v.rightBracket = rightBracket;
+    return v;
+}
+
+export interface ArrayLiteralInitializerMember extends NodeBase {
+    type: NodeType.arrayLiteralInitializerMember,
+    expr: Node,
+    comma: Terminal | null
+}
+
+export function ArrayLiteralInitializerMember(
+    expr: Node,
+    comma: Terminal | null
+) : ArrayLiteralInitializerMember {
+    const v = NodeBase<ArrayLiteralInitializerMember>(NodeType.arrayLiteralInitializerMember, mergeRanges(expr, comma));
+    v.expr = expr;
+    v.comma = comma;
+    return v;
 }
