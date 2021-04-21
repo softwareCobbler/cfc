@@ -1,3 +1,2 @@
-export { Scanner } from "./scanner";
-export { Tokenizer, TokenizerMode } from "./tokenizer";
+export { Scanner, TokenizerMode } from "./scanner";
 export { Parser, Diagnostic } from "./parser";

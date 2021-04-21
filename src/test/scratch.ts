@@ -1,4 +1,4 @@
-import { Scanner, Tokenizer, TokenizerMode, Parser } from "../compiler";
+import { Scanner, TokenizerMode, Parser } from "../compiler";
 
 //const scanner = Scanner(`<cfset x = function foo(a, b = 42 & 0){}>`);
 const scanner = Scanner(`
@@ -7,9 +7,8 @@ const scanner = Scanner(`
 </cfscript>
 `);
 
-const tokenizer = new Tokenizer(scanner);
 const parser = Parser()
-    .setTokenizer(tokenizer, TokenizerMode.tag)
+    .setScanner(scanner, TokenizerMode.tag)
     .setDebug(true);
 
 parser.parseTags();

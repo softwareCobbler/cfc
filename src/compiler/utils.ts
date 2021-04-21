@@ -1,7 +1,6 @@
 import type { CfTag, Node, TagAttribute } from "./node";
 import { NodeType } from "./node";
-import type { Token } from "./tokenizer";
-import { TokenType } from "./tokenizer";
+import { Token, TokenType } from "./scanner";
 
 const enum TagFact {
     ALLOW_VOID		= 0x00000001, // tag can be void, e.g., <cfhttp> can be loose, or have a body like <cfhttp><cfhttpparam></cfhttp>

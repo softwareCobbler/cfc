@@ -1,5 +1,4 @@
-import { TokenType, Token, NilToken, TokenTypeUiString } from "./tokenizer";
-import { SourceRange } from "./scanner";
+import { SourceRange, TokenType, Token, NilToken, TokenTypeUiString } from "./scanner";
 
 let debug = false;
 
@@ -797,15 +796,15 @@ export type AccessElement =
     | DotAccess
     | BracketAccess;
 
-const enum AccessType { dot, bracket };
+export const enum IndexedAccessType { dot, bracket };
 export interface DotAccess {
-    accessType: AccessType.dot;
+    accessType: IndexedAccessType.dot;
     dot: Terminal;
     propertyName: Terminal;
 }
 
 export interface BracketAccess {
-    accessType: AccessType.bracket;
+    accessType: IndexedAccessType.bracket;
     leftBracket: Terminal;
     expr: Node;
     rightBracket: Terminal;
@@ -829,7 +828,7 @@ export function pushAccessElement(base: IndexedAccess, leftBracket: Terminal, ex
 export function pushAccessElement(base: IndexedAccess, dotOrBracket: Terminal, expr: Node | Terminal, rightBracket?: Terminal) : void {
     if (rightBracket) { // bracket access
         (<BracketAccess[]>base.accessElements).push({
-            accessType: AccessType.bracket,
+            accessType: IndexedAccessType.bracket,
             leftBracket: dotOrBracket,
             expr: expr,
             rightBracket: rightBracket
@@ -837,7 +836,7 @@ export function pushAccessElement(base: IndexedAccess, dotOrBracket: Terminal, e
     }
     else { // dot access
         (<DotAccess[]>base.accessElements).push({
-            accessType: AccessType.dot,
+            accessType: IndexedAccessType.dot,
             dot: dotOrBracket,
             propertyName: (expr as Terminal)
         });

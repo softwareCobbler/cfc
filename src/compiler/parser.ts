@@ -15,9 +15,9 @@ import {
     ArrayLiteralInitializerMember,
     ArrayLiteral,
     EmptyOrderedStructLiteral,
+    IndexedAccessType,
     OrderedStructLiteral, } from "./node";
-import { SourceRange } from "./scanner";
-import { Token, TokenType, TokenizerMode, Tokenizer, TokenTypeUiString } from "./tokenizer";
+import { SourceRange, Token, TokenType, TokenizerMode, Scanner, TokenTypeUiString } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, isNamedBlockName } from "./utils";
 
 const enum ParseOptions {
@@ -67,8 +67,8 @@ export interface Diagnostic {
 
 // @fixme: don't take params, use a "setMode()", "setScanner", etc.
 export function Parser() {
-    function setTokenizer(tokenizer_: Tokenizer, mode_: TokenizerMode) {
-        tokenizer = tokenizer_;
+    function setScanner(scanner_: Scanner, mode_: TokenizerMode) {
+        scanner = scanner_;
         mode = mode_;
         lookahead_ = peek().type;
         parseContext = ParseContext.none;
@@ -83,7 +83,7 @@ export function Parser() {
         return self_;
     }
 
-    let tokenizer : Tokenizer;
+    let scanner : Scanner;
     let mode: TokenizerMode;
     let parseContext : ParseContext;
     let lookahead_ : TokenType;
@@ -136,7 +136,7 @@ export function Parser() {
     })();
 
     const self_ = {
-        setTokenizer,
+        setScanner,
         setMode,
         setDebug,
         parseTags,
@@ -149,7 +149,7 @@ export function Parser() {
     /* impl
     /********************************/
     function peek(jump: number = 0) {
-        return tokenizer.peek(jump, mode);
+        return scanner.peek(jump, mode);
     }
 
     function lookahead() {
@@ -157,27 +157,27 @@ export function Parser() {
     }
 
     function next() {
-        const result = tokenizer.next(mode);
+        const result = scanner.next(mode);
         lookahead_ = peek().type;
         return result;
     }
 
     function getTokenizerState() : TokenizerState {
         return {
-            index: tokenizer.getIndex(),
+            index: scanner.getIndex(),
             mode: mode,
-            artificialEndLimit: tokenizer.getArtificalEndLimit()
+            artificialEndLimit: scanner.getArtificalEndLimit()
         }
     }
 
     function restoreTokenizerState(state: TokenizerState) {
-        tokenizer.restoreIndex(state.index);
+        scanner.restoreIndex(state.index);
         mode = state.mode;
         if (state.artificialEndLimit) {
-            tokenizer.setArtificialEndLimit(state.artificialEndLimit);
+            scanner.setArtificialEndLimit(state.artificialEndLimit);
         }
         else {
-            tokenizer.clearArtificalEndLimit();
+            scanner.clearArtificalEndLimit();
         }
         lookahead_ = peek().type;
     }
@@ -216,7 +216,7 @@ export function Parser() {
     }
 
     function parseErrorAtCurrentToken(msg: string) : void {
-        parseErrorAtRange(tokenizer.currentToken().range, msg);
+        parseErrorAtRange(scanner.currentToken().range, msg);
     }
 
     function createMissingNode<T extends Node>(node: T) {
@@ -421,7 +421,7 @@ export function Parser() {
 
         let canonicalName = "";
         if (!(tagName.flags & NodeFlags.missing)) {
-            canonicalName = tokenizer.getTokenText(tagName.token).toLowerCase();
+            canonicalName = scanner.getTokenText(tagName.token).toLowerCase();
         }
         return CfTag.Common(CfTag.Which.end, tagStart, tagName, null, rightAngle, canonicalName);
     }
@@ -440,10 +440,10 @@ export function Parser() {
                 else {
                     value = parseExpression();
                 }
-                result.push(TagAttribute(attrName, tokenizer.getTokenText(attrName.token).toLowerCase(), equal, value));
+                result.push(TagAttribute(attrName, scanner.getTokenText(attrName.token).toLowerCase(), equal, value));
             }
             else {
-                result.push(TagAttribute(attrName, tokenizer.getTokenText(attrName.token).toLowerCase()));
+                result.push(TagAttribute(attrName, scanner.getTokenText(attrName.token).toLowerCase()));
             }
         }
 
@@ -857,7 +857,7 @@ export function Parser() {
 
         function startOrContinueTagTextRange() {
             if (tagTextRange.isNil()) {
-                const index = tokenizer.getIndex();
+                const index = scanner.getIndex();
                 tagTextRange = new SourceRange(index, index+1);
             }
         }
@@ -865,7 +865,7 @@ export function Parser() {
             if (tagTextRange.isNil()) {
                 return;
             }
-            tagTextRange.toExclusive = tokenizer.getIndex(); // does not include current; so, no "+1"
+            tagTextRange.toExclusive = scanner.getIndex(); // does not include current; so, no "+1"
             result.push(CfTag.Text(tagTextRange))
             tagTextRange = SourceRange.Nil();
         }
@@ -901,7 +901,7 @@ export function Parser() {
 
     function parseTextInTagContext(range: SourceRange, tagContext: TagContext) {
         if (!tagContext.inTextInterpolationContext()) {
-            return TextSpan(range, tokenizer.getTextSlice(range));
+            return TextSpan(range, scanner.getTextSlice(range));
         }
         const saveTokenizerState = getTokenizerState();
         restoreTokenizerState({
@@ -927,7 +927,7 @@ export function Parser() {
 
         function startOrContinueTextRange() {
             if (textSourceRange.isNil()) {
-                const index = tokenizer.getIndex();
+                const index = scanner.getIndex();
                 textSourceRange = new SourceRange(index, index+1);
             }
             // continuing is a no-op; when we finish the text range, we'll update the "toExclusive"
@@ -938,8 +938,8 @@ export function Parser() {
             if (textSourceRange.isNil()) {
                 return;
             }
-            textSourceRange.toExclusive = tokenizer.getIndex(); // current index is NOT included, so, no '+1'
-            result.push(TextSpan(textSourceRange, tokenizer.getTextSlice(textSourceRange)));
+            textSourceRange.toExclusive = scanner.getIndex(); // current index is NOT included, so, no '+1'
+            result.push(TextSpan(textSourceRange, scanner.getTextSlice(textSourceRange)));
             textSourceRange = SourceRange.Nil();
         }
 
@@ -1107,8 +1107,8 @@ export function Parser() {
 
     function parseComparisonExpressionOrLower() : Node {
         const saveDiagnosticEmitter = globalDiagnosticEmitter;
-        const currentPos = tokenizer.getIndex();
-        globalDiagnosticEmitter = () => parseErrorAtRange(currentPos, tokenizer.getIndex(), "Expected an expression");
+        const currentPos = scanner.getIndex();
+        globalDiagnosticEmitter = () => parseErrorAtRange(currentPos, scanner.getIndex(), "Expected an expression");
 
         let root = parseAddition();
 
@@ -1230,27 +1230,41 @@ export function Parser() {
         }
     }
 
-    function parseParentheticalOrUnaryPrefix() : Node {
+    function parseParentheticalOrUnaryPrefix(allowUnary = true) : Node {
         switch (lookahead()) {
             case TokenType.LEFT_PAREN: {
                 const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
                 const expr = parseExpression();
                 const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+
+                // peek for indexed-access or call expression here?
+                // if lookahead() == dot or left brace or paren, its one of those
+                // now, those are illegal;
+                // but easily recognizable
+
                 return Parenthetical(leftParen, expr, rightParen);
             }
             case TokenType.LIT_NOT: // [[fallthrough]];
             case TokenType.EXCLAMATION: {
-                const op = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
-                const expr = parseParentheticalOrUnaryPrefix(); // for unary NOT operator, recurse to support !!x and similar
-                return UnaryOperator(op, expr);
+                if (allowUnary) {
+                    const op = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
+                    const expr = parseParentheticalOrUnaryPrefix(); // for unary NOT operator, recurse to support !!x and similar
+                    return UnaryOperator(op, expr);
+                }
+                // else fallthrough
             }
             case TokenType.DBL_MINUS: // [[fallthrough]];
             case TokenType.DBL_PLUS: {
-                const op = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
-                const expr = parseCallExpressionOrLower();
-                return UnaryOperator(op, expr);
+                if (allowUnary) {
+                    const op = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
+                    const expr = parseParentheticalOrUnaryPrefix(/*allowUnary*/ false);
+                    return UnaryOperator(op, expr);
+                }
+                // else fallthrough
             }
-            default: return parseCallExpressionOrLower();
+            default: {
+                return parseCallExpressionOrLower();
+            }
         }
     }
 
@@ -1388,6 +1402,11 @@ export function Parser() {
                 }
                 return result;
             }
+            case NodeType.indexedAccess:
+                if (result.accessElements.every(v => v.accessType === IndexedAccessType.dot)) {
+                    return result;
+                }
+                // else fallthrough
             default: {
                 parseErrorAtRange(result.range, "Invalid struct initializer key");
                 return result;
@@ -1501,7 +1520,7 @@ export function Parser() {
                 ParseOptions.withTrivia,
                 () => parseErrorAtRange(
                     leftHash!.range.fromInclusive,
-                    tokenizer.getIndex(),
+                    scanner.getIndex(),
                     "Unterminated hash wrapped expression"));
 
             return HashWrappedExpr(
@@ -1649,13 +1668,13 @@ export function Parser() {
             }
             
             if (lookahead() === TokenType.LEXEME) {
-                const discardedLexemesStartPos = tokenizer.getIndex();
+                const discardedLexemesStartPos = scanner.getIndex();
                 do {
                     next();
                 } while (lookahead() === TokenType.LEXEME);
                 
                 // @fixme: should be a warning
-                parseErrorAtRange(discardedLexemesStartPos, tokenizer.getIndex(), "Names in this position will be discarded at runtime; are you missing a comma?")
+                parseErrorAtRange(discardedLexemesStartPos, scanner.getIndex(), "Names in this position will be discarded at runtime; are you missing a comma?")
             }
 
             equal = parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
@@ -2031,7 +2050,7 @@ export function Parser() {
         // return nil statement
         //
         const nilStatement = Statement(null, null);
-        nilStatement.range = tokenizer.currentToken().range;
+        nilStatement.range = scanner.currentToken().range;
         return nilStatement;
     }
 
