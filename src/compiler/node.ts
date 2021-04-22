@@ -833,6 +833,7 @@ export function pushAccessElement(base: IndexedAccess, dotOrBracket: Terminal, e
             expr: expr,
             rightBracket: rightBracket
         });
+        base.range.toExclusive = rightBracket.range.toExclusive;
     }
     else { // dot access
         (<DotAccess[]>base.accessElements).push({
@@ -840,6 +841,7 @@ export function pushAccessElement(base: IndexedAccess, dotOrBracket: Terminal, e
             dot: dotOrBracket,
             propertyName: (expr as Terminal)
         });
+        base.range.toExclusive = expr.range.toExclusive;
     }
 }
 

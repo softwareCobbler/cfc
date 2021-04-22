@@ -2,10 +2,9 @@ import { Scanner, TokenizerMode, Parser } from "../compiler";
 
 //const scanner = Scanner(`<cfset x = function foo(a, b = 42 & 0){}>`);
 const scanner = Scanner(`
-<!--- <!---
 <cfscript>
-    // 
-</cfscript>--->
+x = (function () {}).v(;
+</cfscript>
 `);
 
 const parser = Parser()

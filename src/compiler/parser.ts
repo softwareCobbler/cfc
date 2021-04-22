@@ -83,21 +83,6 @@ export function Parser() {
         return self_;
     }
 
-    function scanToNextToken(token: TokenType[], endOnOrAfter: "on" | "after" = "on") : void {
-        scanner.scanToNext(token, mode);
-        if (endOnOrAfter === "after") {
-            scanner.next(mode);
-        }
-        lookahead_ = peek().type;
-    }
-    function scanToNextChar(char: string, endOnOrAfter: "on" | "after" = "on") : void {
-        scanner.scanToNext(char);
-        if (endOnOrAfter === "after") {
-            scanner.advance();
-        }
-        lookahead_ = peek().type;
-    }
-
     let scanner : Scanner;
     let mode: TokenizerMode;
     let parseContext : ParseContext;
@@ -131,7 +116,9 @@ export function Parser() {
             F extends (...args: any) => any,
             Args extends Parameters<F> = Parameters<F>>(speculationWorker: F, ...args: Args) : ReturnType<F> | null {
             const saveTokenizerState = getTokenizerState();
+            const savedGlobalDiagnosticEmitter = globalDiagnosticEmitter;
             const saveParseErrorBeforeNextFinishedNode = parseErrorBeforeNextFinishedNode;
+            const diagnosticsLimit = diagnostics.length;
 
             const result = speculationWorker(...args as [...Args]);
 
@@ -141,6 +128,8 @@ export function Parser() {
             else {
                 parseErrorBeforeNextFinishedNode = saveParseErrorBeforeNextFinishedNode;
                 restoreTokenizerState(saveTokenizerState);
+                globalDiagnosticEmitter = savedGlobalDiagnosticEmitter;
+                diagnostics.splice(diagnosticsLimit); // drop any diagnostics that were added
                 return null;
             }
         }
@@ -175,6 +164,26 @@ export function Parser() {
         const result = scanner.next(mode);
         lookahead_ = peek().type;
         return result;
+    }
+
+    function scanToNextToken(token: TokenType[], endOnOrAfter: "on" | "after" = "on") : void {
+        scanner.scanToNext(token, mode);
+        if (endOnOrAfter === "after") {
+            scanner.next(mode);
+        }
+        lookahead_ = peek().type;
+    }
+
+    function scanToNextChar(char: string, endOnOrAfter: "on" | "after" = "on") : void {
+        scanner.scanToNext(char);
+        if (endOnOrAfter === "after") {
+            scanner.advance();
+        }
+        lookahead_ = peek().type;
+    }
+
+    function getIndex() {
+        return scanner.getIndex();
     }
 
     function getTokenizerState() : TokenizerState {
@@ -1071,7 +1080,11 @@ export function Parser() {
         return parseExpression();
     }
 
-    function parseExpression(descendIntoOr = true) : Node { // i think this binds the &&'s correctly
+    function parseExpression(descendIntoOr = true) : Node { // todo: does this get the AND and OR precedences correct?
+        const saveDiagnosticEmitter = globalDiagnosticEmitter;
+        const currentPos = scanner.getIndex();
+        globalDiagnosticEmitter = () => parseErrorAtRange(currentPos, scanner.getIndex(), "Expected an expression");
+
         let root = parseComparisonExpressionOrLower();
 
         outer:
@@ -1128,14 +1141,11 @@ export function Parser() {
             break;
         }
 
+        globalDiagnosticEmitter = saveDiagnosticEmitter;
         return root;
     }
 
     function parseComparisonExpressionOrLower() : Node {
-        const saveDiagnosticEmitter = globalDiagnosticEmitter;
-        const currentPos = scanner.getIndex();
-        globalDiagnosticEmitter = () => parseErrorAtRange(currentPos, scanner.getIndex(), "Expected an expression");
-
         let root = parseAddition();
 
         while (true) {
@@ -1171,8 +1181,6 @@ export function Parser() {
             // if we didn't match any of the above tokens, we're done
             break;
         }
-
-        globalDiagnosticEmitter = saveDiagnosticEmitter;
 
         return root;
     }
@@ -1260,15 +1268,25 @@ export function Parser() {
         switch (lookahead()) {
             case TokenType.LEFT_PAREN: {
                 const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
-                const expr = parseExpression();
+                const expr = parseAnonymousFunctionDefinitionOrExpression();
                 const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+                let root : Node = Parenthetical(leftParen, expr, rightParen);
 
-                // peek for indexed-access or call expression here?
-                // if lookahead() == dot or left brace or paren, its one of those
-                // now, those are illegal;
-                // but easily recognizable
+                root = parseTrailingExpressionChain(root);
 
-                return Parenthetical(leftParen, expr, rightParen);
+                // (function() {})()      valid cf2021+
+                // (() => value)()        valid cf2021+
+                // ([1,2,3])[1]           invalid
+                // ({x:1}).x              invalid
+                // ({x:1})["x"]           invalid
+
+                // @fixme: need to unwrap a call expression to see if it is an indexed-access root
+                // root.type === call && root.name === indexed access or something like that
+                if ((root.type === NodeType.indexedAccess) ||
+                    (root.type === NodeType.unaryOperator && root.expr.type === NodeType.indexedAccess)) {
+                    parseErrorAtRange(root.range, "Illegal indexed access expression; consider removing the parentheses from the index root");
+                }
+                return root;
             }
             case TokenType.LIT_NOT: // [[fallthrough]];
             case TokenType.EXCLAMATION: {
@@ -1304,9 +1322,12 @@ export function Parser() {
 
         let expr : Node;
         if (isInSomeContext(ParseContext.interpolatedText)) {
+            // if we're in interpolated text, we can do any expression here, like "#x+1#"
             expr = parseExpression();
         }
         else {
+            // #foo()#     is ok
+            // #foo() + 1# is invalid
             expr = parseCallExpressionOrLower()
         }
 
@@ -1339,19 +1360,24 @@ export function Parser() {
             default: break;
         }
 
-        let root : Node = parseIdentifier(ParseOptions.allowHashWrapped);
-        if (root.type === NodeType.hashWrappedExpr) {
-            return root;
-        }
+        let root : Node = parseIdentifier();
+        root = parseTrailingExpressionChain(root);
+        return root;
+    }
 
-        while (lookahead() != TokenType.EOF) {
+    /**
+     * given some root, parse a chain of dot/bracket | call expression accesses, and a postfix ++/-- operator
+     * something like `a.b["c"]().d["e"]++`
+     */
+    function parseTrailingExpressionChain<T extends Node>(root: T) : T | IndexedAccess | CallExpression | UnaryOperator {
+        while (true) {
             switch(lookahead()) {
                 case TokenType.LEFT_BRACKET:
                 case TokenType.DOT:
-                    root = parseIndexedAccess(root);
+                    (root as Node) = parseIndexedAccess(root);
                     continue;
                 case TokenType.LEFT_PAREN:
-                    root = parseCallExpression(root);
+                    (root as Node) = parseCallExpression(root);
                     continue;
             }
             break;
@@ -1361,14 +1387,14 @@ export function Parser() {
             case TokenType.DBL_PLUS:
             case TokenType.DBL_MINUS:
                 const unaryOp = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
-                root = UnaryOperator(root, unaryOp);
+                (root as Node) = UnaryOperator(root, unaryOp);
         }
 
         return root;
     }
 
-    function parseIndexedAccess(root: Node) : Node {
-        while (lookahead() != TokenType.EOF) {
+    function parseIndexedAccess<T extends Node>(root: T) : T | IndexedAccess {
+        while (true) {
             switch (lookahead()) {
                 case TokenType.LEFT_BRACKET: {
                     const leftBracket = parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
@@ -1376,9 +1402,9 @@ export function Parser() {
                     const rightBracket = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
 
                     if (root.type !== NodeType.indexedAccess) {
-                        root = IndexedAccess(root);
+                        (root as Node) = IndexedAccess(root);
                     }
-                    pushAccessElement(root, leftBracket, expr, rightBracket);
+                    pushAccessElement(root as IndexedAccess, leftBracket, expr, rightBracket);
 
                     continue;
                 }
@@ -1386,9 +1412,9 @@ export function Parser() {
                     const dot = parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
                     const propertyName = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
                     if (root.type !== NodeType.indexedAccess) {
-                        root = IndexedAccess(root);
+                        (root as Node) = IndexedAccess(root);
                     }
-                    pushAccessElement(root, dot, propertyName);
+                    pushAccessElement(root as IndexedAccess, dot, propertyName);
                     continue;
                 }
             }
@@ -1397,10 +1423,12 @@ export function Parser() {
         return root;
     }
 
-    function parseCallExpression(root: Node) {
+    function parseCallExpression(root: Node) : CallExpression {
         const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
         const args : CallArgument[] = [];
         while (lookahead() != TokenType.EOF && lookahead() != TokenType.RIGHT_PAREN) {
+            // @fixme: this fails if parseExpression hits a single identifier but the identifier was invalid;
+            // in that case, we don't advance, and we get stuck here
             const expr = parseExpression();
             const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
             args.push(CallArgument(expr, comma));
@@ -1524,39 +1552,15 @@ export function Parser() {
         }
     }
 
-    function parseIdentifier() : Identifier;
-    function parseIdentifier(parseOptions: ParseOptions.allowHashWrapped) : Identifier | HashWrappedExpr;
-    function parseIdentifier(parseOptions?: ParseOptions.allowHashWrapped) : Identifier | HashWrappedExpr {
-        let leftHash : Terminal | null = null;
-        if (parseOptions && (parseOptions & ParseOptions.allowHashWrapped) && !isInSomeContext(ParseContext.hashWrappedExpr)) {
-            leftHash = parseOptionalTerminal(TokenType.HASH, ParseOptions.withTrivia);
-        }
-
-        const identifier = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true);
+    function parseIdentifier() : Identifier {
+        const identifier = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false);
 
         // @fixme: make sure the identifier name is valid
         // for example, "var" is a valid identifier, but "and" and "final" are not
         // in cf2021 they tightened it a bit, so 'function' is no longer a valid identifier, probably others
         
         const canonicalName = identifier.token.text.toLowerCase();
-
-        if (leftHash && parseOptions! & ParseOptions.allowHashWrapped) {
-            const rightHash = parseExpectedTerminal(
-                TokenType.HASH,
-                ParseOptions.withTrivia,
-                () => parseErrorAtRange(
-                    leftHash!.range.fromInclusive,
-                    scanner.getIndex(),
-                    "Unterminated hash wrapped expression"));
-
-            return HashWrappedExpr(
-                leftHash,
-                Identifier(identifier, canonicalName),
-                rightHash);
-        }
-        else {
-            return Identifier(identifier, canonicalName);
-        }
+        return Identifier(identifier, canonicalName);
     }
 
     function parseStringLiteral() : Node {
@@ -1991,8 +1995,7 @@ export function Parser() {
             switch (lookahead()) {
                 case TokenType.WHITESPACE: {
                     // @fixme: attach this to a node somehow to get a beter round-trip
-                    // do we ever get here ? ...
-                    throw "uh";
+                    // do we ever get here ? ... should be just in error, otherwise we would have appropriately eaten any trivia by now
                     next();
                     continue;
                 }
@@ -2058,7 +2061,18 @@ export function Parser() {
                         return NamedBlockFromBlock(name, attrs, block);
                     }
                     else {
-                        return parseAssignmentOrLower();
+                        const index = getIndex();
+                        const savedDiagnosticEmitter = globalDiagnosticEmitter;
+                        globalDiagnosticEmitter = () => parseErrorAtRange(index, getIndex(), "Expression expected");
+                        
+                        parseAssignmentOrLower();
+                        
+                        globalDiagnosticEmitter = savedDiagnosticEmitter;
+
+                        if (getIndex() === index) {
+                            parseErrorAtCurrentToken("Unexpected input");
+                            next();
+                        }
                         // we can just skip it, there was an error earlier and this is some token that should be part of another
                         // production but is now loose
                         // should we mark an error?; note that we're not returning, we're t
