@@ -83,6 +83,21 @@ export function Parser() {
         return self_;
     }
 
+    function scanToNextToken(token: TokenType[], endOnOrAfter: "on" | "after" = "on") : void {
+        scanner.scanToNext(token, mode);
+        if (endOnOrAfter === "after") {
+            scanner.next(mode);
+        }
+        lookahead_ = peek().type;
+    }
+    function scanToNextChar(char: string, endOnOrAfter: "on" | "after" = "on") : void {
+        scanner.scanToNext(char);
+        if (endOnOrAfter === "after") {
+            scanner.advance();
+        }
+        lookahead_ = peek().type;
+    }
+
     let scanner : Scanner;
     let mode: TokenizerMode;
     let parseContext : ParseContext;
@@ -316,24 +331,34 @@ export function Parser() {
 
     function parseTagComment() : CfTag.Comment {
         const commentStart = parseExpectedTerminal(TokenType.CF_TAG_COMMENT_START, ParseOptions.noTrivia);
-        const commentBody = parseTagTrivia();
-        const commentEnd = parseExpectedTerminal(TokenType.CF_TAG_COMMENT_END, ParseOptions.noTrivia);
+        const nestedComments : CfTag.Comment[] = [];
+        while (true) {
+            scanToNextToken([TokenType.CF_TAG_COMMENT_START, TokenType.CF_TAG_COMMENT_END]);
+            if (lookahead() === TokenType.CF_TAG_COMMENT_START) {
+                nestedComments.push(parseTagComment());
+            }
+            else {
+                break;
+            }
+        }
 
-        // if no comment end, emit an error
-
-        return CfTag.Comment(commentStart, commentBody, commentEnd);
+        const commentEnd = parseExpectedTerminal(
+            TokenType.CF_TAG_COMMENT_END,
+            ParseOptions.noTrivia,
+            () => parseErrorAtRange(commentStart.range.fromInclusive, scanner.getIndex(), "Unterminated tag comment"));
+        return CfTag.Comment(commentStart, nestedComments, commentEnd);
     }
 
     function parseScriptSingleLineComment() : Comment {
-        throw "nyi";
+        const start = parseExpectedTerminal(TokenType.DBL_FORWARD_SLASH, ParseOptions.noTrivia);
+        scanToNextChar("\n", /*endOnOrAfter*/"after");
+        return Comment(CommentType.scriptSingleLine, new SourceRange(start.range.fromInclusive, scanner.getIndex()));
     }
 
     function parseScriptMultiLineComment() : Comment {
         const startToken = parseExpectedTerminal(TokenType.FORWARD_SLASH_STAR, ParseOptions.noTrivia);
-        while (lookahead() !== TokenType.STAR_FORWARD_SLASH && lookahead() !== TokenType.EOF) {
-            next();
-        }
-        const endToken = parseExpectedTerminal(TokenType.STAR_FORWARD_SLASH, ParseOptions.noTrivia);
+        scanToNextToken([TokenType.STAR_FORWARD_SLASH]);
+        const endToken = parseExpectedTerminal(TokenType.STAR_FORWARD_SLASH, ParseOptions.noTrivia, () => parseErrorAtRange(startToken.range.fromInclusive, scanner.getIndex(), "Unterminated multiline script comment"));
         return Comment(CommentType.scriptMultiLine, new SourceRange(startToken.range.fromInclusive, endToken.range.toExclusive));
     }
 
@@ -403,6 +428,7 @@ export function Parser() {
                 mode = TokenizerMode.script;
 
                 // hm, probably mode should be a context flag, too
+                rightAngle.trivia = parseTrivia(); // <cfscript> is a tag but it gets script-based trivia (so it can have script comments attached to it)
                 const stmtList = doInContext(ParseContext.cfScriptTagBody, parseStatementList);
 
                 mode = saveMode;
@@ -1965,6 +1991,8 @@ export function Parser() {
             switch (lookahead()) {
                 case TokenType.WHITESPACE: {
                     // @fixme: attach this to a node somehow to get a beter round-trip
+                    // do we ever get here ? ...
+                    throw "uh";
                     next();
                     continue;
                 }

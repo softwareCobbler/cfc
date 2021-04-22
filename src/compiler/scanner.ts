@@ -51,6 +51,7 @@ export const enum AsciiMap {
 
 export const enum TokenType {
     NIL,
+    CHAR, // any single char that we didn't otherwise handle
     EOF,
     BOM_UTF_8, // ef bb ef
 
@@ -155,6 +156,7 @@ export const enum TokenType {
 
 export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.NIL]:                  "nil",
+    [TokenType.CHAR]:                 "char",
     [TokenType.EOF]:                  "eof",
     [TokenType.BOM_UTF_8]:            "utf8-bom",
 
@@ -577,6 +579,39 @@ export function Scanner(sourceText_: string) {
         }
     }
 
+    /**
+     * target is expected to be a string of length 1, or a TokenType
+     * this leaves the scanner primed to scan the target char or TokenType on the next call to `nextToken`
+     */
+    function scanToNext(target: string) : void;
+    function scanToNext(target: TokenType[], mode: TokenizerMode) : void;
+    function scanToNext(target: string | TokenType[], mode?: TokenizerMode) : void {
+        if (typeof target === "string") {
+            const targetCodepoint = target.charCodeAt(0);
+            while (true) {
+                const nextCodepoint = peekChar()?.codepoint;
+                if (!nextCodepoint || nextCodepoint === targetCodepoint) {
+                    break;
+                }
+                else {
+                    nextChar();
+                }
+            }
+        }
+        else {
+            while (true) {
+                // we could peek but that requires more work than jumping
+                // back to the start of the token when we finally find a match
+                let lastIndex = getIndex();
+                const token = nextToken(mode!);
+                if (target.includes(token.type) || token.type === TokenType.EOF) {
+                    restoreIndex(lastIndex);
+                    break;
+                }
+            }
+        }
+    }
+
     function maybeEat(pattern: RegExp) {
         pattern.lastIndex = index;
         const match = pattern.exec(sourceText);
@@ -639,12 +674,14 @@ export function Scanner(sourceText_: string) {
     }
 
     return {
+        advance: () : void => {index = Math.min(index+1, end-1)},
         getLastScannedText,
         getTextSlice,
         getIndex,
         hasNext,
         peek: peekToken,
         next: nextToken,
+        scanToNext,
         setArtificialEndLimit,
         getArtificalEndLimit,
         clearArtificalEndLimit,
