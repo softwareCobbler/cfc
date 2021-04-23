@@ -1,2 +1,2 @@
-export { Scanner, TokenizerMode } from "./scanner";
-export { Parser, Diagnostic } from "./parser";
+export { Scanner, ScannerMode as TokenizerMode } from "./scanner";
+export { Parser, CfFileType, Diagnostic } from "./parser";

@@ -256,8 +256,18 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.KW_TRY]:               "try",
     [TokenType.KW_VAR]:               "var",
     [TokenType.KW_WHILE]:             "while",
-    [TokenType._LAST_KW]:            "<<IMMEDIATELY-AFTER-LAST-KW>>",
+    [TokenType._LAST_KW]:             "<<IMMEDIATELY-AFTER-LAST-KW>>",
 } as const;
+
+export const TokenTypeUiStringReverse = reverseMap(TokenTypeUiString);
+
+function reverseMap<K extends number | string, V extends number | string>(source: Record<K, V>) : Record<V,K> {
+    const result : Partial<Record<V,K>> = {};
+    for (const key of (Object.keys(source) as unknown as (keyof typeof source)[])) {
+        result[source[key]] = key;
+    }
+    return result as Record<V,K>;
+}
 
 export interface AnnotatedChar {
     codepoint: number,
@@ -288,6 +298,8 @@ export class SourceRange {
         return this.fromInclusive == -1 && this.toExclusive == -1;
     }
 }
+
+type char = string; // with the intent being "exactly one character" (and non-empty!)
 
 export function Scanner(sourceText_: string) {
     const sourceText = sourceText_;
@@ -374,7 +386,7 @@ export function Scanner(sourceText_: string) {
         return annotatedChars[index++];
     }
 
-    function peekToken(jump: number, mode: TokenizerMode) : Token {
+    function peekToken(jump: number, mode: ScannerMode) : Token {
         const saveIndex = getIndex();
         let result : Token;
 
@@ -387,7 +399,7 @@ export function Scanner(sourceText_: string) {
         return result;
     }
 
-    function nextToken(mode: TokenizerMode) : Token {
+    function nextToken(mode: ScannerMode) : Token {
         if (!hasNext()) {
             // we've already seen a fin token;
             // or, we've hit the artificial end limit
@@ -399,8 +411,8 @@ export function Scanner(sourceText_: string) {
             );
         }
 
-        const tag = mode == TokenizerMode.tag;
-        const script = mode == TokenizerMode.script;
+        const tag = mode == ScannerMode.tag || ScannerMode.allow_both;
+        const script = mode == ScannerMode.script || ScannerMode.allow_both;
         const from = getIndex();
 
         const c = peekChar()!.codepoint;
@@ -581,11 +593,12 @@ export function Scanner(sourceText_: string) {
 
     /**
      * target is expected to be a string of length 1, or a TokenType
+     * if a char, it is case-sensitive
      * this leaves the scanner primed to scan the target char or TokenType on the next call to `nextToken`
      */
-    function scanToNext(target: string) : void;
-    function scanToNext(target: TokenType[], mode: TokenizerMode) : void;
-    function scanToNext(target: string | TokenType[], mode?: TokenizerMode) : void {
+    function scanToNext(target: char) : void;
+    function scanToNext(target: TokenType[], mode: ScannerMode) : void;
+    function scanToNext(target: char | TokenType[], mode?: ScannerMode) : void {
         if (typeof target === "string") {
             const targetCodepoint = target.charCodeAt(0);
             while (true) {
@@ -723,4 +736,4 @@ export function Token(type: TokenType, text: string, fromOrRange: number | Sourc
 
 export const NilToken : Readonly<Token> = Token(TokenType.NIL, "", SourceRange.Nil());
 
-export const enum TokenizerMode { tag, script }
+export const enum ScannerMode { tag, script, allow_both }

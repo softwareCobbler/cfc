@@ -16,8 +16,9 @@ import {
     ArrayLiteral,
     EmptyOrderedStructLiteral,
     IndexedAccessType,
-    OrderedStructLiteral, } from "./node";
-import { SourceRange, Token, TokenType, TokenizerMode, Scanner, TokenTypeUiString } from "./scanner";
+    OrderedStructLiteral,
+    ReturnStatement, } from "./node";
+import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, TokenTypeUiStringReverse } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, isNamedBlockName } from "./utils";
 
 const enum ParseOptions {
@@ -53,7 +54,7 @@ function TagContext() {
 type TagContext = ReturnType<typeof TagContext>;
 
 interface TokenizerState {
-    mode : TokenizerMode;
+    mode : ScannerMode;
     index: number;
     artificialEndLimit: number | undefined;
 }
@@ -65,17 +66,21 @@ export interface Diagnostic {
     msg: string;
 }
 
-// @fixme: don't take params, use a "setMode()", "setScanner", etc.
+export const enum CfFileType { cfm, cfc };
+
 export function Parser() {
-    function setScanner(scanner_: Scanner, mode_: TokenizerMode) {
+    function setScanner(scanner_: Scanner) {
         scanner = scanner_;
-        mode = mode_;
-        lookahead_ = peek().type;
         parseContext = ParseContext.none;
+        diagnostics = [];
         return self_;
     }
-    function setMode(mode_: TokenizerMode) {
+    function primeScanner() {
+        lookahead_ = peek().type;
+    }
+    function setScannerMode(mode_: ScannerMode) {
         mode = mode_;
+        primeScanner();
         return self_;
     }
     function setDebug(isDebug: boolean) {
@@ -84,13 +89,16 @@ export function Parser() {
     }
 
     let scanner : Scanner;
-    let mode: TokenizerMode;
+    let mode: ScannerMode;
     let parseContext : ParseContext;
     let lookahead_ : TokenType;
-    
-    let globalDiagnosticEmitter : (() => void) | null = null;
 
-    const diagnostics : Diagnostic[] = [];
+    const identifierPattern = /^[_$a-z][_$a-z0-9]*$/i;
+    const tagNamePattern    = /^[_a-z]+$/i;
+    
+    let globalDiagnosticEmitter : (() => void) | null = null; // @fixme: find a way to not need this
+
+    let diagnostics : Diagnostic[] = [];
     let parseErrorBeforeNextFinishedNode = false;
     parseErrorBeforeNextFinishedNode;
 
@@ -141,10 +149,12 @@ export function Parser() {
 
     const self_ = {
         setScanner,
-        setMode,
+        setScannerMode,
         setDebug,
+        getDiagnostics,
         parseTags,
-        getDiagnostics
+        parseScript,
+        parse,
     };
 
     return self_;
@@ -207,10 +217,10 @@ export function Parser() {
     }
 
     function tagMode() : boolean {
-        return mode === TokenizerMode.tag;
+        return mode === ScannerMode.tag;
     }
     function scriptMode() : boolean {
-        return mode === TokenizerMode.script;
+        return mode === ScannerMode.script;
     }
     function isInSomeContext(contextFlags: ParseContext) {
         return (parseContext & contextFlags) === contextFlags;
@@ -304,7 +314,7 @@ export function Parser() {
         if (!isLexemeLikeToken(token)) {
             parseErrorAtRange(token.range, "Expected a cftag name here");
         }
-        else if (!/^[_a-z]+$/i.test(token.text)) {
+        else if (!tagNamePattern.test(token.text)) {
             parseErrorAtRange(token.range, "Invalid cftag name");
         }
 
@@ -433,14 +443,14 @@ export function Parser() {
             const maybeVoidSlash = parseOptionalTerminal(TokenType.FORWARD_SLASH, ParseOptions.withTrivia);
             const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
             if (canonicalName === "script") {
-                const saveMode = mode;
-                mode = TokenizerMode.script;
+                const savedMode = mode;
+                setScannerMode(ScannerMode.script);
 
                 // hm, probably mode should be a context flag, too
                 rightAngle.trivia = parseTrivia(); // <cfscript> is a tag but it gets script-based trivia (so it can have script comments attached to it)
                 const stmtList = doInContext(ParseContext.cfScriptTagBody, parseStatementList);
 
-                mode = saveMode;
+                setScannerMode(savedMode);
                 return CfTag.Script(tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, stmtList);
             }
             else {
@@ -464,8 +474,9 @@ export function Parser() {
     function parseTagAttributes() : TagAttribute[] {
         const result : TagAttribute[] = [];
 
-        while (lookahead() === TokenType.LEXEME) {
-            const attrName = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
+        while (isLexemeLikeToken(peek())) {
+            // @fixme: does this need "consumeOnFailure", does anyone use "true"?
+            const attrName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false);
             if (lookahead() === TokenType.EQUAL) {
                 const equal = parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
                 let value : Node;
@@ -483,6 +494,120 @@ export function Parser() {
         }
 
         return result;
+    }
+
+    function parseComponentPreamble() : "script" | "tag" | null {
+        setScannerMode(ScannerMode.allow_both);
+        const preamble : Node[] = [];
+
+        //
+        // speculationhelper will cleanup scannermode changes
+        //
+        function isTagComponentBlock() {
+            setScannerMode(ScannerMode.tag);
+            if (lookahead() !== TokenType.CF_START_TAG_START) {
+                return false;
+            }
+            return parseCfStartTag().canonicalName === "component";
+        }
+
+        function isScriptComponentBlock() {
+            setScannerMode(ScannerMode.script);
+            if (peek().text.toLowerCase() !== "component") {
+                return false;
+            }
+            next();
+            parseTrivia();
+            parseTagAttributes();
+            return peek().type === TokenType.LEFT_BRACE;
+        }
+
+        let gotNonComment = false;
+        let gotTagComment = false;
+        let gotScriptComment = false;
+        let match : "script" | "tag" | null = null;
+        outer:
+        while (lookahead() !== TokenType.EOF) {
+            switch (lookahead()) {
+                case TokenType.CF_TAG_COMMENT_START: {
+                    preamble.push(parseTagComment());
+                    gotTagComment = true;
+                    continue;
+                }
+                case TokenType.DBL_FORWARD_SLASH: {
+                    preamble.push(parseScriptSingleLineComment());
+                    gotScriptComment = true;
+                    continue;
+                }
+                case TokenType.FORWARD_SLASH_STAR: {
+                    preamble.push(parseScriptMultiLineComment());
+                    gotScriptComment = true;
+                    continue;
+                }
+                case TokenType.LEXEME: {
+                    if (SpeculationHelper.lookahead(isScriptComponentBlock)) {
+                        match = "script";
+                        break outer;
+                    }
+                    gotNonComment = true;
+                    next();
+                    continue;
+                }
+                case TokenType.CF_START_TAG_START: {
+                    if (SpeculationHelper.lookahead(isTagComponentBlock)) {
+                        match = "tag";
+                        break outer;
+                    }
+                    gotNonComment = true;
+                    next();
+                    continue;
+                }
+                case TokenType.WHITESPACE: {
+                    next();
+                    continue;
+                }
+                default: {
+                    gotNonComment = true;
+                    next();
+                    continue;
+                }
+            }
+        }
+
+        if (gotNonComment) {
+            parseErrorAtRange(0, getIndex(), "A component preamble may only contain comments.");
+        }
+
+        if (match && ((match === "tag" && gotScriptComment) || (match === "script" && gotTagComment))) {
+            parseErrorAtRange(0, getIndex(), `A ${match} component preamble may only contain ${match}-style comments.`);
+        }
+        else if (!match) {
+            parseErrorAtRange(0, getIndex(), `A CFC file must contain a component definition.`);
+        }
+
+        return match;
+    }
+
+    function parse(cfFileType: CfFileType) : Node[] {
+        if (cfFileType === CfFileType.cfm) {
+            return parseTags();
+        }
+
+        const componentType = parseComponentPreamble();
+        if (!componentType) {
+            return [];
+        }
+        else if (componentType === "tag") {
+            return parseTags();
+        }
+        else {
+            return parseScript();
+        }
+    }
+
+    function parseScript() : Node[] {
+        setScannerMode(ScannerMode.script);
+        return parseStatementList();
     }
 
     function parseTags() : Node[] {
@@ -646,7 +771,7 @@ export function Parser() {
                     }
                 }
 
-                parseErrorAtRange(root.range, "Missing </cfif> tag");
+                parseErrorAtRange(root.range, "Missing </cfif> tag.");
                 return root;
             }
 
@@ -655,12 +780,12 @@ export function Parser() {
                     const nameAttr = getAttributeValue(tag.attrs, "name");
                     let name = "";
                     if (!nameAttr) {
-                        parseErrorAtRange(tag.range, "<cfargument> requires a 'name' attribute");
+                        parseErrorAtRange(tag.range, "<cfargument> requires a 'name' attribute.");
                     }
                     else {
                         const nameVal = getTriviallyComputableString(nameAttr);
                         if (!nameVal) {
-                            parseErrorAtRange(nameAttr.range, "<cfargument> 'name' attribute must be a constant string value");
+                            parseErrorAtRange(nameAttr.range, "<cfargument> 'name' attribute must be a constant string value.");
                         }
                         else {
                             name = nameVal;
@@ -676,13 +801,13 @@ export function Parser() {
                             // if we don't get a NaN, and we are less than 0, report an error, because there is a special rule,
                             // or more of a actual cf-engine parse-failure, that negative numbers cannot be coerced to boolean
                             // in the requires attribute of a <cfargument> tag
-                            parseErrorAtRange(requiredAttr.range, "<cfargument> 'required' attribute does not allow coercions to boolean from negative numbers");
+                            parseErrorAtRange(requiredAttr.range, "<cfargument> 'required' attribute does not allow coercions to boolean from negative numbers.");
                             isRequired = false;
                         }
                         else {
                             const boolVal = getTriviallyComputableBoolean(requiredAttr);
                             if (boolVal === undefined) { // whatever the value was, it was not coercible to bool
-                                parseErrorAtRange(requiredAttr.range, "<cfargument> 'required' attribute must be a constant boolean value");
+                                parseErrorAtRange(requiredAttr.range, "<cfargument> 'required' attribute must be a constant boolean value.");
                             }
                             isRequired = boolVal ?? false;
                         }
@@ -694,12 +819,12 @@ export function Parser() {
                 let functionName = "";
                 const functionNameExpr = getAttributeValue(startTag.attrs, "name");
                 if (!functionNameExpr) {
-                    parseErrorAtRange(startTag.range, "<cffunction> requires a name attribute")
+                    parseErrorAtRange(startTag.range, "<cffunction> requires a name attribute.")
                 }
                 else {
                     let functionName = getTriviallyComputableString(functionNameExpr);
                     if (!functionName) {
-                        parseErrorAtRange(functionNameExpr.range, "<cffunction> name attribute must be a constant")
+                        parseErrorAtRange(functionNameExpr.range, "<cffunction> name attribute must be a constant.")
                     }
                 }
 
@@ -789,14 +914,14 @@ export function Parser() {
                                 openTagStack.push("function");
                                 const startTag = parseExpectedTag(CfTag.Which.start, "function");
                                 const body = treeifyTags(stopAt(CfTag.Which.end, "function", ReductionScheme.return));
-                                const endTag = parseExpectedTag(CfTag.Which.end, "function", () => parseErrorAtRange(startTag.range, "Missing </cffunction> tag"))
+                                const endTag = parseExpectedTag(CfTag.Which.end, "function", () => parseErrorAtRange(startTag.range, "Missing </cffunction> tag."))
                                 openTagStack.pop();
                                 result.push(treeifyTagFunction(startTag as CfTag.Common, body, endTag as CfTag.Common));
                                 continue;
                             }
                             case "script": {
                                 nextTag();
-                                const endTag = parseExpectedTag(CfTag.Which.end, "script", () => parseErrorAtRange(tag.range, "Missing </cfscript> tag"));
+                                const endTag = parseExpectedTag(CfTag.Which.end, "script", () => parseErrorAtRange(tag.range, "Missing </cfscript> tag."));
                                 result.push(
                                     FromTag.Block(
                                         tag,
@@ -814,7 +939,7 @@ export function Parser() {
 
                                     openTagStack.pop();
 
-                                    const endTag = parseExpectedTag(CfTag.Which.end, startTag.canonicalName, () => parseErrorAtRange(startTag.range, "Missing </cf" + startTag.canonicalName + ">"));
+                                    const endTag = parseExpectedTag(CfTag.Which.end, startTag.canonicalName, () => parseErrorAtRange(startTag.range, "Missing </cf" + startTag.canonicalName + "> tag."));
                                     updateTagContext(endTag);
                                     result.push(FromTag.Block(startTag, blockChildren, endTag));
                                 }
@@ -870,7 +995,7 @@ export function Parser() {
                                 return result;
                             }
                             else {
-                                parseErrorAtRange(tag.range, "End tag without a matching start tag (cf" + tag.canonicalName + ")")
+                                parseErrorAtRange(tag.range, "End tag without a matching start tag (cf" + tag.canonicalName + ").")
                             }
                         }
 
@@ -884,8 +1009,8 @@ export function Parser() {
             return treeifyTags(reductionInstructions.default);
         }
 
-        const saveMode = mode;
-        mode = TokenizerMode.tag;
+        const savedMode = mode;
+        setScannerMode(ScannerMode.tag);
 
         const result : CfTag[] = [];
         let tagTextRange = SourceRange.Nil();
@@ -929,7 +1054,7 @@ export function Parser() {
             }
         }
 
-        mode = saveMode;
+        setScannerMode(savedMode);
 
         return treeifyTagList(result);
     }
@@ -941,15 +1066,15 @@ export function Parser() {
         const saveTokenizerState = getTokenizerState();
         restoreTokenizerState({
             index: range.fromInclusive,
-            mode: TokenizerMode.tag,
+            mode: ScannerMode.tag,
             artificialEndLimit: range.toExclusive});
         
-        const result = parseTextWithPossibleInterpolations();
+        const result = parseInterpolatedText();
         restoreTokenizerState(saveTokenizerState);
         return result;
     }
 
-    function parseTextWithPossibleInterpolations(quoteDelimiter?: TokenType.QUOTE_SINGLE | TokenType.QUOTE_DOUBLE) : (TextSpan | HashWrappedExpr)[] {
+    function parseInterpolatedText(quoteDelimiter?: TokenType.QUOTE_SINGLE | TokenType.QUOTE_DOUBLE) : (TextSpan | HashWrappedExpr)[] {
         // when we enter a new interpolation context, we can reset our hashWrappedExpr flag;
         // hash wrapped expressions don't nest directly, but indirectly is ok; e.g,
         // #someVal & "some-string-literal #nesting_here_is_ok#" & trying_to_nest_here_is_an_error #
@@ -1038,18 +1163,14 @@ export function Parser() {
         const root = parseCallExpressionOrLower();
 
         if (lookahead() != TokenType.EQUAL) {
-            if (finalModifier || varModifier) {
+            if (varModifier) {
                 // we could probably return a "declaration" here ?
                 // var x;  sure it's semantically meaningless in cf (all var declarations require initializers), but it looks valid
                 // would also be useful in a for-in: `for (var x in y)` where `var x` is a declaration
                 // so we could check if we're in a for-in context
-                parseErrorAtRange(root.range, "variable declarations require initializers");
-                return root;
+                parseErrorAtRange(root.range, "Variable declarations require initializers.");
             }
-            else {
-                // just a plain ol' expr
-                return root;
-            }
+            return root;
         }
 
         if (!isAssignmentTarget(root)) {
@@ -1083,7 +1204,7 @@ export function Parser() {
     function parseExpression(descendIntoOr = true) : Node { // todo: does this get the AND and OR precedences correct?
         const saveDiagnosticEmitter = globalDiagnosticEmitter;
         const currentPos = scanner.getIndex();
-        globalDiagnosticEmitter = () => parseErrorAtRange(currentPos, scanner.getIndex(), "Expected an expression");
+        globalDiagnosticEmitter = () => parseErrorAtRange(currentPos, scanner.getIndex(), "Expression expected.");
 
         let root = parseComparisonExpressionOrLower();
 
@@ -1272,19 +1393,33 @@ export function Parser() {
                 const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
                 let root : Node = Parenthetical(leftParen, expr, rightParen);
 
+                //
+                // this message could be better especially at a use site like a concise arrow function:
+                // `() => ({x:1})` is illegal, but the message could be "Consider an explicit return"
+                // anyway, at least its flagged
+                //
+                switch (stripOuterParens(root).type) {
+                    case NodeType.arrayLiteral:
+                        parseErrorAtRange(root.range, "Parenthesized array literals are illegal. Consider removing the parentheses.");
+                        break;
+                    case NodeType.structLiteral:
+                        parseErrorAtRange(root.range, "Parenthesized struct literals are illegal. Consider removing the parentheses.");
+                        break;
+                }
+
                 root = parseTrailingExpressionChain(root);
 
                 // (function() {})()      valid cf2021+
                 // (() => value)()        valid cf2021+
+                // (function() {}).v()    invalid
                 // ([1,2,3])[1]           invalid
                 // ({x:1}).x              invalid
                 // ({x:1})["x"]           invalid
-
-                // @fixme: need to unwrap a call expression to see if it is an indexed-access root
-                // root.type === call && root.name === indexed access or something like that
+                //
                 if ((root.type === NodeType.indexedAccess) ||
-                    (root.type === NodeType.unaryOperator && root.expr.type === NodeType.indexedAccess)) {
-                    parseErrorAtRange(root.range, "Illegal indexed access expression; consider removing the parentheses from the index root");
+                    (root.type === NodeType.unaryOperator && root.expr.type === NodeType.indexedAccess) ||
+                    (root.type === NodeType.callExpression && root.left.type === NodeType.indexedAccess)) {
+                    parseErrorAtRange(root.range, "Illegal indexed access expression; consider removing the parentheses from the left-most expression");
                 }
                 return root;
             }
@@ -1394,11 +1529,15 @@ export function Parser() {
     }
 
     function parseIndexedAccess<T extends Node>(root: T) : T | IndexedAccess {
+        const base = root;
         while (true) {
             switch (lookahead()) {
                 case TokenType.LEFT_BRACKET: {
                     const leftBracket = parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
-                    const expr = parseExpression();
+                    const expr = isStartOfExpression()
+                        ? parseExpression()
+                        : (parseErrorAtCurrentToken("Expression expected."), createMissingNode(Identifier(NilTerminal, "")));
+                    
                     const rightBracket = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
 
                     if (root.type !== NodeType.indexedAccess) {
@@ -1420,15 +1559,50 @@ export function Parser() {
             }
             break;
         }
+
+        if (root.type === NodeType.indexedAccess) {
+            switch (base.type) {
+                case NodeType.arrayLiteral:
+                    parseErrorAtRange(base.range, "An array literal may not be accessed in the same expression as its definition.");
+                    break;
+                case NodeType.structLiteral:
+                    parseErrorAtRange(base.range, "A struct literal may not be accessed in the same expression as its definition.");
+                    break;
+            }
+        }
+
         return root;
+    }
+
+    function isStartOfExpression() : boolean {
+        switch (lookahead()) {
+            case TokenType.EOF:
+                return false;
+            case TokenType.LEFT_PAREN:
+            case TokenType.LEFT_BRACE:
+            case TokenType.NUMBER:
+            case TokenType.DBL_MINUS:
+            case TokenType.DBL_PLUS:
+            case TokenType.EXCLAMATION:
+            case TokenType.LIT_NOT:
+            case TokenType.HASH:
+            case TokenType.PLUS:
+            case TokenType.MINUS: // @fixme: TokenType.NUMBER currently includes the minus, but it should be a prefix unary operator                
+            case TokenType.QUOTE_SINGLE:
+            case TokenType.QUOTE_DOUBLE:
+            case TokenType.KW_TRUE:
+            case TokenType.KW_FALSE:
+            case TokenType.KW_FUNCTION:
+                return true;
+            default:
+                return isIdentifier();
+        }
     }
 
     function parseCallExpression(root: Node) : CallExpression {
         const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
         const args : CallArgument[] = [];
-        while (lookahead() != TokenType.EOF && lookahead() != TokenType.RIGHT_PAREN) {
-            // @fixme: this fails if parseExpression hits a single identifier but the identifier was invalid;
-            // in that case, we don't advance, and we get stuck here
+        while (isStartOfExpression()) {
             const expr = parseExpression();
             const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
             args.push(CallArgument(expr, comma));
@@ -1488,7 +1662,8 @@ export function Parser() {
         }
 
         const rightBrace = parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
-        return StructLiteral(leftBrace, kvPairs, rightBrace);
+        return parseTrailingExpressionChain(
+            StructLiteral(leftBrace, kvPairs, rightBrace));
     }
 
     /**
@@ -1504,7 +1679,9 @@ export function Parser() {
         if (lookahead() === TokenType.COLON) {
             const colon = parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
             const rightBracket = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
-            return EmptyOrderedStructLiteral(leftBracket, colon, rightBracket);
+
+            return parseTrailingExpressionChain(
+                EmptyOrderedStructLiteral(leftBracket, colon, rightBracket));
         }        
 
         function isExpressionThenColon() {
@@ -1514,7 +1691,7 @@ export function Parser() {
 
         if (SpeculationHelper.lookahead(isExpressionThenColon)) {
             const structMembers : StructLiteralInitializerMember[] = [];
-            while (lookahead() !== TokenType.RIGHT_BRACKET && lookahead() !== TokenType.EOF) {
+            while (isStartOfExpression()) {
                 const key = parseStructLiteralInitializerKey();
                 const colon = parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
                 const expr = parseExpression();
@@ -1530,11 +1707,12 @@ export function Parser() {
             }
 
             const rightBracket = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
-            return OrderedStructLiteral(leftBracket, structMembers, rightBracket);
+            return parseTrailingExpressionChain(
+                OrderedStructLiteral(leftBracket, structMembers, rightBracket));
         }
         else {
             const elements : ArrayLiteralInitializerMember[] = [];
-            while (lookahead() !== TokenType.RIGHT_BRACKET && lookahead() !== TokenType.EOF) {
+            while (isStartOfExpression()) {
                 const expr = parseExpression();
                 const maybeComma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
 
@@ -1548,19 +1726,53 @@ export function Parser() {
                 elements.push(ArrayLiteralInitializerMember(expr, maybeComma))
             }
             const rightBracket = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
-            return ArrayLiteral(leftBracket, elements, rightBracket);
+            return parseTrailingExpressionChain(
+                ArrayLiteral(leftBracket, elements, rightBracket));
         }
     }
 
-    function parseIdentifier() : Identifier {
-        const identifier = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false);
+    function isIllegalKeywordTokenAsIdentifier(tokenType: TokenType) {
+        return tokenType > TokenType._FIRST_KW
+            && tokenType < TokenType._LAST_KW
+            && tokenType !== TokenType.KW_VAR; // `var` is a valid identifier, so `var var = expr` is OK
+    }
 
-        // @fixme: make sure the identifier name is valid
-        // for example, "var" is a valid identifier, but "and" and "final" are not
-        // in cf2021 they tightened it a bit, so 'function' is no longer a valid identifier, probably others
-        
-        const canonicalName = identifier.token.text.toLowerCase();
-        return Identifier(identifier, canonicalName);
+    function isIdentifier() : boolean {
+        if (identifierPattern.test(peek().text)) {
+            let tokenType : TokenType | undefined = lookahead() === TokenType.LEXEME
+                ? TokenTypeUiStringReverse[peek().text.toLowerCase()]
+                : lookahead();
+            // in tag mode we might get keywords as lexemes
+            // so we try to reverse map from text to a token
+            // if there was no matching token then it's an acceptable identifier
+            // if it did match a token, make sure it isn't an illegal keyword like 'var'
+            return !tokenType || !isIllegalKeywordTokenAsIdentifier(tokenType);
+        }
+        return false;
+    }
+
+    function parseIdentifier() : Identifier {
+        let gotValidIdentifier = true;
+        if (isIllegalKeywordTokenAsIdentifier(lookahead())) {
+            parseErrorAtCurrentToken(`Reserved keyword \`${peek().text.toLowerCase()}\` cannot be used as a variable name.`);
+            gotValidIdentifier = false;
+        }
+        else if (!isIdentifier()) {
+            if (globalDiagnosticEmitter) globalDiagnosticEmitter();
+            else parseErrorAtCurrentToken("Expected an identifier.");
+            gotValidIdentifier = false;
+        }
+
+        // don't consume if we didn't match a valid identifier
+        const terminal = gotValidIdentifier
+            ? Terminal(next(), parseTrivia())
+            : Terminal(peek(), []);
+
+        const canonicalName = gotValidIdentifier
+            ? terminal.token.text.toLowerCase()
+            : "";
+
+        return Identifier(terminal, canonicalName);
     }
 
     function parseStringLiteral() : Node {
@@ -1571,7 +1783,7 @@ export function Parser() {
         }
 
         const leftQuote = parseExpectedTerminal(quoteType, ParseOptions.noTrivia);
-        const stringElements = parseTextWithPossibleInterpolations(quoteType);
+        const stringElements = parseInterpolatedText(quoteType);
         const rightQuote = parseExpectedTerminal(quoteType, ParseOptions.withTrivia);
 
         if (stringElements.length === 1) {
@@ -1621,7 +1833,7 @@ export function Parser() {
     }
 
     function isIdentifierThenFatArrow() : boolean {
-        if (lookahead() !== TokenType.LEXEME) return false;
+        if (!isIdentifier()) return false;
         next();
         parseTrivia();
         if (lookahead() !== TokenType.EQUAL_RIGHT_ANGLE) return false;
@@ -1657,7 +1869,9 @@ export function Parser() {
     function tryParseFunctionDefinitionParameters(speculative: true) : FunctionParameter[] | null;
     function tryParseFunctionDefinitionParameters(speculative: boolean) : FunctionParameter[] | null {
         const result : FunctionParameter[] = [];
-        while (lookahead() !== TokenType.RIGHT_PAREN && lookahead() !== TokenType.EOF) {
+        // might have to handle 'required' specially in "isIdentifier"
+        // we could set a flag saying we're in a functionParameterList to help out
+        while (isStartOfExpression()) {
             let requiredTerminal : Terminal | null = null;
             let javaLikeTypename : DottedPath<Terminal> | null = null;
             let name : Identifier;
@@ -1767,14 +1981,21 @@ export function Parser() {
         // <cfset identity_lambda = x => <!--- still in tag mode ---> x>
         // <cfset identity_lambda = x => { /* entered script mode */ return x; }>
         //
-        const saveMode = mode;
+        const savedMode = mode;
         if (lookahead() === TokenType.LEFT_BRACE) {
-            mode = TokenizerMode.script;
+            setScannerMode(ScannerMode.script);
         }
         const stmtOrBlock = parseStatement();
-        mode = saveMode;
+        setScannerMode(savedMode);
 
         return ArrowFunctionDefinition(leftParen, params, rightParen, fatArrow, stmtOrBlock);
+    }
+
+    function stripOuterParens(node: Node) {
+        while (node.type === NodeType.parenthetical) {
+            node = node.expr;
+        }
+        return node;
     }
 
     function parseSwitch() {
@@ -1874,7 +2095,7 @@ export function Parser() {
         params     = tryParseFunctionDefinitionParameters(/*speculative*/ false);
         rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
         attrs      = parseTagAttributes();
-        body       = parseBlock(TokenizerMode.script);
+        body       = parseBlock(ScannerMode.script);
 
         return FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body);
     }
@@ -1914,7 +2135,7 @@ export function Parser() {
         params        = tryParseFunctionDefinitionParameters(/*speculative*/ false);
         rightParen    = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
         attrs         = parseTagAttributes();
-        body          = parseBlock(TokenizerMode.script);
+        body          = parseBlock(ScannerMode.script);
 
         return FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body);
     }
@@ -1979,13 +2200,18 @@ export function Parser() {
         return result;
     }
 
-    function parseBlock(parseBlockInMode: TokenizerMode) {
+    function parseBlock(parseBlockInMode: ScannerMode) {
         const savedMode = mode;
-        mode = parseBlockInMode;
+        setScannerMode(parseBlockInMode);
         const leftBrace = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
         const body = parseStatementList();
-        const rightBrace = parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
-        mode = savedMode;
+
+        // if left brace was missing we don't eat right brace
+        const rightBrace = (leftBrace.flags & NodeFlags.missing)
+            ? createMissingNode(NilTerminal)
+            : parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
+
+        setScannerMode(savedMode);
         return Block(leftBrace, body, rightBrace);
     }
 
@@ -2007,6 +2233,11 @@ export function Parser() {
                     // will we *ever* parse a block in tag mode ... ?
                     // anyway, just forward current mode; which is assumed to be script mode, if we're parsing a statement
                     return parseBlock(mode);
+                }
+                case TokenType.LEFT_PAREN: {
+                    const expr = parseParentheticalOrUnaryPrefix();
+                    const semicolon = scriptMode() ? parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia) : null;
+                    return Statement(expr, semicolon);
                 }
                 case TokenType.NUMBER: {
                     const expr = parseExpression();
@@ -2045,7 +2276,17 @@ export function Parser() {
                         continue;
                     }
                 }
+                case TokenType.KW_RETURN: {
+                    const returnToken = parseExpectedTerminal(TokenType.KW_RETURN, ParseOptions.withTrivia);
+                    const expr = parseAnonymousFunctionDefinitionOrExpression();
+                    // if we've got a return statement we should be in a script context;
+                    // but a user may not be heeding that rule
+                    const semi = scriptMode() ? parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia) : null;
+                    return ReturnStatement(returnToken, expr, semi);
+                }
                 default: {
+                    // @todo - check that something is an identifier;
+                    // right now a statment like `x:1` is parsed as ident ident number
                     const peeked = peek();
                     if (isLexemeLikeToken(peeked)) {
                         const maybeFunction = SpeculationHelper.speculate(tryParseNamedFunctionDefinition, /*speculative*/ true);
@@ -2065,14 +2306,17 @@ export function Parser() {
                         const savedDiagnosticEmitter = globalDiagnosticEmitter;
                         globalDiagnosticEmitter = () => parseErrorAtRange(index, getIndex(), "Expression expected");
                         
-                        parseAssignmentOrLower();
+                        const result = parseAssignmentOrLower();
                         
                         globalDiagnosticEmitter = savedDiagnosticEmitter;
 
                         if (getIndex() === index) {
-                            parseErrorAtCurrentToken("Unexpected input");
-                            next();
+                            throw "assertion failure - consumed no input"
+                            //parseErrorAtCurrentToken("Unexpected input");
+                            //next();
                         }
+
+                        return result;
                         // we can just skip it, there was an error earlier and this is some token that should be part of another
                         // production but is now loose
                         // should we mark an error?; note that we're not returning, we're t

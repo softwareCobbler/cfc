@@ -14,20 +14,22 @@ import {
 	CompletionItemKind,
 	TextDocumentPositionParams,
 	TextDocumentSyncKind,
-	InitializeResult
+	InitializeResult,
+	ConnectionOptions
 } from 'vscode-languageserver/node';
 
 import {
 	TextDocument
 } from 'vscode-languageserver-textdocument';
 
-import { Scanner, Parser, Diagnostic as cfcDiagnostic, TokenizerMode } from "compiler";
+import { Scanner, Parser, CfFileType, Diagnostic as cfcDiagnostic, TokenizerMode } from "compiler";
 
-function naiveGetDiagnostics(text: string) : readonly cfcDiagnostic[] {
+const parser = Parser();
+
+function naiveGetDiagnostics(text: string, fileType: CfFileType) : readonly cfcDiagnostic[] {
 	// how to tell if we were launched in debug mode ?
-    const scanner = Scanner(text);
-    const parser = Parser().setScanner(scanner, TokenizerMode.tag).setDebug(true);
-    parser.parseTags();
+    parser.setScanner(Scanner(text)).setDebug(true);
+    parser.parse(fileType);
     return parser.getDiagnostics();
 }
 
@@ -144,13 +146,26 @@ documents.onDidChangeContent(change => {
 	validateTextDocument(change.document);
 });
 
+const cfmPattern = /cfml?$/i;
+const cfcPattern = /cfc$/i;
+
 async function validateTextDocument(textDocument: TextDocument): Promise<void> {
 	// In this simple example we get the settings for every validate run.
 	let settings = await getDocumentSettings(textDocument.uri);
+	
+	let cfDiagnostics : readonly cfcDiagnostic[];
 
-	// The validator creates diagnostics for all uppercase words length 2 and more
-	const cfDiagnostics = naiveGetDiagnostics(textDocument.getText());
-
+	if (cfmPattern.test(textDocument.uri)) {
+		cfDiagnostics = naiveGetDiagnostics(textDocument.getText(), CfFileType.cfm);
+	}
+	else if (cfcPattern.test(textDocument.uri)) {
+		cfDiagnostics = naiveGetDiagnostics(textDocument.getText(), CfFileType.cfc);
+	}
+	else {
+		// didn't match a cf file type, send an empty diagnostics list and we're done
+		connection.sendDiagnostics({ uri: textDocument.uri, diagnostics: [] });
+		return;
+	}
 
 	let text = textDocument.getText();
 	let pattern = /\b[A-Z]{2,}\b/g;

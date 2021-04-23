@@ -19,7 +19,7 @@ export const enum NodeType {
     identifier, indexedAccess,
     functionDefinition, arrowFunctionDefinition, functionParameter,
     dottedPath, switch, switchCase, do, while, ternary, for, structLiteral, arrayLiteral,
-    structLiteralInitializerMember, arrayLiteralInitializerMember
+    structLiteralInitializerMember, arrayLiteralInitializerMember, returnStatement
 }
 
 const NodeTypeUiString : Record<NodeType, string> = {
@@ -57,7 +57,8 @@ const NodeTypeUiString : Record<NodeType, string> = {
     [NodeType.structLiteral]: "structLiteral",
     [NodeType.arrayLiteral]: "arrayLiteral",
     [NodeType.structLiteralInitializerMember]: "structLiteralInitializerMember",
-    [NodeType.arrayLiteralInitializerMember]: "arrayLiteralInitializerMember"
+    [NodeType.arrayLiteralInitializerMember]: "arrayLiteralInitializerMember",
+    [NodeType.returnStatement]: "returnStatement"
 
 };
 
@@ -76,6 +77,7 @@ export type Node =
     | BinaryOperator
     | Conditional
     | Statement
+    | ReturnStatement
     | Block
     | SimpleStringLiteral
     | InterpolatedStringLiteral
@@ -384,15 +386,15 @@ export namespace CfTag {
 
 export interface CallExpression extends NodeBase {
     type: NodeType.callExpression;
-    identifier: Node;
+    left: Node;
     leftParen: Terminal;
     args: CallArgument[];
     rightParen: Terminal;
 
 }
-export function CallExpression(identifier: Node, leftParen: Terminal, args: CallArgument[], rightParen: Terminal) {
-    const v = NodeBase<CallExpression>(NodeType.callExpression, mergeRanges(identifier, rightParen));
-    v.identifier = identifier;
+export function CallExpression(left: Node, leftParen: Terminal, args: CallArgument[], rightParen: Terminal) {
+    const v = NodeBase<CallExpression>(NodeType.callExpression, mergeRanges(left, rightParen));
+    v.left = left;
     v.leftParen = leftParen;
     v.args = args;
     v.rightParen = rightParen;
@@ -638,30 +640,42 @@ export namespace FromTag {
 
 export interface Statement extends NodeBase {
     type: NodeType.statement;
-    stmt: Node | null;
-    semicolon : Terminal | null;
+    expr: Node | null;              // null if from tag (originating node will be in tagOrigin.startTag)
+    semicolon : Terminal | null;    // null if from tag
 }
 
 export function Statement(node: Node | null, semicolon: Terminal | null) : Statement {
     const v = NodeBase<Statement>(NodeType.statement, mergeRanges(node, semicolon));
-    v.stmt = node;
+    v.expr = node;
     v.semicolon = semicolon;
     return v;
 }
 
 export namespace FromTag {
-export function Statement(tag: CfTag) : Statement {
-    const stmt = NodeBase<Statement>(NodeType.statement, tag.range);
-    stmt.stmt = null;
-    stmt.tagOrigin.startTag = tag;
-    stmt.semicolon = null;
-    return stmt;
-    //
-    // will probably need to determine which of the "cf-built-in" statements this is;
-    // or maybe the caller will have to do that, and constructing from "any start tag" doesn't make sense
-    //
+    export function Statement(tag: CfTag) : Statement {
+        const stmt = NodeBase<Statement>(NodeType.statement, tag.range);
+        stmt.expr = null;
+        stmt.tagOrigin.startTag = tag;
+        stmt.semicolon = null;
+        return stmt;
+        //
+        // will probably need to determine which of the "cf-built-in" statements this is;
+        // or maybe the caller will have to do that, and constructing from "any start tag" doesn't make sense
+        //
+    }
 }
-} // namespace FromTag
+
+export interface ReturnStatement extends Omit<Statement, "type"> {
+    type: NodeType.returnStatement;
+    returnToken: Terminal;
+}
+export function ReturnStatement(returnToken: Terminal, expr: Node, semicolon: Terminal | null) : ReturnStatement {
+    const v = NodeBase<ReturnStatement>(NodeType.returnStatement, mergeRanges(returnToken, expr, semicolon))
+    v.returnToken = returnToken;
+    v.expr = expr;
+    v.semicolon;
+    return v;
+}
 
 export interface Block extends NodeBase {
     type: NodeType.namedBlock;

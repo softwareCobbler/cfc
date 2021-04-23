@@ -20,6 +20,7 @@ const tagFacts = {
     argument:       TagFact.DISALLOW_BODY,
     break:          TagFact.DISALLOW_BODY,
     catch:          TagFact.DISALLOW_BODY,
+    component:      TagFact.REQUIRE_BODY,
     content:        TagFact.DISALLOW_BODY,
     continue:       TagFact.DISALLOW_BODY,
     cookie:         TagFact.DISALLOW_BODY,
