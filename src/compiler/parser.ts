@@ -428,33 +428,54 @@ export function Parser() {
         const tagName = parseExpectedTagName();
         const canonicalName = tagName.token.text.toLowerCase();
 
-        if (canonicalName === "if" || canonicalName === "elseif") {
-            const expr = parseExpression();
-            const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
-            return CfTag.ScriptLike(CfTag.Which.start, tagStart, tagName, null, rightAngle, canonicalName, expr);
-        }
-        else if (canonicalName === "set") {
-            const expr = parseAssignmentOrLower();
-            const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
-            return CfTag.ScriptLike(CfTag.Which.start, tagStart, tagName, null, rightAngle, canonicalName, expr);
-        }
-        else {
-            const tagAttrs = parseTagAttributes();
-            const maybeVoidSlash = parseOptionalTerminal(TokenType.FORWARD_SLASH, ParseOptions.withTrivia);
-            const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
-            if (canonicalName === "script") {
-                const savedMode = mode;
-                setScannerMode(ScannerMode.script);
-
-                // hm, probably mode should be a context flag, too
-                rightAngle.trivia = parseTrivia(); // <cfscript> is a tag but it gets script-based trivia (so it can have script comments attached to it)
-                const stmtList = doInContext(ParseContext.cfScriptTagBody, parseStatementList);
-
-                setScannerMode(savedMode);
-                return CfTag.Script(tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, stmtList);
+        switch (canonicalName) {
+            case "if":
+            case "elseif": {
+                const expr = parseExpression();
+                const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
+                return CfTag.ScriptLike(CfTag.Which.start, tagStart, tagName, null, rightAngle, canonicalName, expr);
             }
-            else {
-                return CfTag.Common(CfTag.Which.start, tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, tagAttrs);
+            case "set": {
+                const expr = parseAssignmentOrLower();
+                // any void slash here would have gotten picked up by parseExpression, right?
+                const maybeVoidSlash = parseOptionalTerminal(TokenType.FORWARD_SLASH, ParseOptions.withTrivia);
+                if (maybeVoidSlash) {
+                    parseErrorAtRange(maybeVoidSlash.range, "A trailing tag slash is not allowed on a <cfset> tag.");
+                }
+                const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
+                return CfTag.ScriptLike(CfTag.Which.start, tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, expr);
+            }
+            case "return": {
+                if (lookahead() === TokenType.FORWARD_SLASH || lookahead() === TokenType.RIGHT_ANGLE) {
+                    const maybeVoidSlash = parseOptionalTerminal(TokenType.FORWARD_SLASH, ParseOptions.withTrivia);
+                    const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
+                    return CfTag.ScriptLike(CfTag.Which.start, tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, null);
+                }
+                else {
+                    const expr = parseAnonymousFunctionDefinitionOrExpression();
+                    const maybeVoidSlash = parseOptionalTerminal(TokenType.FORWARD_SLASH, ParseOptions.withTrivia);
+                    const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
+                    return CfTag.ScriptLike(CfTag.Which.start, tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, expr);
+                }
+            }
+            default: {
+                const tagAttrs = parseTagAttributes();
+                const maybeVoidSlash = parseOptionalTerminal(TokenType.FORWARD_SLASH, ParseOptions.withTrivia);
+                const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
+                if (canonicalName === "script") {
+                    const savedMode = mode;
+                    setScannerMode(ScannerMode.script);
+
+                    // hm, probably mode should be a context flag, too
+                    rightAngle.trivia = parseTrivia(); // <cfscript> is a tag but it gets script-based trivia (so it can have script comments attached to it)
+                    const stmtList = doInContext(ParseContext.cfScriptTagBody, parseStatementList);
+
+                    setScannerMode(savedMode);
+                    return CfTag.Script(tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, stmtList);
+                }
+                else {
+                    return CfTag.Common(CfTag.Which.start, tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, tagAttrs);
+                }
             }
         }
     }
@@ -480,12 +501,21 @@ export function Parser() {
             if (lookahead() === TokenType.EQUAL) {
                 const equal = parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
                 let value : Node;
-                if (lookahead() === TokenType.LEXEME) {
-                    value = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
+
+                if (isLexemeLikeToken(peek())) {
+                    value = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false);
+                }
+                else if (lookahead() === TokenType.QUOTE_SINGLE || lookahead() === TokenType.QUOTE_DOUBLE) {
+                    value = parseStringLiteral();
+                }
+                else if (lookahead() === TokenType.HASH) {
+                    value = parseHashWrappedExpression();
                 }
                 else {
-                    value = parseExpression();
+                    parseErrorAtCurrentToken("Expected a tag-attribute value here.");
+                    value = createMissingNode(NilTerminal);
                 }
+
                 result.push(TagAttribute(attrName, scanner.getTokenText(attrName.token).toLowerCase(), equal, value));
             }
             else {
@@ -904,9 +934,12 @@ export function Parser() {
                                 continue;
                             }
                             case "set": {
-                                const expr = (<CfTag.ScriptLike>tag).expr;
-                                expr.tagOrigin.startTag = tag;
-                                result.push(expr);
+                                result.push(FromTag.Statement(<CfTag.ScriptLike>tag));
+                                nextTag();
+                                continue;
+                            }
+                            case "return": {
+                                result.push(FromTag.ReturnStatement(<CfTag.ScriptLike>tag));
                                 nextTag();
                                 continue;
                             }
@@ -1149,6 +1182,8 @@ export function Parser() {
         switch (node.type) {
             case NodeType.indexedAccess:
             case NodeType.identifier:
+            case NodeType.simpleStringLiteral:          // <cfset "x" = "y">
+            case NodeType.interpolatedStringLiteral:    // <cfset "#x#" = 42> <!--- same as <cfset y = 42>
                 return true;
             case NodeType.hashWrappedExpr:
                 return isAssignmentTarget(node.expr);

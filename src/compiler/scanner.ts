@@ -106,7 +106,6 @@ export const enum TokenType {
 
     CF_START_TAG_START, // <\s*cf
     CF_END_TAG_START,   // <\s*/\s*cf
-    CF_TAG_END_VOID,    // /\s*>
     CF_TAG_COMMENT_START,
     CF_TAG_COMMENT_END,
 
@@ -211,7 +210,6 @@ export const TokenTypeUiString : Record<TokenType, string> = {
 
     [TokenType.CF_START_TAG_START]:   "<cf",
     [TokenType.CF_END_TAG_START]:     "</cf",
-    [TokenType.CF_TAG_END_VOID]:      "/>",
     [TokenType.CF_TAG_COMMENT_START]: "<!---",
     [TokenType.CF_TAG_COMMENT_END]:   "--->",
 
@@ -489,99 +487,98 @@ export function Scanner(sourceText_: string) {
                 else return consumeCurrentCharAs(TokenType.STAR);
             case AsciiMap.FORWARD_SLASH:
                 if (script && maybeEat(/\/\//iy)) return setToken(TokenType.DBL_FORWARD_SLASH, from, getIndex());
-                else if (script && maybeEat(/\/*/iy)) return setToken(TokenType.FORWARD_SLASH_STAR, from, getIndex());
-                else if (tag && maybeEat(/\/\s*>/iy)) return setToken(TokenType.CF_TAG_END_VOID, from, getIndex());
+                else if (script && maybeEat(/\/\*/iy)) return setToken(TokenType.FORWARD_SLASH_STAR, from, getIndex());
                 else if (maybeEat(/\/=/iy)) return setToken(TokenType.FORWARD_SLASH_EQUAL, from, getIndex());
                 else return consumeCurrentCharAs(TokenType.FORWARD_SLASH);
             case AsciiMap.a: // [[fallthrough]];
             case AsciiMap.A:
-                if (maybeEat(/and/iy)) return setToken(TokenType.LIT_AND, from, getIndex());
+                if (maybeEat(/and\b/iy)) return setToken(TokenType.LIT_AND, from, getIndex());
                 else return lexeme();
             case AsciiMap.b: // [[fallthrough]];
             case AsciiMap.B:
-                if (script && maybeEat(/break/iy)) return setToken(TokenType.KW_BREAK, from, getIndex());
+                if (script && maybeEat(/break\b/iy)) return setToken(TokenType.KW_BREAK, from, getIndex());
                 else return lexeme();
             case AsciiMap.c: // [[fallthrough]];
             case AsciiMap.C:
-                if (script && maybeEat(/catch/iy)) return setToken(TokenType.KW_CATCH, from, getIndex());
-                else if (script && maybeEat(/case/iy)) return setToken(TokenType.KW_CASE, from, getIndex());
-                else if (maybeEat(/contains/iy)) return setToken(TokenType.LIT_CONTAINS, from, getIndex());
+                if (script && maybeEat(/catch\b/iy)) return setToken(TokenType.KW_CATCH, from, getIndex());
+                else if (script && maybeEat(/case\b/iy)) return setToken(TokenType.KW_CASE, from, getIndex());
+                else if (maybeEat(/contains\b/iy)) return setToken(TokenType.LIT_CONTAINS, from, getIndex());
                 else return lexeme();
             case AsciiMap.d: // [[fallthrough]];
             case AsciiMap.D:
-                if (maybeEat(/does\s+not\s+contain/iy)) return setToken(TokenType.LIT_DOES_NOT_CONTAIN, from, getIndex());
-                else if (script && maybeEat(/default/iy)) return setToken(TokenType.KW_DEFAULT, from, getIndex());
-                else if (script && maybeEat(/do/iy)) return setToken(TokenType.KW_DO, from, getIndex());
+                if (maybeEat(/does\s+not\s+contain\b/iy)) return setToken(TokenType.LIT_DOES_NOT_CONTAIN, from, getIndex());
+                else if (script && maybeEat(/default\b/iy)) return setToken(TokenType.KW_DEFAULT, from, getIndex());
+                else if (script && maybeEat(/do\b/iy)) return setToken(TokenType.KW_DO, from, getIndex());
                 else return lexeme();
             case AsciiMap.e: // [[fallthrough]];
             case AsciiMap.E:
-                if (maybeEat(/eq/iy)) return setToken(TokenType.LIT_EQ, from, getIndex());
-                else if (script && maybeEat(/else/iy)) return setToken(TokenType.KW_ELSE, from, getIndex());
+                if (maybeEat(/eq\b/iy)) return setToken(TokenType.LIT_EQ, from, getIndex());
+                else if (script && maybeEat(/else\b/iy)) return setToken(TokenType.KW_ELSE, from, getIndex());
                 else return lexeme();
             case AsciiMap.f: // [[fallthrough]];
             case AsciiMap.F:
-                if (maybeEat(/false/iy)) return setToken(TokenType.KW_FALSE, from, getIndex());
-                else if (maybeEat(/final/iy)) return setToken(TokenType.KW_FINAL, from, getIndex());
-                else if (script && maybeEat(/for/iy)) return setToken(TokenType.KW_FOR, from, getIndex());
-                else if (maybeEat(/function/iy)) return setToken(TokenType.KW_FUNCTION, from, getIndex());
+                if (maybeEat(/false\b/iy)) return setToken(TokenType.KW_FALSE, from, getIndex());
+                else if (maybeEat(/final\b/iy)) return setToken(TokenType.KW_FINAL, from, getIndex());
+                else if (script && maybeEat(/for\b/iy)) return setToken(TokenType.KW_FOR, from, getIndex());
+                else if (maybeEat(/function\b/iy)) return setToken(TokenType.KW_FUNCTION, from, getIndex());
                 else return lexeme();
             case AsciiMap.g: // [[fallthrough]];
             case AsciiMap.G:
-                if (maybeEat(/gte/iy)) return setToken(TokenType.LIT_GTE, from, getIndex());
-                else if (maybeEat(/gt/iy)) return setToken(TokenType.LIT_GT, from, getIndex());
-                else if (maybeEat(/ge/iy)) return setToken(TokenType.LIT_GE, from, getIndex());
+                if (maybeEat(/gte\b/iy)) return setToken(TokenType.LIT_GTE, from, getIndex());
+                else if (maybeEat(/gt\b/iy)) return setToken(TokenType.LIT_GT, from, getIndex());
+                else if (maybeEat(/ge\b/iy)) return setToken(TokenType.LIT_GE, from, getIndex());
                 else return lexeme();
             case AsciiMap.i: // [[fallthrough]];
             case AsciiMap.I:
-                if (script && maybeEat(/if/iy)) return setToken(TokenType.KW_IF, from, getIndex());
-                else if (script && maybeEat(/import/iy)) return setToken(TokenType.KW_IMPORT, from, getIndex());
-                else if (maybeEat(/is\s+not/iy)) return setToken(TokenType.LIT_IS_NOT, from, getIndex());
-                else if (maybeEat(/is/iy)) return setToken(TokenType.LIT_IS, from, getIndex());
+                if (script && maybeEat(/if\b/iy)) return setToken(TokenType.KW_IF, from, getIndex());
+                else if (script && maybeEat(/import\b/iy)) return setToken(TokenType.KW_IMPORT, from, getIndex());
+                else if (maybeEat(/is\s+not\b/iy)) return setToken(TokenType.LIT_IS_NOT, from, getIndex());
+                else if (maybeEat(/is\b/iy)) return setToken(TokenType.LIT_IS, from, getIndex());
                 else return lexeme();
             case AsciiMap.l: // [[fallthrough]];
             case AsciiMap.L:
-                if (maybeEat(/lte/iy)) return setToken(TokenType.LIT_LTE, from, getIndex());
-                else if (maybeEat(/le/iy)) return setToken(TokenType.LIT_LE, from, getIndex());
-                else if (maybeEat(/lt/iy)) return setToken(TokenType.LIT_LT, from, getIndex());
+                if (maybeEat(/lte\b/iy)) return setToken(TokenType.LIT_LTE, from, getIndex());
+                else if (maybeEat(/le\b/iy)) return setToken(TokenType.LIT_LE, from, getIndex());
+                else if (maybeEat(/lt\b/iy)) return setToken(TokenType.LIT_LT, from, getIndex());
                 else return lexeme();
             case AsciiMap.m: // [[fallthrough]];
             case AsciiMap.M:
-                if (maybeEat(/mod/iy)) return setToken(TokenType.LIT_MOD, from, getIndex());
+                if (maybeEat(/mod\b/iy)) return setToken(TokenType.LIT_MOD, from, getIndex());
                 else return lexeme();
             case AsciiMap.n: // [[fallthrough]];
             case AsciiMap.N:
-                if (maybeEat(/neq/iy)) return setToken(TokenType.LIT_NEQ, from, getIndex());
-                else if (maybeEat(/new/iy)) return setToken(TokenType.KW_NEW, from, getIndex());
-                else if (maybeEat(/not/iy)) return setToken(TokenType.LIT_NOT, from, getIndex());
+                if (maybeEat(/neq\b/iy)) return setToken(TokenType.LIT_NEQ, from, getIndex());
+                else if (maybeEat(/new\b/iy)) return setToken(TokenType.KW_NEW, from, getIndex());
+                else if (maybeEat(/not\b/iy)) return setToken(TokenType.LIT_NOT, from, getIndex());
                 else return lexeme();
             case AsciiMap.o: // [[fallthrough]];
             case AsciiMap.O:
-                if (maybeEat(/or/iy)) return setToken(TokenType.LIT_OR, from, getIndex());
+                if (maybeEat(/or\b/iy)) return setToken(TokenType.LIT_OR, from, getIndex());
                 else return lexeme();
             case AsciiMap.r: // [[fallthrough]];
             case AsciiMap.R:
-                if (script && maybeEat(/return/iy)) return setToken(TokenType.KW_RETURN, from, getIndex());
+                if (script && maybeEat(/return\b/iy)) return setToken(TokenType.KW_RETURN, from, getIndex());
                 else return lexeme();
             case AsciiMap.s:
             case AsciiMap.S:
-                if (script && maybeEat(/switch/iy)) return setToken(TokenType.KW_SWITCH, from, getIndex());
+                if (script && maybeEat(/switch\b/iy)) return setToken(TokenType.KW_SWITCH, from, getIndex());
                 else return lexeme();
             case AsciiMap.t: // [[fallthrough]];
             case AsciiMap.T:
-                if (maybeEat(/true/iy)) return setToken(TokenType.KW_TRUE, from, getIndex());
-                else if (script && maybeEat(/try/iy)) return setToken(TokenType.KW_TRY, from, getIndex());
+                if (maybeEat(/true\b/iy)) return setToken(TokenType.KW_TRUE, from, getIndex());
+                else if (script && maybeEat(/try\b/iy)) return setToken(TokenType.KW_TRY, from, getIndex());
                 else return lexeme();
             case AsciiMap.v: // [[fallthrough]];
             case AsciiMap.V:
-                if (maybeEat(/var/iy)) return setToken(TokenType.KW_VAR, from, getIndex());
+                if (maybeEat(/var\b/iy)) return setToken(TokenType.KW_VAR, from, getIndex());
                 else return lexeme();
             case AsciiMap.w: // [[fallthrough]];
             case AsciiMap.W:
-                if (script && maybeEat(/while/iy)) return setToken(TokenType.KW_WHILE, from, getIndex());
+                if (script && maybeEat(/while\b/iy)) return setToken(TokenType.KW_WHILE, from, getIndex());
                 else return lexeme();
             case AsciiMap.x: // [[fallthrough]];
             case AsciiMap.X:
-                if (maybeEat(/xor/iy)) return setToken(TokenType.LIT_XOR, from, getIndex());
+                if (maybeEat(/xor\b/iy)) return setToken(TokenType.LIT_XOR, from, getIndex());
                 else return lexeme();
             /*case '\xEF':
                 if (maybeEat(/\xEF\xBB\xBF/, TokenType.BOM_UTF_8)) return token_;*/
@@ -667,8 +664,13 @@ export function Scanner(sourceText_: string) {
 
     function lexeme() {
         const from = getIndex();
-        if (!maybeEat(/[$_a-z][$_a-z0-9]*/iy)) throw "expected a lexeme"
-        return setToken(TokenType.LEXEME, from, getIndex());
+        if (maybeEat(/[$_a-z][$_a-z0-9]*/iy)) {
+            return setToken(TokenType.LEXEME, from, getIndex());
+        }
+        else {
+            nextChar();
+            return setToken(TokenType.CHAR, from, getIndex());
+        }
     }
 
     function tryEatNumber(from: number) : Token | undefined {

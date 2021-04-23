@@ -328,7 +328,7 @@ export namespace CfTag {
 
     export interface ScriptLike extends TagBase {
         tagType: TagType.scriptLike;
-        expr: Node;
+        expr: Node | null; // a return can have no expression
     }
     export function ScriptLike(
         which: Which.start,
@@ -337,7 +337,7 @@ export namespace CfTag {
         voidSlash: Terminal | null,
         tagEnd: Terminal,
         canonicalName: string,
-        expr: Node) : ScriptLike {
+        expr: Node | null) : ScriptLike {
         const v = TagBase<ScriptLike>(which, TagType.scriptLike, tagStart, tagName, voidSlash, tagEnd, canonicalName);
         v.expr = expr;
         return v;
@@ -652,22 +652,18 @@ export function Statement(node: Node | null, semicolon: Terminal | null) : State
 }
 
 export namespace FromTag {
-    export function Statement(tag: CfTag) : Statement {
+    export function Statement(tag: CfTag.ScriptLike) : Statement {
         const stmt = NodeBase<Statement>(NodeType.statement, tag.range);
-        stmt.expr = null;
+        stmt.expr = tag.expr;
         stmt.tagOrigin.startTag = tag;
         stmt.semicolon = null;
         return stmt;
-        //
-        // will probably need to determine which of the "cf-built-in" statements this is;
-        // or maybe the caller will have to do that, and constructing from "any start tag" doesn't make sense
-        //
     }
 }
 
 export interface ReturnStatement extends Omit<Statement, "type"> {
     type: NodeType.returnStatement;
-    returnToken: Terminal;
+    returnToken: Terminal | null; // null if from tag
 }
 export function ReturnStatement(returnToken: Terminal, expr: Node, semicolon: Terminal | null) : ReturnStatement {
     const v = NodeBase<ReturnStatement>(NodeType.returnStatement, mergeRanges(returnToken, expr, semicolon))
@@ -675,6 +671,16 @@ export function ReturnStatement(returnToken: Terminal, expr: Node, semicolon: Te
     v.expr = expr;
     v.semicolon;
     return v;
+}
+export namespace FromTag {
+    export function ReturnStatement(tag: CfTag.ScriptLike) : ReturnStatement {
+        const v = NodeBase<ReturnStatement>(NodeType.returnStatement, tag.range);
+        v.tagOrigin.startTag = tag;
+        v.returnToken = null;
+        v.expr = tag.expr;
+        v.semicolon = null;
+        return v;
+    }
 }
 
 export interface Block extends NodeBase {
