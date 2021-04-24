@@ -450,6 +450,7 @@ export function Scanner(sourceText_: string) {
             case AsciiMap.COMMA:         return consumeCurrentCharAs(TokenType.COMMA);
             case AsciiMap.COLON:         return consumeCurrentCharAs(TokenType.COLON);
             case AsciiMap.SEMICOLON:     return consumeCurrentCharAs(TokenType.SEMICOLON);
+            case AsciiMap.DOT:           return consumeCurrentCharAs(TokenType.DOT);
             case AsciiMap.QUESTION_MARK:
                 // note we do not scan a QUESTION_MARK_COLON token here,
                 // it appears that it is not actually a token, and it is valid to have a comment between the "?" and ":"
@@ -468,9 +469,6 @@ export function Scanner(sourceText_: string) {
             case AsciiMap.PIPE:
                 if (maybeEat(/\|\|/iy)) return setToken(TokenType.DBL_PIPE, from, getIndex());
                 else return consumeCurrentCharAs(TokenType.PIPE);
-            case AsciiMap.DOT:
-                if (maybeEat(/\.\d+/iy)) return setToken(TokenType.NUMBER, from, getIndex());
-                return consumeCurrentCharAs(TokenType.DOT);
             case AsciiMap.PLUS:
                 if (maybeEat(/\+\+/iy)) return setToken(TokenType.DBL_PLUS, from, getIndex());
                 if (maybeEat(/\+=/iy)) return setToken(TokenType.PLUS_EQUAL, from, getIndex());
@@ -679,7 +677,7 @@ export function Scanner(sourceText_: string) {
     }
 
     function tryEatNumber(from: number) : Token | undefined {
-        if (maybeEat(/\d+e[+-]?\d+(\.\d+)?\b|\d+(\.\d+)?\b|\.\d+\b/iy)) {
+        if (maybeEat(/\d+e[+-]?\d+(\.\d+)?\b|\d+(\.\d+)?\b/iy)) {
             return setToken(TokenType.NUMBER, from, getIndex());
         }
         return undefined;

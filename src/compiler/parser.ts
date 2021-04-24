@@ -26,7 +26,7 @@ import {
     mergeRanges,
     VariableDeclaration, } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, TokenTypeUiStringReverse } from "./scanner";
-import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, isNamedBlockName } from "./utils";
+import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, isNamedBlockName, getAssociatedTrivia } from "./utils";
 
 const enum ParseOptions {
     none     = 0,
@@ -1677,7 +1677,7 @@ export function Parser() {
 
     function parseCallExpressionOrLower() : Node {
         switch(lookahead()) {
-            case TokenType.MINUS:
+            case TokenType.DOT:
             case TokenType.NUMBER:
                 return parseNumericLiteral();
             case TokenType.QUOTE_DOUBLE: // [[fallthrough]];
@@ -1789,6 +1789,8 @@ export function Parser() {
         switch (lookahead()) {
             case TokenType.EOF:
                 return false;
+            case TokenType.HASH:
+                return !isInSomeContext(ParseContext.hashWrappedExpr);
             case TokenType.LEFT_PAREN:
             case TokenType.LEFT_BRACE:
             case TokenType.NUMBER:
@@ -1796,9 +1798,8 @@ export function Parser() {
             case TokenType.DBL_PLUS:
             case TokenType.EXCLAMATION:
             case TokenType.LIT_NOT:
-            case TokenType.HASH:
             case TokenType.PLUS:
-            case TokenType.MINUS: // @fixme: TokenType.NUMBER currently includes the minus, but it should be a prefix unary operator                
+            case TokenType.MINUS:
             case TokenType.QUOTE_SINGLE:
             case TokenType.QUOTE_DOUBLE:
             case TokenType.KW_TRUE:
@@ -2032,6 +2033,13 @@ export function Parser() {
     }
 
     function parseNumericLiteral() {
+        if (lookahead() === TokenType.DOT) {
+            const dot = parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
+            const number = parseExpectedTerminal(TokenType.NUMBER, ParseOptions.withTrivia);
+            // @fixme: if we're in debug mode, manually creating a Token here will miss out on any __debug info a factory would have otherwise attached to it
+            const combinedToken = Token(TokenType.NUMBER, "." + number.token.text, dot.range.fromInclusive, number.range.toExclusive);
+            return NumericLiteral(Terminal(combinedToken));
+        }
         return NumericLiteral(parseExpectedTerminal(TokenType.NUMBER, ParseOptions.withTrivia));
     }  
 

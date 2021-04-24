@@ -915,12 +915,14 @@ export interface IndexedAccess extends NodeBase {
     type: NodeType.indexedAccess;
     root: Node;
     accessElements: AccessElement[];
+    last: () => AccessElement | undefined;
 }
 
 export function IndexedAccess(root: Node) : IndexedAccess {
     const v = NodeBase<IndexedAccess>(NodeType.indexedAccess, root.range);
     v.root = root;
     v.accessElements = [];
+    v.last = function() { return this.accessElements[this.accessElements.length-1]; }
     return v;
 }
 
