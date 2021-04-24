@@ -65,18 +65,19 @@ connection.onInitialize((params: InitializeParams) => {
 		capabilities: {
 			textDocumentSync: TextDocumentSyncKind.Incremental,
 			// Tell the client that this server supports code completion.
-			completionProvider: {
+			/*completionProvider: {
 				resolveProvider: true
-			}
+			}*/
 		}
 	};
+	/*
 	if (hasWorkspaceFolderCapability) {
 		result.capabilities.workspace = {
 			workspaceFolders: {
 				supported: true
 			}
 		};
-	}
+	}*/
 	return result;
 });
 
@@ -85,11 +86,12 @@ connection.onInitialized(() => {
 		// Register for all configuration changes.
 		connection.client.register(DidChangeConfigurationNotification.type, undefined);
 	}
+	/*
 	if (hasWorkspaceFolderCapability) {
 		connection.workspace.onDidChangeWorkspaceFolders(_event => {
 			connection.console.log('Workspace folder change event received.');
 		});
-	}
+	}*/
 });
 
 // The example settings
@@ -138,6 +140,7 @@ function getDocumentSettings(resource: string): Thenable<ExampleSettings> {
 // Only keep settings for open documents
 documents.onDidClose(e => {
 	documentSettings.delete(e.document.uri);
+	connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] });
 });
 
 // The content of a text document has changed. This event is emitted
@@ -151,7 +154,7 @@ const cfcPattern = /cfc$/i;
 
 async function validateTextDocument(textDocument: TextDocument): Promise<void> {
 	// In this simple example we get the settings for every validate run.
-	let settings = await getDocumentSettings(textDocument.uri);
+	//let settings = await getDocumentSettings(textDocument.uri);
 	
 	let cfDiagnostics : readonly cfcDiagnostic[];
 
@@ -167,11 +170,6 @@ async function validateTextDocument(textDocument: TextDocument): Promise<void> {
 		return;
 	}
 
-	let text = textDocument.getText();
-	let pattern = /\b[A-Z]{2,}\b/g;
-	let m: RegExpExecArray | null;
-
-	let problems = 0;
 	let diagnostics: Diagnostic[] = [];
 
 	for (const diagnostic of cfDiagnostics) {
@@ -228,7 +226,7 @@ connection.onDidChangeWatchedFiles(_change => {
 });
 
 // This handler provides the initial list of the completion items.
-connection.onCompletion(
+/*connection.onCompletion(
 	(_textDocumentPosition: TextDocumentPositionParams): CompletionItem[] => {
 		// The pass parameter contains the position of the text document in
 		// which code complete got requested. For the example we ignore this
@@ -246,11 +244,11 @@ connection.onCompletion(
 			}
 		];
 	}
-);
+);*/
 
 // This handler resolves additional information for the item selected in
 // the completion list.
-connection.onCompletionResolve(
+/*connection.onCompletionResolve(
 	(item: CompletionItem): CompletionItem => {
 		if (item.data === 1) {
 			item.detail = 'TypeScript details';
@@ -261,7 +259,7 @@ connection.onCompletionResolve(
 		}
 		return item;
 	}
-);
+);*/
 
 // Make the text document manager listen on the connection
 // for open, change and close text document events

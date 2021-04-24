@@ -403,12 +403,16 @@ export function CallExpression(left: Node, leftParen: Terminal, args: CallArgume
 
 export interface CallArgument extends NodeBase {
     type: NodeType.callArgument;
+    name: Identifier | null;
+    equals: Terminal | null;
     expr: Node;
     comma: Terminal | null;
 }
 
-export function CallArgument(expr: Node, comma: Terminal | null) : CallArgument {
-    const v = NodeBase<CallArgument>(NodeType.callArgument, mergeRanges(expr, comma));
+export function CallArgument(name: Identifier | null, equals: Terminal | null, expr: Node, comma: Terminal | null) : CallArgument {
+    const v = NodeBase<CallArgument>(NodeType.callArgument, mergeRanges(name, expr, comma));
+    v.name = name;
+    v.equals = equals;
     v.expr = expr;
     v.comma = comma;
     return v;

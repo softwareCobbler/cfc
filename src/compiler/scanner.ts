@@ -475,7 +475,6 @@ export function Scanner(sourceText_: string) {
                 if (maybeEat(/--->/iy)) return setToken(TokenType.CF_TAG_COMMENT_END, from, getIndex());
                 if (maybeEat(/--/iy)) return setToken(TokenType.DBL_MINUS, from, getIndex());
                 if (maybeEat(/-=/iy)) return setToken(TokenType.MINUS_EQUAL, from, getIndex());
-                if (tryEatNumber(from)) return token;
                 else return consumeCurrentCharAs(TokenType.MINUS);
             case AsciiMap.AMPERSAND:
                 if (maybeEat(/&&/iy)) return setToken(TokenType.DBL_AMPERSAND, from, getIndex());
@@ -674,7 +673,7 @@ export function Scanner(sourceText_: string) {
     }
 
     function tryEatNumber(from: number) : Token | undefined {
-        if (maybeEat(/-?\d+e[+-]?\d+(\.\d+)?|-?\d+(\.\d+)?|-?\.\d+/iy)) {
+        if (maybeEat(/\d+e[+-]?\d+(\.\d+)?\b|\d+(\.\d+)?\b|\.\d+\b/iy)) {
             return setToken(TokenType.NUMBER, from, getIndex());
         }
         return undefined;

@@ -30,10 +30,11 @@ const enum ParseOptions {
 
 const enum ParseContext {
     none = 0,
-    hashWrappedExpr  = 0x00000001,
-    cfScriptTagBody  = 0x00000002,
-    for              = 0x00000004,
-    interpolatedText = 0x00000008,
+    hashWrappedExpr   = 0x00000001,
+    cfScriptTagBody   = 0x00000002,
+    for               = 0x00000004,
+    interpolatedText  = 0x00000008,
+    awaitingVoidSlash = 0x00000010, // <cfset foo = bar /> is just `foo=bar`, with a trailing tag-void-slash, not `foo=bar/` with a missing rhs to the `/` operator
 }
 
 function TagContext() {
@@ -225,6 +226,11 @@ export function Parser() {
     function isInSomeContext(contextFlags: ParseContext) {
         return (parseContext & contextFlags) === contextFlags;
     }
+
+    //
+    // run some function inside of some context
+    // this totally erases the existing context for the duration of the body
+    //
     function doInContext<T>(context: ParseContext, f: (() => T)) : T {
         const savedContext = parseContext;
         parseContext = context;
@@ -436,12 +442,8 @@ export function Parser() {
                 return CfTag.ScriptLike(CfTag.Which.start, tagStart, tagName, null, rightAngle, canonicalName, expr);
             }
             case "set": {
-                const expr = parseAssignmentOrLower();
-                // any void slash here would have gotten picked up by parseExpression, right?
+                const expr = doInContext(ParseContext.awaitingVoidSlash, parseAssignmentOrLower);
                 const maybeVoidSlash = parseOptionalTerminal(TokenType.FORWARD_SLASH, ParseOptions.withTrivia);
-                if (maybeVoidSlash) {
-                    parseErrorAtRange(maybeVoidSlash.range, "A trailing tag slash is not allowed on a <cfset> tag.");
-                }
                 const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
                 return CfTag.ScriptLike(CfTag.Which.start, tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, expr);
             }
@@ -452,7 +454,7 @@ export function Parser() {
                     return CfTag.ScriptLike(CfTag.Which.start, tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, null);
                 }
                 else {
-                    const expr = parseAnonymousFunctionDefinitionOrExpression();
+                    const expr = doInContext(ParseContext.awaitingVoidSlash, parseAnonymousFunctionDefinitionOrExpression);
                     const maybeVoidSlash = parseOptionalTerminal(TokenType.FORWARD_SLASH, ParseOptions.withTrivia);
                     const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
                     return CfTag.ScriptLike(CfTag.Which.start, tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, expr);
@@ -1305,7 +1307,7 @@ export function Parser() {
         let root = parseAddition();
 
         while (true) {
-            if (tagMode() && lookahead() === TokenType.LEFT_ANGLE || lookahead() === TokenType.RIGHT_ANGLE) {
+            if (tagMode() && (lookahead() === TokenType.LEFT_ANGLE || lookahead() === TokenType.RIGHT_ANGLE)) {
                 break;
             }
             switch (lookahead()) {
@@ -1383,10 +1385,24 @@ export function Parser() {
 
         stack.push(parseParentheticalOrUnaryPrefix());
 
+        outer:
         while (true) {
             switch (lookahead()) {
-                case TokenType.STAR:
                 case TokenType.FORWARD_SLASH: {
+                    // if we're awaiting a void slash, check to see if there is no expression following the slash
+                    // if no expression follows this, we found the void slash we were looking for
+                    if (isInSomeContext(ParseContext.awaitingVoidSlash)) {
+                        const slashIsNotFollowedByExpression = SpeculationHelper.lookahead(function() {
+                            return next(), parseTrivia(), !isStartOfExpression();
+                        });
+                        if (slashIsNotFollowedByExpression) {
+                            reduceRight();
+                            break outer;
+                        }
+                    }
+                    // fallthrough
+                }
+                case TokenType.STAR: {
                     reduceRight();
                     const op = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
                     const expr = parseParentheticalOrUnaryPrefix();
@@ -1467,6 +1483,8 @@ export function Parser() {
                 }
                 // else fallthrough
             }
+            case TokenType.MINUS:
+            case TokenType.PLUS:
             case TokenType.DBL_MINUS: // [[fallthrough]];
             case TokenType.DBL_PLUS: {
                 if (allowUnary) {
@@ -1638,9 +1656,25 @@ export function Parser() {
         const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
         const args : CallArgument[] = [];
         while (isStartOfExpression()) {
-            const expr = parseExpression();
+            const exprOrArgName = parseExpression();
+
+            // if we got an identifier, peek ahead to see if there is an equals token
+            // if so, this is a named argument, like foo(bar=baz, qux=42)
+            // we don't know from our current position if all of the args are named,
+            // we can check that later
+            if (exprOrArgName.type === NodeType.identifier) {
+                if (lookahead() === TokenType.EQUAL) {
+                    const equals = parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
+                    const namedArgValue = parseExpression();
+                    const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+                    args.push(CallArgument(exprOrArgName, equals, namedArgValue, comma));
+                    continue;
+                }
+            }
+
+            // we have an unnamed arguments, like foo(x, y, z);
             const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
-            args.push(CallArgument(expr, comma));
+            args.push(CallArgument(null, null, exprOrArgName, comma));
         }
         const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
         return CallExpression(root, leftParen, args, rightParen);
@@ -2209,7 +2243,7 @@ export function Parser() {
             const semi1 = parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia);
             const condition = parseExpression();
             const semi2 = parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia);
-            const incrementExpr = parseExpression();
+            const incrementExpr = parseAssignmentOrLower();
             const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
             const body = parseStatement();
             return For.For(forToken, leftParen, init, semi1, condition, semi2, incrementExpr, rightParen, body);
