@@ -242,6 +242,14 @@ export function Parser() {
         return result;
     }
 
+    function doOutsideOfContext<T>(context: ParseContext, f: (() => T)) : T {
+        const savedContext = parseContext;
+        parseContext &= ~context;
+        const result = f();
+        parseContext = savedContext;
+        return result;
+    }
+
     function parseErrorAtRange(range: SourceRange, msg: string) : void;
     function parseErrorAtRange(fromInclusive: number, toExclusive: number, msg: string) : void;
     function parseErrorAtRange(fromInclusiveOrRange: number | SourceRange, toExclusiveOrMsg: number | string, msg?: string) : void {
@@ -737,6 +745,10 @@ export function Parser() {
                         tagContext.depth[tag.canonicalName] += bumpDir;
                     }
                 }
+                if ((<any>tagContext).depth[tag.canonicalName] < 0) {
+                    let _x = 0;
+                    _x;
+                }
             }
 
             function stopAt(which: CfTag.Which, name: string, reduction: ReductionScheme) : ReductionInstruction[] {
@@ -956,7 +968,6 @@ export function Parser() {
                     openTagStack.pop();
 
                     const endTag = parseExpectedTag(CfTag.Which.end, startTag.canonicalName, () => parseErrorAtRange(startTag.range, "Missing </cf" + startTag.canonicalName + "> tag."));
-                    updateTagContext(endTag);
                     result.push(FromTag.Block(startTag, blockChildren, endTag));
                 }
 
@@ -1635,18 +1646,30 @@ export function Parser() {
 
         const leftHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
 
-        let expr : Node;
-        if (isInSomeContext(ParseContext.interpolatedText)) {
-            // if we're in interpolated text, we can do any expression here, like "#x+1#"
-            expr = parseExpression();
-        }
-        else {
+        const expr = parseExpression();
+        if (!isInSomeContext(ParseContext.interpolatedText)) {
+            // in a non-interpolated text context, only a subset of call-expr-or-lower expressions are valid
             // #foo()#     is ok
             // #foo() + 1# is invalid
-            expr = parseCallExpressionOrLower()
+            // #3#         is invalid
+            // #{x:1}#     is invalid
+            // etc.
+            switch (expr.type) {
+                case NodeType.identifier:
+                case NodeType.simpleStringLiteral:
+                case NodeType.interpolatedStringLiteral:
+                case NodeType.indexedAccess:
+                case NodeType.callExpression:
+                    break;
+                default:
+                    parseErrorAtRange(expr.range, "Hashed expressions in non-interpolated text contexts must be identifiers, strings, dot/bracket index lookups, or function calls.")
+            }
         }
 
-        const rightHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia, "Unterminated hash-wrapped expression");
+        const rightHash = parseExpectedTerminal(
+            TokenType.HASH,
+            ParseOptions.withTrivia,
+            () => parseErrorAtRange(leftHash.range.fromInclusive, getIndex(), "Unterminated hash-wrapped expression"));
 
         parseContext = savedContext;
         return HashWrappedExpr(leftHash, expr, rightHash);
@@ -1669,7 +1692,15 @@ export function Parser() {
                 return parseArrayLiteralOrOrderedStructLiteral();
             case TokenType.HASH:
                 if (!isInSomeContext(ParseContext.hashWrappedExpr)) {
-                    return parseHashWrappedExpression();
+                    // do this outside of an interpolated text context;
+                    // inside an interpolated text context, a hash wrapped expression can be any expression
+                    // but in a call-expr-or-lower hash wrapped expression, only a non-composite call-expr-or-lower is valid
+                    // however, hash-wrapped exprs can appear in expressions inside of interpolated text hash-wrapped expressions, e.g,
+                    // <cfoutput>
+                    //      #someMethod(#x#)#
+                    // </cfoutput>
+                    // and we would like `x` in the above to adhere to the call-expr-or-lower requirements
+                    return doOutsideOfContext(ParseContext.interpolatedText, parseHashWrappedExpression);
                 }
                 // [[fallthrough]];
             default: break;
