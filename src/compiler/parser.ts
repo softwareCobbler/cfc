@@ -43,6 +43,7 @@ const enum ParseContext {
     interpolatedText  = 0x00000008, // in <cfoutput>#...#</cfoutput> or "#...#"
     awaitingVoidSlash = 0x00000010, // <cfset foo = bar /> is just `foo=bar`, with a trailing tag-void-slash, not `foo=bar/` with a missing rhs to the `/` operator
     switch            = 0x00000020, // in a switch statement
+    trivia            = 0x00000040, // comments, whitespace
 }
 
 function TagContext() {
@@ -115,6 +116,7 @@ export function Parser() {
     let mode: ScannerMode;
     let parseContext : ParseContext;
     let lookahead_ : TokenType;
+    let lastNonTriviaToken : Token;
 
     const identifierPattern = /^[_$a-z][_$a-z0-9]*$/i;
     const tagNamePattern    = /^[_a-z]+$/i;
@@ -130,11 +132,13 @@ export function Parser() {
         function lookahead(lookaheadWorker: () => boolean) {
             const saveTokenizerState = getScannerState();
             const diagnosticsLimit = diagnostics.length;
+            const savedLastNonTriviaToken = lastNonTriviaToken;
 
             const result = lookaheadWorker();
 
             diagnostics.splice(diagnosticsLimit); // drop any diagnostics that were added
             restoreScannerState(saveTokenizerState);
+            lastNonTriviaToken = savedLastNonTriviaToken;
             return result;
         }
         //
@@ -147,6 +151,7 @@ export function Parser() {
             const saveTokenizerState = getScannerState();
             const savedGlobalDiagnosticEmitter = globalDiagnosticEmitter;
             const diagnosticsLimit = diagnostics.length;
+            const savedLastNonTriviaToken = lastNonTriviaToken;
 
             const result = speculationWorker(...args as [...Args]);
 
@@ -157,6 +162,7 @@ export function Parser() {
                 restoreScannerState(saveTokenizerState);
                 globalDiagnosticEmitter = savedGlobalDiagnosticEmitter;
                 diagnostics.splice(diagnosticsLimit); // drop any diagnostics that were added
+                lastNonTriviaToken = savedLastNonTriviaToken;
                 return null;
             }
         }
@@ -216,6 +222,7 @@ export function Parser() {
     }
 
     function getScannerState() : ScannerState {
+        // can maybe put lastNonTriviaToken in here ?
         return {
             index: scanner.getIndex(),
             mode: mode,
@@ -252,9 +259,18 @@ export function Parser() {
     // run some function inside of some context
     // this totally erases the existing context for the duration of the body
     //
-    function doInContext<T>(context: ParseContext, f: (() => T)) : T {
+    function doInFreshContext<T>(context: ParseContext, f: (() => T)) : T {
         const savedContext = parseContext;
         parseContext = context;
+        const result = f();
+        parseContext = savedContext;
+        return result;
+    }
+
+    // same as do in context except we don't stomp on the original flags, just set the new ones
+    function doInExtendedContext<T>(context: ParseContext, f: (() => T)) : T {
+        const savedContext = parseContext;
+        parseContext |= context;
         const result = f();
         parseContext = savedContext;
         return result;
@@ -326,6 +342,9 @@ export function Parser() {
     function parseOptionalTerminal(type: TokenType, parseOptions: ParseOptions) : Terminal | null {
         if (lookahead() === type) {
             const token = next();
+            if (!isInSomeContext(ParseContext.trivia)) {
+                lastNonTriviaToken = token;
+            }
             if (parseOptions & ParseOptions.withTrivia) {
                 return Terminal(token, parseTrivia());
             }
@@ -356,10 +375,9 @@ export function Parser() {
                 globalDiagnosticEmitter();
             }
             else {
-                const currentToken = scanner.currentToken();
                 parseErrorAtRange(
-                    currentToken.range.fromInclusive,
-                    currentToken.range.fromInclusive + 1,
+                    lastNonTriviaToken.range.toExclusive,
+                    lastNonTriviaToken.range.toExclusive + 1,
                     "Expected a '" + TokenTypeUiString[type] + "' here");
             }
 
@@ -457,25 +475,33 @@ export function Parser() {
     }
 
     function parseTrivia() : Node[] {
+        let result : Node[];
+
+        const savedContext = parseContext;
+        parseContext |= ParseContext.trivia;
+
         if (tagMode()) {
-            return parseTagTrivia();
+            result = parseTagTrivia();
+        }
+        else {
+            result = [];
+            while (true) {
+                switch (lookahead()) {
+                    case TokenType.DBL_FORWARD_SLASH:
+                        result.push(parseScriptSingleLineComment());
+                        continue;
+                    case TokenType.FORWARD_SLASH_STAR:
+                        result.push(parseScriptMultiLineComment());
+                        continue;
+                    case TokenType.WHITESPACE:
+                        result.push(TextSpan(next().range, "")); // not really any need to store the whitespace
+                        continue;
+                }
+                break;
+            }
         }
 
-        const result : Node[] = [];
-        while (true) {
-            switch (lookahead()) {
-                case TokenType.DBL_FORWARD_SLASH:
-                    result.push(parseScriptSingleLineComment());
-                    continue;
-                case TokenType.FORWARD_SLASH_STAR:
-                    result.push(parseScriptMultiLineComment());
-                    continue;
-                case TokenType.WHITESPACE:
-                    result.push(TextSpan(next().range, "")); // not really any need to store the whitespace
-                    continue;
-            }
-            break;
-        }
+        parseContext = savedContext;
         return result;
     }
 
@@ -511,7 +537,7 @@ export function Parser() {
                 return CfTag.ScriptLike(CfTag.Which.start, tagStart, tagName, null, rightAngle, canonicalName, expr);
             }
             case "set": {
-                const expr = doInContext(ParseContext.awaitingVoidSlash, parseAssignmentOrLower);
+                const expr = doInExtendedContext(ParseContext.awaitingVoidSlash, parseAssignmentOrLower);
                 const maybeVoidSlash = parseOptionalTerminal(TokenType.FORWARD_SLASH, ParseOptions.withTrivia);
                 const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
                 return CfTag.ScriptLike(CfTag.Which.start, tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, expr);
@@ -523,7 +549,7 @@ export function Parser() {
                     return CfTag.ScriptLike(CfTag.Which.start, tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, null);
                 }
                 else {
-                    const expr = doInContext(ParseContext.awaitingVoidSlash, parseAnonymousFunctionDefinitionOrExpression);
+                    const expr = doInExtendedContext(ParseContext.awaitingVoidSlash, parseAnonymousFunctionDefinitionOrExpression);
                     const maybeVoidSlash = parseOptionalTerminal(TokenType.FORWARD_SLASH, ParseOptions.withTrivia);
                     const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
                     return CfTag.ScriptLike(CfTag.Which.start, tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, expr);
@@ -543,7 +569,7 @@ export function Parser() {
 
                     // hm, probably mode should be a context flag, too
                     rightAngle.trivia = parseTrivia(); // <cfscript> is a tag but it gets script-based trivia (so it can have script comments attached to it)
-                    const stmtList = doInContext(ParseContext.cfScriptTagBody, parseStatementList);
+                    const stmtList = doInFreshContext(ParseContext.cfScriptTagBody, parseStatementList);
 
                     setScannerMode(savedMode);
                     return CfTag.Script(tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, stmtList);
@@ -2024,7 +2050,7 @@ export function Parser() {
 
         // don't consume if we didn't match a valid identifier
         const terminal = gotValidIdentifier
-            ? Terminal(next(), parseTrivia())
+            ? parseExpectedTerminal(lookahead(), ParseOptions.withTrivia)
             : Terminal(peek(), []);
 
         const canonicalName = gotValidIdentifier
