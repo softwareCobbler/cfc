@@ -1,4 +1,4 @@
-import { CfTag, IndexedAccessType, Node, TagAttribute } from "./node";
+import { CfTag, Node, TagAttribute } from "./node";
 import { NodeType } from "./node";
 import { Token, TokenType } from "./scanner";
 
@@ -210,27 +210,4 @@ export function getAttributeValue(attrs: TagAttribute[], name: string) : Node | 
         }
     }
     return null;
-}
-
-export function getAssociatedTrivia(node: Node) : Node[] {
-    switch (node.type) {
-        case NodeType.terminal:
-            return node.trivia;
-        case NodeType.identifier:
-            return node.lexeme.trivia;
-        case NodeType.simpleStringLiteral:
-        case NodeType.interpolatedStringLiteral:
-            return node.rightQuote.trivia;
-        case NodeType.indexedAccess: {
-            const lastAccessElement = node.last();
-            if (!lastAccessElement) throw "don't call getAssociatedTrivia on incomplete indexed access element"
-            if (lastAccessElement.accessType === IndexedAccessType.bracket) return lastAccessElement.rightBracket.trivia;
-            else return lastAccessElement.propertyName.trivia;
-        }
-        case NodeType.callExpression:
-            return node.rightParen.trivia;
-        default:
-            throw "unhandled";
-            return [];
-    }
 }

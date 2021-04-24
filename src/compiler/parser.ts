@@ -26,7 +26,7 @@ import {
     mergeRanges,
     VariableDeclaration, } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, TokenTypeUiStringReverse } from "./scanner";
-import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, isNamedBlockName, getAssociatedTrivia } from "./utils";
+import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, isNamedBlockName } from "./utils";
 
 const enum ParseOptions {
     none     = 0,
@@ -46,23 +46,38 @@ const enum ParseContext {
 }
 
 function TagContext() {
-    return {
-        depth: {
-            output: 0,
-            mail: 0,
-            query: 0
-        },
-        inTextInterpolationContext() {
-            return this.depth.output > 0
-                || this.depth.mail > 0
-                || this.depth.query > 0;
+    const depth = {
+        output: 0,
+        mail: 0,
+        query: 0
+    };
+    
+    function inTextInterpolationContext() {
+        return depth.output > 0
+            || depth.mail > 0
+            || depth.query > 0;
+    };
+
+    function update(tag: CfTag) {
+        let bumpDir = tag.which === CfTag.Which.start ? 1 : -1;
+        switch (tag.canonicalName) {
+            case "output":
+            case "mail":
+            case "query": {
+                depth[tag.canonicalName] += bumpDir;
+            }
         }
+    }
+
+    return {
+        inTextInterpolationContext,
+        update
     }
 }
 
 type TagContext = ReturnType<typeof TagContext>;
 
-interface TokenizerState {
+interface ScannerState {
     mode : ScannerMode;
     index: number;
     artificialEndLimit: number | undefined;
@@ -113,13 +128,13 @@ export function Parser() {
         // run a boolean returning worker, and always rollback changes to parser state when done
         //
         function lookahead(lookaheadWorker: () => boolean) {
-            const saveTokenizerState = getTokenizerState();
+            const saveTokenizerState = getScannerState();
             const diagnosticsLimit = diagnostics.length;
 
             const result = lookaheadWorker();
 
             diagnostics.splice(diagnosticsLimit); // drop any diagnostics that were added
-            restoreTokenizerState(saveTokenizerState);
+            restoreScannerState(saveTokenizerState);
             return result;
         }
         //
@@ -129,7 +144,7 @@ export function Parser() {
         function speculate<
             F extends (...args: any) => any,
             Args extends Parameters<F> = Parameters<F>>(speculationWorker: F, ...args: Args) : ReturnType<F> | null {
-            const saveTokenizerState = getTokenizerState();
+            const saveTokenizerState = getScannerState();
             const savedGlobalDiagnosticEmitter = globalDiagnosticEmitter;
             const diagnosticsLimit = diagnostics.length;
 
@@ -139,7 +154,7 @@ export function Parser() {
                 return result;
             }
             else {
-                restoreTokenizerState(saveTokenizerState);
+                restoreScannerState(saveTokenizerState);
                 globalDiagnosticEmitter = savedGlobalDiagnosticEmitter;
                 diagnostics.splice(diagnosticsLimit); // drop any diagnostics that were added
                 return null;
@@ -200,7 +215,7 @@ export function Parser() {
         return scanner.getIndex();
     }
 
-    function getTokenizerState() : TokenizerState {
+    function getScannerState() : ScannerState {
         return {
             index: scanner.getIndex(),
             mode: mode,
@@ -208,7 +223,10 @@ export function Parser() {
         }
     }
 
-    function restoreTokenizerState(state: TokenizerState) {
+    /**
+     * if `state.artificialEndLimit` is undefined, we clear any artifical end limit
+     */
+    function restoreScannerState(state: ScannerState) {
         scanner.restoreIndex(state.index);
         mode = state.mode;
         if (state.artificialEndLimit) {
@@ -217,7 +235,7 @@ export function Parser() {
         else {
             scanner.clearArtificalEndLimit();
         }
-        lookahead_ = peek().type;
+        primeScanner();
     }
 
     function tagMode() : boolean {
@@ -341,8 +359,8 @@ export function Parser() {
                 const currentToken = scanner.currentToken();
                 parseErrorAtRange(
                     currentToken.range.fromInclusive,
-                    currentToken.range.fromInclusive+1,
-                    "Expected a " + TokenTypeUiString[type] + " here");
+                    currentToken.range.fromInclusive + 1,
+                    "Expected a '" + TokenTypeUiString[type] + "' here");
             }
 
             const phonyToken : Token = Token(type, "", SourceRange.Nil());
@@ -406,17 +424,23 @@ export function Parser() {
             scanToNextToken([TokenType.CF_TAG_COMMENT_START, TokenType.CF_TAG_COMMENT_END]);
             if (lookahead() === TokenType.CF_TAG_COMMENT_START) {
                 nestedComments.push(parseTagComment());
+                continue;
             }
             else {
                 break;
             }
         }
-
-        const commentEnd = parseExpectedTerminal(
-            TokenType.CF_TAG_COMMENT_END,
-            ParseOptions.noTrivia,
-            () => parseErrorAtRange(commentStart.range.fromInclusive, scanner.getIndex(), "Unterminated tag comment"));
-        return CfTag.Comment(commentStart, nestedComments, commentEnd);
+        
+        if (lookahead() !== TokenType.CF_TAG_COMMENT_END) {
+            if (nestedComments.length > 0) parseErrorAtRange(commentStart.range.fromInclusive, nestedComments[0].range.fromInclusive, "Unterminated tag comment.");
+            else parseErrorAtRange(commentStart.range.fromInclusive, scanner.getIndex(), "Unterminated tag comment.");
+            const commentEnd = createMissingNode(NilTerminal);
+            return CfTag.Comment(commentStart, nestedComments, commentEnd);
+        }
+        else {
+            const commentEnd = parseExpectedTerminal(TokenType.CF_TAG_COMMENT_END, ParseOptions.noTrivia);
+            return CfTag.Comment(commentStart, nestedComments, commentEnd);
+        }
     }
 
     function parseScriptSingleLineComment() : Comment {
@@ -701,10 +725,9 @@ export function Parser() {
         // a tag with children becomes a block, a single tag (like a <cfset ...> or just a loose <cffile ...> ) becomes a statement
         // this also gives us the opportunity to emit diagnostics for unbalanced start or end tags
         //
-        function treeifyTagList(tagList: CfTag[]) : Node[] {
-            const tagContext = TagContext();
+        function treeifyTagList(tagList: (CfTag|HashWrappedExpr)[]) : Node[] {
             const openTagStack : string[] = [];
-            let index = 0;
+            let tagIndex = 0;
 
             function openTagStackFindMatchingStartTag(tagCanonicalName: string) : number | null {
                 for (let i = openTagStack.length-1; i >= 0; i--) {
@@ -736,21 +759,6 @@ export function Parser() {
                 default: <readonly ReductionInstruction[]>[]
             };
 
-            function updateTagContext(tag: CfTag) {
-                let bumpDir = tag.which === CfTag.Which.start ? 1 : -1;
-                switch (tag.canonicalName) {
-                    case "output":
-                    case "mail":
-                    case "query": {
-                        tagContext.depth[tag.canonicalName] += bumpDir;
-                    }
-                }
-                if ((<any>tagContext).depth[tag.canonicalName] < 0) {
-                    let _x = 0;
-                    _x;
-                }
-            }
-
             function stopAt(which: CfTag.Which, name: string, reduction: ReductionScheme) : ReductionInstruction[] {
                 return [{
                     onHitWhich: which,
@@ -769,24 +777,33 @@ export function Parser() {
             }
 
             function hasNextTag() : boolean {
-                return index < tagList.length;
+                return tagIndex < tagList.length;
             }
 
             // @ts-expect-error - unused
             function next() : never { // shadow the outer next()
                 throw "use nextTag";
             }
+            // @ts-expect-error - unused
+            function peek() : never { // shadow the outer peek()
+                throw "use peekTag";
+            }
             
             function nextTag() {
-                return tagList[index++];
+                return tagList[tagIndex++];
             }
             function peekTag() {
-                return hasNextTag() ? tagList[index] : null;
+                return hasNextTag() ? tagList[tagIndex] : null;
             }
 
             function parseOptionalTag(which: CfTag.Which, canonicalName: string) : CfTag | null {
-                if (hasNextTag() && tagList[index].which === which && tagList[index].canonicalName === canonicalName) {
-                    return nextTag();
+                if (!hasNextTag()) return null;
+                const tag = peekTag()!;
+                if (tag.type === NodeType.hashWrappedExpr) return null;
+
+                if (tag.which === which && tag.canonicalName === canonicalName) {
+                    nextTag();
+                    return tag;
                 }
                 else {
                     return null;
@@ -856,7 +873,7 @@ export function Parser() {
 
                 if (hasNextTag()) {
                     const nextTag = peekTag()!;
-                    if (nextTag.canonicalName === "if" && nextTag.which === CfTag.Which.end) {
+                    if (nextTag.type === NodeType.tag && nextTag.canonicalName === "if" && nextTag.which === CfTag.Which.end) {
                         root.tagOrigin.endTag = parseExpectedTag(CfTag.Which.end, "if");
                         return root;
                     }
@@ -973,23 +990,14 @@ export function Parser() {
 
                 while (hasNextTag()) {
                     const tag = peekTag()!;
-                    updateTagContext(tag);
 
-                    if (tag.tagType === CfTag.TagType.text) {
-                        const text = parseTextInTagContext(tag.range, tagContext);
-
-                        if (Array.isArray(text)) {
-                            result.push(...text);
-                        }
-                        else {
-                            result.push(text);
-                        }
-
-                        nextTag()
+                    if (tag.type === NodeType.hashWrappedExpr) {
+                        result.push(tag);
+                        nextTag();
                         continue;
                     }
-                    else if (tag.tagType === CfTag.TagType.comment) {
-                        result.push(Comment(CommentType.tag, tag.range));
+                    if (tag.tagType === CfTag.TagType.text) {
+                        result.push(TextSpan(tag.range, scanner.getTextSlice(tag.range)));
                         nextTag();
                         continue;
                     }
@@ -1142,6 +1150,9 @@ export function Parser() {
 
                         nextTag();
                     }
+                    else {
+                        throw "non-exhaustive if arms";
+                    }
                 }
 
                 return result;
@@ -1153,44 +1164,68 @@ export function Parser() {
         const savedMode = mode;
         setScannerMode(ScannerMode.tag);
 
-        const result : CfTag[] = [];
-        let tagTextRange = SourceRange.Nil();
-
-        function startOrContinueTagTextRange() {
-            if (tagTextRange.isNil()) {
-                const index = scanner.getIndex();
-                tagTextRange = new SourceRange(index, index+1);
-            }
-        }
-        function finishTagTextRange() {
-            if (tagTextRange.isNil()) {
-                return;
-            }
-            tagTextRange.toExclusive = scanner.getIndex(); // does not include current; so, no "+1"
-            result.push(CfTag.Text(tagTextRange))
-            tagTextRange = SourceRange.Nil();
-        }
+        const tagContext = TagContext();
+        const result : (CfTag | HashWrappedExpr)[] = [];
 
         while (lookahead() != TokenType.EOF) {
             switch (lookahead()) {
                 case TokenType.CF_START_TAG_START: {
-                    finishTagTextRange();
-                    result.push(parseCfStartTag());
-                    break;
+                    const tag = parseCfStartTag();
+                    tagContext.update(tag);
+                    result.push(tag);
+                    continue;
                 }
                 case TokenType.CF_END_TAG_START: {
-                    finishTagTextRange();
-                    result.push(parseCfEndTag());
-                    break;
+                    const tag = parseCfEndTag();
+                    tagContext.update(tag);
+                    result.push(tag);
+                    continue;
                 }
                 case TokenType.CF_TAG_COMMENT_START: {
-                    finishTagTextRange();
                     result.push(parseTagComment());
-                    break;
+                    continue;
                 }
                 default: {
-                    startOrContinueTagTextRange();
-                    next();
+                    if (tagContext.inTextInterpolationContext()) {
+                        const savedContext = parseContext;
+                        parseContext |= ParseContext.interpolatedText; 
+                        const start = getIndex();
+
+                        while (true) {
+                            scanToNextToken([
+                                TokenType.HASH,
+                                TokenType.CF_START_TAG_START,
+                                TokenType.CF_END_TAG_START,
+                                TokenType.CF_TAG_COMMENT_START], /*endOnOrAfter*/ "on"); // scan to next will hit the next start of comment or EOF
+
+                            if (lookahead() === TokenType.HASH) {
+                                if (peek(1).type === TokenType.HASH) { // a doubled up hash is an escaped hash, just plain text; keep going
+                                    next(), next(); // skip past the current and next hash; calling scanToNext(T) when we are looking at a T would not move the scanner
+                                    continue;
+                                }
+                                else {
+                                    result.push(CfTag.Text(new SourceRange(start, getIndex())));
+                                    result.push(parseHashWrappedExpression());
+                                    break;
+                                }
+                            }
+                            else {
+                                result.push(CfTag.Text(new SourceRange(start, getIndex())));
+                                break;
+                            }
+                        }
+
+                        parseContext = savedContext;
+                    }
+                    else {
+                        const start = getIndex();
+                        scanToNextToken([
+                            TokenType.CF_START_TAG_START,
+                            TokenType.CF_END_TAG_START,
+                            TokenType.CF_TAG_COMMENT_START], /*endOnOrAfter*/ "on"); // scan to next will hit the next start of comment or EOF
+
+                        result.push(CfTag.Text(new SourceRange(start, getIndex())));
+                    }
                 }
             }
         }
@@ -1198,21 +1233,6 @@ export function Parser() {
         setScannerMode(savedMode);
 
         return treeifyTagList(result);
-    }
-
-    function parseTextInTagContext(range: SourceRange, tagContext: TagContext) {
-        if (!tagContext.inTextInterpolationContext()) {
-            return TextSpan(range, scanner.getTextSlice(range));
-        }
-        const saveTokenizerState = getTokenizerState();
-        restoreTokenizerState({
-            index: range.fromInclusive,
-            mode: ScannerMode.tag,
-            artificialEndLimit: range.toExclusive});
-        
-        const result = parseInterpolatedText();
-        restoreTokenizerState(saveTokenizerState);
-        return result;
     }
 
     function parseInterpolatedText(quoteDelimiter?: TokenType.QUOTE_SINGLE | TokenType.QUOTE_DOUBLE) : (TextSpan | HashWrappedExpr)[] {
@@ -1642,11 +1662,11 @@ export function Parser() {
         if (isInSomeContext(ParseContext.hashWrappedExpr)) throw "parseHashWrappedExpr cannot be nested";
 
         const savedContext = parseContext;
-        parseContext |= ParseContext.hashWrappedExpr;
+        parseContext |= ParseContext.hashWrappedExpr; // set flag so we don't recurse back into here
 
         const leftHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
-
         const expr = parseExpression();
+
         if (!isInSomeContext(ParseContext.interpolatedText)) {
             // in a non-interpolated text context, only a subset of call-expr-or-lower expressions are valid
             // #foo()#     is ok
@@ -1668,7 +1688,7 @@ export function Parser() {
 
         const rightHash = parseExpectedTerminal(
             TokenType.HASH,
-            ParseOptions.withTrivia,
+            isInSomeContext(ParseContext.interpolatedText) ? ParseOptions.noTrivia : ParseOptions.withTrivia, // if inside interpolated text, the 'trivia' outside the right-hash should be interpreted as raw text
             () => parseErrorAtRange(leftHash.range.fromInclusive, getIndex(), "Unterminated hash-wrapped expression"));
 
         parseContext = savedContext;
@@ -1760,6 +1780,9 @@ export function Parser() {
                 }
                 case TokenType.DOT: {
                     const dot = parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
+                    // allow numeric lexeme-likes, to support:
+                    // foo = {4: 42};
+                    // bar = foo.4; -- ok, bar == 42;
                     const propertyName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ true);
                     if (root.type !== NodeType.indexedAccess) {
                         (root as Node) = IndexedAccess(root);

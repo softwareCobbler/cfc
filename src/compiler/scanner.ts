@@ -595,13 +595,17 @@ export function Scanner(sourceText_: string) {
      * target is expected to be a string of length 1, or a TokenType
      * if a char, it is case-sensitive
      * this leaves the scanner primed to scan the target char or TokenType on the next call to `nextToken`
+     * if we're already on top of the target char or token type we do not move
      */
     function scanToNext(target: char) : void;
     function scanToNext(target: TokenType[], mode: ScannerMode) : void;
     function scanToNext(target: char | TokenType[], mode?: ScannerMode) : void {
         if (typeof target === "string") {
+            if (sourceText[index] === target) {
+                return;
+            }
             const targetCodepoint = target.charCodeAt(0);
-            while (true) {
+            while (true) { // will bail on peekChar returning null
                 const nextCodepoint = peekChar()?.codepoint;
                 if (!nextCodepoint || nextCodepoint === targetCodepoint) {
                     break;
@@ -612,13 +616,16 @@ export function Scanner(sourceText_: string) {
             }
         }
         else {
-            while (true) {
-                // we could peek but that requires more work than jumping
-                // back to the start of the token when we finally find a match
-                let lastIndex = getIndex();
-                const token = nextToken(mode!);
+            if (target.includes(currentToken().type)) {
+                return;
+            }
+            while (true) { // will bail on EOF
+                const lastIndex   = getIndex();
+                const lastToken = currentToken();
+                const token     = nextToken(mode!);
                 if (target.includes(token.type) || token.type === TokenType.EOF) {
-                    restoreIndex(lastIndex);
+                    restoreIndex(lastIndex); // jump back to the previous token, so the scanner is primed to consume it on the next call to next
+                    setToken(lastToken);
                     break;
                 }
             }
@@ -638,9 +645,16 @@ export function Scanner(sourceText_: string) {
         }
     }
     
-    function setToken(type: TokenType, from: number, to: number, text = lastScannedText) {
-        token = Token(type, text, from, to);
-        return token;
+    function setToken(tokenType: TokenType, from: number, to: number, text?: string): Token; // overload 1
+    function setToken(token: Token) : void; // overload 2
+    function setToken(tokenOrTokenType: Token | TokenType, from?: number, to?: number, text = lastScannedText) : Token | void {
+        if (typeof tokenOrTokenType === "number") { // overload 1
+            token = Token(tokenOrTokenType, text, from!, to!);
+            return token;
+        }
+        else { // overload 2
+            token = tokenOrTokenType;
+        }
     }
 
     function currentToken() {
