@@ -134,6 +134,7 @@ export const enum TokenType {
     KW_BREAK,
     KW_CASE,
     KW_CATCH,
+    KW_CONTINUE,
     KW_DEFAULT,
     KW_DO,
     KW_ELSE,
@@ -239,6 +240,7 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.KW_BREAK]:             "break",
     [TokenType.KW_CASE]:              "case",
     [TokenType.KW_CATCH]:             "catch",
+    [TokenType.KW_CONTINUE]:          "continue",
     [TokenType.KW_DEFAULT]:           "default",
     [TokenType.KW_DO]:                "do",
     [TokenType.KW_ELSE]:              "else",
@@ -504,6 +506,7 @@ export function Scanner(sourceText_: string) {
                 if (script && maybeEat(/catch\b/iy)) return setToken(TokenType.KW_CATCH, from, getIndex());
                 else if (script && maybeEat(/case\b/iy)) return setToken(TokenType.KW_CASE, from, getIndex());
                 else if (maybeEat(/contains\b/iy)) return setToken(TokenType.LIT_CONTAINS, from, getIndex());
+                else if (script && maybeEat(/continue\b/iy)) return setToken(TokenType.KW_CONTINUE, from, getIndex());
                 else return lexeme();
             case AsciiMap.d: // [[fallthrough]];
             case AsciiMap.D:

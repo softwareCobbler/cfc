@@ -19,7 +19,8 @@ export const enum NodeType {
     identifier, indexedAccess,
     functionDefinition, arrowFunctionDefinition, functionParameter,
     dottedPath, switch, switchCase, do, while, ternary, for, structLiteral, arrayLiteral,
-    structLiteralInitializerMember, arrayLiteralInitializerMember, returnStatement, try, catch, finally
+    structLiteralInitializerMember, arrayLiteralInitializerMember, returnStatement, try, catch, finally,
+    breakStatement, continueStatement
 }
 
 const NodeTypeUiString : Record<NodeType, string> = {
@@ -61,8 +62,9 @@ const NodeTypeUiString : Record<NodeType, string> = {
     [NodeType.returnStatement]: "returnStatement",
     [NodeType.try]: "try",
     [NodeType.catch]: "catch",
-    [NodeType.finally]: "finally"
-
+    [NodeType.finally]: "finally",
+    [NodeType.breakStatement]: "break",
+    [NodeType.continueStatement]: "continue"
 };
 
 export type Node =
@@ -81,6 +83,8 @@ export type Node =
     | Conditional
     | Statement
     | ReturnStatement
+    | BreakStatement
+    | ContinueStatement
     | Block
     | SimpleStringLiteral
     | InterpolatedStringLiteral
@@ -689,6 +693,54 @@ export namespace FromTag {
         v.tagOrigin.startTag = tag;
         v.returnToken = null;
         v.expr = tag.expr;
+        v.semicolon = null;
+        return v;
+    }
+}
+
+export interface BreakStatement extends NodeBase {
+    type: NodeType.breakStatement,
+    breakToken: Terminal | null,
+    semicolon: Terminal | null
+}
+export function BreakStatement(
+    breakToken: Terminal,
+    semicolon: Terminal | null
+) : BreakStatement {
+    const v = NodeBase<BreakStatement>(NodeType.breakStatement, mergeRanges(breakToken, semicolon));
+    v.breakToken = breakToken;
+    v.semicolon = semicolon;
+    return v;
+}
+export namespace FromTag {
+    export function BreakStatement(tag: CfTag.Common) : BreakStatement {
+        const v = NodeBase<BreakStatement>(NodeType.breakStatement, tag.range);
+        v.tagOrigin.startTag = tag;
+        v.breakToken = null;
+        v.semicolon = null;
+        return v;
+    }
+}
+
+export interface ContinueStatement extends NodeBase {
+    type: NodeType.continueStatement,
+    continueToken: Terminal | null,
+    semicolon: Terminal | null
+}
+export function ContinueStatement(
+    continueToken: Terminal,
+    semicolon: Terminal | null
+) : ContinueStatement {
+    const v = NodeBase<ContinueStatement>(NodeType.continueStatement, mergeRanges(continueToken, semicolon));
+    v.continueToken = continueToken;
+    v.semicolon = semicolon;
+    return v;
+}
+export namespace FromTag {
+    export function ContinueStatement(tag: CfTag.Common) : ContinueStatement {
+        const v = NodeBase<ContinueStatement>(NodeType.continueStatement, tag.range);
+        v.tagOrigin.startTag = tag;
+        v.continueToken = null;
         v.semicolon = null;
         return v;
     }

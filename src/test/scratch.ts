@@ -4,7 +4,9 @@ import { CfFileType } from "../compiler/parser";
 //const scanner = Scanner(`<cfset x = function foo(a, b = 42 & 0){}>`);
 const scanner = Scanner(`
 <cfscript>
-    X = Y & Z;
+    switch (foo) {
+        
+    }
 </cfscript>
 `);
 
