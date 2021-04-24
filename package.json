@@ -4,8 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "install-all": "npm install && cd src/lang-server/client && npm install && cd ../server && npm install && cd ../../../",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build-cflsp": "webpack --config webpack.config.js"
+    "build-cflsp": "webpack --config webpack.config.js",
+    "build-cflsp-prod": "webpack --config webpack.prod.config.js"
   },
   "author": "",
   "license": "ISC",

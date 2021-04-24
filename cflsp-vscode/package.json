@@ -6,6 +6,10 @@
 	"version": "1.0.0",
 	"publisher": "DavidRogers",
 	"categories": [],
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/softwareCobbler/cfc.git"
+	},
 	"keywords": [
 		"ColdFusion"
 	],
