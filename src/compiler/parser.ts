@@ -22,7 +22,8 @@ import {
     Catch,
     Finally,
     BreakStatement,
-    ContinueStatement, } from "./node";
+    ContinueStatement,
+    mergeRanges, } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, TokenTypeUiStringReverse } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, isNamedBlockName } from "./utils";
 
@@ -364,10 +365,10 @@ export function Parser() {
         return Terminal(forcedLexemeToken, trivia);
     }
 
-    function parseExpectedLexemeLikeTerminal(consumeOnFailure: boolean, errorMsg?: string) : Terminal {
+    function parseExpectedLexemeLikeTerminal(consumeOnFailure: boolean, allowNumeric: boolean, errorMsg?: string) : Terminal {
         const labelLike = peek();
         let trivia : Node[] = [];
-        if (!isLexemeLikeToken(labelLike)) {
+        if (!isLexemeLikeToken(labelLike, allowNumeric)) {
             if (errorMsg) {
                 parseErrorAtRange(labelLike.range, errorMsg);
             }
@@ -500,6 +501,10 @@ export function Parser() {
                 const maybeVoidSlash = parseOptionalTerminal(TokenType.FORWARD_SLASH, ParseOptions.withTrivia);
                 const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
                 if (canonicalName === "script") {
+                    if (tagAttrs.length > 0) {
+                        parseErrorAtRange(mergeRanges(tagAttrs), "A <cfscript> tag cannot contain attributes.");
+                    }
+                    
                     const savedMode = mode;
                     setScannerMode(ScannerMode.script);
 
@@ -532,15 +537,15 @@ export function Parser() {
     function parseTagAttributes() : TagAttribute[] {
         const result : TagAttribute[] = [];
 
-        while (isLexemeLikeToken(peek())) {
+        while (isLexemeLikeToken(peek(), /*allowNumeric*/ true)) {
             // @fixme: does this need "consumeOnFailure", does anyone use "true"?
-            const attrName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false);
+            const attrName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
             if (lookahead() === TokenType.EQUAL) {
                 const equal = parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
                 let value : Node;
 
-                if (isLexemeLikeToken(peek())) {
-                    value = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false);
+                if (isLexemeLikeToken(peek(), /*allowNumeric*/ true)) {
+                    value = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ true);
                 }
                 else if (lookahead() === TokenType.QUOTE_SINGLE || lookahead() === TokenType.QUOTE_DOUBLE) {
                     value = parseStringLiteral();
@@ -753,6 +758,12 @@ export function Parser() {
             function hasNextTag() : boolean {
                 return index < tagList.length;
             }
+
+            // @ts-expect-error - unused
+            function next() : never { // shadow the outer next()
+                throw "use nextTag";
+            }
+            
             function nextTag() {
                 return tagList[index++];
             }
@@ -933,6 +944,21 @@ export function Parser() {
                     return null;
                 }
 
+                // handle a tag block that requires a matching start/end tag pair
+                function tagBlockWorker(tag: CfTag) {
+                    openTagStack.push(tag.canonicalName);
+
+                    const startTag = tag;
+                    nextTag();
+                    const blockChildren = treeifyTags(stopAt(CfTag.Which.end, startTag.canonicalName, ReductionScheme.return));
+
+                    openTagStack.pop();
+
+                    const endTag = parseExpectedTag(CfTag.Which.end, startTag.canonicalName, () => parseErrorAtRange(startTag.range, "Missing </cf" + startTag.canonicalName + "> tag."));
+                    updateTagContext(endTag);
+                    result.push(FromTag.Block(startTag, blockChildren, endTag));
+                }
+
                 while (hasNextTag()) {
                     const tag = peekTag()!;
                     updateTagContext(tag);
@@ -989,6 +1015,49 @@ export function Parser() {
                                 result.push(treeifyTagFunction(startTag as CfTag.Common, body, endTag as CfTag.Common));
                                 continue;
                             }
+                            case "transaction": {
+                                const actionAttrValue = getAttributeValue((<CfTag.Common>tag).attrs, "action");
+                                // there is NO action attribute, so it is implied to be "action=begin", which requires a body
+                                if (!actionAttrValue) {
+                                    if (tag.voidSlash) parseErrorAtRange(tag.voidSlash.range, "Unexpected '/' in <cftransaction> block with implied action=begin attribute.");
+                                    tagBlockWorker(tag);
+                                    continue;
+                                }
+
+                                const valueAsString = getTriviallyComputableString(actionAttrValue)?.toLowerCase();
+                                if (valueAsString === "begin") {
+                                    if (tag.voidSlash) {
+                                        if (valueAsString === "begin")
+                                            parseErrorAtRange(tag.voidSlash.range, "Unexpected '/' in <cftransaction action=begin> block.");
+                                        else
+                                            parseErrorAtRange(tag.voidSlash.range, "Unexpected '/' in <cftransaction> block with implied action=begin attribute.");
+                                    }
+                                    tagBlockWorker(tag);
+                                }
+                                else if (valueAsString === "commit" || valueAsString === "rollback" || valueAsString === "setsavepoint") {
+                                    result.push(
+                                        FromTag.Block(/*startTag*/ tag, /*stmtList*/ [], /*endTag*/ null));
+                                    nextTag();
+                                }
+                                else {
+                                    // <cftransaction> allows for a dynamic "action" attribute, e.g, `<cftransaction action="#dont_know_until_runtime#">`
+                                    // so best we can do is honor the possibly-present void slash
+                                    // and if the value is a static string, here we know it is an invalid one
+                                    if (typeof valueAsString === "string") {
+                                        parseErrorAtRange(actionAttrValue.range, "Unsupported <cftransaction> 'action' attribute.");
+                                    }
+                                    if (tag.voidSlash) {
+                                        result.push(
+                                            FromTag.Block(tag, [], null));
+                                        nextTag();
+                                    }
+                                    else {
+                                        tagBlockWorker(tag);
+                                    }
+                                }
+
+                                continue;
+                            }
                             case "script": {
                                 nextTag();
                                 const endTag = parseExpectedTag(CfTag.Which.end, "script", () => parseErrorAtRange(tag.range, "Missing </cfscript> tag."));
@@ -1001,17 +1070,7 @@ export function Parser() {
                             }
                             default: {
                                 if (requiresEndTag(tag)) {
-                                    openTagStack.push(tag.canonicalName);
-
-                                    const startTag = tag;
-                                    nextTag();
-                                    const blockChildren = treeifyTags(stopAt(CfTag.Which.end, startTag.canonicalName, ReductionScheme.return));
-
-                                    openTagStack.pop();
-
-                                    const endTag = parseExpectedTag(CfTag.Which.end, startTag.canonicalName, () => parseErrorAtRange(startTag.range, "Missing </cf" + startTag.canonicalName + "> tag."));
-                                    updateTagContext(endTag);
-                                    result.push(FromTag.Block(startTag, blockChildren, endTag));
+                                    tagBlockWorker(tag);
                                 }
                                 else {
                                     // a single loose tag
@@ -1638,7 +1697,7 @@ export function Parser() {
                 }
                 case TokenType.DOT: {
                     const dot = parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
-                    const propertyName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true);
+                    const propertyName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ true);
                     if (root.type !== NodeType.indexedAccess) {
                         (root as Node) = IndexedAccess(root);
                     }
@@ -1738,7 +1797,7 @@ export function Parser() {
                 result = DottedPath(result);
                 while (lookahead() === TokenType.DOT) {
                     const dot = parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
-                    const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true);
+                    const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ true);
                     result.rest.push({dot:dot, key: name});
                 }
                 return result;
@@ -2229,7 +2288,7 @@ export function Parser() {
         let body          : Block;
         
         if (SpeculationHelper.lookahead(isAccessModifier)) {
-            accessModifier = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true);
+            accessModifier = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ false);
         }
         if (SpeculationHelper.lookahead(isJavaLikeTypenameThenFunction)) {
             returnType = parseDottedPathTypename();
@@ -2245,7 +2304,7 @@ export function Parser() {
             functionToken = parseExpectedTerminal(TokenType.KW_FUNCTION, ParseOptions.withTrivia);
         }
 
-        nameToken     = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false);
+        nameToken     = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
         leftParen     = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
         params        = tryParseFunctionDefinitionParameters(/*speculative*/ false);
         rightParen    = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
@@ -2283,7 +2342,7 @@ export function Parser() {
                 init = createMissingNode(Identifier(NilTerminal, ""));
                 parseErrorAtCurrentToken("Expression expected.");
             }
-            const inToken = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false);
+            const inToken = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
             const expr = parseExpression();
             const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
             const body = parseStatement();
@@ -2468,7 +2527,7 @@ export function Parser() {
                     }
 
                     if (isNamedBlockName(peeked.text)) {
-                        const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true);
+                        const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ false);
                         const attrs = parseTagAttributes();
                         const block = parseBlock(mode);
                         return NamedBlockFromBlock(name, attrs, block);

@@ -86,15 +86,17 @@ export function requiresEndTag(tag: CfTag) : boolean {
     return !!facts && !!(facts & TagFact.REQUIRE_BODY);
 }
 
-export function allowTagBody(tag: CfTag) {
+export function allowTagBody(tag: CfTag) : boolean {
     const facts = getTagFacts(tag);
-    return !!facts && (
-        (facts & TagFact.ALLOW_BODY) || !!(facts & TagFact.REQUIRE_BODY));
+    return !!(facts && (
+        (facts & TagFact.ALLOW_BODY) ||
+        (facts & TagFact.REQUIRE_BODY)));
 }
 
-export function isLexemeLikeToken(token: Token) : boolean {
+export function isLexemeLikeToken(token: Token, allowNumeric = false) : boolean {
     const val = token.type;
     return val === TokenType.LEXEME
+        || (allowNumeric && val === TokenType.NUMBER)
         || (val > TokenType._FIRST_KW && val < TokenType._LAST_KW)
         || (val > TokenType._FIRST_LIT && val < TokenType._LAST_LIT);
 }

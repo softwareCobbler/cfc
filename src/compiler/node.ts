@@ -140,7 +140,7 @@ export function NodeBase<T extends NodeBase>(type: T["type"], range: SourceRange
     return result as T;
 }
 
-function mergeRanges(...nodes : (SourceRange | Node | Node[] | undefined | null )[]) : SourceRange {
+export function mergeRanges(...nodes : (SourceRange | Node | Node[] | undefined | null )[]) : SourceRange {
     const result = SourceRange.Nil();
     if (nodes.length === 0) {
         return result;
@@ -746,9 +746,14 @@ export namespace FromTag {
     }
 }
 
+// we're going to abuse Block for at least <cftransaction>, maybe others:
+// <cftransaction>...</cftransaction> is a named block, with the name "transaction"
+// <cftransaction action="rollback"> is effectively a statement, but we will store it as a named block,
+//     with no body, and no end tag; so the moral script equivalent would be like `transaction action="rollback";`, no braced-body
+//     when we parse named blocks in script statement mode we have to account for some named blocks being allowed to have no body
 export interface Block extends NodeBase {
     type: NodeType.namedBlock;
-    name: Terminal | null; // cf blocks may be named, e.g, `savecontent variable='foo' { ... }` the name is 'savecontent'
+    name: Terminal | null; // null if from tag (it's in tagOrigin.startTag), a terminal if from script
     attrs: TagAttribute[]; // cf blocks may have attributes just like their tag counterparts, e.g, `variable='foo'` in the above
     leftBrace: Terminal | null; // tag-origin blocks will have no braces
     stmtList: Node[];
@@ -772,13 +777,13 @@ export function Block(leftBrace: Terminal | null, stmtList: Node[], rightBrace: 
 }
 
 export namespace FromTag {
-export function Block(startTag: CfTag, endTag: CfTag) : Block;
-export function Block(startTag: CfTag, stmtList: Node[], endTag: CfTag) : Block;
-export function Block(startTag: CfTag, endTagOrStmtList: CfTag | Node[], endTag?: CfTag) {
-    if (endTag) {
-        const v = NodeBase<Block>(NodeType.namedBlock, mergeRanges(startTag, endTag));
+export function Block(startTag: CfTag, endTag: CfTag) : Block;                                      // overload 1
+export function Block(startTag: CfTag, stmtList: Node[], endTag: CfTag | null) : Block;             // overload 2
+export function Block(startTag: CfTag, endTagOrStmtList: CfTag | Node[], endTag?: CfTag | null) {
+    if (endTag === undefined) { // overload 1
+        const v = NodeBase<Block>(NodeType.namedBlock, mergeRanges(startTag, endTagOrStmtList));
         v.tagOrigin.startTag = startTag;
-        v.tagOrigin.endTag = endTag;
+        v.tagOrigin.endTag = endTagOrStmtList as CfTag;
         v.name = null;
         v.attrs = [];
         v.leftBrace = null;
@@ -786,10 +791,10 @@ export function Block(startTag: CfTag, endTagOrStmtList: CfTag | Node[], endTag?
         v.rightBrace = null;
         return v;
     }
-    else {
-        const v = NodeBase<Block>(NodeType.namedBlock, mergeRanges(startTag, endTagOrStmtList));
+    else { // overload 2
+        const v = NodeBase<Block>(NodeType.namedBlock, mergeRanges(startTag, endTag));
         v.tagOrigin.startTag = startTag;
-        v.tagOrigin.endTag = endTagOrStmtList as CfTag;
+        v.tagOrigin.endTag = endTag;
         v.name = null;
         v.attrs = [];
         v.leftBrace = null;
