@@ -4,7 +4,7 @@ import { CfFileType } from "../compiler/parser";
 //const scanner = Scanner(`<cfset x = function foo(a, b = 42 & 0){}>`);
 const scanner = Scanner(`
 <cfscript v=4>
-    x &= y;
+    var x &= y;
     y += 4;
 </cfscript>
 `);
@@ -18,4 +18,3 @@ parser.parse(CfFileType.cfm);
 for (const diag of parser.getDiagnostics()) {
     console.log(diag);
 }
-    

@@ -14,8 +14,8 @@ export const enum NodeFlags {
 
 export const enum NodeType {
     terminal, textSpan, comment, hashWrappedExpr, parenthetical, tagAttribute,
-    tag, callExpression, callArgument, assignment, unaryOperator, binaryOperator,
-    conditional, statement, namedBlock, simpleStringLiteral, interpolatedStringLiteral, numericLiteral, booleanLiteral,
+    tag, callExpression, callArgument, unaryOperator, binaryOperator,
+    conditional, variableDeclaration, statement, namedBlock, simpleStringLiteral, interpolatedStringLiteral, numericLiteral, booleanLiteral,
     identifier, indexedAccess,
     functionDefinition, arrowFunctionDefinition, functionParameter,
     dottedPath, switch, switchCase, do, while, ternary, for, structLiteral, arrayLiteral,
@@ -33,10 +33,10 @@ const NodeTypeUiString : Record<NodeType, string> = {
     [NodeType.tag]: "tag",
     [NodeType.callExpression]: "callExpression",
     [NodeType.callArgument]: "callArgument",
-    [NodeType.assignment]: "assignment",
     [NodeType.unaryOperator]: "unaryOperator",
     [NodeType.binaryOperator]: "binaryOperator",
     [NodeType.conditional]: "conditional",
+    [NodeType.variableDeclaration]: "declaration",
     [NodeType.statement]: "statement",
     [NodeType.namedBlock]: "namedBlock",
     [NodeType.simpleStringLiteral]: "simpleStringLiteral",
@@ -77,10 +77,10 @@ export type Node =
     | CfTag
     | CallExpression
     | CallArgument
-    | Assignment
     | UnaryOperator
     | BinaryOperator
     | Conditional
+    | VariableDeclaration
     | Statement
     | ReturnStatement
     | BreakStatement
@@ -428,28 +428,6 @@ export function CallArgument(name: Identifier | null, equals: Terminal | null, e
     return v;
 }
 
-export interface Assignee {
-    equals: Terminal;
-    value: Node;
-}
-export interface Assignment extends NodeBase {
-    type: NodeType.assignment;
-    finalModifier: Terminal | null;
-    varModifier: Terminal | null;
-    baseTarget: Node;
-    assignmentChain: Assignee[];
-}
-
-export function Assignment(finalModifier: Terminal | null, varModifier: Terminal | null, baseTarget: Node, assignmentChain: Assignee[]) : Assignment {
-    if (assignmentChain.length == 0) throw "assignment chain must have at least one element";
-    const v = NodeBase<Assignment>(NodeType.assignment, mergeRanges(finalModifier, varModifier, baseTarget, assignmentChain[assignmentChain.length-1].value));
-    v.finalModifier = finalModifier;
-    v.varModifier = varModifier;
-    v.baseTarget = baseTarget;
-    v.assignmentChain = assignmentChain;
-    return v;
-}
-
 export const enum UnaryOperatorPos { pre, post };
 export const enum UnaryOpType { inc, dec, pos, neg, not };
 export interface UnaryOperator extends NodeBase {
@@ -495,26 +473,32 @@ export function tokenTypeToUnaryOpType(tokenType: TokenType) {
 
 export const enum BinaryOpType {
     add, sub, mul, div, mod, exp, cat, eq, neq, lt, lte, gt, gte, nullCoalesce,
-    and, or, xor
+    and, or, xor, assign, assign_add, assign_sub, assign_mul, assign_div, assign_cat
 }
 const BinaryOpTypeUiString : Record<BinaryOpType, string> = {
-    [BinaryOpType.add]:          "add",
-    [BinaryOpType.sub]:          "sub",
-    [BinaryOpType.mul]:          "mul",
-    [BinaryOpType.div]:          "div",
-    [BinaryOpType.mod]:          "mod",
-    [BinaryOpType.exp]:          "exp",
-    [BinaryOpType.cat]:          "cat",
-    [BinaryOpType.eq]:           "eq",
-    [BinaryOpType.neq]:          "neq",
-    [BinaryOpType.lt]:           "lt",
-    [BinaryOpType.lte]:          "lte",
-    [BinaryOpType.gt]:           "gt",
-    [BinaryOpType.gte]:          "gte",
-    [BinaryOpType.nullCoalesce]: "nullCoalesce",
-    [BinaryOpType.and]:          "and",
-    [BinaryOpType.or]:           "or",
-    [BinaryOpType.xor]:          "xor",
+    [BinaryOpType.add]:          "+",
+    [BinaryOpType.sub]:          "-",
+    [BinaryOpType.mul]:          "*",
+    [BinaryOpType.div]:          "/",
+    [BinaryOpType.mod]:          "%",
+    [BinaryOpType.exp]:          "exp", // in cf, "^", but that is easily confusable with the xor symbol from other langs so we spell it out
+    [BinaryOpType.cat]:          "&",
+    [BinaryOpType.eq]:           "==",
+    [BinaryOpType.neq]:          "!=",
+    [BinaryOpType.lt]:           "<",
+    [BinaryOpType.lte]:          "<=",
+    [BinaryOpType.gt]:           ">",
+    [BinaryOpType.gte]:          ">=",
+    [BinaryOpType.nullCoalesce]: "?:",
+    [BinaryOpType.and]:          "&&",
+    [BinaryOpType.or]:           "||",
+    [BinaryOpType.xor]:          "xor", // no cf operator symbol exists for this
+    [BinaryOpType.assign]:       "=",
+    [BinaryOpType.assign_add]:   "+=",
+    [BinaryOpType.assign_cat]:   "&=",
+    [BinaryOpType.assign_div]:   "/=",
+    [BinaryOpType.assign_sub]:   "-=",
+    [BinaryOpType.assign_mul]:   "*=",
 };
 
 export interface BinaryOperator extends NodeBase {
@@ -575,6 +559,13 @@ export function tokenTypeToBinaryOpType(tokenType: TokenType) {
         case TokenType.DBL_AMPERSAND:       return BinaryOpType.and;
         case TokenType.LIT_AND:             return BinaryOpType.and;
         case TokenType.LIT_XOR:             return BinaryOpType.xor;
+
+        case TokenType.EQUAL:               return BinaryOpType.assign;
+        case TokenType.AMPERSAND_EQUAL:     return BinaryOpType.assign_cat;
+        case TokenType.PLUS_EQUAL:          return BinaryOpType.assign_add;
+        case TokenType.MINUS_EQUAL:         return BinaryOpType.assign_sub;
+        case TokenType.STAR_EQUAL:          return BinaryOpType.assign_mul;
+        case TokenType.FORWARD_SLASH_EQUAL: return BinaryOpType.assign_div;
 
         case TokenType.QUESTION_MARK_COLON: return BinaryOpType.nullCoalesce;
         default: break;
@@ -651,6 +642,28 @@ export namespace FromTag {
 
         return v;
     }
+}
+
+export interface VariableDeclaration extends NodeBase {
+    type: NodeType.variableDeclaration,
+    finalModifier: Terminal | null,
+    varModifier: Terminal | null,
+    identifier: Node, // can be Identifier | HashWrappedExpr | SimpleStringLiteral | InterpolatedStringLiteral | IndexedAccess, but that's tough to constrain ergonomically
+    expr: Node
+}
+
+export function VariableDeclaration(
+    finalModifier: Terminal | null,
+    varModifier: Terminal | null,
+    identifier: Node,
+    expr: Node
+) : VariableDeclaration {
+    const v = NodeBase<VariableDeclaration>(NodeType.variableDeclaration, mergeRanges(finalModifier, varModifier, expr));
+    v.finalModifier = finalModifier;
+    v.varModifier = varModifier;
+    v.identifier = identifier;
+    v.expr = expr;
+    return v;
 }
 
 export interface Statement extends NodeBase {

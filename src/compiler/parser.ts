@@ -2,7 +2,7 @@ import {
     setDebug as setNodeFactoryDebug,
     CfTag, Node, NodeType, TagAttribute, NodeFlags, Terminal, Comment, TextSpan, NilTerminal,
     Conditional, ConditionalSubtype, FunctionParameter, FromTag, FunctionDefinition, CommentType,
-    HashWrappedExpr, Assignee, Assignment, BinaryOperator, Parenthetical, UnaryOperator, BooleanLiteral,
+    HashWrappedExpr, BinaryOperator, Parenthetical, UnaryOperator, BooleanLiteral,
     CallExpression, IndexedAccess, pushAccessElement, CallArgument, Identifier, SimpleStringLiteral, InterpolatedStringLiteral,
     NumericLiteral, DottedPath, ArrowFunctionDefinition, Statement, Block, Switch, NamedBlockFromBlock,
     SwitchCase,
@@ -23,7 +23,8 @@ import {
     Finally,
     BreakStatement,
     ContinueStatement,
-    mergeRanges, } from "./node";
+    mergeRanges,
+    VariableDeclaration, } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, TokenTypeUiStringReverse } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, isNamedBlockName } from "./utils";
 
@@ -1289,11 +1290,25 @@ export function Parser() {
     }
 
     function parseAssignmentOrLower() : Node {
+        function isAssignmentOperator() : boolean {
+            switch (lookahead()) {
+                case TokenType.EQUAL:
+                case TokenType.AMPERSAND_EQUAL:
+                case TokenType.PLUS_EQUAL:
+                case TokenType.STAR_EQUAL:
+                case TokenType.MINUS_EQUAL:
+                case TokenType.FORWARD_SLASH_EQUAL:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         const finalModifier = parseOptionalTerminal(TokenType.KW_FINAL, ParseOptions.withTrivia);
         const varModifier = parseOptionalTerminal(TokenType.KW_VAR, ParseOptions.withTrivia);
         const root = parseCallExpressionOrLower();
 
-        if (lookahead() != TokenType.EQUAL) {
+        if (!isAssignmentOperator()) {
             if (varModifier) {
                 // we could probably return a "declaration" here ?
                 // var x;  sure it's semantically meaningless in cf (all var declarations require initializers), but it looks valid
@@ -1304,19 +1319,36 @@ export function Parser() {
             return root;
         }
 
+        if (varModifier) {
+            if (lookahead() !== TokenType.EQUAL) {
+                parseErrorAtRange(root.range, "A mutating assignment operator cannot be used to initialize a variable.");
+            }
+        }
         if (!isAssignmentTarget(root)) {
-            parseErrorAtRange(root.range, "left-hand side of assignment is not a valid assignment target");
+            parseErrorAtRange(root.range, "Left-hand side of assignment is not a valid assignment target.");
         }
 
-        const assignmentChain : Assignee[] = [];
-        do {
-            assignmentChain.push({
-                equals: parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia),
-                value: parseAnonymousFunctionDefinitionOrExpression()
-            });
-        } while (lookahead() === TokenType.EQUAL && isAssignmentTarget(assignmentChain[assignmentChain.length-1].value));
+        // we definitely have at least one <assignment-target><assignment-operator><expression> 
+        let assignmentExpr = BinaryOperator(root, parseExpectedTerminal(lookahead(), ParseOptions.withTrivia), parseExpression());
 
-        return Assignment(finalModifier, varModifier, root, assignmentChain);
+        // parse out the rest of a possible chain, e.g,
+        // x += x -= x *= x /= x &= x;
+        // but note, that these are not value-producing expressions, e.g,
+        // `x = (x += x)` is invalid, as is `if (x -= y) {...}`
+        while (isAssignmentOperator()) {
+            assignmentExpr = BinaryOperator(root, parseExpectedTerminal(lookahead(), ParseOptions.withTrivia), parseExpression());
+        }
+
+        // would be nice to have a 'finishNode' here to mark them as errors if any of the above error checks got hit
+        if (finalModifier || varModifier) {
+            if (!varModifier) {
+                parseErrorAtRange(finalModifier!.range, "`final` modifier is missing its associated `var` modifier.");
+            }
+            return VariableDeclaration(finalModifier, varModifier, root, assignmentExpr);
+        }
+        else {
+            return assignmentExpr;
+        }
     }
 
     function parseAnonymousFunctionDefinitionOrExpression() : Node {
