@@ -19,7 +19,7 @@ export const enum NodeType {
     identifier, indexedAccess,
     functionDefinition, arrowFunctionDefinition, functionParameter,
     dottedPath, switch, switchCase, do, while, ternary, for, structLiteral, arrayLiteral,
-    structLiteralInitializerMember, arrayLiteralInitializerMember, returnStatement
+    structLiteralInitializerMember, arrayLiteralInitializerMember, returnStatement, try, catch, finally
 }
 
 const NodeTypeUiString : Record<NodeType, string> = {
@@ -58,7 +58,10 @@ const NodeTypeUiString : Record<NodeType, string> = {
     [NodeType.arrayLiteral]: "arrayLiteral",
     [NodeType.structLiteralInitializerMember]: "structLiteralInitializerMember",
     [NodeType.arrayLiteralInitializerMember]: "arrayLiteralInitializerMember",
-    [NodeType.returnStatement]: "returnStatement"
+    [NodeType.returnStatement]: "returnStatement",
+    [NodeType.try]: "try",
+    [NodeType.catch]: "catch",
+    [NodeType.finally]: "finally"
 
 };
 
@@ -99,6 +102,9 @@ export type Node =
     | StructLiteralInitializerMember
     | ArrayLiteral
     | ArrayLiteralInitializerMember
+    | Try
+    | Catch
+    | Finally
 
 interface NodeBase {
     type: NodeType;
@@ -537,6 +543,7 @@ export function tokenTypeToBinaryOpType(tokenType: TokenType) {
         case TokenType.STAR:          		return BinaryOpType.mul;
         case TokenType.FORWARD_SLASH: 		return BinaryOpType.div;
         case TokenType.PERCENT:       		return BinaryOpType.mod;
+        case TokenType.LIT_MOD:       		return BinaryOpType.mod;
         case TokenType.CARET:         		return BinaryOpType.exp;
         case TokenType.AMPERSAND:     		return BinaryOpType.cat;
 
@@ -669,7 +676,7 @@ export interface ReturnStatement extends Omit<Statement, "type"> {
     type: NodeType.returnStatement;
     returnToken: Terminal | null; // null if from tag
 }
-export function ReturnStatement(returnToken: Terminal, expr: Node, semicolon: Terminal | null) : ReturnStatement {
+export function ReturnStatement(returnToken: Terminal, expr: Node | null, semicolon: Terminal | null) : ReturnStatement {
     const v = NodeBase<ReturnStatement>(NodeType.returnStatement, mergeRanges(returnToken, expr, semicolon))
     v.returnToken = returnToken;
     v.expr = expr;
@@ -1317,3 +1324,88 @@ export function ArrayLiteralInitializerMember(
     v.comma = comma;
     return v;
 }
+
+export interface Try extends NodeBase {
+    type: NodeType.try,
+    tryToken: Terminal,
+    leftBrace: Terminal,
+    body: Node[],
+    rightBrace: Terminal,
+    catchBlocks: Catch[],
+    finallyBlock: Finally | null
+}
+
+export function Try(
+    tryToken: Terminal,
+    leftBrace: Terminal,
+    body: Node[],
+    rightBrace: Terminal,
+    catchBlocks: Catch[],
+    finallyBlock: Finally | null
+) : Try {
+    const v = NodeBase<Try>(NodeType.try, mergeRanges(tryToken, finallyBlock));
+    v.tryToken = tryToken;
+    v.leftBrace = leftBrace;
+    v.body = body;
+    v.rightBrace = rightBrace;
+    v.catchBlocks = catchBlocks;
+    v.finallyBlock = finallyBlock;
+    return v;
+}
+
+export interface Catch extends NodeBase {
+    type: NodeType.catch,
+    catchToken: Terminal,
+    leftParen: Terminal,
+    exceptionType: DottedPath<Terminal>,
+    exceptionBinding: Identifier,
+    rightParen: Terminal,
+    leftBrace: Terminal,
+    body: Node[],
+    rightBrace: Terminal
+}
+
+export function Catch(
+    catchToken: Terminal,
+    leftParen: Terminal,
+    exceptionType: DottedPath<Terminal>,
+    exceptionBinding: Identifier,
+    rightParen: Terminal,
+    leftBrace: Terminal,
+    body: Node[],
+    rightBrace: Terminal
+) : Catch {
+    const v = NodeBase<Catch>(NodeType.catch, mergeRanges(leftParen, rightBrace));
+    v.catchToken = catchToken;
+    v.leftParen = leftParen;
+    v.exceptionType = exceptionType;
+    v.exceptionBinding = exceptionBinding;
+    v.rightParen = rightParen;
+    v.leftBrace = leftBrace;
+    v.body = body;
+    v.rightBrace = rightBrace;
+    return v;
+}
+
+export interface Finally extends NodeBase {
+    type: NodeType.finally,
+    finallyToken: Terminal,
+    leftBrace: Terminal,
+    body: Node[],
+    rightBrace: Terminal
+}
+
+export function Finally(
+    finallyToken: Terminal,
+    leftBrace: Terminal,
+    body: Node[],
+    rightBrace: Terminal
+) : Finally {
+    const v = NodeBase<Finally>(NodeType.finally, mergeRanges(finallyToken, rightBrace));
+    v.finallyToken = finallyToken;
+    v.leftBrace = leftBrace;
+    v.body = body;
+    v.rightBrace = rightBrace;
+    return v;
+}
+

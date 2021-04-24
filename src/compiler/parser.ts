@@ -17,7 +17,10 @@ import {
     EmptyOrderedStructLiteral,
     IndexedAccessType,
     OrderedStructLiteral,
-    ReturnStatement, } from "./node";
+    ReturnStatement,
+    Try,
+    Catch,
+    Finally, } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, TokenTypeUiStringReverse } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, isNamedBlockName } from "./utils";
 
@@ -110,9 +113,11 @@ export function Parser() {
         function lookahead(lookaheadWorker: () => boolean) {
             const saveTokenizerState = getTokenizerState();
             const saveParseErrorBeforeNextFinishedNode = parseErrorBeforeNextFinishedNode;
+            const diagnosticsLimit = diagnostics.length;
 
             const result = lookaheadWorker();
 
+            diagnostics.splice(diagnosticsLimit); // drop any diagnostics that were added
             restoreTokenizerState(saveTokenizerState);
             parseErrorBeforeNextFinishedNode = saveParseErrorBeforeNextFinishedNode;
             return result;
@@ -1402,7 +1407,8 @@ export function Parser() {
                     }
                     // fallthrough
                 }
-                case TokenType.STAR: {
+                case TokenType.STAR:
+                case TokenType.LIT_MOD: {
                     reduceRight();
                     const op = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
                     const expr = parseParentheticalOrUnaryPrefix();
@@ -1602,7 +1608,7 @@ export function Parser() {
                 }
                 case TokenType.DOT: {
                     const dot = parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
-                    const propertyName = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
+                    const propertyName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true);
                     if (root.type !== NodeType.indexedAccess) {
                         (root as Node) = IndexedAccess(root);
                     }
@@ -1667,6 +1673,9 @@ export function Parser() {
                     const equals = parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
                     const namedArgValue = parseExpression();
                     const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+                    if (!comma && isStartOfExpression()) {
+                        parseErrorAtRange(namedArgValue.range.toExclusive, namedArgValue.range.toExclusive + 1, "Expected ','");
+                    }
                     args.push(CallArgument(exprOrArgName, equals, namedArgValue, comma));
                     continue;
                 }
@@ -1674,6 +1683,11 @@ export function Parser() {
 
             // we have an unnamed arguments, like foo(x, y, z);
             const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+
+            if (!comma && isStartOfExpression()) {
+                parseErrorAtRange(exprOrArgName.range.toExclusive, exprOrArgName.range.toExclusive + 1, "Expected ','");
+            }
+
             args.push(CallArgument(null, null, exprOrArgName, comma));
         }
         const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
@@ -2120,7 +2134,7 @@ export function Parser() {
 
         while (lookahead() === TokenType.KW_ELSE) {
             const elseToken = parseExpectedTerminal(TokenType.KW_ELSE, ParseOptions.withTrivia);
-            const maybeIfToken = parseExpectedTerminal(TokenType.KW_IF, ParseOptions.withTrivia);
+            const maybeIfToken = parseOptionalTerminal(TokenType.KW_IF, ParseOptions.withTrivia);
             if (maybeIfToken) {
                 const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
                 const expr = parseExpression();
@@ -2250,6 +2264,38 @@ export function Parser() {
         }
     }
 
+    function parseTry() : Try {
+        const tryToken   = parseExpectedTerminal(TokenType.KW_TRY, ParseOptions.withTrivia);
+        const leftBrace  = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
+        const body       = parseStatementList();
+        const rightBrace = parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
+        
+        const catchBlocks : Catch[] = [];
+        while (lookahead() === TokenType.KW_CATCH) {
+            const catchToken       = parseExpectedTerminal(TokenType.KW_CATCH, ParseOptions.withTrivia);
+            const leftParen        = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
+            const exceptionType    = parseDottedPathTypename();
+            const exceptionBinding = parseIdentifier();
+            const rightParen       = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+            const leftBrace        = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
+            const catchBody        = parseStatementList();
+            const rightBrace       = (leftBrace.flags & NodeFlags.missing) ? createMissingNode(NilTerminal) : parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
+            catchBlocks.push(
+                Catch(catchToken, leftParen, exceptionType, exceptionBinding, rightParen, leftBrace, catchBody, rightBrace));
+        }
+
+        let finallyBlock : Finally | null = null;
+        if (lookahead() === TokenType.KW_FINALLY) {
+            const finallyToken = parseExpectedTerminal(TokenType.KW_FINALLY, ParseOptions.withTrivia);
+            const leftBrace = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
+            const body = parseStatementList();
+            const rightBrace = parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
+            finallyBlock = Finally(finallyToken, leftBrace, body, rightBrace);
+        }
+
+        return Try(tryToken, leftBrace, body, rightBrace, catchBlocks, finallyBlock);
+    }
+
     function parseStatementList() : Node[] {
         const result : Node[] = [];
 
@@ -2335,6 +2381,9 @@ export function Parser() {
                     // lone semicolons are valid, they are simply null statements
                     return Statement(null, parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia));
                 }
+                case TokenType.KW_TRY: {
+                    return parseTry();
+                }
                 case TokenType.CF_END_TAG_START: {
                     if (isInSomeContext(ParseContext.cfScriptTagBody)) {
                         break outer;
@@ -2347,7 +2396,7 @@ export function Parser() {
                 }
                 case TokenType.KW_RETURN: {
                     const returnToken = parseExpectedTerminal(TokenType.KW_RETURN, ParseOptions.withTrivia);
-                    const expr = parseAnonymousFunctionDefinitionOrExpression();
+                    const expr = isStartOfExpression() ? parseAnonymousFunctionDefinitionOrExpression() : null;
                     // if we've got a return statement we should be in a script context;
                     // but a user may not be heeding that rule
                     const semi = scriptMode() ? parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia) : null;
@@ -2380,9 +2429,9 @@ export function Parser() {
                         globalDiagnosticEmitter = savedDiagnosticEmitter;
 
                         if (getIndex() === index) {
-                            throw "assertion failure - consumed no input"
+                            //throw "assertion failure - consumed no input"
                             //parseErrorAtCurrentToken("Unexpected input");
-                            //next();
+                            next();
                         }
 
                         return result;

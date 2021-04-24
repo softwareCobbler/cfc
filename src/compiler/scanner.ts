@@ -139,6 +139,7 @@ export const enum TokenType {
     KW_ELSE,
     KW_FALSE,
     KW_FINAL,
+    KW_FINALLY,
     KW_FOR,
     KW_FUNCTION,
     KW_IF,
@@ -243,6 +244,7 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.KW_ELSE]:              "else",
     [TokenType.KW_FALSE]:             "false",
     [TokenType.KW_FINAL]:             "final",
+    [TokenType.KW_FINALLY]:           "finally",
     [TokenType.KW_FOR]:               "for",
     [TokenType.KW_FUNCTION]:          "function",
     [TokenType.KW_IF]:                "if",
@@ -517,6 +519,7 @@ export function Scanner(sourceText_: string) {
             case AsciiMap.f: // [[fallthrough]];
             case AsciiMap.F:
                 if (maybeEat(/false\b/iy)) return setToken(TokenType.KW_FALSE, from, getIndex());
+                else if (script && maybeEat(/finally\b/iy)) return setToken(TokenType.KW_FINALLY, from, getIndex());
                 else if (maybeEat(/final\b/iy)) return setToken(TokenType.KW_FINAL, from, getIndex());
                 else if (script && maybeEat(/for\b/iy)) return setToken(TokenType.KW_FOR, from, getIndex());
                 else if (maybeEat(/function\b/iy)) return setToken(TokenType.KW_FUNCTION, from, getIndex());
