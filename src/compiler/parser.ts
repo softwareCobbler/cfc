@@ -381,7 +381,7 @@ export function Parser() {
                     "Expected a '" + TokenTypeUiString[type] + "' here");
             }
 
-            const phonyToken : Token = Token(type, "", SourceRange.Nil());
+            const phonyToken : Token = Token(type, "", scanner.currentToken().range);
             return createMissingNode(Terminal(phonyToken));
         }
     }
@@ -407,6 +407,11 @@ export function Parser() {
 
         const trivia = parseTrivia();
         const forcedLexemeToken = Token(TokenType.LEXEME, token.text, token.range.fromInclusive, token.range.toExclusive);
+
+        if (!isInSomeContext(ParseContext.trivia)) {
+            lastNonTriviaToken = token;
+        }
+
         return Terminal(forcedLexemeToken, trivia);
     }
 
@@ -431,6 +436,11 @@ export function Parser() {
             next();
             trivia = parseTrivia();
         }
+
+        if (!isInSomeContext(ParseContext.trivia)) {
+            lastNonTriviaToken = labelLike;
+        }
+
         const forcedLexemeToken = Token(TokenType.LEXEME, labelLike.text, labelLike.range.fromInclusive, labelLike.range.toExclusive);
         return Terminal(forcedLexemeToken, trivia);
     }
@@ -1386,14 +1396,18 @@ export function Parser() {
         }
 
         // we definitely have at least one <assignment-target><assignment-operator><expression> 
-        let assignmentExpr = BinaryOperator(root, parseExpectedTerminal(lookahead(), ParseOptions.withTrivia), parseExpression());
+        let operator = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
+        let rhs = parseAnonymousFunctionDefinitionOrExpression();
+        let assignmentExpr = BinaryOperator(root, operator, rhs);
 
         // parse out the rest of a possible chain, e.g,
         // x += x -= x *= x /= x &= x;
         // but note, that these are not value-producing expressions, e.g,
         // `x = (x += x)` is invalid, as is `if (x -= y) {...}`
-        while (isAssignmentOperator()) {
-            assignmentExpr = BinaryOperator(root, parseExpectedTerminal(lookahead(), ParseOptions.withTrivia), parseExpression());
+        while (isAssignmentOperator() && isAssignmentTarget(rhs)) {
+            operator = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
+            rhs = parseAnonymousFunctionDefinitionOrExpression();
+            assignmentExpr = BinaryOperator(root, operator, rhs);
         }
 
         // would be nice to have a 'finishNode' here to mark them as errors if any of the above error checks got hit
@@ -1693,6 +1707,8 @@ export function Parser() {
         const leftHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
         const expr = parseExpression();
 
+        /*
+        this is only true in some attributes; probably need to do this check later
         if (!isInSomeContext(ParseContext.interpolatedText)) {
             // in a non-interpolated text context, only a subset of call-expr-or-lower expressions are valid
             // #foo()#     is ok
@@ -1704,13 +1720,15 @@ export function Parser() {
                 case NodeType.identifier:
                 case NodeType.simpleStringLiteral:
                 case NodeType.interpolatedStringLiteral:
+                case NodeType.numericLiteral:
                 case NodeType.indexedAccess:
                 case NodeType.callExpression:
                     break;
                 default:
-                    parseErrorAtRange(expr.range, "Hashed expressions in non-interpolated text contexts must be identifiers, strings, dot/bracket index lookups, or function calls.")
+                    parseErrorAtRange(expr.range, "Hashed expressions in non-interpolated text contexts must be non-compound expressions")
             }
         }
+        */
 
         const rightHash = parseExpectedTerminal(
             TokenType.HASH,
@@ -1892,6 +1910,13 @@ export function Parser() {
 
             args.push(CallArgument(null, null, exprOrArgName, comma));
         }
+
+        if (args.length > 0) {
+            if (args[args.length-1].comma) {
+                parseErrorAtRange(args[args.length-1].comma!.range, "Illegal trailing comma.");
+            }
+        }
+        
         const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
         return CallExpression(root, leftParen, args, rightParen);
     }

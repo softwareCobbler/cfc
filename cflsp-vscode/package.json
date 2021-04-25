@@ -1,9 +1,9 @@
 {
 	"name": "cflsp",
-	"description": "A language server example",
-	"author": "Microsoft Corporation",
+	"description": "ColdFusion syntax error checker",
+	"author": "David Rogers",
 	"license": "MIT",
-	"version": "1.0.0",
+	"version": "1.0.3",
 	"publisher": "DavidRogers",
 	"categories": [],
 	"repository": {

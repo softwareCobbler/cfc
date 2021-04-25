@@ -7,7 +7,7 @@ well, really it's just a parser
 * Parse a large subset of ColdFusion 2018+
 * Recognize common errors and emit reasonable diagnostics for them
 * Don't crash on invalid source text
-* Provide a VSCode language plugin that error-squiggles syntactic errors, with intent of working on top of [KamasamaK's excellent existing CFML plugin](https://github.com/KamasamaK/vscode-cfml)
+* Provide a VSCode language plugin that error-squiggles syntactic errors, with intent of working on top of [KamasamaK's excellent existing CFML plugin](https://github.com/KamasamaK/vscode-cfml) (please note that there is ZERO affiliation between this repo and the KamasamaK one)
 * Learn about good ways to collect and debug any plugin errors from opted-in end-user machines
 * Learn about the VSCode extension deployment workflow
 
