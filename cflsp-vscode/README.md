@@ -6,4 +6,4 @@ I really recommend [KamasamaK's current plugin](https://github.com/KamasamaK/vsc
 
 Thanks for having a look. If you install it and it gives you problems, give me a shout [on github](https://github.com/softwareCobbler/cfc).
 
-![example diagnostics, both squiggly-underlined and in the 'problems' panel](./cfls-diagnostics.png)
+![example diagnostics, both squiggly-underlined and in the 'problems' panel](./cflsp-vscode/cfls-diagnostics.png)
