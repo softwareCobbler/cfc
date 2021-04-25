@@ -1,6 +1,6 @@
 import { CfTag, Node, TagAttribute } from "./node";
 import { NodeType } from "./node";
-import { Token, TokenType } from "./scanner";
+import { Token, TokenType, CfFileType } from "./scanner";
 
 const enum TagFact {
     ALLOW_VOID		= 0x00000001, // tag can be void, e.g., <cfhttp> can be loose, or have a body like <cfhttp><cfhttpparam></cfhttp>
@@ -19,7 +19,7 @@ const tagFacts = {
     application:    TagFact.DISALLOW_BODY,
     argument:       TagFact.DISALLOW_BODY,
     break:          TagFact.DISALLOW_BODY,
-    catch:          TagFact.REQUIRE_BODY,
+    catch:          TagFact.ALLOW_BODY,
     component:      TagFact.REQUIRE_BODY,
     content:        TagFact.DISALLOW_BODY,
     continue:       TagFact.DISALLOW_BODY,
@@ -81,6 +81,12 @@ function getTagFacts(tag: CfTag) : TagFact | null {
     return null;
 }
 
+export function cfmOrCfc(fname: string) : CfFileType {
+    return /\.cfc$/.test(fname)
+        ? CfFileType.cfc
+        : CfFileType.cfm
+}
+
 export function requiresEndTag(tag: CfTag) : boolean {
 	const facts = getTagFacts(tag);
     return !!facts && !!(facts & TagFact.REQUIRE_BODY);
@@ -101,7 +107,7 @@ export function isLexemeLikeToken(token: Token, allowNumeric = false) : boolean 
         || (val > TokenType._FIRST_LIT && val < TokenType._LAST_LIT);
 }
 
-const namedBlockNames = new Set<string>(["savecontent", "lock", "transaction"]);
+const namedBlockNames = new Set<string>(["component", "interface", "savecontent", "lock", "transaction"]);
 export function isNamedBlockName(text: string) {
     return namedBlockNames.has(text);
 }

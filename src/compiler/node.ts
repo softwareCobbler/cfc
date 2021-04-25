@@ -19,8 +19,9 @@ export const enum NodeType {
     identifier, indexedAccess,
     functionDefinition, arrowFunctionDefinition, functionParameter,
     dottedPath, switch, switchCase, do, while, ternary, for, structLiteral, arrayLiteral,
-    structLiteralInitializerMember, arrayLiteralInitializerMember, returnStatement, try, catch, finally,
-    breakStatement, continueStatement
+    structLiteralInitializerMember, arrayLiteralInitializerMember, try, catch, finally,
+    breakStatement, continueStatement, returnStatement, importStatement,
+    new
 }
 
 const NodeTypeUiString : Record<NodeType, string> = {
@@ -64,7 +65,9 @@ const NodeTypeUiString : Record<NodeType, string> = {
     [NodeType.catch]: "catch",
     [NodeType.finally]: "finally",
     [NodeType.breakStatement]: "break",
-    [NodeType.continueStatement]: "continue"
+    [NodeType.continueStatement]: "continue",
+    [NodeType.importStatement]: "import",
+    [NodeType.new]: "new",
 };
 
 export type Node =
@@ -109,6 +112,8 @@ export type Node =
     | Try
     | Catch
     | Finally
+    | ImportStatement
+    | New
 
 interface NodeBase {
     type: NodeType;
@@ -473,32 +478,35 @@ export function tokenTypeToUnaryOpType(tokenType: TokenType) {
 
 export const enum BinaryOpType {
     add, sub, mul, div, mod, exp, cat, eq, neq, lt, lte, gt, gte, nullCoalesce,
-    and, or, xor, assign, assign_add, assign_sub, assign_mul, assign_div, assign_cat
+    and, or, xor, assign, assign_add, assign_sub, assign_mul, assign_div, assign_cat,
+    contains, does_not_contain
 }
 const BinaryOpTypeUiString : Record<BinaryOpType, string> = {
-    [BinaryOpType.add]:          "+",
-    [BinaryOpType.sub]:          "-",
-    [BinaryOpType.mul]:          "*",
-    [BinaryOpType.div]:          "/",
-    [BinaryOpType.mod]:          "%",
-    [BinaryOpType.exp]:          "exp", // in cf, "^", but that is easily confusable with the xor symbol from other langs so we spell it out
-    [BinaryOpType.cat]:          "&",
-    [BinaryOpType.eq]:           "==",
-    [BinaryOpType.neq]:          "!=",
-    [BinaryOpType.lt]:           "<",
-    [BinaryOpType.lte]:          "<=",
-    [BinaryOpType.gt]:           ">",
-    [BinaryOpType.gte]:          ">=",
-    [BinaryOpType.nullCoalesce]: "?:",
-    [BinaryOpType.and]:          "&&",
-    [BinaryOpType.or]:           "||",
-    [BinaryOpType.xor]:          "xor", // no cf operator symbol exists for this
-    [BinaryOpType.assign]:       "=",
-    [BinaryOpType.assign_add]:   "+=",
-    [BinaryOpType.assign_cat]:   "&=",
-    [BinaryOpType.assign_div]:   "/=",
-    [BinaryOpType.assign_sub]:   "-=",
-    [BinaryOpType.assign_mul]:   "*=",
+    [BinaryOpType.add]:              "+",
+    [BinaryOpType.sub]:              "-",
+    [BinaryOpType.mul]:              "*",
+    [BinaryOpType.div]:              "/",
+    [BinaryOpType.mod]:              "%",
+    [BinaryOpType.exp]:              "exp", // in cf, "^", but that is easily confusable with the xor symbol from other langs so we spell it out
+    [BinaryOpType.cat]:              "&",
+    [BinaryOpType.eq]:               "==",
+    [BinaryOpType.neq]:              "!=",
+    [BinaryOpType.lt]:               "<",
+    [BinaryOpType.lte]:              "<=",
+    [BinaryOpType.gt]:               ">",
+    [BinaryOpType.gte]:              ">=",
+    [BinaryOpType.nullCoalesce]:     "?:",
+    [BinaryOpType.and]:              "&&",
+    [BinaryOpType.or]:               "||",
+    [BinaryOpType.xor]:              "xor", // no cf operator symbol exists for this
+    [BinaryOpType.assign]:           "=",
+    [BinaryOpType.assign_add]:       "+=",
+    [BinaryOpType.assign_cat]:       "&=",
+    [BinaryOpType.assign_div]:       "/=",
+    [BinaryOpType.assign_sub]:       "-=",
+    [BinaryOpType.assign_mul]:       "*=",
+    [BinaryOpType.contains]:         "contains",
+    [BinaryOpType.does_not_contain]: "does_not_contain",
 };
 
 export interface BinaryOperator extends NodeBase {
@@ -568,6 +576,9 @@ export function tokenTypeToBinaryOpType(tokenType: TokenType) {
         case TokenType.FORWARD_SLASH_EQUAL: return BinaryOpType.assign_div;
 
         case TokenType.QUESTION_MARK_COLON: return BinaryOpType.nullCoalesce;
+
+        case TokenType.LIT_CONTAINS:         return BinaryOpType.contains;
+        case TokenType.LIT_DOES_NOT_CONTAIN: return BinaryOpType.does_not_contain;
         default: break;
     }
     throw "bad binary op type transform";
@@ -1481,3 +1492,37 @@ export function Finally(
     return v;
 }
 
+export interface ImportStatement extends NodeBase {
+    type: NodeType.importStatement,
+    importToken: Terminal,
+    path: DottedPath<Terminal>,
+    semicolon: Terminal | null,
+}
+
+export function ImportStatement(
+    importToken: Terminal,
+    path: DottedPath<Terminal>,
+    semicolon: Terminal | null
+) : ImportStatement {
+    const v = NodeBase<ImportStatement>(NodeType.importStatement, mergeRanges(importToken, path, semicolon));
+    v.importToken = importToken;
+    v.path = path;
+    v.semicolon = semicolon;
+    return v;
+}
+
+export interface New extends NodeBase {
+    type: NodeType.new,
+    newToken: Terminal,
+    callExpr: CallExpression
+}
+
+export function New(
+    newToken: Terminal,
+    callExpr: CallExpression
+) : New {
+    const v = NodeBase<New>(NodeType.new, mergeRanges(newToken, callExpr));
+    v.newToken = newToken;
+    v.callExpr = callExpr;
+    return v;
+}

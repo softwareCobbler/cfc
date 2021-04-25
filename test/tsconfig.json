@@ -1,3 +1,9 @@
+//
+// there is an issue with dependency resolution at runtime with ts-node, 
+// so make sure to rebuild the compiler before running
+// we dynamically link against the build artifacts
+// there should be a `tsc --build` command in the root package.json "scripts.test" property
+//
 {
   "compilerOptions": {
     /* Visit https://aka.ms/tsconfig.json to read more about this file */

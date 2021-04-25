@@ -22,7 +22,7 @@ import {
 	TextDocument
 } from 'vscode-languageserver-textdocument';
 
-import { Scanner, Parser, CfFileType, Diagnostic as cfcDiagnostic, TokenizerMode } from "compiler";
+import { Scanner, Parser, CfFileType, Diagnostic as cfcDiagnostic } from "compiler";
 
 const parser = Parser();
 

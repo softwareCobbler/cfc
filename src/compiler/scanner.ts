@@ -53,7 +53,8 @@ export const enum TokenType {
     NIL,
     CHAR, // any single char that we didn't otherwise handle
     EOF,
-    BOM_UTF_8, // ef bb ef
+    BOM_UTF_8,  // ef bb ef
+    BOM_UTF_16, // fe ff
 
     WHITESPACE,
     LEXEME,
@@ -159,7 +160,8 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.NIL]:                  "nil",
     [TokenType.CHAR]:                 "char",
     [TokenType.EOF]:                  "eof",
-    [TokenType.BOM_UTF_8]:            "utf8-bom",
+    [TokenType.BOM_UTF_8]:            "utf-8-bom",
+    [TokenType.BOM_UTF_16]:           "utf-16-bom",
 
     [TokenType.WHITESPACE]:           "<whitespace>",
     [TokenType.LEXEME]:               "<lexeme>",
@@ -303,9 +305,20 @@ export class SourceRange {
 
 type char = string; // with the intent being "exactly one character" (and non-empty!)
 
-export function Scanner(sourceText_: string) {
-    const sourceText = sourceText_;
-    const annotatedChars = annotate(sourceText);
+export const enum CfFileType { cfm, cfc };
+
+let debugScanner = false;
+export function setScannerDebug(isDebug: boolean) {
+    debugScanner = isDebug;
+}
+
+export function Scanner(source_: string | Buffer) {
+    let sourceText! : string;
+    let sourceEncoding : "utf-8" | "utf-16-le" | "utf-16-be" = "utf-8";
+    let hadBom = false;
+
+    const annotatedChars = annotate(source_);
+
     let end = annotatedChars.length;
     let index = 0;
     let lastScannedText = "";
@@ -315,7 +328,52 @@ export function Scanner(sourceText_: string) {
     // @fixme:
     // will work for ascii or utf16, but multibyte utf8 will probably break
     //
-    function annotate(text: string) {
+    function annotate(bytesOrAlreadyUtf16: string | Buffer) : AnnotatedChar[] {
+        if (typeof bytesOrAlreadyUtf16 === "string") { // already UTF-16
+            if (bytesOrAlreadyUtf16.charCodeAt(0) === 0xFEFF) {
+                hadBom = true;
+            }
+            sourceEncoding = "utf-16-be";
+            sourceText = bytesOrAlreadyUtf16;
+            return annotateWorker(bytesOrAlreadyUtf16);
+        }
+
+        const bytes = bytesOrAlreadyUtf16; // alias; this is zero cost, right ?
+
+        // defaults
+        sourceEncoding = "utf-8";
+        hadBom = false;
+
+        if (bytes.length >= 3) {
+            if (bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) {
+                sourceEncoding = "utf-8";
+                hadBom = true;
+            }
+        }
+        else if (bytes.length >= 2) {
+            if (bytes[0] === 0xFE && bytes[1] === 0xFF) {
+                sourceEncoding = "utf-16-be";
+                hadBom = true;
+                // swap endianness from big to little
+                for (let i = 0; i < bytes.length; i += 2) {
+                    let t = bytes[i+1];
+                    bytes[i+1] = bytes[i];
+                    bytes[i] = t;
+                }
+            }
+            else if (bytes[0] === 0xFF && bytes[1] === 0xFE) {
+                sourceEncoding = "utf-16-le"
+            }
+        }
+        
+        sourceText = sourceEncoding === "utf-8"
+            ? bytes.slice(hadBom ? 3 : 0).toString("utf-8")
+            : bytes.slice(2).toString("utf16le");
+
+        return annotateWorker(sourceText);
+    }
+
+    function annotateWorker(text: string) : AnnotatedChar[] {
         let index = 0;
         let col = 0;
         let line = 0;
@@ -413,8 +471,8 @@ export function Scanner(sourceText_: string) {
             );
         }
 
-        const tag = mode == ScannerMode.tag || ScannerMode.allow_both;
-        const script = mode == ScannerMode.script || ScannerMode.allow_both;
+        const tag = mode === ScannerMode.tag || mode === ScannerMode.allow_both;
+        const script = mode === ScannerMode.script || mode === ScannerMode.allow_both;
         const from = getIndex();
 
         const c = peekChar()!.codepoint;
@@ -583,8 +641,6 @@ export function Scanner(sourceText_: string) {
             case AsciiMap.X:
                 if (maybeEat(/xor\b/iy)) return setToken(TokenType.LIT_XOR, from, getIndex());
                 else return lexeme();
-            /*case '\xEF':
-                if (maybeEat(/\xEF\xBB\xBF/, TokenType.BOM_UTF_8)) return token_;*/
             default:
                 if (tryEatNumber(from)) return token;
                 return lexeme();
@@ -632,6 +688,126 @@ export function Scanner(sourceText_: string) {
         }
     }
 
+    function isAsciiAlpha(c: number) {
+        return (c >= AsciiMap.A && c <= AsciiMap.Z)
+            || (c >= AsciiMap.a && c <= AsciiMap.z);
+    }
+
+    function isAsciiDigit(c: number) {
+        return c >= AsciiMap._0 && c <= AsciiMap._9;
+    }
+
+    function isTagNameStart() {
+        const codePoint = annotatedChars[index].codepoint;
+        return isAsciiAlpha(codePoint)
+            || codePoint === AsciiMap.UNDERSCORE
+    }
+
+    function isTagNameRest() {
+        const codePoint = annotatedChars[index].codepoint;
+        return isAsciiAlpha(codePoint)
+            || isAsciiDigit(codePoint)
+            || codePoint === AsciiMap.UNDERSCORE
+    }
+
+    function isTagAttributeNameStart() {
+        const codePoint = annotatedChars[index].codepoint;
+        return isAsciiAlpha(codePoint)
+            || codePoint === AsciiMap.UNDERSCORE
+            || codePoint === AsciiMap.DOLLAR;
+    }
+
+    function isTagAttributeNameRest() {
+        const codePoint = annotatedChars[index].codepoint;
+        return isAsciiAlpha(codePoint)
+            || isAsciiDigit(codePoint)
+            || codePoint === AsciiMap.UNDERSCORE
+            || codePoint === AsciiMap.DOLLAR
+            || codePoint === AsciiMap.COLON;
+    }
+
+    function scanTagName() : Token | null {
+        if (!isTagNameStart()) return null;
+        const from = index;
+        index += 1;
+        while (isTagNameRest()) {
+            index += 1;
+        }
+        return setToken(TokenType.LEXEME, from, getIndex());
+    }
+
+    function scanTagAttributeName() : Token | null {
+        if (!isTagAttributeNameStart()) return null;
+        const from = index;
+        index += 1;
+        while (isTagAttributeNameRest()) {
+            index += 1;
+        }
+        return setToken(TokenType.LEXEME, from, getIndex());
+    }
+
+    function isTagCommentOpen() {
+        if (index + "<!---".length >= annotatedChars.length) {
+            return false;
+        }
+        return annotatedChars[index + 0].codepoint === AsciiMap.LEFT_ANGLE
+            && annotatedChars[index + 1].codepoint === AsciiMap.EXCLAMATION
+            && annotatedChars[index + 2].codepoint === AsciiMap.MINUS
+            && annotatedChars[index + 3].codepoint === AsciiMap.MINUS
+            && annotatedChars[index + 4].codepoint === AsciiMap.MINUS;
+    }
+
+    function isTagCommentClose() {
+        if (index + "--->".length >= annotatedChars.length) {
+            return false;
+        }
+        return annotatedChars[index + 0].codepoint === AsciiMap.MINUS
+            && annotatedChars[index + 1].codepoint === AsciiMap.MINUS
+            && annotatedChars[index + 2].codepoint === AsciiMap.MINUS
+            && annotatedChars[index + 3].codepoint === AsciiMap.RIGHT_ANGLE
+    }
+
+    /**
+     * this is helpful in avoiding the possibility of a tag comment being like "----->"
+     * which could reasonably be matched as [DBL_MINUS, DBL_MINUS, MINUS, RIGHT_ANGLE]
+     */
+    function scanToNextTagCommentToken() : void {
+        while (index < annotatedChars.length) {
+            if (isTagCommentOpen() || isTagCommentClose()) {
+                return;
+            }
+            else {
+                index++;
+            }
+        }
+    }
+
+    function isLexemeLikeStructKeyStart(c: number) : boolean {
+        return isAsciiAlpha(c)
+            || isAsciiDigit(c)
+            || c === AsciiMap.UNDERSCORE
+            || c === AsciiMap.DOLLAR;
+    }
+
+    function isLexemeLikeStructKeyRest(c: number) : boolean {
+        return isLexemeLikeStructKeyStart(c) || c === AsciiMap.DOT;
+    }
+
+    function scanLexemeLikeStructKey() : Token | null {
+        if (!isLexemeLikeStructKeyStart(annotatedChars[index].codepoint)) {
+            return null;
+        }
+
+        const from = index;
+        index += 1;
+
+        while (isLexemeLikeStructKeyRest(annotatedChars[index].codepoint)) {
+            index += 1;
+        }
+
+        return setToken(TokenType.LEXEME, from, index);
+    }
+
     function maybeEat(pattern: RegExp) {
         pattern.lastIndex = index;
         const match = pattern.exec(sourceText);
@@ -650,6 +826,14 @@ export function Scanner(sourceText_: string) {
     function setToken(tokenOrTokenType: Token | TokenType, from?: number, to?: number, text = lastScannedText) : Token | void {
         if (typeof tokenOrTokenType === "number") { // overload 1
             token = Token(tokenOrTokenType, text, from!, to!);
+
+            if (debugScanner) {
+                const annotatedChar = getAnnotatedChar(from!);
+                token.__debug_line = annotatedChar.line + 1;
+                token.__debug_col = annotatedChar.col + 1;
+                token.__debug_type = TokenTypeUiString[tokenOrTokenType];
+            }
+
             return token;
         }
         else { // overload 2
@@ -705,6 +889,10 @@ export function Scanner(sourceText_: string) {
         return lastScannedText;
     }
 
+    function getAnnotatedChar(index: number) : AnnotatedChar {
+        return annotatedChars[index];
+    }
+
     return {
         advance: () : void => {index = Math.min(index+1, end-1)},
         getLastScannedText,
@@ -721,7 +909,12 @@ export function Scanner(sourceText_: string) {
         maybeEat,
         getUtf16Position,
         currentToken,
-        getTokenText
+        getTokenText,
+        getAnnotatedChar,
+        scanTagName,
+        scanTagAttributeName,
+        scanToNextTagCommentToken,
+        scanLexemeLikeStructKey,
     }
 }
 export type Scanner = ReturnType<typeof Scanner>;
@@ -730,6 +923,9 @@ export interface Token {
     type: TokenType;
     range: SourceRange;
     text: string;
+    __debug_line?: number;
+    __debug_col?: number;
+    __debug_type?: string;
 }
 
 export function Token(type: TokenType, text: string, fromInclusive: number, toExclusive: number) : Token;
