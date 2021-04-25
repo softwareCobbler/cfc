@@ -1,3 +1,0 @@
-[submodule "test/mxunit"]
-	path = test/mxunit
-	url = https://github.com/mxunit/mxunit.git
