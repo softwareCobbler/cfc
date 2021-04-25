@@ -5,15 +5,18 @@
   "main": "index.js",
   "scripts": {
     "install-all": "npm install && cd src/lang-server/client && npm install && cd ../server && npm install && cd ../../../",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "tsc --build src/compiler && mocha",
     "build-cflsp": "webpack --config webpack.config.js",
     "build-cflsp-prod": "webpack --config webpack.prod.config.js"
   },
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "@types/mocha": "^8.2.2",
     "@types/node": "^14.14.37",
+    "mocha": "^8.3.2",
     "ts-loader": "^8.1.0",
+    "ts-node": "^9.1.1",
     "tsconfig-paths-webpack-plugin": "^3.5.1",
     "typescript": "^4.2.4",
     "webpack": "^5.31.2",

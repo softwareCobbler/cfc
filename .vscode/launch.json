@@ -27,6 +27,18 @@
 			"restart": true,
 			"outFiles": ["${workspaceRoot}/cflsp-vscode/out/**/*.js"]
 		},
+		{
+			"name": "Debug tests",
+			"type": "node",
+			"request": "launch",
+			"program": "${workspaceRoot}/node_modules/mocha/bin/_mocha",
+			"stopOnEntry": false,
+			"args": ["test/**/*.spec.ts", "--no-timeouts"],
+			"cwd": "${workspaceRoot}",
+			"runtimeExecutable": null,
+			"sourceMaps": true,
+			"env": { "NODE_ENV": "testing"}
+		}
     ],
     "compounds": [
 		{
