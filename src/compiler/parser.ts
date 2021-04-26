@@ -1413,6 +1413,7 @@ export function Parser() {
                 case TokenType.STAR_EQUAL:
                 case TokenType.MINUS_EQUAL:
                 case TokenType.FORWARD_SLASH_EQUAL:
+                case TokenType.PERCENT_EQUAL:
                     return true;
                 default:
                     return false;
@@ -1424,14 +1425,16 @@ export function Parser() {
         const root = parseExpression();
 
         if (!isAssignmentOperator()) {
-            if (varModifier) {
-                // we could probably return a "declaration" here ?
-                // var x;  sure it's semantically meaningless in cf (all var declarations require initializers), but it looks valid
-                // would also be useful in a for-in: `for (var x in y)` where `var x` is a declaration
-                // so we could check if we're in a for-in context
+            // if we're in a `for` context, we just got the following:
+            // for (var x.y.z 
+            //      ^^^^^^^^^
+            // so we hope to see an `in` following this; otherwise, it *also* needs an initializer
+            // but we can flag that in the antecedent `for` parser
+            if (!isInSomeContext(ParseContext.for) && varModifier) {
                 parseErrorAtRange(root.range, "Variable declarations require initializers.");
             }
-            return root;
+
+            return VariableDeclaration(finalModifier, varModifier, root, null);
         }
 
         if (varModifier) {
@@ -1577,9 +1580,11 @@ export function Parser() {
                 case TokenType.LIT_GT:				   // [[fallthrough]];
                 case TokenType.RIGHT_ANGLE_EQUAL: 	   // [[fallthrough]];
                 case TokenType.LIT_GTE:				   // [[fallthrough]];
-                case TokenType.LIT_GE:
+                case TokenType.LIT_GE:                 // [[fallthrough]];
                 case TokenType.LIT_CONTAINS:           // [[fallthrough]];
-                case TokenType.LIT_DOES_NOT_CONTAIN: { // [[fallthrough]];
+                case TokenType.LIT_DOES_NOT_CONTAIN:   // [[fallthrough]];
+                case TokenType.LIT_EQV:                // [[fallthrough]];
+                case TokenType.LIT_IMP: {              // [[fallthrough]];
                     const op = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
                     const right = parseAddition();
                     root = BinaryOperator(root, op, right);
@@ -1911,10 +1916,11 @@ export function Parser() {
     }
 
     function parseNewExpression() {
-        const newToken = parseExpectedTerminal(TokenType.KW_NEW, ParseOptions.withTrivia);
-        const className = parseDottedPathTypename();
+        const newToken       = parseExpectedTerminal(TokenType.KW_NEW, ParseOptions.withTrivia);
+        const className      = parseDottedPathTypename();
         const callExpression = parseCallExpression(className);
-        return New(newToken, callExpression);
+        const newExpression  = New(newToken, callExpression);
+        return parseTrailingExpressionChain(newExpression); // is new foo()["some property"] ok ?
     }
 
     function isStartOfStatement() : boolean {
@@ -1971,24 +1977,30 @@ export function Parser() {
         while (isStartOfExpression()) {
             const exprOrArgName = parseAnonymousFunctionDefinitionOrExpression();
 
-            // if we got an identifier, peek ahead to see if there is an equals token
-            // if so, this is a named argument, like foo(bar=baz, qux=42)
+            // if we got an identifier, peek ahead to see if there is an equals or colon token
+            // if so, this is a named argument, like foo(bar=baz, qux:42)
+            // like within a struct literals, `=` and `:` share the same meaning
             // we don't know from our current position if all of the args are named,
-            // we can check that later
+            // we can check that later; if one is, all of them must be
             if (exprOrArgName.type === NodeType.identifier) {
-                if (lookahead() === TokenType.EQUAL) {
-                    const equals = parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
+                let equalOrComma : Terminal | null;
+                if (equalOrComma =
+                        (parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia) ??
+                        (parseOptionalTerminal(TokenType.COLON, ParseOptions.withTrivia)))) {
                     const namedArgValue = parseAnonymousFunctionDefinitionOrExpression();
                     const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+
                     if (!comma && isStartOfExpression()) {
                         parseErrorAtRange(namedArgValue.range.toExclusive, namedArgValue.range.toExclusive + 1, "Expected ','");
                     }
-                    args.push(CallArgument(exprOrArgName, equals, namedArgValue, comma));
+
+                    args.push(CallArgument(exprOrArgName, equalOrComma, namedArgValue, comma));
                     continue;
                 }
             }
 
-            // we have an unnamed arguments, like foo(x, y, z);
+            // there was no '=' or ':' after the expression,
+            // so we have an unnamed arguments, like foo(x, y, z);
             const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
 
             if (!comma && isStartOfExpression()) {
@@ -2605,18 +2617,25 @@ export function Parser() {
     }
 
     function parseFor() : For {
+        const savedContext = updateParseContext(ParseContext.for);
+
         const forToken = parseExpectedTerminal(TokenType.KW_FOR, ParseOptions.withTrivia);
         const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
-        let init = isStartOfExpression() ? parseAssignmentOrLower() : null;
+        let init = isStartOfExpression()
+            ? parseAssignmentOrLower()
+            : null;
+
         if (peek().text.toLowerCase() === "in") {
             if (!init) {
                 init = createMissingNode(Identifier(NilTerminal, ""));
-                parseErrorAtCurrentToken("Expression expected.");
+                parseErrorAtRange(leftParen.range.fromInclusive+1, leftParen.range.toExclusive+1, "Expression expected.");
             }
-            const inToken = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
+            const inToken = Terminal(parseNextToken(), parseTrivia());
             const expr = parseExpression();
             const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
             const body = parseStatement();
+
+            parseContext = savedContext;
             return For.ForIn(forToken, leftParen, init, inToken, expr, rightParen, body);
         }
         else {
@@ -2626,6 +2645,8 @@ export function Parser() {
             const incrementExpr = isStartOfExpression() ? parseAssignmentOrLower() : null;
             const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
             const body = parseStatement();
+
+            parseContext = savedContext;
             return For.For(forToken, leftParen, init, semi1, condition, semi2, incrementExpr, rightParen, body);
         }
     }

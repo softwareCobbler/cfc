@@ -89,6 +89,7 @@ export const enum TokenType {
     MINUS,
     MINUS_EQUAL,
     PERCENT,
+    PERCENT_EQUAL,
     PIPE,
     PLUS,
     PLUS_EQUAL,
@@ -117,9 +118,11 @@ export const enum TokenType {
     LIT_CONTAINS,
     LIT_DOES_NOT_CONTAIN,
     LIT_EQ,
+    LIT_EQV, // binary operator 'equivalent'
     LIT_GT,
     LIT_GTE,
     LIT_GE,
+    LIT_IMP, // binary operator 'implies'
     LIT_INCLUDES,
     LIT_IS,
     LIT_IS_NOT,
@@ -198,6 +201,7 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.MINUS]:                "-",
     [TokenType.MINUS_EQUAL]:          "-=",
     [TokenType.PERCENT]:              "%",
+    [TokenType.PERCENT_EQUAL]:        "%=",
     [TokenType.PIPE]:                 "|",
     [TokenType.PLUS]:                 "+",
     [TokenType.PLUS_EQUAL]:           "+=",
@@ -226,9 +230,11 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.LIT_CONTAINS]:         "contains",
     [TokenType.LIT_DOES_NOT_CONTAIN]: "does not contain",
     [TokenType.LIT_EQ]:               "eq",
+    [TokenType.LIT_EQV]:              "eqv",
     [TokenType.LIT_GT]:               "gt",
     [TokenType.LIT_GTE]:              "gte",
     [TokenType.LIT_GE]:               "ge",
+    [TokenType.LIT_IMP]:              "imp",
     [TokenType.LIT_INCLUDES]:         "includes",
     [TokenType.LIT_IS]:               "is",
     [TokenType.LIT_IS_NOT]:           "is not",
@@ -499,8 +505,10 @@ export function Scanner(source_: string | Buffer) {
                 else if (maybeEat(/==/iy)) return setToken(TokenType.DBL_EQUAL, from, getIndex());
                 else if (maybeEat(/=>/iy)) return setToken(TokenType.EQUAL_RIGHT_ANGLE, from, getIndex());
                 else return consumeCurrentCharAs(TokenType.EQUAL);
+            case AsciiMap.PERCENT:
+                if (maybeEat(/%=/iy)) return setToken(TokenType.PERCENT_EQUAL, from, getIndex());
+                return consumeCurrentCharAs(TokenType.PERCENT);
             case AsciiMap.HASH:          return consumeCurrentCharAs(TokenType.HASH);
-            case AsciiMap.PERCENT:       return consumeCurrentCharAs(TokenType.PERCENT);
             case AsciiMap.LEFT_PAREN:    return consumeCurrentCharAs(TokenType.LEFT_PAREN);
             case AsciiMap.RIGHT_PAREN:   return consumeCurrentCharAs(TokenType.RIGHT_PAREN);
             case AsciiMap.LEFT_BRACKET:  return consumeCurrentCharAs(TokenType.LEFT_BRACKET);
@@ -578,7 +586,8 @@ export function Scanner(source_: string | Buffer) {
                 else return lexeme();
             case AsciiMap.e: // [[fallthrough]];
             case AsciiMap.E:
-                if (maybeEat(/eq\b/iy)) return setToken(TokenType.LIT_EQ, from, getIndex());
+                if (maybeEat(/eqv\b/iy)) return setToken(TokenType.LIT_EQV, from, getIndex());
+                else if (maybeEat(/eq\b/iy)) return setToken(TokenType.LIT_EQ, from, getIndex());
                 else if (script && maybeEat(/else\b/iy)) return setToken(TokenType.KW_ELSE, from, getIndex());
                 else return lexeme();
             case AsciiMap.f: // [[fallthrough]];
@@ -599,6 +608,7 @@ export function Scanner(source_: string | Buffer) {
             case AsciiMap.I:
                 if (script && maybeEat(/if\b/iy)) return setToken(TokenType.KW_IF, from, getIndex());
                 else if (script && maybeEat(/import\b/iy)) return setToken(TokenType.KW_IMPORT, from, getIndex());
+                else if (maybeEat(/imp\b/iy)) return setToken(TokenType.LIT_IMP, from, getIndex());
                 else if (maybeEat(/is\s+not\b/iy)) return setToken(TokenType.LIT_IS_NOT, from, getIndex());
                 else if (maybeEat(/is\b/iy)) return setToken(TokenType.LIT_IS, from, getIndex());
                 else return lexeme();

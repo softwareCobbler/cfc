@@ -478,8 +478,10 @@ export function tokenTypeToUnaryOpType(tokenType: TokenType) {
 
 export const enum BinaryOpType {
     add, sub, mul, div, mod, exp, cat, eq, neq, lt, lte, gt, gte, nullCoalesce,
-    and, or, xor, assign, assign_add, assign_sub, assign_mul, assign_div, assign_cat,
-    contains, does_not_contain, strict_eq, strict_neq
+    and, or, xor,
+    assign, assign_add, assign_sub, assign_mul, assign_div, assign_mod, assign_cat,
+    contains, does_not_contain, strict_eq, strict_neq,
+    equivalent, implies
 }
 const BinaryOpTypeUiString : Record<BinaryOpType, string> = {
     [BinaryOpType.add]:              "+",
@@ -505,10 +507,13 @@ const BinaryOpTypeUiString : Record<BinaryOpType, string> = {
     [BinaryOpType.assign_div]:       "/=",
     [BinaryOpType.assign_sub]:       "-=",
     [BinaryOpType.assign_mul]:       "*=",
+    [BinaryOpType.assign_mod]:       "%=",
     [BinaryOpType.contains]:         "contains",
     [BinaryOpType.does_not_contain]: "does_not_contain",
     [BinaryOpType.strict_eq]:        "strict_eq",
     [BinaryOpType.strict_neq]:       "strict_neq",
+    [BinaryOpType.equivalent]:       "eqv",
+    [BinaryOpType.implies]:          "imp",
 };
 
 export interface BinaryOperator extends NodeBase {
@@ -576,12 +581,15 @@ export function tokenTypeToBinaryOpType(tokenType: TokenType) : BinaryOpType {
         case TokenType.MINUS_EQUAL:           return BinaryOpType.assign_sub;
         case TokenType.STAR_EQUAL:            return BinaryOpType.assign_mul;
         case TokenType.FORWARD_SLASH_EQUAL:   return BinaryOpType.assign_div;
+        case TokenType.PERCENT_EQUAL:         return BinaryOpType.assign_mod;
 
         case TokenType.QUESTION_MARK_COLON:   return BinaryOpType.nullCoalesce;
 
         case TokenType.LIT_CONTAINS:          return BinaryOpType.contains;
         case TokenType.LIT_DOES_NOT_CONTAIN:  return BinaryOpType.does_not_contain;
 
+        case TokenType.LIT_EQV:               return BinaryOpType.equivalent;
+        case TokenType.LIT_IMP:               return BinaryOpType.implies;
         case TokenType.TRIPLE_EQUAL:          return BinaryOpType.strict_eq;
         case TokenType.EXCLAMATION_DBL_EQUAL: return BinaryOpType.strict_neq;
         default: break;
@@ -665,14 +673,14 @@ export interface VariableDeclaration extends NodeBase {
     finalModifier: Terminal | null,
     varModifier: Terminal | null,
     identifier: Node, // can be Identifier | HashWrappedExpr | SimpleStringLiteral | InterpolatedStringLiteral | IndexedAccess, but that's tough to constrain ergonomically
-    expr: Node
+    expr: Node | null
 }
 
 export function VariableDeclaration(
     finalModifier: Terminal | null,
     varModifier: Terminal | null,
     identifier: Node,
-    expr: Node
+    expr: Node | null
 ) : VariableDeclaration {
     const v = NodeBase<VariableDeclaration>(NodeType.variableDeclaration, mergeRanges(finalModifier, varModifier, expr));
     v.finalModifier = finalModifier;
