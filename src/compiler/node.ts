@@ -479,7 +479,7 @@ export function tokenTypeToUnaryOpType(tokenType: TokenType) {
 export const enum BinaryOpType {
     add, sub, mul, div, mod, exp, cat, eq, neq, lt, lte, gt, gte, nullCoalesce,
     and, or, xor, assign, assign_add, assign_sub, assign_mul, assign_div, assign_cat,
-    contains, does_not_contain
+    contains, does_not_contain, strict_eq, strict_neq
 }
 const BinaryOpTypeUiString : Record<BinaryOpType, string> = {
     [BinaryOpType.add]:              "+",
@@ -507,6 +507,8 @@ const BinaryOpTypeUiString : Record<BinaryOpType, string> = {
     [BinaryOpType.assign_mul]:       "*=",
     [BinaryOpType.contains]:         "contains",
     [BinaryOpType.does_not_contain]: "does_not_contain",
+    [BinaryOpType.strict_eq]:        "strict_eq",
+    [BinaryOpType.strict_neq]:       "strict_neq",
 };
 
 export interface BinaryOperator extends NodeBase {
@@ -532,53 +534,56 @@ export function BinaryOperator(left: Node, operator: Terminal, right: Node) : Bi
     return v;
 }
 
-export function tokenTypeToBinaryOpType(tokenType: TokenType) {
+export function tokenTypeToBinaryOpType(tokenType: TokenType) : BinaryOpType {
     switch (tokenType) {
-        case TokenType.PLUS:          		return BinaryOpType.add;
-        case TokenType.MINUS:         		return BinaryOpType.sub;
-        case TokenType.STAR:          		return BinaryOpType.mul;
-        case TokenType.FORWARD_SLASH: 		return BinaryOpType.div;
-        case TokenType.PERCENT:       		return BinaryOpType.mod;
-        case TokenType.LIT_MOD:       		return BinaryOpType.mod;
-        case TokenType.CARET:         		return BinaryOpType.exp;
-        case TokenType.AMPERSAND:     		return BinaryOpType.cat;
+        case TokenType.PLUS:          		  return BinaryOpType.add;
+        case TokenType.MINUS:         		  return BinaryOpType.sub;
+        case TokenType.STAR:          		  return BinaryOpType.mul;
+        case TokenType.FORWARD_SLASH: 		  return BinaryOpType.div;
+        case TokenType.PERCENT:       		  return BinaryOpType.mod;
+        case TokenType.LIT_MOD:       		  return BinaryOpType.mod;
+        case TokenType.CARET:         		  return BinaryOpType.exp;
+        case TokenType.AMPERSAND:     		  return BinaryOpType.cat;
 
-        case TokenType.DBL_EQUAL:       	return BinaryOpType.eq;
-        case TokenType.LIT_EQ:        		return BinaryOpType.eq;
-        case TokenType.LIT_IS:              return BinaryOpType.eq;
-        case TokenType.EXCLAMATION_EQUAL:	return BinaryOpType.neq;
-        case TokenType.LIT_NEQ:				return BinaryOpType.neq;
-        case TokenType.LIT_IS_NOT:          return BinaryOpType.neq;
+        case TokenType.DBL_EQUAL:       	  return BinaryOpType.eq;
+        case TokenType.LIT_EQ:        		  return BinaryOpType.eq;
+        case TokenType.LIT_IS:                return BinaryOpType.eq;
+        case TokenType.EXCLAMATION_EQUAL:	  return BinaryOpType.neq;
+        case TokenType.LIT_NEQ:				  return BinaryOpType.neq;
+        case TokenType.LIT_IS_NOT:            return BinaryOpType.neq;
 
-        case TokenType.LEFT_ANGLE:    		return BinaryOpType.lt;
-        case TokenType.LIT_LT:              return BinaryOpType.lt;
-        case TokenType.LEFT_ANGLE_EQUAL: 	return BinaryOpType.lte;
-        case TokenType.LIT_LTE:				return BinaryOpType.lte;
-        case TokenType.LIT_LE:				return BinaryOpType.lte;
+        case TokenType.LEFT_ANGLE:    		  return BinaryOpType.lt;
+        case TokenType.LIT_LT:                return BinaryOpType.lt;
+        case TokenType.LEFT_ANGLE_EQUAL: 	  return BinaryOpType.lte;
+        case TokenType.LIT_LTE:				  return BinaryOpType.lte;
+        case TokenType.LIT_LE:				  return BinaryOpType.lte;
 
-        case TokenType.RIGHT_ANGLE:    		return BinaryOpType.gt;
-        case TokenType.LIT_GT:				return BinaryOpType.gt;
-        case TokenType.RIGHT_ANGLE_EQUAL: 	return BinaryOpType.gte;
-        case TokenType.LIT_GTE:				return BinaryOpType.gte;
-        case TokenType.LIT_GE:				return BinaryOpType.gte;
+        case TokenType.RIGHT_ANGLE:    	      return BinaryOpType.gt;
+        case TokenType.LIT_GT:				  return BinaryOpType.gt;
+        case TokenType.RIGHT_ANGLE_EQUAL:     return BinaryOpType.gte;
+        case TokenType.LIT_GTE:				  return BinaryOpType.gte;
+        case TokenType.LIT_GE:				  return BinaryOpType.gte;
 
-        case TokenType.DBL_PIPE:            return BinaryOpType.or;
-        case TokenType.LIT_OR:              return BinaryOpType.or;
-        case TokenType.DBL_AMPERSAND:       return BinaryOpType.and;
-        case TokenType.LIT_AND:             return BinaryOpType.and;
-        case TokenType.LIT_XOR:             return BinaryOpType.xor;
+        case TokenType.DBL_PIPE:              return BinaryOpType.or;
+        case TokenType.LIT_OR:                return BinaryOpType.or;
+        case TokenType.DBL_AMPERSAND:         return BinaryOpType.and;
+        case TokenType.LIT_AND:               return BinaryOpType.and;
+        case TokenType.LIT_XOR:               return BinaryOpType.xor;
 
-        case TokenType.EQUAL:               return BinaryOpType.assign;
-        case TokenType.AMPERSAND_EQUAL:     return BinaryOpType.assign_cat;
-        case TokenType.PLUS_EQUAL:          return BinaryOpType.assign_add;
-        case TokenType.MINUS_EQUAL:         return BinaryOpType.assign_sub;
-        case TokenType.STAR_EQUAL:          return BinaryOpType.assign_mul;
-        case TokenType.FORWARD_SLASH_EQUAL: return BinaryOpType.assign_div;
+        case TokenType.EQUAL:                 return BinaryOpType.assign;
+        case TokenType.AMPERSAND_EQUAL:       return BinaryOpType.assign_cat;
+        case TokenType.PLUS_EQUAL:            return BinaryOpType.assign_add;
+        case TokenType.MINUS_EQUAL:           return BinaryOpType.assign_sub;
+        case TokenType.STAR_EQUAL:            return BinaryOpType.assign_mul;
+        case TokenType.FORWARD_SLASH_EQUAL:   return BinaryOpType.assign_div;
 
-        case TokenType.QUESTION_MARK_COLON: return BinaryOpType.nullCoalesce;
+        case TokenType.QUESTION_MARK_COLON:   return BinaryOpType.nullCoalesce;
 
-        case TokenType.LIT_CONTAINS:         return BinaryOpType.contains;
-        case TokenType.LIT_DOES_NOT_CONTAIN: return BinaryOpType.does_not_contain;
+        case TokenType.LIT_CONTAINS:          return BinaryOpType.contains;
+        case TokenType.LIT_DOES_NOT_CONTAIN:  return BinaryOpType.does_not_contain;
+
+        case TokenType.TRIPLE_EQUAL:          return BinaryOpType.strict_eq;
+        case TokenType.EXCLAMATION_DBL_EQUAL: return BinaryOpType.strict_neq;
         default: break;
     }
     throw "bad binary op type transform";
@@ -691,12 +696,23 @@ export function Statement(node: Node | null, semicolon: Terminal | null) : State
 }
 
 export namespace FromTag {
-    export function Statement(tag: CfTag.ScriptLike) : Statement {
-        const stmt = NodeBase<Statement>(NodeType.statement, tag.range);
-        stmt.expr = tag.expr;
-        stmt.tagOrigin.startTag = tag;
-        stmt.semicolon = null;
-        return stmt;
+    export function Statement(tag: CfTag.Common) : Statement;
+    export function Statement(tag: CfTag.ScriptLike) : Statement;
+    export function Statement(tag: CfTag.Common | CfTag.ScriptLike) : Statement {
+        if (tag.tagType === CfTag.TagType.scriptLike) {
+            const stmt = NodeBase<Statement>(NodeType.statement, tag.range);
+            stmt.expr = tag.expr;
+            stmt.tagOrigin.startTag = tag;
+            stmt.semicolon = null;
+            return stmt;
+        }
+        else {
+            const stmt = NodeBase<Statement>(NodeType.statement, tag.range);
+            stmt.expr = null;
+            stmt.tagOrigin.startTag = tag;
+            stmt.semicolon = null;
+            return stmt;
+        }
     }
 }
 

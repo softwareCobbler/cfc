@@ -163,7 +163,7 @@ const expectedDiagnosticCountByFile : Record<string, number> = {
     "./mxunit/tests/framework/PublicProxyMakerTest.cfc": 0,
     "./mxunit/tests/framework/querysim.cfm": 0,
     "./mxunit/tests/framework/QueryTestResultTest.cfc": 0,
-    "./mxunit/tests/framework/RemoteFacadeObjectCacheTest.cfc": 14, // all errors are associated with the now-illegal use of 'final' as an identifier
+    "./mxunit/tests/framework/RemoteFacadeObjectCacheTest.cfc": 12, // all errors are associated with the now-illegal use of 'final' as an identifier
     "./mxunit/tests/framework/RemoteFacadeTest.cfc": 0,
     "./mxunit/tests/framework/TagSoupTest.cfc": 0,
     "./mxunit/tests/framework/TestCaseBeforeAfterTest.cfc": 0,
@@ -251,7 +251,7 @@ const expectedDiagnosticCountByFile : Record<string, number> = {
 
 
 describe("MX-Unit smoke test", () => {
-    it("Should parse all CFMs/CFCs within the MX-Unit subrepo without errors", () => {
+    it("Should completely parse all CFMs/CFCs within the MX-Unit subrepo with exactly the expected diagnostic quantities emitted", () => {
         for (const fileBaseName of Object.keys(expectedDiagnosticCountByFile)) {
             console.log(fileBaseName);
             const absPath = path.resolve(__dirname, fileBaseName);

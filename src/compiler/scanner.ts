@@ -76,6 +76,7 @@ export const enum TokenType {
     EQUAL_RIGHT_ANGLE,
     EXCLAMATION,
     EXCLAMATION_EQUAL,
+    EXCLAMATION_DBL_EQUAL,
     FORWARD_SLASH,
     FORWARD_SLASH_EQUAL,
     FORWARD_SLASH_STAR,
@@ -104,6 +105,7 @@ export const enum TokenType {
     STAR,
     STAR_FORWARD_SLASH,
     STAR_EQUAL,
+    TRIPLE_EQUAL,
 
     CF_START_TAG_START, // <\s*cf
     CF_END_TAG_START,   // <\s*/\s*cf
@@ -183,6 +185,7 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.EQUAL_RIGHT_ANGLE]:    "=>",
     [TokenType.EXCLAMATION]:          "!",
     [TokenType.EXCLAMATION_EQUAL]:    "!=",
+    [TokenType.EXCLAMATION_DBL_EQUAL]:    "!==",
     [TokenType.FORWARD_SLASH]:        "/",
     [TokenType.FORWARD_SLASH_EQUAL]:  "/=",
     [TokenType.FORWARD_SLASH_STAR]:   "/*",
@@ -211,6 +214,7 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.STAR]:                 "*",
     [TokenType.STAR_FORWARD_SLASH]:   "*/",
     [TokenType.STAR_EQUAL]:           "*=",
+    [TokenType.TRIPLE_EQUAL]:         "===",
 
     [TokenType.CF_START_TAG_START]:   "<cf",
     [TokenType.CF_END_TAG_START]:     "</cf",
@@ -491,7 +495,8 @@ export function Scanner(source_: string | Buffer) {
                 if (script && maybeEat(/>=/iy)) return setToken(TokenType.RIGHT_ANGLE_EQUAL, from, getIndex());
                 return consumeCurrentCharAs(TokenType.RIGHT_ANGLE);
             case AsciiMap.EQUAL:
-                if (maybeEat(/==/iy)) return setToken(TokenType.DBL_EQUAL, from, getIndex());
+                if (maybeEat(/===/iy)) return setToken(TokenType.TRIPLE_EQUAL, from, getIndex());
+                else if (maybeEat(/==/iy)) return setToken(TokenType.DBL_EQUAL, from, getIndex());
                 else if (maybeEat(/=>/iy)) return setToken(TokenType.EQUAL_RIGHT_ANGLE, from, getIndex());
                 else return consumeCurrentCharAs(TokenType.EQUAL);
             case AsciiMap.HASH:          return consumeCurrentCharAs(TokenType.HASH);
@@ -522,7 +527,8 @@ export function Scanner(source_: string | Buffer) {
                 maybeEat(/\s+/iy);
                 return setToken(TokenType.WHITESPACE, from, getIndex());
             case AsciiMap.EXCLAMATION:
-                if (maybeEat(/!=/iy)) return setToken(TokenType.EXCLAMATION_EQUAL, from, getIndex());
+                if (maybeEat(/!==/iy)) return setToken(TokenType.EXCLAMATION_DBL_EQUAL, from, getIndex());
+                else if (maybeEat(/!=/iy)) return setToken(TokenType.EXCLAMATION_EQUAL, from, getIndex());
                 else return consumeCurrentCharAs(TokenType.EXCLAMATION);
             case AsciiMap.PIPE:
                 if (maybeEat(/\|\|/iy)) return setToken(TokenType.DBL_PIPE, from, getIndex());

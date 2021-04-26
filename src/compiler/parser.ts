@@ -1142,8 +1142,7 @@ export function Parser() {
                                     tagBlockWorker(tag);
                                 }
                                 else if (valueAsString === "commit" || valueAsString === "rollback" || valueAsString === "setsavepoint") {
-                                    result.push(
-                                        FromTag.Block(/*startTag*/ tag, /*stmtList*/ [], /*endTag*/ null));
+                                    result.push(FromTag.Statement(tag as CfTag.Common));
                                     nextTag();
                                 }
                                 else {
@@ -1154,8 +1153,7 @@ export function Parser() {
                                         parseErrorAtRange(actionAttrValue.range, "Unsupported <cftransaction> 'action' attribute.");
                                     }
                                     if (tag.voidSlash) {
-                                        result.push(
-                                            FromTag.Block(tag, [], null));
+                                        result.push(FromTag.Statement(tag as CfTag.Common));
                                         nextTag();
                                     }
                                     else {
@@ -1460,11 +1458,13 @@ export function Parser() {
             assignmentExpr = BinaryOperator(root, operator, rhs);
         }
 
-        // would be nice to have a 'finishNode' here to mark them as errors if any of the above error checks got hit
         if (finalModifier || varModifier) {
-            if (!varModifier) {
-                parseErrorAtRange(finalModifier!.range, "`final` modifier is missing its associated `var` modifier.");
-            }
+            // check for missing var modifier in later pass; we might be using final on a valid scope
+            // `final local.foo = 42` is OK if we are not in a function
+            // `final local['foo'] = 42` is OK
+            // `final local[dynamic_key]` is illegal
+            // `final user_struct.foo = 42` is always illegal
+            // `final no_struct` is illegal
             return VariableDeclaration(finalModifier, varModifier, root, assignmentExpr);
         }
         else {
@@ -1564,6 +1564,8 @@ export function Parser() {
                 case TokenType.EXCLAMATION_EQUAL:	   // [[fallthrough]];
                 case TokenType.LIT_IS_NOT:             // [[fallthrough]];
                 case TokenType.LIT_NEQ:           	   // [[fallthrough]];
+                case TokenType.TRIPLE_EQUAL:           // [[fallthrough]];
+                case TokenType.EXCLAMATION_DBL_EQUAL:  // [[fallthrough]];
     
                 case TokenType.LEFT_ANGLE:    		   // [[fallthrough]]; // invalid in tag mode, but we've already checked for it
                 case TokenType.LIT_LT:                 // [[fallthrough]];
@@ -1652,6 +1654,7 @@ export function Parser() {
                     // fallthrough
                 }
                 case TokenType.STAR:
+                case TokenType.PERCENT:
                 case TokenType.LIT_MOD: {
                     reduceRight();
                     const op = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
@@ -1965,7 +1968,7 @@ export function Parser() {
         const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
         const args : CallArgument[] = [];
         while (isStartOfExpression()) {
-            const exprOrArgName = parseExpression();
+            const exprOrArgName = parseAnonymousFunctionDefinitionOrExpression();
 
             // if we got an identifier, peek ahead to see if there is an equals token
             // if so, this is a named argument, like foo(bar=baz, qux=42)
@@ -1974,7 +1977,7 @@ export function Parser() {
             if (exprOrArgName.type === NodeType.identifier) {
                 if (lookahead() === TokenType.EQUAL) {
                     const equals = parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
-                    const namedArgValue = parseExpression();
+                    const namedArgValue = parseAnonymousFunctionDefinitionOrExpression();
                     const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
                     if (!comma && isStartOfExpression()) {
                         parseErrorAtRange(namedArgValue.range.toExclusive, namedArgValue.range.toExclusive + 1, "Expected ','");

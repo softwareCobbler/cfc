@@ -130,6 +130,9 @@ export function isIllegalIdentifierName(text: string) {
     if (node.type === NodeType.simpleStringLiteral) {
         return node.textSpan.text;
     }
+    else if (node.type === NodeType.terminal) {
+        return node.token.text;
+    }
     else if (node.type === NodeType.numericLiteral) {
         return node.literal.token.text;
     }
@@ -153,10 +156,12 @@ export function isIllegalIdentifierName(text: string) {
 export function getTriviallyComputableBoolean(node: Node | undefined | null) : boolean | undefined {
     if (!node) return undefined
 
-    if (node.type === NodeType.simpleStringLiteral) {
-        return castCfStringAsCfBoolean(node.textSpan.text);
+    let trivialString = getTriviallyComputableString(node);
+    if (trivialString) {
+        return castCfStringAsCfBoolean(trivialString);
     }
-    else if (node.type === NodeType.booleanLiteral) {
+
+    if (node.type === NodeType.booleanLiteral) {
         return node.literal.token.type === TokenType.KW_TRUE;
     }
     else if (node.type === NodeType.numericLiteral) {
