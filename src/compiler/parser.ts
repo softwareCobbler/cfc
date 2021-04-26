@@ -1564,8 +1564,8 @@ export function Parser() {
                 case TokenType.EXCLAMATION_EQUAL:	   // [[fallthrough]];
                 case TokenType.LIT_IS_NOT:             // [[fallthrough]];
                 case TokenType.LIT_NEQ:           	   // [[fallthrough]];
-                case TokenType.TRIPLE_EQUAL:           // [[fallthrough]];
-                case TokenType.EXCLAMATION_DBL_EQUAL:  // [[fallthrough]];
+                case TokenType.TRIPLE_EQUAL:           // [[fallthrough]]; // only valid on cf2021+
+                case TokenType.EXCLAMATION_DBL_EQUAL:  // [[fallthrough]]; // only valid on cf2021+
     
                 case TokenType.LEFT_ANGLE:    		   // [[fallthrough]]; // invalid in tag mode, but we've already checked for it
                 case TokenType.LIT_LT:                 // [[fallthrough]];
@@ -1958,6 +1958,7 @@ export function Parser() {
             case TokenType.KW_TRUE:
             case TokenType.KW_FALSE:
             case TokenType.KW_FUNCTION:
+            case TokenType.KW_NEW:
                 return true;
             default:
                 return isIdentifier();

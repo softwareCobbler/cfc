@@ -11,11 +11,7 @@ import * as path from "path";
 //const fname = path.resolve("./test/mxunit/tests/framework/DynamicTestCaseGenerationTest.cfc");
 //console.error("parsing: " + fname);
 //const scanner = Scanner(fs.readFileSync(fname));
-const scanner = Scanner(`
-<cffunction name="foo">
-    <cfargument name="x" required=lel>
-</cffunction>
-`)
+const scanner = Scanner(`<cfset x = {v: () => new bla.bla.bla()}>`)
 
 
 const parser = Parser()

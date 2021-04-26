@@ -896,7 +896,10 @@ export function Scanner(source_: string | Buffer) {
     }
 
     function getAnnotatedChar(index: number) : AnnotatedChar {
-        return annotatedChars[index];
+        const clampedIndex = index < annotatedChars.length
+            ? index
+            : annotatedChars.length-1;
+        return annotatedChars[clampedIndex];
     }
 
     return {
