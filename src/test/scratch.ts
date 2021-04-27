@@ -8,24 +8,21 @@ import * as fs from "fs";
 import * as path from "path";
 
 // PluginDemoTests\InvalidMarkupTest.cfc
-//const fname = path.resolve("./test/mxunit/tests/framework/DynamicTestCaseGenerationTest.cfc");
+//const fname = path.resolve("./test/mxunit/tests/framework/RemoteFacadeObjectCacheTest.cfc");
 //console.error("parsing: " + fname);
 //const scanner = Scanner(fs.readFileSync(fname));
 const scanner = Scanner(`
-<cfscript>
-    for (x in y) {
-        for (i = 0; i < 10; i++) {
-
-        }
-    }
-</cfscript>`);
+<cfcomponent>
+<cfset final = variables.cache.getSuitePoolCount()>
+</cfcomponent>
+`);
 
 
 const parser = Parser()
     .setScanner(scanner)
     .setDebug(true);
 
-parser.parse(CfFileType.cfm);
+parser.parse(CfFileType.cfc);
 
 const diagnostics = parser.getDiagnostics();
 console.log("got ", diagnostics.length + " diagnostics");

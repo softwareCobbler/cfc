@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "install-all": "npm install && cd src/lang-server/client && npm install && cd ../server && npm install && cd ../../../",
-    "test": "tsc --build src/compiler && mocha",
+    "test-all": "tsc --build src/compiler && mocha --extension=ts --require=ts-node/register --spec=test/**/*.ts",
+    "test-one": "tsc --build src/compiler && echo && mocha --extension=ts --require=ts-node/register --spec=",
     "build-cflsp": "webpack --config webpack.config.js",
     "build-cflsp-prod": "webpack --config webpack.prod.config.js"
   },

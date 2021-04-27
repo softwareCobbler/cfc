@@ -37,4 +37,7 @@ describe("general smoke test for particular constructs", () => {
     it("Should accept the legacy operator `IMP`", () => {
         assertNoDiagnostics(`<cfif a imp b></cfif>`, CfFileType.cfm);
     });
+    it("Should be OK with multibyte utf16 characters`", () => {
+        assertNoDiagnostics(`<cfif 😬 EQ 😬>😅</cfif>`, CfFileType.cfm);
+    });
 });

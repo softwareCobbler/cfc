@@ -26,7 +26,7 @@ import {
     VariableDeclaration,
     ImportStatement,
     New, } from "./node";
-import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, TokenTypeUiStringReverse, CfFileType, setScannerDebug } from "./scanner";
+import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, isNamedBlockName } from "./utils";
 
 let debugParseModule = false;
@@ -135,8 +135,6 @@ export function Parser() {
     let lookahead_ : TokenType;
     let lastNonTriviaToken : Token;
     let diagnostics : Diagnostic[] = [];
-
-    const identifierPattern = /^[_$a-z][_$a-z0-9]*$/i;
     
     let globalDiagnosticEmitter : (() => void) | null = null; // @fixme: find a way to not need this
 
@@ -266,6 +264,16 @@ export function Parser() {
 
     function scanLexemeLikeStructKey() {
         const result = scanner.scanLexemeLikeStructKey();
+        primeLookahead();
+        return result;
+    }
+
+    function isIdentifier() : boolean {
+        return scanner.isIdentifier();
+    }
+
+    function scanIdentifier() : Token | null {
+        const result = scanner.scanIdentifier();
         primeLookahead();
         return result;
     }
@@ -2171,40 +2179,25 @@ export function Parser() {
             && tokenType !== TokenType.KW_VAR; // `var` is a valid identifier, so `var var = expr` is OK
     }
 
-    function isIdentifier() : boolean {
-        if (identifierPattern.test(peek().text)) {
-            let tokenType : TokenType | undefined = lookahead() === TokenType.LEXEME
-                ? TokenTypeUiStringReverse[peek().text.toLowerCase()]
-                : lookahead();
-            // in tag mode we might get keywords as lexemes
-            // so we try to reverse map from text to a token
-            // if there was no matching token then it's an acceptable identifier
-            // if it did match a token, make sure it isn't an illegal keyword like 'var'
-            return !tokenType || !isIllegalKeywordTokenAsIdentifier(tokenType);
-        }
-        return false;
-    }
-
     function parseIdentifier() : Identifier {
-        let gotValidIdentifier = true;
-        if (isIllegalKeywordTokenAsIdentifier(lookahead())) {
-            parseErrorAtCurrentToken(`Reserved keyword \`${peek().text.toLowerCase()}\` cannot be used as a variable name.`);
-            gotValidIdentifier = false;
-        }
-        else if (!isIdentifier()) {
+        let terminal : Terminal;
+        let canonicalName : string;
+
+        if (!isIdentifier()) {
             if (globalDiagnosticEmitter) globalDiagnosticEmitter();
             else parseErrorAtCurrentToken("Expected an identifier.");
-            gotValidIdentifier = false;
+
+            terminal = Terminal(peek(), []);
+            canonicalName = "";
         }
+        else {
+            if (isIllegalKeywordTokenAsIdentifier(lookahead())) {
+                parseErrorAtCurrentToken(`Reserved keyword \`${peek().text.toLowerCase()}\` cannot be used as a variable name.`);
+            }
 
-        // don't consume if we didn't match a valid identifier
-        const terminal = gotValidIdentifier
-            ? parseExpectedTerminal(lookahead(), ParseOptions.withTrivia)
-            : Terminal(peek(), []);
-
-        const canonicalName = gotValidIdentifier
-            ? terminal.token.text.toLowerCase()
-            : "";
+            terminal = Terminal(scanIdentifier()!, parseTrivia());
+            canonicalName = terminal.token.text.toLowerCase();
+        }
 
         return Identifier(terminal, canonicalName);
     }
@@ -2275,10 +2268,8 @@ export function Parser() {
 
     function isIdentifierThenFatArrow() : boolean {
         if (!isIdentifier()) return false;
-        next();
-        parseTrivia();
-        if (lookahead() !== TokenType.EQUAL_RIGHT_ANGLE) return false;
-        return true;
+        parseIdentifier();
+        return lookahead() === TokenType.EQUAL_RIGHT_ANGLE;
     }
 
     function isAccessModifier() : boolean {

@@ -1,7 +1,7 @@
 export const enum AsciiMap {
     TAB = 9,
-    LF = 10, // \n
-    CR = 13, // \r
+    NEWLINE = 10,         // \n
+    CARRIAGE_RETURN = 13, // \r
     SPACE = 32,
     EXCLAMATION,
     QUOTE_DOUBLE,
@@ -335,16 +335,19 @@ export function Scanner(source_: string | Buffer) {
     let token : Token = NilToken;
 
     //
-    // @fixme:
-    // will work for ascii or utf16, but multibyte utf8 will probably break
+    // if we get text, we assume it is already uft16-le, which is what node does by default
+    // and vscode pushes text to us in this manner
+    // if we want control over BOMs, read the file as bytes and provide the buffer;
+    // we record if there was a BOM and what encoding we're in, but drop the BOM (if there was one)
+    // before we start parsing, so we don't have to consier tokenizing it or having it end up in an identifier
     //
     function annotate(bytesOrAlreadyUtf16: string | Buffer) : AnnotatedChar[] {
         if (typeof bytesOrAlreadyUtf16 === "string") { // already UTF-16
             if (bytesOrAlreadyUtf16.charCodeAt(0) === 0xFEFF) {
                 hadBom = true;
             }
-            sourceEncoding = "utf-16-be";
-            sourceText = bytesOrAlreadyUtf16;
+            sourceEncoding = "utf-16-le";
+            sourceText = hadBom ? bytesOrAlreadyUtf16.slice(1) : bytesOrAlreadyUtf16;
             return annotateWorker(bytesOrAlreadyUtf16);
         }
 
@@ -383,26 +386,32 @@ export function Scanner(source_: string | Buffer) {
         return annotateWorker(sourceText);
     }
 
-    function annotateWorker(text: string) : AnnotatedChar[] {
+    /**
+     * build the (codepoint, col, line) tuples for each codepoint in the source text
+     */
+    function annotateWorker(utf16: string) : AnnotatedChar[] {
         let index = 0;
         let col = 0;
         let line = 0;
         const result : AnnotatedChar[] = [];
-        for (const c of text) {
-            result.push({
-                codepoint: c.charCodeAt(0),
-                index,
-                col,
-                line
-            });
-            if (c == '\n') {
-                line += 1;
-                col = 0;
+        for (const char of utf16) {
+            for (let i = 0; i < char.length; i++) {
+                const c = char.charCodeAt(i);
+                result.push({
+                    codepoint: c,
+                    index,
+                    col,
+                    line
+                });
+                if (c == AsciiMap.NEWLINE) {
+                    line += 1;
+                    col = 0;
+                }
+                else {
+                    col += 1;
+                }
+                index += 1;
             }
-            else {
-                col += 1;
-            }
-            index += 1;
         }
 
         // push "eof"
@@ -527,10 +536,10 @@ export function Scanner(source_: string | Buffer) {
                 // it appears that it is not actually a token, and it is valid to have a comment between the "?" and ":"
                 // so it is generated if necessary during parsing, if we recognize "<question-mark><trivia>?<colon>"
                 return consumeCurrentCharAs(TokenType.QUESTION_MARK);
-            case AsciiMap.SPACE: //    [[fallthrough]];
-            case AsciiMap.TAB:   // \t [[fallthrough]];
-            case AsciiMap.CR:    // \r [[fallthrough]];
-            case AsciiMap.LF:    // \n [[fallthrough]];
+            case AsciiMap.SPACE:           //    [[fallthrough]];
+            case AsciiMap.TAB:             // \t [[fallthrough]];
+            case AsciiMap.CARRIAGE_RETURN: // \r [[fallthrough]];
+            case AsciiMap.NEWLINE:         // \n [[fallthrough]];
                 // more of a "definite" eat here
                 maybeEat(/\s+/iy);
                 return setToken(TokenType.WHITESPACE, from, getIndex());
@@ -726,15 +735,13 @@ export function Scanner(source_: string | Buffer) {
             || codePoint === AsciiMap.UNDERSCORE
     }
 
-    function isTagAttributeNameStart() {
-        const codePoint = annotatedChars[index].codepoint;
+    function isTagAttributeNameStart(codePoint: number) {
         return isAsciiAlpha(codePoint)
             || codePoint === AsciiMap.UNDERSCORE
             || codePoint === AsciiMap.DOLLAR;
     }
 
-    function isTagAttributeNameRest() {
-        const codePoint = annotatedChars[index].codepoint;
+    function isTagAttributeNameRest(codePoint: number) {
         return isAsciiAlpha(codePoint)
             || isAsciiDigit(codePoint)
             || codePoint === AsciiMap.UNDERSCORE
@@ -753,10 +760,10 @@ export function Scanner(source_: string | Buffer) {
     }
 
     function scanTagAttributeName() : Token | null {
-        if (!isTagAttributeNameStart()) return null;
+        if (!isTagAttributeNameStart(annotatedChars[index].codepoint)) return null;
         const from = index;
         index += 1;
-        while (isTagAttributeNameRest()) {
+        while (isTagAttributeNameRest(annotatedChars[index].codepoint)) {
             index += 1;
         }
         return setToken(TokenType.LEXEME, from, getIndex());
@@ -822,6 +829,36 @@ export function Scanner(source_: string | Buffer) {
         }
 
         return setToken(TokenType.LEXEME, from, index);
+    }
+
+    function isIdentifierStart(codePoint: number) {
+        return isAsciiAlpha(codePoint)
+            || codePoint === AsciiMap.UNDERSCORE
+            || codePoint === AsciiMap.DOLLAR
+            || codePoint > 128; // waaaaaay to wide a unicode acceptance range
+    }
+
+    function isIdentifierRest(codePoint: number) {
+        return isAsciiAlpha(codePoint)
+            || isAsciiDigit(codePoint)
+            || codePoint === AsciiMap.UNDERSCORE
+            || codePoint === AsciiMap.DOLLAR
+            || codePoint > 128;
+    }
+
+    function scanIdentifier() : Token | null {
+        if (!isIdentifierStart(annotatedChars[index].codepoint)) return null;
+        const from = index;
+        index += 1;
+        while (isIdentifierRest(annotatedChars[index].codepoint)) {
+            index += 1;
+        }
+        lastScannedText = sourceText.slice(from, index);
+        return setToken(TokenType.LEXEME, from, getIndex());
+    }
+
+    function isIdentifier() {
+        return isIdentifierStart(annotatedChars[index].codepoint);
     }
 
     function maybeEat(pattern: RegExp) {
@@ -934,6 +971,8 @@ export function Scanner(source_: string | Buffer) {
         scanTagAttributeName,
         scanToNextTagCommentToken,
         scanLexemeLikeStructKey,
+        scanIdentifier,
+        isIdentifier
     }
 }
 export type Scanner = ReturnType<typeof Scanner>;
