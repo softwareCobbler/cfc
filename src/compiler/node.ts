@@ -16,7 +16,8 @@ export const enum NodeType {
     terminal, textSpan, comment, hashWrappedExpr, parenthetical, tagAttribute,
     tag, callExpression, callArgument, unaryOperator, binaryOperator,
     conditional, variableDeclaration, statement, namedBlock, simpleStringLiteral, interpolatedStringLiteral, numericLiteral, booleanLiteral,
-    identifier, indexedAccess,
+    identifier,
+    indexedAccess, indexedAccessChainElement,
     functionDefinition, arrowFunctionDefinition, functionParameter,
     dottedPath, switch, switchCase, do, while, ternary, for, structLiteral, arrayLiteral,
     structLiteralInitializerMember, arrayLiteralInitializerMember, try, catch, finally,
@@ -46,6 +47,7 @@ const NodeTypeUiString : Record<NodeType, string> = {
     [NodeType.booleanLiteral]: "booleanLiteral",
     [NodeType.identifier]: "identifier",
     [NodeType.indexedAccess]: "indexedAccess",
+    [NodeType.indexedAccessChainElement]: "indexedAccessChainElement",
     [NodeType.functionDefinition]: "functionDefinition",
     [NodeType.arrowFunctionDefinition]: "arrowFunctionDefinition",
     [NodeType.functionParameter]: "functionParameter",
@@ -928,59 +930,125 @@ export function Identifier(identifier: Terminal, name: string) {
     return v;
 }
 
-export type AccessElement =
-    | DotAccess
-    | BracketAccess;
+export const enum IndexedAccessType { dot, bracket, optionalDot, optionalBracket, optionalCall };
 
-export const enum IndexedAccessType { dot, bracket };
-export interface DotAccess {
-    accessType: IndexedAccessType.dot;
-    dot: Terminal;
-    propertyName: Terminal;
+export interface DotAccess extends NodeBase {
+    type: NodeType.indexedAccessChainElement,
+    accessType: IndexedAccessType.dot,
+    dot: Terminal,
+    property: Terminal,
 }
 
-export interface BracketAccess {
-    accessType: IndexedAccessType.bracket;
-    leftBracket: Terminal;
-    expr: Node;
-    rightBracket: Terminal;
+export interface BracketAccess extends NodeBase {
+    type: NodeType.indexedAccessChainElement,
+    accessType: IndexedAccessType.bracket,
+    leftBracket: Terminal,
+    expr: Node,
+    rightBracket: Terminal,
+}
+
+// note that for the optional accesses, like with the null coalescing operator `?:`
+// it is not one token, but two separate tokens, possibly with comments between them
+export interface OptionalDotAccess extends NodeBase {
+    type: NodeType.indexedAccessChainElement,
+    accessType: IndexedAccessType.optionalDot,
+    questionMark: Terminal,
+    dot: Terminal,
+    property: Terminal,
+}
+
+export interface OptionalBracketAccess extends NodeBase {
+    type: NodeType.indexedAccessChainElement,
+    accessType: IndexedAccessType.optionalBracket,
+    questionMark: Terminal,
+    dot: Terminal,
+    leftBracket: Terminal,
+    expr: Node,
+    rightBracket: Terminal,
+}
+
+export interface OptionalCall extends NodeBase {
+    type: NodeType.indexedAccessChainElement,
+    accessType: IndexedAccessType.optionalCall,
+    questionMark: Terminal,
+    dot: Terminal,
+    // the call itself will "own" this node as its left-side
+    // foo?.() is a call expression where the left side is an indexed-access expression with a trailing OptionalCall access chain element
+}
+
+export type IndexedAccessChainElement = (
+    | DotAccess
+    | BracketAccess
+    | OptionalDotAccess
+    | OptionalBracketAccess
+    | OptionalCall) & {__debug_access_type?: string};
+
+export function DotAccess(dot: Terminal, property: Terminal) : DotAccess {
+    const node = NodeBase<DotAccess>(NodeType.indexedAccessChainElement, mergeRanges(dot, property));
+    node.accessType = IndexedAccessType.dot;
+    node.dot = dot;
+    node.property = property;
+    if (debug) (<IndexedAccessChainElement>node).__debug_access_type = "dot";
+    return node;
+}
+
+export function BracketAccess(leftBracket: Terminal, expr: Node, rightBracket: Terminal) : BracketAccess {
+    const node = NodeBase<BracketAccess>(NodeType.indexedAccessChainElement, mergeRanges(leftBracket, rightBracket));
+    node.accessType = IndexedAccessType.bracket;
+    node.leftBracket = leftBracket;
+    node.expr = expr;
+    node.rightBracket = rightBracket;
+    if (debug) (<IndexedAccessChainElement>node).__debug_access_type = "bracket";
+    return node;
+}
+
+export function OptionalDotAccess(questionMark: Terminal, dot: Terminal, property: Terminal) : OptionalDotAccess {
+    const node = NodeBase<OptionalDotAccess>(NodeType.indexedAccessChainElement, mergeRanges(questionMark, property));
+    node.accessType = IndexedAccessType.optionalDot;
+    node.questionMark = questionMark;
+    node.dot = dot;
+    node.property = property;
+    if (debug) (<IndexedAccessChainElement>node).__debug_access_type = "optional-dot";
+    return node;
+}
+
+export function OptionalBracketAccess(questionMark: Terminal, dot: Terminal, leftBracket: Terminal, expr: Node, rightBracket: Terminal) : OptionalBracketAccess {
+    const node = NodeBase<OptionalBracketAccess>(NodeType.indexedAccessChainElement, mergeRanges(questionMark, rightBracket));
+    node.accessType = IndexedAccessType.optionalBracket;
+    node.questionMark = questionMark;
+    node.dot = dot;
+    node.leftBracket = leftBracket;
+    node.expr = expr;
+    node.rightBracket = rightBracket;
+    if (debug) (<IndexedAccessChainElement>node).__debug_access_type = "optional-bracket";
+    return node;
+}
+
+export function OptionalCall(questionMark: Terminal, dot: Terminal) : OptionalCall {
+    const node = NodeBase<OptionalCall>(NodeType.indexedAccessChainElement, mergeRanges(questionMark, dot));
+    node.accessType = IndexedAccessType.optionalCall;
+    node.questionMark = questionMark;
+    node.dot = dot;
+    if (debug) (<IndexedAccessChainElement>node).__debug_access_type = "optional-call";
+    return node;
 }
 
 export interface IndexedAccess extends NodeBase {
-    type: NodeType.indexedAccess;
-    root: Node;
-    accessElements: AccessElement[];
-    last: () => AccessElement | undefined;
+    type: NodeType.indexedAccess,
+    root: Node,
+    accessElements: IndexedAccessChainElement[],
 }
 
 export function IndexedAccess(root: Node) : IndexedAccess {
     const v = NodeBase<IndexedAccess>(NodeType.indexedAccess, root.range);
     v.root = root;
     v.accessElements = [];
-    v.last = function() { return this.accessElements[this.accessElements.length-1]; }
     return v;
 }
 
-export function pushAccessElement(base: IndexedAccess, dot: Terminal, propertyName: Terminal) : void;
-export function pushAccessElement(base: IndexedAccess, leftBracket: Terminal, expr: Node, rightBracket: Terminal) : void;
-export function pushAccessElement(base: IndexedAccess, dotOrBracket: Terminal, expr: Node | Terminal, rightBracket?: Terminal) : void {
-    if (rightBracket) { // bracket access
-        (<BracketAccess[]>base.accessElements).push({
-            accessType: IndexedAccessType.bracket,
-            leftBracket: dotOrBracket,
-            expr: expr,
-            rightBracket: rightBracket
-        });
-        base.range.toExclusive = rightBracket.range.toExclusive;
-    }
-    else { // dot access
-        (<DotAccess[]>base.accessElements).push({
-            accessType: IndexedAccessType.dot,
-            dot: dotOrBracket,
-            propertyName: (expr as Terminal)
-        });
-        base.range.toExclusive = expr.range.toExclusive;
-    }
+export function pushAccessElement(base: IndexedAccess, element: IndexedAccessChainElement) : void {
+    base.accessElements.push(element);
+    base.range.toExclusive = element.range.toExclusive;
 }
 
 export interface FunctionParameter extends NodeBase {

@@ -13,7 +13,7 @@ import * as path from "path";
 //const scanner = Scanner(fs.readFileSync(fname));
 const scanner = Scanner(`
 <cfcomponent>
-<cfset final = variables.cache.getSuitePoolCount()>
+<cfset foo = a?.()>
 </cfcomponent>
 `);
 

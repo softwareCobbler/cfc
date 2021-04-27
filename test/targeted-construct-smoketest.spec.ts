@@ -5,39 +5,48 @@ import {Scanner, Parser, CfFileType } from "../out/compiler";
 
 const parser = Parser().setDebug(true);
 
-function assertNoDiagnostics(text: string, cfFileType: CfFileType) {
+function assertDiagnosticsCount(text: string, cfFileType: CfFileType, count: number) {
     const scanner = Scanner(text);
     parser.setScanner(scanner).parse(cfFileType);
-    assert.strictEqual(parser.getDiagnostics().length, 0, "No diagnostics emitted");
+    assert.strictEqual(parser.getDiagnostics().length, count, `${count} diagnostics emitted`);
 }
 
 describe("general smoke test for particular constructs", () => {
     it("Should accept `new` expression in an expression context", () => {
-        assertNoDiagnostics(`<cfset x = {v: new foo.bar().someMethod()}>`, CfFileType.cfm);
+        assertDiagnosticsCount(`<cfset x = {v: new foo.bar().someMethod()}>`, CfFileType.cfm, 0);
     });
     it("Should accept named arguments with both '=' and ':' as the name/expression delimiter", () => {
-        assertNoDiagnostics(`<cfset x = foo(x=1, y:2)>`, CfFileType.cfm);
+        assertDiagnosticsCount(`<cfset x = foo(x=1, y:2)>`, CfFileType.cfm, 0);
     });
     it("Should accept `%=`", () => {
-        assertNoDiagnostics(`<cfset x %= y>`, CfFileType.cfm);
+        assertDiagnosticsCount(`<cfset x %= y>`, CfFileType.cfm, 0);
     });
     it("Should accept for-in and normal-for", () => {
-        assertNoDiagnostics(`
+        assertDiagnosticsCount(`
             <cfscript>
                 for (x in y) {
                     for (i = 0; i < 10; i++) {
             
                     }
                 }
-            </cfscript>`, CfFileType.cfm);
+            </cfscript>`, CfFileType.cfm, 0);
     });
     it("Should accept the legacy operator `EQV`", () => {
-        assertNoDiagnostics(`<cfif a eqv b></cfif>`, CfFileType.cfm);
+        assertDiagnosticsCount(`<cfif a eqv b></cfif>`, CfFileType.cfm, 0);
     });
     it("Should accept the legacy operator `IMP`", () => {
-        assertNoDiagnostics(`<cfif a imp b></cfif>`, CfFileType.cfm);
+        assertDiagnosticsCount(`<cfif a imp b></cfif>`, CfFileType.cfm, 0);
     });
     it("Should be OK with multibyte utf16 characters`", () => {
-        assertNoDiagnostics(`<cfif 😬 EQ 😬>😅</cfif>`, CfFileType.cfm);
+        assertDiagnosticsCount(`<cfif 😬 EQ 😬>😅</cfif>`, CfFileType.cfm, 0);
+    });
+    it("Should accept optional dot access`", () => {
+        assertDiagnosticsCount(`<cfif a?.b eq c?.d></cfif>`, CfFileType.cfm, 0);
+    });
+    it("Should issue a diagnostic for an optional bracket access`", () => {
+        assertDiagnosticsCount(`<cfif a?.deep?.["b"] eq c?.deep?.["d"]></cfif>`, CfFileType.cfm, 2);
+    });
+    it("Should issue a diagnostic for an optional call`", () => {
+        assertDiagnosticsCount(`<cfif a?.deep?.() gt b?.deep?.()></cfif>`, CfFileType.cfm, 2);
     });
 });

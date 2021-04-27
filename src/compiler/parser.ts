@@ -25,7 +25,8 @@ import {
     mergeRanges,
     VariableDeclaration,
     ImportStatement,
-    New, } from "./node";
+    New,
+    DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, isNamedBlockName } from "./utils";
 
@@ -1724,7 +1725,7 @@ export function Parser() {
                         break;
                 }
 
-                root = parseTrailingExpressionChain(root);
+                root = parseCallExpressionOrLowerRest(root);
 
                 // (function() {})()      valid cf2021+
                 // (() => value)()        valid cf2021+
@@ -1818,9 +1819,11 @@ export function Parser() {
             case TokenType.KW_FALSE:
                 return BooleanLiteral(parseExpectedTerminal(lookahead(), ParseOptions.withTrivia));
             case TokenType.LEFT_BRACE:
-                return parseStructLiteral();
+                return parseCallExpressionOrLowerRest(
+                    parseStructLiteral());
             case TokenType.LEFT_BRACKET:
-                return parseArrayLiteralOrOrderedStructLiteral();
+                return parseCallExpressionOrLowerRest(
+                    parseArrayLiteralOrOrderedStructLiteral());
             case TokenType.HASH:
                 if (!isInSomeContext(ParseContext.hashWrappedExpr)) {
                     // do this outside of an interpolated text context;
@@ -1842,7 +1845,7 @@ export function Parser() {
         }
 
         let root : Node = parseIdentifier();
-        root = parseTrailingExpressionChain(root);
+        root = parseCallExpressionOrLowerRest(root);
         return root;
     }
 
@@ -1850,19 +1853,8 @@ export function Parser() {
      * given some root, parse a chain of dot/bracket | call expression accesses, and a postfix ++/-- operator
      * something like `a.b["c"]().d["e"]++`
      */
-    function parseTrailingExpressionChain<T extends Node>(root: T) : T | IndexedAccess | CallExpression | UnaryOperator {
-        while (true) {
-            switch(lookahead()) {
-                case TokenType.LEFT_BRACKET:
-                case TokenType.DOT:
-                    (root as Node) = parseIndexedAccess(root);
-                    continue;
-                case TokenType.LEFT_PAREN:
-                    (root as Node) = parseCallExpression(root);
-                    continue;
-            }
-            break;
-        }
+    function parseCallExpressionOrLowerRest<T extends Node>(root: T) : T | IndexedAccess | CallExpression | UnaryOperator {
+        parseCallAndAccessChain(root);
 
         switch (lookahead()) {
             case TokenType.DBL_PLUS:
@@ -1874,23 +1866,70 @@ export function Parser() {
         return root;
     }
 
-    function parseIndexedAccess<T extends Node>(root: T) : T | IndexedAccess {
-        const base = root;
+    function nextNonTriviaIsDot() : boolean {
+        next();
+        parseTrivia();
+        return lookahead() === TokenType.DOT;
+    }
+
+    /**
+     * accept a Node, and if it is an IndexedAccess node, push an access element into it
+     * if it is not already an IndexedAccess node, convert it to one, and then push the access element into it
+     */
+    function transformingPushAccessElement(root: Node, accessElement: IndexedAccessChainElement) : IndexedAccess {
+        if (root.type !== NodeType.indexedAccess) {
+            root = IndexedAccess(root);
+        }
+        pushAccessElement(root, accessElement);
+        return root;
+    }
+
+    function parseCallAndAccessChain<T extends Node>(root: T) : T | IndexedAccess | CallExpression {
+        outer:
         while (true) {
             switch (lookahead()) {
+                case TokenType.LEFT_PAREN: {
+                    root = parseCallExpression(root) as T;
+                    continue;
+                }
+                case TokenType.QUESTION_MARK: {
+                    if (SpeculationHelper.lookahead(nextNonTriviaIsDot)) {
+                        const questionMark = parseExpectedTerminal(TokenType.QUESTION_MARK, ParseOptions.withTrivia);
+                        const dot          = parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
+                        if (lookahead() === TokenType.LEFT_BRACKET) {
+                            const leftBracket           = parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
+                            const expr                  = parseExpression();
+                            const rightBracket          = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
+                            const optionalBracketAccess = OptionalBracketAccess(questionMark, dot, leftBracket, expr, rightBracket);
+                            root                        = transformingPushAccessElement(root, optionalBracketAccess) as T;
+                            parseErrorAtRange(questionMark.range.fromInclusive, rightBracket.range.toExclusive, "CF does not support optional bracket access expressions.");
+                            continue;
+                        }
+                        else if (lookahead() === TokenType.LEFT_PAREN) {
+                            root = transformingPushAccessElement(root, OptionalCall(questionMark, dot)) as T;
+                            root = parseCallExpression(root) as T;
+                            parseErrorAtRange(questionMark.range.fromInclusive, (<CallExpression>root).rightParen.range.toExclusive, "CF does not support optional call expressions.");
+                            continue;
+                        }
+                        else {
+                            const propertyName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ true);
+                            root = transformingPushAccessElement(root, OptionalDotAccess(questionMark, dot, propertyName)) as T;
+                            // todo -- parseError if first char of propertyName is an ascii digit
+                            continue;
+                        }
+                    }
+                    else {
+                        break outer;
+                    }
+                }
                 case TokenType.LEFT_BRACKET: {
                     const leftBracket = parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
                     const expr = isStartOfExpression()
                         ? parseExpression()
                         : (parseErrorAtCurrentToken("Expression expected."), createMissingNode(Identifier(NilTerminal, "")));
-                    
                     const rightBracket = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
 
-                    if (root.type !== NodeType.indexedAccess) {
-                        (root as Node) = IndexedAccess(root);
-                    }
-                    pushAccessElement(root as IndexedAccess, leftBracket, expr, rightBracket);
-
+                    root = transformingPushAccessElement(root, BracketAccess(leftBracket, expr, rightBracket)) as T;
                     continue;
                 }
                 case TokenType.DOT: {
@@ -1899,17 +1938,17 @@ export function Parser() {
                     // foo = {4: 42};
                     // bar = foo.4; -- ok, bar == 42;
                     const propertyName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ true);
-                    if (root.type !== NodeType.indexedAccess) {
-                        (root as Node) = IndexedAccess(root);
-                    }
-                    pushAccessElement(root as IndexedAccess, dot, propertyName);
+
+                    root = transformingPushAccessElement(root, DotAccess(dot, propertyName)) as T;
                     continue;
                 }
             }
             break;
         }
 
-        if (root.type === NodeType.indexedAccess) {
+        // we'll have to do this later during/after we bind parents
+        /*
+        if (root.type === NodeType.indexedAccess || root.type === NodeType.callExpression) {
             switch (base.type) {
                 case NodeType.arrayLiteral:
                     parseErrorAtRange(base.range, "An array literal may not be accessed in the same expression as its definition.");
@@ -1919,6 +1958,7 @@ export function Parser() {
                     break;
             }
         }
+        */
 
         return root;
     }
@@ -1928,7 +1968,7 @@ export function Parser() {
         const className      = parseDottedPathTypename();
         const callExpression = parseCallExpression(className);
         const newExpression  = New(newToken, callExpression);
-        return parseTrailingExpressionChain(newExpression); // is new foo()["some property"] ok ?
+        return parseCallExpressionOrLowerRest(newExpression); // is new foo()["some property"] ok ?
     }
 
     function isStartOfStatement() : boolean {
@@ -2117,7 +2157,7 @@ export function Parser() {
         const leftBrace = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
         const kvPairs = parseList(ParseContext.structBody, parseStructLiteralInitializerMember, TokenType.RIGHT_BRACE);
         const rightBrace = parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
-        return parseTrailingExpressionChain(
+        return parseCallExpressionOrLowerRest(
             StructLiteral(leftBrace, kvPairs, rightBrace));
     }
 
@@ -2128,15 +2168,13 @@ export function Parser() {
      * [:]          --> emptry ordered struct literal
      * @returns 
      */
-    function parseArrayLiteralOrOrderedStructLiteral() : Node {
+    function parseArrayLiteralOrOrderedStructLiteral() : ArrayLiteral | StructLiteral {
         const leftBracket = parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
 
         if (lookahead() === TokenType.COLON) {
             const colon = parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
             const rightBracket = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
-
-            return parseTrailingExpressionChain(
-                EmptyOrderedStructLiteral(leftBracket, colon, rightBracket));
+            return EmptyOrderedStructLiteral(leftBracket, colon, rightBracket);
         }        
 
         function isExpressionThenColon() {
@@ -2148,8 +2186,7 @@ export function Parser() {
             const useArrayBodyListTerminator = ParseContext.arrayBody;
             const structMembers = parseList(useArrayBodyListTerminator, parseStructLiteralInitializerMember, TokenType.RIGHT_BRACKET);
             const rightBracket = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
-            return parseTrailingExpressionChain(
-                OrderedStructLiteral(leftBracket, structMembers, rightBracket));
+            return OrderedStructLiteral(leftBracket, structMembers, rightBracket);
         }
         else {
             const elements : ArrayLiteralInitializerMember[] = [];
@@ -2167,8 +2204,7 @@ export function Parser() {
                 elements.push(ArrayLiteralInitializerMember(expr, maybeComma))
             }
             const rightBracket = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
-            return parseTrailingExpressionChain(
-                ArrayLiteral(leftBracket, elements, rightBracket));
+            return ArrayLiteral(leftBracket, elements, rightBracket);
         }
     }
 

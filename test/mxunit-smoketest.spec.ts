@@ -251,15 +251,15 @@ const expectedDiagnosticCountByFile : Record<string, number> = {
 
 
 describe("MX-Unit smoke test", () => {
-    it("Should completely parse all CFMs/CFCs within the MX-Unit subrepo with exactly the expected diagnostic quantities emitted", () => {
-        for (const fileBaseName of Object.keys(expectedDiagnosticCountByFile)) {
-            console.log(fileBaseName);
+    for (const fileBaseName of Object.keys(expectedDiagnosticCountByFile)) {
+        const expectedDiagnosticCount = expectedDiagnosticCountByFile[fileBaseName];
+
+        it(`Should parse ${fileBaseName} with exactly ___${expectedDiagnosticCount}___ emitted diagnostics`, () => {
             const absPath = path.resolve(__dirname, fileBaseName);
             const scanner = Scanner(fs.readFileSync(absPath));
             parser.setScanner(scanner).parse(cfmOrCfc(fileBaseName));
             const diagnostics = parser.getDiagnostics();
-            const expectedDiagnosticCount = expectedDiagnosticCountByFile[fileBaseName];
             assert.strictEqual(diagnostics.length, expectedDiagnosticCount, `${fileBaseName} parsed with exactly ${expectedDiagnosticCount} emitted diagnostics`);
-        }
-    });
+        });
+    }
 });
