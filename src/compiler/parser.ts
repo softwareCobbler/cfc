@@ -26,7 +26,7 @@ import {
     VariableDeclaration,
     ImportStatement,
     New,
-    DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess } from "./node";
+    DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, SugaredScriptTaglikeStatement, IndexedAccessType } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, isNamedBlockName } from "./utils";
 
@@ -48,10 +48,11 @@ const enum ParseContext {
     interpolatedText,   // in <cfoutput>#...#</cfoutput> or "#...#"
     awaitingVoidSlash,  // <cfset foo = bar /> is just `foo=bar`, with a trailing tag-void-slash, not `foo=bar/` with a missing rhs to the `/` operator
     awaitingRightBrace, // any time a loose '}' would end a parse
-    switchClause,             // in a switch statement
+    switchClause,       // in a switch statement
     trivia,             // comments, whitespace
     structBody,
     arrayBody,
+    sugaredAbort,       // inside an `abort ...;` statement
     END
 }
 
@@ -1443,7 +1444,17 @@ export function Parser() {
                 parseErrorAtRange(root.range, "Variable declarations require initializers.");
             }
 
-            return VariableDeclaration(finalModifier, varModifier, root, null);
+            if (root.type === NodeType.identifier
+                || root.type === NodeType.indexedAccess
+                && root.accessElements.every(e => e.accessType === IndexedAccessType.dot || e.accessType === IndexedAccessType.bracket)) {
+                // @todo - if the access type is not homogenous cf will error, at least at the top-most scope
+                // a["b"]["c"] = 0 declares and inits a = {b: {c: 0}};
+                // a["b"].c = 0 is an error ("a" is not defined)
+                return VariableDeclaration(finalModifier, varModifier, root, null);
+            }
+            else {
+                return root;
+            }
         }
 
         if (varModifier) {
@@ -1896,6 +1907,9 @@ export function Parser() {
                     if (SpeculationHelper.lookahead(nextNonTriviaIsDot)) {
                         const questionMark = parseExpectedTerminal(TokenType.QUESTION_MARK, ParseOptions.withTrivia);
                         const dot          = parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
+                        if (questionMark.range.toExclusive !== dot.range.fromInclusive) {
+                            parseErrorAtRange(questionMark.range.fromInclusive, dot.range.toExclusive, "Consider treating the optional-access operator as a single token.");
+                        }
                         if (lookahead() === TokenType.LEFT_BRACKET) {
                             const leftBracket           = parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
                             const expr                  = parseExpression();
@@ -2653,9 +2667,9 @@ export function Parser() {
             : null;
 
         if (peek().text.toLowerCase() === "in") {
-            if (!init) {
+            if (!init || init.type !== NodeType.variableDeclaration) {
                 init = createMissingNode(Identifier(NilTerminal, ""));
-                parseErrorAtRange(leftParen.range.fromInclusive+1, leftParen.range.toExclusive+1, "Expression expected.");
+                parseErrorAtRange(leftParen.range.fromInclusive+1, leftParen.range.toExclusive+1, "Declaration expected.");
             }
             const inToken = Terminal(parseNextToken(), parseTrivia());
             const expr = parseExpression();
@@ -2852,14 +2866,55 @@ export function Parser() {
                 }
                 default: {
                     const peeked = peek();
+                    const peekedText = peeked.text.toLowerCase();
+
+                    // special case for sugared `abort`
+                    if (peekedText === "abort" && !isInSomeContext(ParseContext.sugaredAbort)) {
+                        const terminal = Terminal(parseNextToken(), parseTrivia());
+                        if (lookahead() === TokenType.SEMICOLON) {
+                            return SugaredScriptTaglikeStatement(terminal, [], parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia));
+                        }
+                        //
+                        // so `function foo() { abort }` is ok, since `}` is not a quote but does not start a statement
+                        // whereas `function foo() { abort v + 1 }` is invalid because (v+1) is not a string literal
+                        // 
+                        else if (isStartOfStatement()) {
+                            const statement = doInExtendedContext(ParseContext.sugaredAbort, parseStatement);
+                            // we parsed a statement, so any string literal will be wrapped in it
+                            // if we got a trivial string value, we are OK
+                            // otherwise, emit a diagnostic
+                            if (statement.type === NodeType.statement
+                                && (statement.expr!.type === NodeType.simpleStringLiteral || statement.expr!.type === NodeType.interpolatedStringLiteral)) {
+                                    if (getTriviallyComputableString(statement.expr) !== undefined) {
+                                        return SugaredScriptTaglikeStatement(
+                                            terminal,
+                                            [TagAttribute(Terminal(peek()), "showerror", NilTerminal, statement.expr!)], // synthesize the "showerror" attribute
+                                            parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia));
+                                    }
+                            }
+
+                            parseErrorAtRange(mergeRanges(terminal, statement), "A sugared abort statement must be followed by a constant string value or a semicolon.");
+                            return SugaredScriptTaglikeStatement(
+                                /* name */ terminal,
+                                /* attrs */ [],
+                                /* semicolon */ parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia));
+                        }
+                        else {
+                            return SugaredScriptTaglikeStatement(
+                                /* name */ terminal,
+                                /* attrs */ [],
+                                /* semicolon */ parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia));
+                        }
+                    }
+
                     if (isLexemeLikeToken(peeked)) {
                         const maybeFunction = SpeculationHelper.speculate(tryParseNamedFunctionDefinition, /*speculative*/ true);
                         if (maybeFunction) {
                             return maybeFunction;
                         }
                     }
-
-                    if (isNamedBlockName(peeked.text)) {
+                    
+                    if (isNamedBlockName(peekedText)) {
                         const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ false);
                         const attrs = parseTagAttributes();
                         const block = parseBracedBlock(mode);

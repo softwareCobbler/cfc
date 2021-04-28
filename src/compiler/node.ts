@@ -165,6 +165,9 @@ export function mergeRanges(...nodes : (SourceRange | Node | Node[] | undefined 
         else if (node instanceof SourceRange) {
             thisRange = node;
         }
+        else if (node.type === NodeType.statement) {
+            thisRange = mergeRanges(node.expr, node.attrs, node.semicolon);
+        }
         else {
             thisRange = node.range;
         }
@@ -684,7 +687,7 @@ export function VariableDeclaration(
     identifier: Node,
     expr: Node | null
 ) : VariableDeclaration {
-    const v = NodeBase<VariableDeclaration>(NodeType.variableDeclaration, mergeRanges(finalModifier, varModifier, expr));
+    const v = NodeBase<VariableDeclaration>(NodeType.variableDeclaration, mergeRanges(finalModifier, varModifier, identifier, expr));
     v.finalModifier = finalModifier;
     v.varModifier = varModifier;
     v.identifier = identifier;
@@ -695,12 +698,22 @@ export function VariableDeclaration(
 export interface Statement extends NodeBase {
     type: NodeType.statement;
     expr: Node | null;              // null if from tag (originating node will be in tagOrigin.startTag)
+    attrs: TagAttribute[] | null;   // sugaredScriptTagCalls with no body become statements, and may have attributes; like `transaction action=rollback;`
     semicolon : Terminal | null;    // null if from tag
+}
+
+export function SugaredScriptTaglikeStatement(name: Terminal, attrs: TagAttribute[], semicolon: Terminal | null) : Statement {
+    const v = NodeBase<Statement>(NodeType.statement, mergeRanges(name, attrs, semicolon));
+    v.expr = name;
+    v.attrs = attrs;
+    v.semicolon = semicolon;
+    return v;
 }
 
 export function Statement(node: Node | null, semicolon: Terminal | null) : Statement {
     const v = NodeBase<Statement>(NodeType.statement, mergeRanges(node, semicolon));
     v.expr = node;
+    v.attrs = null;
     v.semicolon = semicolon;
     return v;
 }

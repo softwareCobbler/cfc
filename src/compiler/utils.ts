@@ -139,15 +139,21 @@ export function isIllegalIdentifierName(text: string) {
     else if (node.type === NodeType.hashWrappedExpr || node.type === NodeType.parenthetical) {
         return getTriviallyComputableString(node.expr);
     }
-    // and interpolated string literal is trival if every one of its elements is trivial
-    // e.g, '#'x'##'y'#' === "xy"
-    // however, it appears that cf does not accept a string like the above as if it were a constant,
-    // and requires, if an interpolated string literal is to be interpreted as a constant, that that string
-    // literal be composed of a single interpolated element
     else if (node.type === NodeType.interpolatedStringLiteral) {
-        if (node.elements.length === 1) {
-            return getTriviallyComputableString(node.elements[0]);
+        let result = "";
+        for (let i = 0; i < node.elements.length; i++) {
+            let trivialElement = getTriviallyComputableString(node.elements[0]);
+            if (trivialElement === undefined) {
+                return undefined;
+            }
+            else {
+                result += trivialElement;
+            }
         }
+        return result;
+    }
+    else if (node.type === NodeType.identifier) {
+        return node.lexeme.token.text;
     }
 
     return undefined;

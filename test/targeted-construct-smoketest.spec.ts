@@ -37,16 +37,26 @@ describe("general smoke test for particular constructs", () => {
     it("Should accept the legacy operator `IMP`", () => {
         assertDiagnosticsCount(`<cfif a imp b></cfif>`, CfFileType.cfm, 0);
     });
-    it("Should be OK with multibyte utf16 characters`", () => {
+    it("Should be OK with multibyte utf16 characters", () => {
         assertDiagnosticsCount(`<cfif 😬 EQ 😬>😅</cfif>`, CfFileType.cfm, 0);
     });
-    it("Should accept optional dot access`", () => {
+    it("Should accept optional dot access", () => {
         assertDiagnosticsCount(`<cfif a?.b eq c?.d></cfif>`, CfFileType.cfm, 0);
     });
-    it("Should issue a diagnostic for an optional bracket access`", () => {
+    it("Should issue a diagnostic for an optional bracket access", () => {
         assertDiagnosticsCount(`<cfif a?.deep?.["b"] eq c?.deep?.["d"]></cfif>`, CfFileType.cfm, 2);
     });
-    it("Should issue a diagnostic for an optional call`", () => {
+    it("Should issue a diagnostic for an optional call", () => {
         assertDiagnosticsCount(`<cfif a?.deep?.() gt b?.deep?.()></cfif>`, CfFileType.cfm, 2);
+    });
+    it("Should issue diagnostics for sugared aborts not followed by string literals or semicolons", () => {
+        assertDiagnosticsCount(`<cfscript>abort function foo() {};</cfscript>`, CfFileType.cfm, 1);
+        assertDiagnosticsCount(`<cfscript>abort v</cfscript>`, CfFileType.cfm, 1);
+        assertDiagnosticsCount(`<cfscript>abort 1</cfscript>`, CfFileType.cfm, 1);
+    });
+    it("Should accept sugared aborts followed by string literals or semicolons", () => {
+        assertDiagnosticsCount(`<cfscript>abort;</cfscript>`, CfFileType.cfm, 0);
+        assertDiagnosticsCount(`<cfscript>abort "v"</cfscript>`, CfFileType.cfm, 0);
+        assertDiagnosticsCount(`<cfscript>abort '1'</cfscript>`, CfFileType.cfm, 0);
     });
 });
