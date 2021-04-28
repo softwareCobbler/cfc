@@ -4,7 +4,7 @@ import {
     Conditional, ConditionalSubtype, FunctionParameter, FromTag, FunctionDefinition, CommentType,
     HashWrappedExpr, BinaryOperator, Parenthetical, UnaryOperator, BooleanLiteral,
     CallExpression, IndexedAccess, pushAccessElement, CallArgument, Identifier, SimpleStringLiteral, InterpolatedStringLiteral,
-    NumericLiteral, DottedPath, ArrowFunctionDefinition, Statement, Block, Switch, NamedBlockFromBlock,
+    NumericLiteral, DottedPath, ArrowFunctionDefinition, Statement, Block, Switch,
     SwitchCase,
     Do,
     While,
@@ -26,9 +26,11 @@ import {
     VariableDeclaration,
     ImportStatement,
     New,
-    DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, SugaredScriptTaglikeStatement, IndexedAccessType } from "./node";
+    DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
+    SugaredTaglikeBlock, TaglikeCallBlock,
+    SugaredTaglikeStatement, TaglikeCallStatement } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
-import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, isNamedBlockName } from "./utils";
+import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, isSugaredTagName } from "./utils";
 
 let debugParseModule = false;
 
@@ -48,6 +50,7 @@ const enum ParseContext {
     interpolatedText,   // in <cfoutput>#...#</cfoutput> or "#...#"
     awaitingVoidSlash,  // <cfset foo = bar /> is just `foo=bar`, with a trailing tag-void-slash, not `foo=bar/` with a missing rhs to the `/` operator
     awaitingRightBrace, // any time a loose '}' would end a parse
+    argumentList,       // someCallWithArgs(...)
     switchClause,       // in a switch statement
     trivia,             // comments, whitespace
     structBody,
@@ -477,7 +480,7 @@ export function Parser() {
             }
             else {
                 if (globalDiagnosticEmitter) globalDiagnosticEmitter();
-                else parseErrorAtRange(labelLike.range, "Expected a lexeme-like token here");
+                else parseErrorAtRange(labelLike.range, "Expected a lexeme-like token here.");
             }
             
             if (consumeOnFailure) {
@@ -533,7 +536,7 @@ export function Parser() {
     function parseScriptMultiLineComment() : Comment {
         const startToken = parseExpectedTerminal(TokenType.FORWARD_SLASH_STAR, ParseOptions.noTrivia);
         scanToNextToken([TokenType.STAR_FORWARD_SLASH]);
-        const endToken = parseExpectedTerminal(TokenType.STAR_FORWARD_SLASH, ParseOptions.noTrivia, () => parseErrorAtRange(startToken.range.fromInclusive, scanner.getIndex(), "Unterminated multiline script comment"));
+        const endToken = parseExpectedTerminal(TokenType.STAR_FORWARD_SLASH, ParseOptions.noTrivia, () => parseErrorAtRange(startToken.range.fromInclusive, scanner.getIndex(), "Unterminated multiline script comment."));
         return Comment(CommentType.scriptMultiLine, new SourceRange(startToken.range.fromInclusive, endToken.range.toExclusive));
     }
 
@@ -1549,7 +1552,7 @@ export function Parser() {
                         const colon = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
                         if (questionMark.range.toExclusive !== colon.range.fromInclusive) {
                             // @fixme: make this a warning
-                            parseErrorAtRange(questionMark.range.fromInclusive, colon.range.toExclusive, "Consider treating the null coalescing operator as a single token");
+                            parseErrorAtRange(questionMark.range.fromInclusive, colon.range.toExclusive, "Consider treating the null coalescing operator as a single token.");
                         }
 
                         const syntheticOp = Terminal(Token(TokenType.QUESTION_MARK_COLON, "?:", questionMark.range.fromInclusive, colon.range.toExclusive), colon.trivia);
@@ -1748,7 +1751,7 @@ export function Parser() {
                 if ((root.type === NodeType.indexedAccess) ||
                     (root.type === NodeType.unaryOperator && root.expr.type === NodeType.indexedAccess) ||
                     (root.type === NodeType.callExpression && root.left.type === NodeType.indexedAccess)) {
-                    parseErrorAtRange(root.range, "Illegal indexed access expression; consider removing the parentheses from the left-most expression");
+                    parseErrorAtRange(root.range, "Illegal indexed access expression; consider removing the parentheses from the left-most expression.");
                 }
                 return root;
             }
@@ -1812,7 +1815,7 @@ export function Parser() {
         const rightHash = parseExpectedTerminal(
             TokenType.HASH,
             isInSomeContext(ParseContext.interpolatedText) ? ParseOptions.noTrivia : ParseOptions.withTrivia, // if inside interpolated text, the 'trivia' outside the right-hash should be interpreted as raw text
-            () => parseErrorAtRange(leftHash.range.fromInclusive, getIndex(), "Unterminated hash-wrapped expression"));
+            () => parseErrorAtRange(leftHash.range.fromInclusive, getIndex(), "Unterminated hash-wrapped expression."));
 
         parseContext = savedContext;
         return HashWrappedExpr(leftHash, expr, rightHash);
@@ -1999,7 +2002,7 @@ export function Parser() {
             case TokenType.KW_WHILE:
                 return true;
             default:
-                return (isNamedBlockName(peek().text.toLowerCase()))
+                return (isSugaredTagName(peek().text.toLowerCase()))
                     || isStartOfExpression();
         }
     }
@@ -2033,44 +2036,44 @@ export function Parser() {
         }
     }
 
+    function parseArgument() : CallArgument {
+        const exprOrArgName = parseAnonymousFunctionDefinitionOrExpression();
+
+        // if we got an identifier, peek ahead to see if there is an equals or colon token
+        // if so, this is a named argument, like foo(bar=baz, qux:42)
+        // like within a struct literals, `=` and `:` share the same meaning
+        // we don't know from our current position if all of the args are named,
+        // we can check that later; if one is, all of them must be
+        if (exprOrArgName.type === NodeType.identifier) {
+            let equalOrComma : Terminal | null;
+            if (equalOrComma =
+                    (parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia) ??
+                    (parseOptionalTerminal(TokenType.COLON, ParseOptions.withTrivia)))) {
+                const namedArgValue = parseAnonymousFunctionDefinitionOrExpression();
+                const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+
+                if (!comma && isStartOfExpression()) {
+                    parseErrorAtRange(namedArgValue.range.toExclusive, namedArgValue.range.toExclusive + 1, "Expected ','");
+                }
+
+                return CallArgument(exprOrArgName, equalOrComma, namedArgValue, comma);
+            }
+        }
+
+        // there was no '=' or ':' after the expression,
+        // so we have an unnamed arguments, like foo(x, y, z);
+        const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+
+        if (!comma && isStartOfExpression()) {
+            parseErrorAtRange(exprOrArgName.range.toExclusive, exprOrArgName.range.toExclusive + 1, "Expected ','");
+        }
+
+        return CallArgument(null, null, exprOrArgName, comma);
+    }
+
     function parseCallExpression(root: Node) : CallExpression {
         const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
-        const args : CallArgument[] = [];
-        while (isStartOfExpression()) {
-            const exprOrArgName = parseAnonymousFunctionDefinitionOrExpression();
-
-            // if we got an identifier, peek ahead to see if there is an equals or colon token
-            // if so, this is a named argument, like foo(bar=baz, qux:42)
-            // like within a struct literals, `=` and `:` share the same meaning
-            // we don't know from our current position if all of the args are named,
-            // we can check that later; if one is, all of them must be
-            if (exprOrArgName.type === NodeType.identifier) {
-                let equalOrComma : Terminal | null;
-                if (equalOrComma =
-                        (parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia) ??
-                        (parseOptionalTerminal(TokenType.COLON, ParseOptions.withTrivia)))) {
-                    const namedArgValue = parseAnonymousFunctionDefinitionOrExpression();
-                    const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
-
-                    if (!comma && isStartOfExpression()) {
-                        parseErrorAtRange(namedArgValue.range.toExclusive, namedArgValue.range.toExclusive + 1, "Expected ','");
-                    }
-
-                    args.push(CallArgument(exprOrArgName, equalOrComma, namedArgValue, comma));
-                    continue;
-                }
-            }
-
-            // there was no '=' or ':' after the expression,
-            // so we have an unnamed arguments, like foo(x, y, z);
-            const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
-
-            if (!comma && isStartOfExpression()) {
-                parseErrorAtRange(exprOrArgName.range.toExclusive, exprOrArgName.range.toExclusive + 1, "Expected ','");
-            }
-
-            args.push(CallArgument(null, null, exprOrArgName, comma));
-        }
+        const args = parseList(ParseContext.argumentList, parseArgument);
 
         if (args.length > 0) {
             if (args[args.length-1].comma) {
@@ -2086,6 +2089,7 @@ export function Parser() {
         switch (what) {
             case ParseContext.arrayBody:
             case ParseContext.structBody:
+            case ParseContext.argumentList:
                 return isStartOfExpression();
             case ParseContext.cfScriptTagBody:
             case ParseContext.cfScriptTopLevel:
@@ -2101,6 +2105,8 @@ export function Parser() {
         if (lookahead() === TokenType.EOF) return true;
 
         switch (what) {
+            case ParseContext.argumentList:
+                return lookahead() === TokenType.RIGHT_PAREN;
             case ParseContext.arrayBody:
                 return lookahead() === TokenType.RIGHT_BRACKET;
             case ParseContext.structBody:
@@ -2143,7 +2149,7 @@ export function Parser() {
             case NodeType.interpolatedStringLiteral:
                 return result;
             default: {
-                parseErrorAtRange(result.range, "Invalid struct initializer key");
+                parseErrorAtRange(result.range, "Invalid struct initializer key.");
                 return result;
             }
         }
@@ -2161,7 +2167,7 @@ export function Parser() {
             parseErrorAtRange(value.range.toExclusive - 1, value.range.toExclusive + 1, "Expected ','");
         }
         if (maybeComma && lookahead() === terminator) {
-            parseErrorAtRange(maybeComma.range, "Illegal trailing comma");
+            parseErrorAtRange(maybeComma.range, "Illegal trailing comma.");
         }
 
         return StructLiteralInitializerMember(key, colonOrEqual, value, maybeComma);
@@ -2212,7 +2218,7 @@ export function Parser() {
                     parseErrorAtRange(expr.range.toExclusive-1, expr.range.toExclusive, "Expected ','");
                 }
                 if (maybeComma && lookahead() === TokenType.RIGHT_BRACKET) {
-                    parseErrorAtRange(maybeComma.range, "Illegal trailing comma");
+                    parseErrorAtRange(maybeComma.range, "Illegal trailing comma.");
                 }
 
                 elements.push(ArrayLiteralInitializerMember(expr, maybeComma))
@@ -2424,6 +2430,9 @@ export function Parser() {
             result.push(FunctionParameter(requiredTerminal, javaLikeTypename, name, equal, defaultValue, comma));
         }
 
+        if (result.length > 0 && result[result.length-1].comma) {
+            parseErrorAtRange(result[result.length-1].comma!.range, "Illegal trailing comma.");
+        }
         return result;
     }
 
@@ -2527,7 +2536,7 @@ export function Parser() {
                 cases.push(SwitchCase.Default(defaultToken, colon, body));
             }
             else {
-                parseErrorAtCurrentToken("Expected a switch case or default here");
+                parseErrorAtCurrentToken("Expected a switch case or default.");
                 break;
             }
         }
@@ -2753,7 +2762,7 @@ export function Parser() {
         return result as unknown as R[];
     }
 
-    function parseBracedBlock(parseBlockInMode: ScannerMode) {
+    function parseBracedBlock(parseBlockInMode: ScannerMode = mode) {
         const savedMode = mode;
         setScannerMode(parseBlockInMode);
         const leftBrace = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
@@ -2851,7 +2860,7 @@ export function Parser() {
                         break outer;
                     }
                     else {
-                        parseErrorAtCurrentToken("Unexpected </cf token in a statement context");
+                        parseErrorAtCurrentToken("Unexpected </cf token in a statement context.");
                         next();
                         continue;
                     }
@@ -2872,7 +2881,7 @@ export function Parser() {
                     if (peekedText === "abort" && !isInSomeContext(ParseContext.sugaredAbort)) {
                         const terminal = Terminal(parseNextToken(), parseTrivia());
                         if (lookahead() === TokenType.SEMICOLON) {
-                            return SugaredScriptTaglikeStatement(terminal, [], parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia));
+                            return SugaredTaglikeStatement(terminal, [], parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia));
                         }
                         //
                         // so `function foo() { abort }` is ok, since `}` is not a quote but does not start a statement
@@ -2886,7 +2895,7 @@ export function Parser() {
                             if (statement.type === NodeType.statement
                                 && (statement.expr!.type === NodeType.simpleStringLiteral || statement.expr!.type === NodeType.interpolatedStringLiteral)) {
                                     if (getTriviallyComputableString(statement.expr) !== undefined) {
-                                        return SugaredScriptTaglikeStatement(
+                                        return SugaredTaglikeStatement(
                                             terminal,
                                             [TagAttribute(Terminal(peek()), "showerror", NilTerminal, statement.expr!)], // synthesize the "showerror" attribute
                                             parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia));
@@ -2894,13 +2903,13 @@ export function Parser() {
                             }
 
                             parseErrorAtRange(mergeRanges(terminal, statement), "A sugared abort statement must be followed by a constant string value or a semicolon.");
-                            return SugaredScriptTaglikeStatement(
+                            return SugaredTaglikeStatement(
                                 /* name */ terminal,
                                 /* attrs */ [],
                                 /* semicolon */ parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia));
                         }
                         else {
-                            return SugaredScriptTaglikeStatement(
+                            return SugaredTaglikeStatement(
                                 /* name */ terminal,
                                 /* attrs */ [],
                                 /* semicolon */ parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia));
@@ -2914,13 +2923,68 @@ export function Parser() {
                         }
                     }
                     
-                    if (isNamedBlockName(peekedText)) {
-                        const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ false);
-                        const attrs = parseTagAttributes();
-                        const block = parseBracedBlock(mode);
-                        return NamedBlockFromBlock(name, attrs, block);
+                    if (isSugaredTagName(peekedText)) {
+                        const quickPeek = SpeculationHelper.speculate(() => {
+                            const sugaredTagNameToken = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/false, /*allowNumeric*/false);
+                            return lookahead() === TokenType.LEFT_BRACE
+                                ? sugaredTagNameToken
+                                : SpeculationHelper.lookahead(() => !!scanTagAttributeName())
+                                ? [sugaredTagNameToken, parseTagAttributes()] as const
+                                : null;
+                        });
+
+                        if (quickPeek) {
+                            // if we got an array then we got [terminal, TagAttributes[]]
+                            if (Array.isArray(quickPeek)) {
+                                if (lookahead() === TokenType.LEFT_BRACE) {
+                                    const block = parseBracedBlock();
+                                    return SugaredTaglikeBlock(/*name*/quickPeek[0], /*attrs*/[], /*block*/block);
+                                }
+                                else {
+                                    return SugaredTaglikeStatement(quickPeek[0], quickPeek[1], parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia))
+                                }
+                            }
+                            // otherwise we just got a terminal
+                            else {
+                                const block = parseBracedBlock();
+                                return SugaredTaglikeBlock(/*name*/quickPeek as Terminal, /*attrs*/[], /*block*/block);
+                            }
+                        }
                     }
-                    else if (isStartOfExpression()) {
+
+                    // if the name matches the "cf..." pattern, and the next non trivia is a left paren, this is a TagLikeCall(Statement|Block)
+                    // cfSomeTag(attr1=foo, attr2=bar) { ... } (taglikecall block)
+                    // cfSomeTag(); (taglikecall statement)
+                    if (peekedText.length > 2 && /^cf/i.test(peekedText)) {
+                        const nameTerminalIfIsCall = SpeculationHelper.speculate(function() {
+                            const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ false);
+                            return lookahead() === TokenType.LEFT_PAREN
+                                ? name
+                                : null;
+                        });
+
+                        if (nameTerminalIfIsCall) {
+                            const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
+                            const args = parseList(ParseContext.argumentList, parseArgument);
+                            const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+                            for (let i = 0; i < args.length; i++) {
+                                if (!args[i].equals) {
+                                    parseErrorAtRange(args[i].expr.range, "Taglike function call arguments must be named.");
+                                }
+                            }
+
+                            if (lookahead() !== TokenType.LEFT_BRACE) {
+                                const semicolon = parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia);
+                                return TaglikeCallStatement(nameTerminalIfIsCall, leftParen, args, rightParen, semicolon);
+                            }
+                            else {
+                                const block = parseBracedBlock(mode);
+                                return TaglikeCallBlock(nameTerminalIfIsCall, leftParen, args, rightParen, block);
+                            }
+                        }
+                    }
+
+                    if (isStartOfExpression()) {
                         const result = parseAssignmentOrLower();
                         const semi = scriptMode() ? parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia) : null;
                         return Statement(result, semi);

@@ -66,7 +66,7 @@ const expectedDiagnosticCountByFile : Record<string, number> = {
     "./mxunit/generator/generate.cfm": 0,
     "./mxunit/generator/index.cfm": 0,
     "./mxunit/generator/lib_cfscript.cfm": 0,
-    "./mxunit/generator/listFiles.cfm": 0,
+    "./mxunit/generator/listFiles.cfm": 4, // a no longer valid use of taglike call statement cfparam("foo","bar"), where it now appears named arguments are required
     "./mxunit/PluginDemoTests/CFScriptExpectedExceptionTest.cfc": 0,
     "./mxunit/PluginDemoTests/CompareDialogTest.cfc": 0,
     "./mxunit/PluginDemoTests/ComplexExceptionTypeErrorTest.cfc": 0,

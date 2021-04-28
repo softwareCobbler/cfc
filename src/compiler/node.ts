@@ -15,7 +15,7 @@ export const enum NodeFlags {
 export const enum NodeType {
     terminal, textSpan, comment, hashWrappedExpr, parenthetical, tagAttribute,
     tag, callExpression, callArgument, unaryOperator, binaryOperator,
-    conditional, variableDeclaration, statement, namedBlock, simpleStringLiteral, interpolatedStringLiteral, numericLiteral, booleanLiteral,
+    conditional, variableDeclaration, statement, block, simpleStringLiteral, interpolatedStringLiteral, numericLiteral, booleanLiteral,
     identifier,
     indexedAccess, indexedAccessChainElement,
     functionDefinition, arrowFunctionDefinition, functionParameter,
@@ -40,7 +40,7 @@ const NodeTypeUiString : Record<NodeType, string> = {
     [NodeType.conditional]: "conditional",
     [NodeType.variableDeclaration]: "declaration",
     [NodeType.statement]: "statement",
-    [NodeType.namedBlock]: "namedBlock",
+    [NodeType.block]: "namedBlock",
     [NodeType.simpleStringLiteral]: "simpleStringLiteral",
     [NodeType.interpolatedStringLiteral]: "interpolatedStringLiteral",
     [NodeType.numericLiteral]: "numericLiteral",
@@ -164,9 +164,6 @@ export function mergeRanges(...nodes : (SourceRange | Node | Node[] | undefined 
         }
         else if (node instanceof SourceRange) {
             thisRange = node;
-        }
-        else if (node.type === NodeType.statement) {
-            thisRange = mergeRanges(node.expr, node.attrs, node.semicolon);
         }
         else {
             thisRange = node.range;
@@ -696,16 +693,35 @@ export function VariableDeclaration(
 }
 
 export interface Statement extends NodeBase {
-    type: NodeType.statement;
-    expr: Node | null;              // null if from tag (originating node will be in tagOrigin.startTag)
-    attrs: TagAttribute[] | null;   // sugaredScriptTagCalls with no body become statements, and may have attributes; like `transaction action=rollback;`
-    semicolon : Terminal | null;    // null if from tag
+    type: NodeType.statement,
+    expr: Node | null,              // null if from tag (originating node will be in tagOrigin.startTag)
+    asSugaredTaglikeStatement: {    // sugaredScriptTagCalls with no body become statements, and may have attributes; like `transaction action=rollback;`
+        attrs: TagAttribute[],   
+    } | null,
+    asTaglikeCallStatement: {       // e.g, cfhttp(foo=bar);
+        leftParen: Terminal,
+        args: CallArgument[],
+        rightParen: Terminal,
+    } | null,
+    semicolon : Terminal | null,    // null if from tag
 }
 
-export function SugaredScriptTaglikeStatement(name: Terminal, attrs: TagAttribute[], semicolon: Terminal | null) : Statement {
+// e.g, `transaction action="foo";`
+export function SugaredTaglikeStatement(name: Terminal, attrs: TagAttribute[], semicolon: Terminal | null) : Statement {
     const v = NodeBase<Statement>(NodeType.statement, mergeRanges(name, attrs, semicolon));
     v.expr = name;
-    v.attrs = attrs;
+    v.asSugaredTaglikeStatement = {attrs};
+    v.asTaglikeCallStatement = null;
+    v.semicolon = semicolon;
+    return v;
+}
+
+// e.g, `cftransaction(action="foo");`
+export function TaglikeCallStatement(name: Terminal, leftParen: Terminal, args: CallArgument[], rightParen: Terminal, semicolon: Terminal | null) : Statement {
+    const v = NodeBase<Statement>(NodeType.statement, mergeRanges(name, rightParen, semicolon));
+    v.expr = name;
+    v.asSugaredTaglikeStatement = null;
+    v.asTaglikeCallStatement = {leftParen, args, rightParen};
     v.semicolon = semicolon;
     return v;
 }
@@ -713,7 +729,8 @@ export function SugaredScriptTaglikeStatement(name: Terminal, attrs: TagAttribut
 export function Statement(node: Node | null, semicolon: Terminal | null) : Statement {
     const v = NodeBase<Statement>(NodeType.statement, mergeRanges(node, semicolon));
     v.expr = node;
-    v.attrs = null;
+    v.asSugaredTaglikeStatement = null;
+    v.asTaglikeCallStatement = null;
     v.semicolon = semicolon;
     return v;
 }
@@ -815,58 +832,77 @@ export namespace FromTag {
 //     with no body, and no end tag; so the moral script equivalent would be like `transaction action="rollback";`, no braced-body
 //     when we parse named blocks in script statement mode we have to account for some named blocks being allowed to have no body
 export interface Block extends NodeBase {
-    type: NodeType.namedBlock;
-    name: Terminal | null; // null if from tag (it's in tagOrigin.startTag), a terminal if from script
-    attrs: TagAttribute[]; // cf blocks may have attributes just like their tag counterparts, e.g, `variable='foo'` in the above
+    type: NodeType.block,
+    name: Terminal | null, // null if from tag (it's in tagOrigin.startTag), a terminal if from script
+    asSugaredTaglikeBlock: { // sugared cf blocks may have attributes just like their tag counterparts, e.g, `transaction action='foo' {}` in the above
+        attrs: TagAttribute[],
+    } | null,
+    asTagLikeCall: {
+        leftParen: Terminal,
+        args: CallArgument[],
+        rightParen: Terminal
+    } | null,
     leftBrace: Terminal | null; // tag-origin blocks will have no braces
     stmtList: Node[];
     rightBrace: Terminal | null;
 }
 
-export function NamedBlockFromBlock(name: Terminal, attrs: TagAttribute[], block: Block) : Block {
+// e.g, `transaction action='foo' {}`
+export function SugaredTaglikeBlock(name: Terminal, attrs: TagAttribute[], block: Block) : Block {
     block.name = name;
-    block.attrs = attrs;
+    block.asSugaredTaglikeBlock = {attrs: attrs};
+    return block;
+}
+
+// e.g, `cftransaction(action='foo') {}`
+export function TaglikeCallBlock(name: Terminal, leftParen: Terminal, args: CallArgument[], rightParen: Terminal, block: Block) : Block {
+    block.name = name;
+    block.asTagLikeCall = {leftParen, args, rightParen};
     return block;
 }
 
 export function Block(leftBrace: Terminal | null, stmtList: Node[], rightBrace: Terminal | null) : Block {
-    const v      = NodeBase<Block>(NodeType.namedBlock, mergeRanges(leftBrace, rightBrace));
-    v.name       = null;
-    v.attrs      = [];
-    v.leftBrace  = leftBrace;
-    v.stmtList   = stmtList;
-    v.rightBrace = rightBrace;
+    const v                 = NodeBase<Block>(NodeType.block, mergeRanges(leftBrace, rightBrace));
+    v.name                  = null;
+    v.asSugaredTaglikeBlock = null;
+    v.asTagLikeCall         = null;
+    v.leftBrace             = leftBrace;
+    v.stmtList              = stmtList;
+    v.rightBrace            = rightBrace;
     return v;
 }
 
 export namespace FromTag {
-export function Block(startTag: CfTag, endTag: CfTag) : Block;                                      // overload 1
-export function Block(startTag: CfTag, stmtList: Node[], endTag: CfTag | null) : Block;             // overload 2
-export function Block(startTag: CfTag, endTagOrStmtList: CfTag | Node[], endTag?: CfTag | null) {
-    if (endTag === undefined) { // overload 1
-        const v = NodeBase<Block>(NodeType.namedBlock, mergeRanges(startTag, endTagOrStmtList));
-        v.tagOrigin.startTag = startTag;
-        v.tagOrigin.endTag = endTagOrStmtList as CfTag;
-        v.name = null;
-        v.attrs = [];
-        v.leftBrace = null;
-        v.stmtList = [];
-        v.rightBrace = null;
-        return v;
-    }
-    else { // overload 2
-        const v = NodeBase<Block>(NodeType.namedBlock, mergeRanges(startTag, endTag));
-        v.tagOrigin.startTag = startTag;
-        v.tagOrigin.endTag = endTag;
-        v.name = null;
-        v.attrs = [];
-        v.leftBrace = null;
-        v.stmtList = [];
-        v.rightBrace = null;
-        return v;
+    export function Block(startTag: CfTag, endTag: CfTag) : Block;                                      // overload 1
+    export function Block(startTag: CfTag, stmtList: Node[], endTag: CfTag | null) : Block;             // overload 2
+    export function Block(startTag: CfTag, endTagOrStmtList: CfTag | Node[], endTag?: CfTag | null) {
+        if (endTag === undefined) { // overload 1
+            const v = NodeBase<Block>(NodeType.block, mergeRanges(startTag, endTagOrStmtList));
+            v.tagOrigin.startTag    = startTag;
+            v.tagOrigin.endTag      = endTagOrStmtList as CfTag;
+
+            v.name                  = null;
+            v.asSugaredTaglikeBlock = null;
+            v.asTagLikeCall         = null;
+            v.leftBrace             = null;
+            v.stmtList              = [];
+            v.rightBrace            = null;
+            return v;
+        }
+        else { // overload 2
+            const v = NodeBase<Block>(NodeType.block, mergeRanges(startTag, endTag));
+            v.tagOrigin.startTag    = startTag;
+            v.tagOrigin.endTag      = endTag;
+            v.name                  = null;
+            v.asSugaredTaglikeBlock = null;
+            v.asTagLikeCall         = null
+            v.leftBrace             = null;
+            v.stmtList              = [];
+            v.rightBrace            = null;
+            return v;
+        }
     }
 }
-} // namespace FromTag
 
 export interface SimpleStringLiteral extends NodeBase {
     type: NodeType.simpleStringLiteral;

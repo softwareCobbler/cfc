@@ -107,9 +107,9 @@ export function isLexemeLikeToken(token: Token, allowNumeric = false) : boolean 
         || (val > TokenType._FIRST_LIT && val < TokenType._LAST_LIT);
 }
 
-const namedBlockNames = new Set<string>(["component", "interface", "savecontent", "lock", "transaction"]);
-export function isNamedBlockName(text: string) {
-    return namedBlockNames.has(text);
+const sugaredTagNames = new Set<string>(["component", "interface", "savecontent", "lock", "transaction"]);
+export function isSugaredTagName(text: string) {
+    return sugaredTagNames.has(text);
 }
 
 // based on testing against CF-2021
