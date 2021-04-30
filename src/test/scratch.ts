@@ -11,13 +11,7 @@ import { CfFileType } from "../compiler/scanner";
 //const fname = path.resolve("./test/mxunit/generator/listFiles.cfm");
 //console.error("parsing: " + fname);
 //const scanner = Scanner(fs.readFileSync(fname));
-const scanner = Scanner(`
-<cffunction name=foo>
-    <cfoutput>
-        #encodeForHTML(#
-    </cfoutput>
-</cffunction>
-`);
+const scanner = Scanner(`<cfset x=4 <!---<!--- --->   >`);
 
 
 const parser = Parser()

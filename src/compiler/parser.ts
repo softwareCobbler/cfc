@@ -518,7 +518,7 @@ export function Parser() {
         if (lookahead() !== TokenType.CF_TAG_COMMENT_END) {
             if (nestedComments.length > 0) parseErrorAtRange(commentStart.range.fromInclusive, nestedComments[0].range.fromInclusive, "Unterminated tag comment.");
             else parseErrorAtRange(commentStart.range.fromInclusive, scanner.getIndex(), "Unterminated tag comment.");
-            const commentEnd = createMissingNode(NilTerminal);
+            const commentEnd = createMissingNode(Terminal(parseNextToken()));
             return CfTag.Comment(commentStart, nestedComments, commentEnd);
         }
         else {

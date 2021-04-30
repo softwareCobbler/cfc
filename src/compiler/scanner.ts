@@ -760,7 +760,7 @@ export function Scanner(source_: string | Buffer) {
     }
 
     function scanTagAttributeName() : Token | null {
-        if (!isTagAttributeNameStart(annotatedChars[index].codepoint)) return null;
+        if (!hasNext() || !isTagAttributeNameStart(annotatedChars[index].codepoint)) return null;
         const from = index;
         index += 1;
         while (isTagAttributeNameRest(annotatedChars[index].codepoint)) {
