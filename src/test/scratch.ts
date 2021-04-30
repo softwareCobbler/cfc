@@ -4,18 +4,20 @@
 // rebuild and then run the debugger
 import { Scanner, Parser } from "../compiler";
 import { CfFileType } from "../compiler/scanner";
-import * as fs from "fs";
-import * as path from "path";
+//import * as fs from "fs";
+//import * as path from "path";
 
 // PluginDemoTests\InvalidMarkupTest.cfc
-const fname = path.resolve("./test/mxunit/generator/listFiles.cfm");
-console.error("parsing: " + fname);
-const scanner = Scanner(fs.readFileSync(fname));
-//const scanner = Scanner(`
-//<cfcomponent>
-//<cfset foo = a?.()?.c["d"]?.e()>
-///</cfcomponent>
-//`);
+//const fname = path.resolve("./test/mxunit/generator/listFiles.cfm");
+//console.error("parsing: " + fname);
+//const scanner = Scanner(fs.readFileSync(fname));
+const scanner = Scanner(`
+<cffunction name=foo>
+    <cfoutput>
+        #encodeForHTML(#
+    </cfoutput>
+</cffunction>
+`);
 
 
 const parser = Parser()

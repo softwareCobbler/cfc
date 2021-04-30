@@ -1784,10 +1784,9 @@ export function Parser() {
     function parseHashWrappedExpression() {
         if (isInSomeContext(ParseContext.hashWrappedExpr)) throw "parseHashWrappedExpr cannot be nested";
 
-        const savedContext = updateParseContext(ParseContext.hashWrappedExpr);
 
         const leftHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
-        const expr = parseExpression();
+        const expr = doInExtendedContext(ParseContext.hashWrappedExpr, parseExpression);
 
         /*
         this is only true in some attributes; probably need to do this check later
@@ -1817,7 +1816,6 @@ export function Parser() {
             isInSomeContext(ParseContext.interpolatedText) ? ParseOptions.noTrivia : ParseOptions.withTrivia, // if inside interpolated text, the 'trivia' outside the right-hash should be interpreted as raw text
             () => parseErrorAtRange(leftHash.range.fromInclusive, getIndex(), "Unterminated hash-wrapped expression."));
 
-        parseContext = savedContext;
         return HashWrappedExpr(leftHash, expr, rightHash);
     }
 
@@ -2117,6 +2115,9 @@ export function Parser() {
                     || lookahead() === TokenType.KW_DEFAULT;
             case ParseContext.cfScriptTagBody:
                 return lookahead() === TokenType.CF_END_TAG_START;
+            case ParseContext.interpolatedText:
+            case ParseContext.hashWrappedExpr:
+                return lookahead() === TokenType.HASH;
             default:
                 return false;
         }
