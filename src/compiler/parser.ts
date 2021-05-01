@@ -27,8 +27,8 @@ import {
     ImportStatement,
     New,
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
-    SugaredTaglikeBlock, TaglikeCallBlock,
-    SugaredTaglikeStatement, TaglikeCallStatement } from "./node";
+    ScriptSugaredTagCallBlock, ScriptTagCallBlock,
+    ScriptSugaredTagCallStatement, ScriptTagCallStatement } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, isSugaredTagName } from "./utils";
 
@@ -2882,7 +2882,7 @@ export function Parser() {
                     if (peekedText === "abort" && !isInSomeContext(ParseContext.sugaredAbort)) {
                         const terminal = Terminal(parseNextToken(), parseTrivia());
                         if (lookahead() === TokenType.SEMICOLON) {
-                            return SugaredTaglikeStatement(terminal, [], parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia));
+                            return ScriptSugaredTagCallStatement(terminal, [], parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia));
                         }
                         //
                         // so `function foo() { abort }` is ok, since `}` is not a quote but does not start a statement
@@ -2896,7 +2896,7 @@ export function Parser() {
                             if (statement.type === NodeType.statement
                                 && (statement.expr!.type === NodeType.simpleStringLiteral || statement.expr!.type === NodeType.interpolatedStringLiteral)) {
                                     if (getTriviallyComputableString(statement.expr) !== undefined) {
-                                        return SugaredTaglikeStatement(
+                                        return ScriptSugaredTagCallStatement(
                                             terminal,
                                             [TagAttribute(Terminal(peek()), "showerror", NilTerminal, statement.expr!)], // synthesize the "showerror" attribute
                                             parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia));
@@ -2904,13 +2904,13 @@ export function Parser() {
                             }
 
                             parseErrorAtRange(mergeRanges(terminal, statement), "A sugared abort statement must be followed by a constant string value or a semicolon.");
-                            return SugaredTaglikeStatement(
+                            return ScriptSugaredTagCallStatement(
                                 /* name */ terminal,
                                 /* attrs */ [],
                                 /* semicolon */ parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia));
                         }
                         else {
-                            return SugaredTaglikeStatement(
+                            return ScriptSugaredTagCallStatement(
                                 /* name */ terminal,
                                 /* attrs */ [],
                                 /* semicolon */ parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia));
@@ -2939,16 +2939,16 @@ export function Parser() {
                             if (Array.isArray(quickPeek)) {
                                 if (lookahead() === TokenType.LEFT_BRACE) {
                                     const block = parseBracedBlock();
-                                    return SugaredTaglikeBlock(/*name*/quickPeek[0], /*attrs*/[], /*block*/block);
+                                    return ScriptSugaredTagCallBlock(/*name*/quickPeek[0], /*attrs*/[], /*block*/block);
                                 }
                                 else {
-                                    return SugaredTaglikeStatement(quickPeek[0], quickPeek[1], parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia))
+                                    return ScriptSugaredTagCallStatement(quickPeek[0], quickPeek[1], parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia))
                                 }
                             }
                             // otherwise we just got a terminal
                             else {
                                 const block = parseBracedBlock();
-                                return SugaredTaglikeBlock(/*name*/quickPeek as Terminal, /*attrs*/[], /*block*/block);
+                                return ScriptSugaredTagCallBlock(/*name*/quickPeek as Terminal, /*attrs*/[], /*block*/block);
                             }
                         }
                     }
@@ -2976,11 +2976,11 @@ export function Parser() {
 
                             if (lookahead() !== TokenType.LEFT_BRACE) {
                                 const semicolon = parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia);
-                                return TaglikeCallStatement(nameTerminalIfIsCall, leftParen, args, rightParen, semicolon);
+                                return ScriptTagCallStatement(nameTerminalIfIsCall, leftParen, args, rightParen, semicolon);
                             }
                             else {
                                 const block = parseBracedBlock(mode);
-                                return TaglikeCallBlock(nameTerminalIfIsCall, leftParen, args, rightParen, block);
+                                return ScriptTagCallBlock(nameTerminalIfIsCall, leftParen, args, rightParen, block);
                             }
                         }
                     }
