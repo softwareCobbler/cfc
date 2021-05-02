@@ -79,7 +79,7 @@ export function Binder() {
 
         const paramIdentifiers = new Map<string, Identifier>();
         for (let i = 0; i < node.params.length; i++) {
-            const staticallyKnownName = getTriviallyComputableString(node.params[i].identifier);
+            const staticallyKnownName = getTriviallyComputableString(node.params[i].identifier)?.toLowerCase(); // @fixme: just use canonicalName prop?
             if (staticallyKnownName) {
                 paramIdentifiers.set(staticallyKnownName, node.params[i].identifier);
             }
@@ -120,10 +120,10 @@ export function Binder() {
     function bindDeclaration(node: VariableDeclaration) {
         let identifierBaseName : string | undefined;
         if (node.identifier.source.type === NodeType.indexedAccess) {
-            identifierBaseName = getTriviallyComputableString(node.identifier.source.root);
+            identifierBaseName = getTriviallyComputableString(node.identifier.source.root)?.toLowerCase();
         }
         else {
-            identifierBaseName = getTriviallyComputableString(node.identifier);
+            identifierBaseName = getTriviallyComputableString(node.identifier)?.toLowerCase();
         }
 
         if (identifierBaseName) {

@@ -67,9 +67,9 @@ describe("general smoke test for particular constructs", () => {
             <cfset var illegal_var_decl_at_top_level = 42>
 
             <cffunction name="foo">
-                <cfargument name="argName">
+                <cfargument name="ARGNAME">
                 <cfset var ok_var_decl_inside_function = 42>
-                <cfset var argName = 42> <!--- can't re-declare a variable that is in arguments scope --->
+                <cfset var argname = 42> <!--- can't re-declare a variable that is in arguments scope --->
             </cffunction>
 
             <cfscript>
