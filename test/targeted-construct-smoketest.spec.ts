@@ -1,14 +1,17 @@
 import * as assert from "assert";
 import * as fs from "fs";
 import * as path from "path";
-import {Scanner, Parser, CfFileType } from "../out/compiler";
+import {Scanner, Parser, Binder, CfFileType } from "../out/compiler";
 
 const parser = Parser().setDebug(true);
+const binder = Binder().setDebug(true);
 
 function assertDiagnosticsCount(text: string, cfFileType: CfFileType, count: number) {
     const scanner = Scanner(text);
-    parser.setScanner(scanner).parse(cfFileType);
-    assert.strictEqual(parser.getDiagnostics().length, count, `${count} diagnostics emitted`);
+    const tree = parser.setScanner(scanner).parse(cfFileType);
+    const diagnostics = parser.getDiagnostics();
+    binder.bindProgram(tree, scanner, diagnostics);
+    assert.strictEqual(diagnostics.length, count, `${count} diagnostics emitted`);
 }
 
 describe("general smoke test for particular constructs", () => {
@@ -58,5 +61,37 @@ describe("general smoke test for particular constructs", () => {
         assertDiagnosticsCount(`<cfscript>abort;</cfscript>`, CfFileType.cfm, 0);
         assertDiagnosticsCount(`<cfscript>abort "v"</cfscript>`, CfFileType.cfm, 0);
         assertDiagnosticsCount(`<cfscript>abort '1'</cfscript>`, CfFileType.cfm, 0);
+    });
+    it("Should flag var declaration binding-phase errors", () => {
+        assertDiagnosticsCount(`
+            <cfset var illegal_var_decl_at_top_level = 42>
+
+            <cffunction name="foo">
+                <cfargument name="argName">
+                <cfset var ok_var_decl_inside_function = 42>
+                <cfset var argName = 42> <!--- can't re-declare a variable that is in arguments scope --->
+            </cffunction>
+
+            <cfscript>
+                function foo(argName, argName2) {
+                    var argName2 = 42;
+                }
+
+                f = function(argName) {
+                    var argName = 42;
+
+                    function nested(x) {
+                        var argName = "ok because the outer arguments scope is not considered";
+                    }
+                }
+
+                f = (argName) => {
+                    var argName = 42;
+                    var argName.f.z = 42;
+
+                    argName = 42; // ok, not a redeclaration, just a reassignment
+                }
+            </cfscript>
+        `, CfFileType.cfm, 6);
     });
 });

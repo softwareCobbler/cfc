@@ -153,7 +153,7 @@ export function isIllegalIdentifierName(text: string) {
         return result;
     }
     else if (node.type === NodeType.identifier) {
-        return node.lexeme.token.text;
+        return getTriviallyComputableString(node.source);
     }
 
     return undefined;

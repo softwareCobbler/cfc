@@ -22,15 +22,19 @@ import {
 	TextDocument
 } from 'vscode-languageserver-textdocument';
 
-import { Scanner, Parser, CfFileType, Diagnostic as cfcDiagnostic } from "compiler";
+import { Scanner, Parser, Binder, CfFileType, Diagnostic as cfcDiagnostic } from "compiler";
 
 const parser = Parser();
+const binder = Binder();
 
 function naiveGetDiagnostics(text: string, fileType: CfFileType) : readonly cfcDiagnostic[] {
 	// how to tell if we were launched in debug mode ?
-    parser.setScanner(Scanner(text)).setDebug(true);
-    parser.parse(fileType);
-    return parser.getDiagnostics();
+	const scanner = Scanner(text);
+    parser.setScanner(scanner);
+    const tree = parser.parse(fileType);
+	const diagnostics = parser.getDiagnostics();
+	binder.bindProgram(tree, scanner, diagnostics);
+    return diagnostics;
 }
 
 // Create a connection for the server, using Node's IPC as a transport.

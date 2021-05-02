@@ -118,9 +118,27 @@ export type Node =
     | ImportStatement
     | New
 
+const staticCgiScope = [
+    "http_method",
+    "auth_user",
+    // etc.
+] as const;
+type StaticCgiScope = typeof staticCgiScope;
+
+interface VarScope {
+    container: Node | null,
+    variables: ReadonlyMap<string, Identifier>,
+
+    this?: Identifier[],
+    arguments?: ReadonlyMap<string, Identifier>,
+    local?: ReadonlyMap<string, Identifier>,
+    url?: Identifier[],
+    cgi?: StaticCgiScope,
+}
+
 interface NodeBase {
     type: NodeType,
-    id: number,
+    nodeId: number,
     parent: Node | null,
     range: SourceRange,
     tagOrigin: {
@@ -128,12 +146,24 @@ interface NodeBase {
         endTag: CfTag | null,
     }
     flags: NodeFlags,
+
+    containedScope?: VarScope,
+
     __debug_type?: string;
+}
+
+export type NodeWithScope = Node & {containedScope: Exclude<Node["containedScope"], undefined>};
+
+export function initContainer(node: Node, container: Node | null) : asserts node is NodeWithScope {
+    node.containedScope = {
+        container,
+        variables: new Map<string, Identifier>()
+    }
 }
 
 export function NodeBase<T extends NodeBase>(type: T["type"], range: SourceRange = SourceRange.Nil()) : T {
     const result : Partial<T> = {};
-    result.id = nextNodeId++;
+    result.nodeId = nextNodeId++;
     result.type = type;
     result.parent = null;
     result.range = range ?? null;
@@ -677,14 +707,14 @@ export interface VariableDeclaration extends NodeBase {
     type: NodeType.variableDeclaration,
     finalModifier: Terminal | null,
     varModifier: Terminal | null,
-    identifier: Node, // can be Identifier | HashWrappedExpr | SimpleStringLiteral | InterpolatedStringLiteral | IndexedAccess, but that's tough to constrain ergonomically
+    identifier: Identifier, // can be Identifier | HashWrappedExpr | SimpleStringLiteral | InterpolatedStringLiteral | IndexedAccess, but that's tough to constrain ergonomically
     expr: Node | null
 }
 
 export function VariableDeclaration(
     finalModifier: Terminal | null,
     varModifier: Terminal | null,
-    identifier: Node,
+    identifier: Identifier,
     expr: Node | null
 ) : VariableDeclaration {
     const v = NodeBase<VariableDeclaration>(NodeType.variableDeclaration, mergeRanges(finalModifier, varModifier, identifier, expr));
@@ -699,7 +729,13 @@ export const enum StatementType {
     fromTag,                       // any loose, no-bodied tag like `<cfhttpparam ...>`
     expressionWrapper,             // any expr in a statement context, mostly so that we can bind a semicolon to it
     scriptSugaredTagCallStatement, // a sugared script tag statement, like `transaction action=rollback`
-    tagCallStatement               // similar to from tag, but its a script-call, like `cfhttpparam(...);`
+    scriptTagCallStatement         // similar to from tag, but its a script-call, like `cfhttpparam(...);`
+}
+const StatementTypeUiString : Record<StatementType, string> = {
+    [StatementType.fromTag]: "fromTag",
+    [StatementType.expressionWrapper]: "expressionWrapper",
+    [StatementType.scriptSugaredTagCallStatement]: "scriptSugaredCallStatement",
+    [StatementType.scriptTagCallStatement]: "scriptTagCallStatement"
 }
 export interface Statement extends NodeBase {
     type: NodeType.statement,
@@ -714,6 +750,7 @@ export interface Statement extends NodeBase {
         rightParen: Terminal,
     } | null,
     semicolon : Terminal | null,    // null if from tag
+    __debug_subtype?: string
 }
 
 // e.g, `transaction action="foo";`
@@ -724,17 +761,27 @@ export function ScriptSugaredTagCallStatement(name: Terminal, attrs: TagAttribut
     v.scriptSugaredTagStatement = {attrs};
     v.callStatement = null;
     v.semicolon = semicolon;
+
+    if (debug) {
+        v.__debug_subtype = StatementTypeUiString[StatementType.scriptSugaredTagCallStatement];
+    }
+
     return v;
 }
 
 // e.g, `cftransaction(action="foo");`
 export function ScriptTagCallStatement(name: Terminal, leftParen: Terminal, args: CallArgument[], rightParen: Terminal, semicolon: Terminal | null) : Statement {
     const v = NodeBase<Statement>(NodeType.statement, mergeRanges(name, rightParen, semicolon));
-    v.subType = StatementType.tagCallStatement;
+    v.subType = StatementType.scriptTagCallStatement;
     v.expr = name;
     v.scriptSugaredTagStatement = null;
     v.callStatement = {leftParen, args, rightParen};
     v.semicolon = semicolon;
+
+    if (debug) {
+        v.__debug_subtype = StatementTypeUiString[StatementType.scriptTagCallStatement];
+    }
+
     return v;
 }
 
@@ -745,29 +792,54 @@ export function Statement(node: Node | null, semicolon: Terminal | null) : State
     v.scriptSugaredTagStatement = null;
     v.callStatement = null;
     v.semicolon = semicolon;
+
+    if (debug) {
+        v.__debug_subtype = StatementTypeUiString[StatementType.expressionWrapper];
+    }
+
     return v;
 }
 
 export namespace FromTag {
+    export function CfSetExpressionWrapper(tag: CfTag.ScriptLike) {
+        let stmt : Statement;
+        stmt = NodeBase<Statement>(NodeType.statement, tag.range);
+        stmt.subType = StatementType.expressionWrapper;
+        stmt.expr = tag.expr;
+        stmt.tagOrigin.startTag = tag;
+        stmt.semicolon = null;
+
+        if (debug) {
+            stmt.__debug_subtype = StatementTypeUiString[StatementType.expressionWrapper]
+        }
+
+        return stmt;
+    }
+
     export function Statement(tag: CfTag.Common) : Statement;
     export function Statement(tag: CfTag.ScriptLike) : Statement;
     export function Statement(tag: CfTag.Common | CfTag.ScriptLike) : Statement {
+        let stmt : Statement;
         if (tag.tagType === CfTag.TagType.scriptLike) {
-            const stmt = NodeBase<Statement>(NodeType.statement, tag.range);
+            stmt = NodeBase<Statement>(NodeType.statement, tag.range);
             stmt.subType = StatementType.fromTag;
             stmt.expr = tag.expr;
             stmt.tagOrigin.startTag = tag;
             stmt.semicolon = null;
-            return stmt;
         }
         else {
-            const stmt = NodeBase<Statement>(NodeType.statement, tag.range);
+            stmt = NodeBase<Statement>(NodeType.statement, tag.range);
             stmt.subType = StatementType.fromTag;
             stmt.expr = null;
             stmt.tagOrigin.startTag = tag;
             stmt.semicolon = null;
-            return stmt;
         }
+
+        if (debug) {
+            stmt.__debug_subtype = StatementTypeUiString[StatementType.fromTag]
+        }
+
+        return stmt;
     }
 }
 
@@ -994,14 +1066,14 @@ export function BooleanLiteral(literal: Terminal) {
 
 export interface Identifier extends NodeBase {
     type: NodeType.identifier;
-    lexeme: Terminal;
-    canonicalName: string;
+    source: Node; // can be e.g, `var x = 42`, `var 'x' = 42`, `var #x# = 42`; <cfargument name="#'interpolated_string_but_constant'#">`
+    canonicalName: string | undefined;
 }
 
-export function Identifier(identifier: Terminal, name: string) {
+export function Identifier(identifier: Node, name: string | undefined) {
     const v = NodeBase<Identifier>(NodeType.identifier, identifier.range);
-    v.lexeme = identifier;
-    v.canonicalName = name.toLowerCase();
+    v.source = identifier;
+    v.canonicalName = name?.toLowerCase();
     return v;
 }
 
@@ -1130,11 +1202,11 @@ export interface FunctionParameter extends NodeBase {
     type: NodeType.functionParameter;
     requiredTerminal: Terminal | null;
     javaLikeTypename: DottedPath<Terminal> | null;
-    identifier: Identifier | null;
+    identifier: Identifier;
     equals: Terminal | null;
     defaultValue: Node | null;
     comma: Terminal | null;
-    canonicalName: string | null;
+    canonicalName: string | undefined;
     required: boolean;
 }
 
@@ -1158,16 +1230,16 @@ export function FunctionParameter(
 }
 
 export namespace FromTag {
-    export function FunctionParameter(tag: CfTag.Common, canonicalName: string | null, required: boolean, defaultValue: Node | null) : FunctionParameter {
+    export function FunctionParameter(tag: CfTag.Common, identifier: Identifier, required: boolean, defaultValue: Node | null) : FunctionParameter {
         const v = NodeBase<FunctionParameter>(NodeType.functionParameter, tag.range);
         v.tagOrigin.startTag = tag;
         v.requiredTerminal = null;
         v.javaLikeTypename = null;
-        v.identifier = null;
+        v.identifier = identifier;
         v.equals = null;
         v.defaultValue = defaultValue;
         v.comma = null;
-        v.canonicalName = canonicalName;
+        v.canonicalName = identifier.canonicalName;
         v.required = required;
         return v;
     }

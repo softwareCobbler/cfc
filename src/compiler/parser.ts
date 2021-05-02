@@ -834,7 +834,7 @@ export function Parser() {
                 return null;
             }
 
-            const enum ReductionScheme { default, return };
+            const enum ReductionScheme { default, return, returnRawTags };
             interface ReductionInstruction {
                 onHitWhich: CfTag.Which,
                 onHitName: string,
@@ -982,7 +982,7 @@ export function Parser() {
             }
 
             function treeifyTagFunction(startTag: CfTag.Common, body: Node[], endTag: CfTag.Common) {
-                function parseParam(tag: CfTag.Common) : FunctionParameter {
+                function parseParam(tag: CfTag.Common) : FunctionParameter | null {
                     const nameAttr = getAttributeValue(tag.attrs, "name");
                     let name = "";
                     if (!nameAttr) {
@@ -1019,7 +1019,13 @@ export function Parser() {
                         }
                     }
 
-                    return FromTag.FunctionParameter(tag, name, isRequired, /*FIXME*/ null);
+                    if (!nameAttr) {
+                        return null;
+                    }
+                    else {
+                        const identifier = Identifier(nameAttr, name);
+                        return FromTag.FunctionParameter(tag, identifier, isRequired, /* @FIXME default value */ null);
+                    }
                 }
 
                 let functionName = "";
@@ -1042,7 +1048,8 @@ export function Parser() {
                         continue;
                     }
                     if (node.type === NodeType.tag && node.canonicalName === "argument") {
-                        params.push(parseParam(node as CfTag.Common));
+                        const param = parseParam(node as CfTag.Common);
+                        if (param) params.push(param);
                         continue;
                     }
                     break;
@@ -1086,6 +1093,17 @@ export function Parser() {
                     result.push(FromTag.Block(startTag, blockChildren, endTag));
                 }
 
+                function finalize(nodeList: Node[] = result) {
+                    for (let i = 0; i < nodeList.length; i++) {
+                        const node = nodeList[i];
+                        if (node.type === NodeType.tag) {
+                            if (node.tagType !== CfTag.TagType.common) throw "should have been a common tag";
+                            nodeList[i] = FromTag.Statement(node);
+                        }
+                    }
+                    return nodeList;
+                }
+
                 while (hasNextTag()) {
                     const tag = peekTag()!;
 
@@ -1096,8 +1114,14 @@ export function Parser() {
                         nextTag();
                         continue;
                     }
+
                     if (tag.tagType === CfTag.TagType.text) {
                         result.push(TextSpan(tag.range, scanner.getTextSlice(tag.range)));
+                        nextTag();
+                        continue;
+                    }
+                    else if (tag.tagType === CfTag.TagType.comment) {
+                        result.push(Comment(CommentType.tag, tag.range));
                         nextTag();
                         continue;
                     }
@@ -1105,6 +1129,8 @@ export function Parser() {
                         const reductionScheme = getReductionScheme(tag, reductionInstructions);
                         switch (reductionScheme) {
                             case ReductionScheme.return:
+                                return finalize();
+                            case ReductionScheme.returnRawTags:
                                 return result;
                             case ReductionScheme.default:
                                 // ok, no-op: the default reduction scheme for a start tag is to do nothing
@@ -1117,7 +1143,7 @@ export function Parser() {
                                 continue;
                             }
                             case "set": {
-                                result.push(FromTag.Statement(<CfTag.ScriptLike>tag));
+                                result.push(FromTag.CfSetExpressionWrapper(<CfTag.ScriptLike>tag));
                                 nextTag();
                                 continue;
                             }
@@ -1129,51 +1155,10 @@ export function Parser() {
                             case "function": {
                                 openTagStack.push("function");
                                 const startTag = parseExpectedTag(CfTag.Which.start, "function");
-                                const body = treeifyTags(stopAt(CfTag.Which.end, "function", ReductionScheme.return));
+                                const body = treeifyTags(stopAt(CfTag.Which.end, "function", ReductionScheme.returnRawTags));
                                 const endTag = parseExpectedTag(CfTag.Which.end, "function", () => parseErrorAtRange(startTag.range, "Missing </cffunction> tag."))
                                 openTagStack.pop();
                                 result.push(treeifyTagFunction(startTag as CfTag.Common, body, endTag as CfTag.Common));
-                                continue;
-                            }
-                            case "transaction": {
-                                const actionAttrValue = getAttributeValue((<CfTag.Common>tag).attrs, "action");
-                                // there is NO action attribute, so it is implied to be "action=begin", which requires a body
-                                if (!actionAttrValue) {
-                                    if (tag.voidSlash) parseErrorAtRange(tag.voidSlash.range, "Unexpected '/' in <cftransaction> block with implied action=begin attribute.");
-                                    tagBlockWorker(tag);
-                                    continue;
-                                }
-
-                                const valueAsString = getTriviallyComputableString(actionAttrValue)?.toLowerCase();
-                                if (valueAsString === "begin") {
-                                    if (tag.voidSlash) {
-                                        if (valueAsString === "begin")
-                                            parseErrorAtRange(tag.voidSlash.range, "Unexpected '/' in <cftransaction action=begin> block.");
-                                        else
-                                            parseErrorAtRange(tag.voidSlash.range, "Unexpected '/' in <cftransaction> block with implied action=begin attribute.");
-                                    }
-                                    tagBlockWorker(tag);
-                                }
-                                else if (valueAsString === "commit" || valueAsString === "rollback" || valueAsString === "setsavepoint") {
-                                    result.push(FromTag.Statement(tag as CfTag.Common));
-                                    nextTag();
-                                }
-                                else {
-                                    // <cftransaction> allows for a dynamic "action" attribute, e.g, `<cftransaction action="#dont_know_until_runtime#">`
-                                    // so best we can do is honor the possibly-present void slash
-                                    // and if the value is a static string, here we know it is an invalid one
-                                    if (typeof valueAsString === "string") {
-                                        parseErrorAtRange(actionAttrValue.range, "Unsupported <cftransaction> 'action' attribute.");
-                                    }
-                                    if (tag.voidSlash) {
-                                        result.push(FromTag.Statement(tag as CfTag.Common));
-                                        nextTag();
-                                    }
-                                    else {
-                                        tagBlockWorker(tag);
-                                    }
-                                }
-
                                 continue;
                             }
                             case "script": {
@@ -1205,7 +1190,10 @@ export function Parser() {
                     else if (tag.which === CfTag.Which.end) {
                         const reductionScheme = getReductionScheme(tag, reductionInstructions);
                         if (reductionScheme === ReductionScheme.return) {
-                                return result;
+                            return finalize();
+                        }
+                        else if (reductionScheme === ReductionScheme.returnRawTags) {
+                            return result;
                         }
 
                         // if we can't find the target tag in our local result, this tag has no matching start tag
@@ -1231,7 +1219,7 @@ export function Parser() {
 					        
                             const blockChildren = result.slice(matchingStartTagIndex + 1);
                             result.splice(matchingStartTagIndex)
-                            result.push(FromTag.Block(matchingStartTag, blockChildren, tag));
+                            result.push(FromTag.Block(matchingStartTag, finalize(blockChildren), tag));
                         }
                         else {
                             // this tag might be a mismatched tag,
@@ -1239,7 +1227,7 @@ export function Parser() {
                             // this will naturally result in an "unmatched tag" error in the caller
                             const matchingOpenTagIndex = openTagStackFindMatchingStartTag(tag.canonicalName);
                             if (matchingOpenTagIndex !== null) {
-                                return result;
+                                return finalize();
                             }
                             else {
                                 parseErrorAtRange(tag.range, "End tag without a matching start tag (cf" + tag.canonicalName + ").")
@@ -1253,7 +1241,8 @@ export function Parser() {
                     }
                 }
 
-                return result;
+                // should we check if we want to return raw tags here ? i.e, consider the reduction instruction
+                return finalize();
             }
 
             return treeifyTags(reductionInstructions.default);
@@ -1453,7 +1442,9 @@ export function Parser() {
                 // @todo - if the access type is not homogenous cf will error, at least at the top-most scope
                 // a["b"]["c"] = 0 declares and inits a = {b: {c: 0}};
                 // a["b"].c = 0 is an error ("a" is not defined)
-                return VariableDeclaration(finalModifier, varModifier, root, null);
+                
+                const identifier = Identifier(root, getTriviallyComputableString(root));
+                return VariableDeclaration(finalModifier, varModifier, identifier, null);
             }
             else {
                 return root;
@@ -1491,7 +1482,7 @@ export function Parser() {
             // `final local[dynamic_key]` is illegal
             // `final user_struct.foo = 42` is always illegal
             // `final no_struct` is illegal
-            return VariableDeclaration(finalModifier, varModifier, root, assignmentExpr);
+            return VariableDeclaration(finalModifier, varModifier, Identifier(root, getTriviallyComputableString(root)), assignmentExpr);
         }
         else {
             return assignmentExpr;
@@ -1853,7 +1844,8 @@ export function Parser() {
                 }
             case TokenType.KW_NEW:
                 return parseNewExpression();
-            default: break;
+            default:
+                break;
         }
 
         let root : Node = parseIdentifier();
@@ -1866,7 +1858,7 @@ export function Parser() {
      * something like `a.b["c"]().d["e"]++`
      */
     function parseCallExpressionOrLowerRest<T extends Node>(root: T) : T | IndexedAccess | CallExpression | UnaryOperator {
-        parseCallAndAccessChain(root);
+        (root as Node) = parseCallAndAccessChain(root);
 
         switch (lookahead()) {
             case TokenType.DBL_PLUS:
@@ -3011,7 +3003,7 @@ export function Parser() {
         return nilStatement;
     }
 
-    function getDiagnostics() : readonly Diagnostic[] {
+    function getDiagnostics() : Diagnostic[] {
         return diagnostics;
     }
 }
