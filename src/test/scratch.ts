@@ -2,8 +2,9 @@
 // throw some text into the scanner,
 // set the parser to either CFM/CFC mode,
 // rebuild and then run the debugger
-import { Scanner, Parser, Binder } from "../compiler";
+import { Scanner, Parser, Binder, NilCfc, NilCfm } from "../compiler";
 import { CfFileType } from "../compiler/scanner";
+import { binarySearch, flattenTree } from "../compiler/utils";
 
 
 /*import * as fs from "fs";
@@ -13,30 +14,31 @@ const fname = path.resolve("./test/mxunit/framework/TestCase.cfc");
 console.error("parsing: " + fname);
 const scanner = Scanner(fs.readFileSync(fname));*/
 
-const scanner = Scanner(`
-<cfset var x = 4>
-<cffunction name="injectProperty" output="false" access="public" returntype="void" hint="injects properties into the receiving object">
-    <cfargument name="receiver" type="any" required="true" hint="the object receiving the method"/>
-    <cfargument name="propertyName" type="string" required="true" hint="the property to be overwritten"/>
-    <cfargument name="propertyValue" type="any" required="true" hint="the property value to be used">
-    <cfargument name="scope" type="string" required="false" default="" hint="the scope in which to set the property. Defaults to variables and this.">
 
-    <cfset var receiver = receiver._mixinProperty(propertyName = arguments.propertyName,
-                            property = arguments.propertyValue,
-                            scope = arguments.scope)>
-</cffunction>
-`);
+//                       ^0             ^15, which after typing the X, the text is like `url.x|>`
+//                                                                                            ^16
 
-
-const parser = Parser()
-    .setScanner(scanner)
-    .setDebug(true);
-
+const parser = Parser().setDebug(true);
+const sourceFile = NilCfm(`<cfset x = url.x>`);
+parser.setSourceFile(sourceFile);
 const binder = Binder().setDebug(true);
 
-const tree = parser.parse(CfFileType.cfm);
-binder.bindProgram(tree, scanner, parser.getDiagnostics());
+parser.parse();
+binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
 
+const flatProgram = flattenTree(sourceFile);
+
+const match = binarySearch(
+    flatProgram,
+    (v) => v.range.fromInclusive < 15
+        ? -1
+        : v.range.fromInclusive === 15
+        ? 0 : 1);
+
+if (match >= 0) {
+    const node = binder.NodeMap.get(flatProgram[match].nodeId);
+    console.log(node);
+}
 
 const diagnostics = parser.getDiagnostics();
 console.log("got ", diagnostics.length + " diagnostics");

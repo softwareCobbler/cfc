@@ -28,7 +28,7 @@ import {
     New,
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
-    ScriptSugaredTagCallStatement, ScriptTagCallStatement } from "./node";
+    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, isSugaredTagName } from "./utils";
 
@@ -45,7 +45,7 @@ const enum ParseContext {
     none = 0,
     hashWrappedExpr,    // in #...# in an expression context, like `a + #b#`
     cfScriptTagBody,    // in a <cfscript> block
-    cfScriptTopLevel,    // in cfscript, but not within a containing <cfscript> block; e.g, a script-based cfc file
+    cfScriptTopLevel,   // in cfscript, but not within a containing <cfscript> block; e.g, a script-based cfc file
     for,                // in a for (...) expression
     interpolatedText,   // in <cfoutput>#...#</cfoutput> or "#...#"
     awaitingVoidSlash,  // <cfset foo = bar /> is just `foo=bar`, with a trailing tag-void-slash, not `foo=bar/` with a missing rhs to the `/` operator
@@ -110,8 +110,13 @@ export interface Diagnostic {
 
 
 export function Parser() {
-    function setScanner(scanner_: Scanner) {
-        scanner = scanner_;
+    function getScanner() {
+        return scanner;
+    }
+
+    function setSourceFile(sourceFile_: SourceFile) {
+        sourceFile = sourceFile_;
+        scanner = Scanner(sourceFile.sourceText);
         parseContext = ParseContext.none;
         diagnostics = [];
         return self_;
@@ -135,6 +140,7 @@ export function Parser() {
     }
 
     let scanner : Scanner;
+    let sourceFile: SourceFile;
     let mode: ScannerMode;
     let parseContext : ParseContext;
     let lookahead_ : TokenType;
@@ -191,8 +197,9 @@ export function Parser() {
     })();
 
     const self_ = {
-        setScanner,
         setScannerMode,
+        getScanner,
+        setSourceFile,
         setDebug,
         getDiagnostics,
         parseTags,
@@ -791,20 +798,20 @@ export function Parser() {
         return match;
     }
 
-    function parse(cfFileType: CfFileType) : Node[] {
+    function parse(cfFileType: CfFileType = sourceFile?.cfFileType || CfFileType.cfm) : Node[] {
         if (cfFileType === CfFileType.cfm) {
-            return parseTags();
+            return sourceFile.content = parseTags();
         }
 
         const componentType = parseComponentPreamble();
         if (!componentType) {
-            return [];
+            return sourceFile.content = [];
         }
         else if (componentType === "tag") {
-            return parseTags();
+            return sourceFile.content = parseTags();
         }
         else {
-            return parseScript();
+            return sourceFile.content = parseScript();
         }
     }
 
@@ -1031,13 +1038,17 @@ export function Parser() {
                 let functionName = "";
                 const functionNameExpr = getAttributeValue(startTag.attrs, "name");
                 if (!functionNameExpr) {
-                    parseErrorAtRange(startTag.range, "<cffunction> requires a name attribute.")
+                    parseErrorAtRange(startTag.range, "<cffunction> requires a name attribute.");
                 }
                 else {
-                    let functionName = getTriviallyComputableString(functionNameExpr);
-                    if (!functionName) {
-                        parseErrorAtRange(functionNameExpr.range, "<cffunction> name attribute must be a constant.")
+                    const maybeFunctionName = getTriviallyComputableString(functionNameExpr)?.toLowerCase();
+                    if (maybeFunctionName === undefined) {
+                        parseErrorAtRange(functionNameExpr.range, "<cffunction> name attribute must be a constant.");
                     }
+                    else if (maybeFunctionName === "") {
+                        parseErrorAtRange(functionNameExpr.range, "<cffunction> requires a name attribute.");
+                    }
+                    functionName = maybeFunctionName ?? "";
                 }
 
                 const params : FunctionParameter[] = [];
@@ -1055,13 +1066,30 @@ export function Parser() {
                     break;
                 }
 
-                body = body.splice(i); // drop all the params and whitespace that we consumed as FunctionParameters
+                //
+                // drop all the params and whitespace that we consumed as FunctionParameters
+                // these are still tags because we had to be able to match the <cfargument> tags;
+                // at this point, we can convert the remainder into statements
+                //
+                body = looseTagsToStatements(body.splice(i));
+
                 return FromTag.FunctionDefinition(
                     startTag,
                     params,
                     Block(null, body, null), // there are no braces on a tag-originating function
                     endTag,
                     functionName);
+            }
+
+            function looseTagsToStatements(nodeList: Node[]) {
+                for (let i = 0; i < nodeList.length; i++) {
+                    const node = nodeList[i];
+                    if (node.type === NodeType.tag) {
+                        if (node.tagType !== CfTag.TagType.common) throw "should have been a common tag";
+                        nodeList[i] = FromTag.Statement(node);
+                    }
+                }
+                return nodeList;
             }
 
             function treeifyTags(reductionInstructions: readonly ReductionInstruction[]) : Node[] {
@@ -1093,16 +1121,7 @@ export function Parser() {
                     result.push(FromTag.Block(startTag, blockChildren, endTag));
                 }
 
-                function finalize(nodeList: Node[] = result) {
-                    for (let i = 0; i < nodeList.length; i++) {
-                        const node = nodeList[i];
-                        if (node.type === NodeType.tag) {
-                            if (node.tagType !== CfTag.TagType.common) throw "should have been a common tag";
-                            nodeList[i] = FromTag.Statement(node);
-                        }
-                    }
-                    return nodeList;
-                }
+
 
                 while (hasNextTag()) {
                     const tag = peekTag()!;
@@ -1129,7 +1148,7 @@ export function Parser() {
                         const reductionScheme = getReductionScheme(tag, reductionInstructions);
                         switch (reductionScheme) {
                             case ReductionScheme.return:
-                                return finalize();
+                                return looseTagsToStatements(result);
                             case ReductionScheme.returnRawTags:
                                 return result;
                             case ReductionScheme.default:
@@ -1190,7 +1209,7 @@ export function Parser() {
                     else if (tag.which === CfTag.Which.end) {
                         const reductionScheme = getReductionScheme(tag, reductionInstructions);
                         if (reductionScheme === ReductionScheme.return) {
-                            return finalize();
+                            return looseTagsToStatements(result);
                         }
                         else if (reductionScheme === ReductionScheme.returnRawTags) {
                             return result;
@@ -1219,7 +1238,7 @@ export function Parser() {
 					        
                             const blockChildren = result.slice(matchingStartTagIndex + 1);
                             result.splice(matchingStartTagIndex)
-                            result.push(FromTag.Block(matchingStartTag, finalize(blockChildren), tag));
+                            result.push(FromTag.Block(matchingStartTag, looseTagsToStatements(blockChildren), tag));
                         }
                         else {
                             // this tag might be a mismatched tag,
@@ -1227,7 +1246,7 @@ export function Parser() {
                             // this will naturally result in an "unmatched tag" error in the caller
                             const matchingOpenTagIndex = openTagStackFindMatchingStartTag(tag.canonicalName);
                             if (matchingOpenTagIndex !== null) {
-                                return finalize();
+                                return looseTagsToStatements(result);
                             }
                             else {
                                 parseErrorAtRange(tag.range, "End tag without a matching start tag (cf" + tag.canonicalName + ").")
@@ -1242,7 +1261,7 @@ export function Parser() {
                 }
 
                 // should we check if we want to return raw tags here ? i.e, consider the reduction instruction
-                return finalize();
+                return looseTagsToStatements(result);
             }
 
             return treeifyTags(reductionInstructions.default);
@@ -1858,7 +1877,7 @@ export function Parser() {
      * something like `a.b["c"]().d["e"]++`
      */
     function parseCallExpressionOrLowerRest<T extends Node>(root: T) : T | IndexedAccess | CallExpression | UnaryOperator {
-        (root as Node) = parseCallAndAccessChain(root);
+        (root as Node) = parseCallAndIndexedAccessChain(root);
 
         switch (lookahead()) {
             case TokenType.DBL_PLUS:
@@ -1888,7 +1907,7 @@ export function Parser() {
         return root;
     }
 
-    function parseCallAndAccessChain<T extends Node>(root: T) : T | IndexedAccess | CallExpression {
+    function parseCallAndIndexedAccessChain<T extends Node>(root: T) : T | IndexedAccess | CallExpression {
         outer:
         while (true) {
             switch (lookahead()) {

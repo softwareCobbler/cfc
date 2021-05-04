@@ -315,7 +315,7 @@ export class SourceRange {
 
 type char = string; // with the intent being "exactly one character" (and non-empty!)
 
-export const enum CfFileType { cfm, cfc };
+export const enum CfFileType { /* first is non-zero */ cfm = 1, cfc };
 
 let debugScanner = false;
 export function setScannerDebug(isDebug: boolean) {

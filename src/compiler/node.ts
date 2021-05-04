@@ -1,7 +1,7 @@
-import { SourceRange, TokenType, Token, NilToken, TokenTypeUiString } from "./scanner";
+import { SourceRange, TokenType, Token, NilToken, TokenTypeUiString, CfFileType } from "./scanner";
 
 let debug = false;
-let nextNodeId = 0;
+let nextNodeId : NodeId = 0;
 
 export function setDebug(isDebug: boolean) {
     debug = isDebug;
@@ -14,6 +14,7 @@ export const enum NodeFlags {
 }
 
 export const enum NodeType {
+    sourceFile,
     terminal, textSpan, comment, hashWrappedExpr, parenthetical, tagAttribute,
     tag, callExpression, callArgument, unaryOperator, binaryOperator,
     conditional, variableDeclaration, statement, block, simpleStringLiteral, interpolatedStringLiteral, numericLiteral, booleanLiteral,
@@ -27,6 +28,7 @@ export const enum NodeType {
 }
 
 const NodeTypeUiString : Record<NodeType, string> = {
+    [NodeType.sourceFile]: "program",
     [NodeType.terminal]: "terminal",
     [NodeType.textSpan]: "textSpan",
     [NodeType.comment]: "comment",
@@ -74,6 +76,7 @@ const NodeTypeUiString : Record<NodeType, string> = {
 };
 
 export type Node =
+    | SourceFile
     | Terminal
     | Comment
     | TextSpan
@@ -117,28 +120,57 @@ export type Node =
     | Finally
     | ImportStatement
     | New
+    | DotAccess
+    | BracketAccess
+    | OptionalDotAccess
+    | OptionalBracketAccess
+    | OptionalCall
 
-const staticCgiScope = [
-    "http_method",
-    "auth_user",
-    // etc.
-] as const;
-type StaticCgiScope = typeof staticCgiScope;
-
-interface VarScope {
-    container: Node | null,
-    variables: ReadonlyMap<string, Identifier>,
-
-    this?: Identifier[],
-    arguments?: ReadonlyMap<string, Identifier>,
-    local?: ReadonlyMap<string, Identifier>,
-    url?: Identifier[],
-    cgi?: StaticCgiScope,
+interface FunctionSignature {
+    params: FunctionParameter[],
+    return: Type
 }
 
+type Type =
+    | "any"
+    | FunctionSignature
+
+export interface Variable {
+    type: Type,
+    name: number, // interned string id
+    final: boolean,
+    var: boolean,
+    initializer: Node | undefined,
+}
+
+export type Scope = Map<number, Variable>;
+
+export interface ScopeDisplay {
+    container: Node | null,
+    
+    variables?: Scope,
+    this?: Scope,
+
+    arguments?: Scope,
+    local?: Scope,
+
+    url?: Scope,
+    form?: Scope,
+    cgi?: Scope,
+    server?: Scope,
+}
+
+export interface RootScope {
+    url: Scope,
+    form: Scope,
+    cgi: Scope,
+    server: Scope
+}
+
+export type NodeId = number;
 interface NodeBase {
     type: NodeType,
-    nodeId: number,
+    nodeId: NodeId,
     parent: Node | null,
     range: SourceRange,
     tagOrigin: {
@@ -147,17 +179,17 @@ interface NodeBase {
     }
     flags: NodeFlags,
 
-    containedScope?: VarScope,
+    containedScope?: ScopeDisplay,
 
     __debug_type?: string;
 }
 
-export type NodeWithScope = Node & {containedScope: Exclude<Node["containedScope"], undefined>};
 
-export function initContainer(node: Node, container: Node | null) : asserts node is NodeWithScope {
+export type NodeWithScope<T extends Node = Node> = T & {containedScope: ScopeDisplay};
+
+export function initContainer<T extends Node>(node: T, container: Node | null) : asserts node is NodeWithScope<T> {
     node.containedScope = {
-        container,
-        variables: new Map<string, Identifier>()
+        container
     }
 }
 
@@ -214,6 +246,26 @@ export function mergeRanges(...nodes : (SourceRange | Node | Node[] | undefined 
 
     return result;
 }
+
+export interface SourceFile extends NodeBase {
+    type: NodeType.sourceFile,
+    absPath: string,
+    cfFileType: CfFileType,
+    sourceText: string,
+    content: Node[]
+}
+
+export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: string) : SourceFile {
+    const sourceFile = NodeBase<SourceFile>(NodeType.sourceFile);
+    sourceFile.absPath = absPath;
+    sourceFile.cfFileType = cfFileType;
+    sourceFile.sourceText = sourceText;
+    sourceFile.content = [];
+    return sourceFile;
+}
+
+export const NilCfm = (text: string) => SourceFile("nil!", CfFileType.cfm, text);
+export const NilCfc = (text: string) => SourceFile("nil!", CfFileType.cfc, text);
 
 export interface Terminal extends NodeBase {
     type: NodeType.terminal;
@@ -708,6 +760,8 @@ export interface VariableDeclaration extends NodeBase {
     finalModifier: Terminal | null,
     varModifier: Terminal | null,
     identifier: Identifier, // can be Identifier | HashWrappedExpr | SimpleStringLiteral | InterpolatedStringLiteral | IndexedAccess, but that's tough to constrain ergonomically
+
+    // @fixme : how are we storing var x = (expr), where's the assignment operator? is expr a binary operator, and we're storing identifier twice?
     expr: Node | null
 }
 
@@ -1084,6 +1138,7 @@ export interface DotAccess extends NodeBase {
     accessType: IndexedAccessType.dot,
     dot: Terminal,
     property: Terminal,
+    __debug_access_type?: string
 }
 
 export interface BracketAccess extends NodeBase {
@@ -1092,6 +1147,7 @@ export interface BracketAccess extends NodeBase {
     leftBracket: Terminal,
     expr: Node,
     rightBracket: Terminal,
+    __debug_access_type?: string
 }
 
 // note that for the optional accesses, like with the null coalescing operator `?:`
@@ -1102,6 +1158,7 @@ export interface OptionalDotAccess extends NodeBase {
     questionMark: Terminal,
     dot: Terminal,
     property: Terminal,
+    __debug_access_type?: string
 }
 
 export interface OptionalBracketAccess extends NodeBase {
@@ -1112,6 +1169,7 @@ export interface OptionalBracketAccess extends NodeBase {
     leftBracket: Terminal,
     expr: Node,
     rightBracket: Terminal,
+    __debug_access_type?: string
 }
 
 export interface OptionalCall extends NodeBase {
@@ -1119,16 +1177,17 @@ export interface OptionalCall extends NodeBase {
     accessType: IndexedAccessType.optionalCall,
     questionMark: Terminal,
     dot: Terminal,
+    __debug_access_type?: string
     // the call itself will "own" this node as its left-side
     // foo?.() is a call expression where the left side is an indexed-access expression with a trailing OptionalCall access chain element
 }
 
-export type IndexedAccessChainElement = (
+export type IndexedAccessChainElement =
     | DotAccess
     | BracketAccess
     | OptionalDotAccess
     | OptionalBracketAccess
-    | OptionalCall) & {__debug_access_type?: string};
+    | OptionalCall
 
 export function DotAccess(dot: Terminal, property: Terminal) : DotAccess {
     const node = NodeBase<DotAccess>(NodeType.indexedAccessChainElement, mergeRanges(dot, property));
@@ -1321,6 +1380,7 @@ export function ArrowFunctionDefinition(leftParen: Terminal | null, params: Func
     return v;
 };
 
+// @fixme clean this up
 export interface DottedPath<T extends NodeBase> extends NodeBase {
     type: NodeType.dottedPath;
     headKey: T;
@@ -1551,16 +1611,15 @@ export interface StructLiteral extends NodeBase {
 }
 
 export function StructLiteral(
-    leftBrace: Terminal,
-    
+    leftDelimiter: Terminal,
     members: StructLiteralInitializerMember[],
-    rightBrace: Terminal,
+    rightDelimiter: Terminal,
 ) : StructLiteral {
-    const v = NodeBase<StructLiteral>(NodeType.structLiteral, mergeRanges(leftBrace, rightBrace));
+    const v = NodeBase<StructLiteral>(NodeType.structLiteral, mergeRanges(leftDelimiter, rightDelimiter));
     v.ordered = false;
-    v.leftDelimiter = leftBrace;
+    v.leftDelimiter = leftDelimiter;
     v.members = members;
-    v.rightDelimiter = rightBrace;
+    v.rightDelimiter = rightDelimiter;
     return v;
 }
 

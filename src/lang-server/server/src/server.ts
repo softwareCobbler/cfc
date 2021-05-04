@@ -15,26 +15,40 @@ import {
 	TextDocumentPositionParams,
 	TextDocumentSyncKind,
 	InitializeResult,
-	ConnectionOptions
+	ConnectionOptions,
+	DocumentSymbolParams,
+	SymbolInformation,
+	SymbolKind
 } from 'vscode-languageserver/node';
 
 import {
 	TextDocument
 } from 'vscode-languageserver-textdocument';
 
-import { Scanner, Parser, Binder, CfFileType, Diagnostic as cfcDiagnostic } from "compiler";
+import { SourceFile, Parser, Binder, Node as cfNode, CfFileType, Diagnostic as cfcDiagnostic, cfmOrCfc, flattenTree, NodeSourceMap } from "compiler";
 
 const parser = Parser();
 const binder = Binder();
+type TextDocumentUri = string;
+const lastParse = new Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[]}>();
 
-function naiveGetDiagnostics(text: string, fileType: CfFileType) : readonly cfcDiagnostic[] {
+function naiveGetDiagnostics(uri: TextDocumentUri, text: string, fileType: CfFileType) : readonly cfcDiagnostic[] {
 	// how to tell if we were launched in debug mode ?
-	const scanner = Scanner(text);
-    parser.setScanner(scanner);
-    const tree = parser.parse(fileType);
-	const diagnostics = parser.getDiagnostics();
-	binder.bindProgram(tree, scanner, diagnostics);
-    return diagnostics;
+
+	const cfFileType = cfmOrCfc(uri);
+	if (!cfFileType) {
+		return [];
+	}
+
+	const sourceFile = SourceFile(uri, cfFileType, text);
+    parser.setSourceFile(sourceFile);
+
+    parser.parse(fileType);
+	binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
+	
+	lastParse.set(uri, {parsedSourceFile: sourceFile, flatTree: flattenTree(sourceFile)});
+
+    return parser.getDiagnostics();
 }
 
 // Create a connection for the server, using Node's IPC as a transport.
@@ -69,9 +83,7 @@ connection.onInitialize((params: InitializeParams) => {
 		capabilities: {
 			textDocumentSync: TextDocumentSyncKind.Incremental,
 			// Tell the client that this server supports code completion.
-			/*completionProvider: {
-				resolveProvider: true
-			}*/
+			completionProvider: {/*no specific options*/},
 		}
 	};
 	/*
@@ -126,6 +138,27 @@ connection.onDidChangeConfiguration(change => {
 	documents.all().forEach(validateTextDocument);
 });
 
+connection.onDocumentSymbol((params: DocumentSymbolParams) => {
+	params.textDocument.uri;
+	const textDocument = documents.get(params.textDocument.uri);
+
+	if (!textDocument) return [];
+
+	const v : SymbolInformation[] = [{
+			name: "someSymbol",
+			kind: SymbolKind.Variable,
+			location: {
+				uri: params.textDocument.uri,
+				range: {
+					start: textDocument?.positionAt(0),
+					end: textDocument?.positionAt(4)
+				}
+			}
+		}];
+
+	return v;
+});
+
 function getDocumentSettings(resource: string): Thenable<ExampleSettings> {
 	if (!hasConfigurationCapability) {
 		return Promise.resolve(globalSettings);
@@ -163,10 +196,10 @@ async function validateTextDocument(textDocument: TextDocument): Promise<void> {
 	let cfDiagnostics : readonly cfcDiagnostic[];
 
 	if (cfmPattern.test(textDocument.uri)) {
-		cfDiagnostics = naiveGetDiagnostics(textDocument.getText(), CfFileType.cfm);
+		cfDiagnostics = naiveGetDiagnostics(textDocument.uri, textDocument.getText(), CfFileType.cfm);
 	}
 	else if (cfcPattern.test(textDocument.uri)) {
-		cfDiagnostics = naiveGetDiagnostics(textDocument.getText(), CfFileType.cfc);
+		cfDiagnostics = naiveGetDiagnostics(textDocument.uri, textDocument.getText(), CfFileType.cfc);
 	}
 	else {
 		// didn't match a cf file type, send an empty diagnostics list and we're done
@@ -230,25 +263,41 @@ connection.onDidChangeWatchedFiles(_change => {
 });
 
 // This handler provides the initial list of the completion items.
-/*connection.onCompletion(
-	(_textDocumentPosition: TextDocumentPositionParams): CompletionItem[] => {
+connection.onCompletion(
+	(textDocumentPosition: TextDocumentPositionParams): CompletionItem[] => {
+		
+		const document = documents.get(textDocumentPosition.textDocument.uri);
+		if (!document) return [];
+
+		const index = document.offsetAt(textDocumentPosition.position);
+
+		
+
 		// The pass parameter contains the position of the text document in
 		// which code complete got requested. For the example we ignore this
 		// info and always provide the same completion items.
 		return [
 			{
 				label: 'TypeScript',
-				kind: CompletionItemKind.Text,
-				data: 1
+				kind: CompletionItemKind.Variable,
+				detail: "scope:variables"
+				//data: 1
 			},
 			{
 				label: 'JavaScript',
 				kind: CompletionItemKind.Text,
-				data: 2
+				detail: "scope:url",
+				//data: 2
+			},
+			{
+				label: 'encodeForHTML',
+				kind: CompletionItemKind.Function,
+				detail: "scope:cf-builtin"
+				//data: 2
 			}
 		];
 	}
-);*/
+);
 
 // This handler resolves additional information for the item selected in
 // the completion list.
