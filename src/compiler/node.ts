@@ -184,14 +184,9 @@ interface NodeBase {
     __debug_type?: string;
 }
 
-
-export type NodeWithScope<T extends Node = Node> = T & {containedScope: ScopeDisplay};
-
-export function initContainer<T extends Node>(node: T, container: Node | null) : asserts node is NodeWithScope<T> {
-    node.containedScope = {
-        container
-    }
-}
+export type NodeWithScope<
+    T extends Node = Node,
+    U extends keyof ScopeDisplay | never = never> = T & {containedScope: Pick<{[k in keyof ScopeDisplay]-?: ScopeDisplay[k]}, U | "container">};
 
 export function NodeBase<T extends NodeBase>(type: T["type"], range: SourceRange = SourceRange.Nil()) : T {
     const result : Partial<T> = {};
@@ -870,24 +865,12 @@ export namespace FromTag {
         return stmt;
     }
 
-    export function Statement(tag: CfTag.Common) : Statement;
-    export function Statement(tag: CfTag.ScriptLike) : Statement;
-    export function Statement(tag: CfTag.Common | CfTag.ScriptLike) : Statement {
-        let stmt : Statement;
-        if (tag.tagType === CfTag.TagType.scriptLike) {
-            stmt = NodeBase<Statement>(NodeType.statement, tag.range);
-            stmt.subType = StatementType.fromTag;
-            stmt.expr = tag.expr;
-            stmt.tagOrigin.startTag = tag;
-            stmt.semicolon = null;
-        }
-        else {
-            stmt = NodeBase<Statement>(NodeType.statement, tag.range);
-            stmt.subType = StatementType.fromTag;
-            stmt.expr = null;
-            stmt.tagOrigin.startTag = tag;
-            stmt.semicolon = null;
-        }
+    export function Statement(tag: CfTag.Common) : Statement {
+        const stmt = NodeBase<Statement>(NodeType.statement, tag.range);
+        stmt.subType = StatementType.fromTag;
+        stmt.expr = null;
+        stmt.tagOrigin.startTag = tag;
+        stmt.semicolon = null;
 
         if (debug) {
             stmt.__debug_subtype = StatementTypeUiString[StatementType.fromTag]
