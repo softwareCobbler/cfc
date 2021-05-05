@@ -19,7 +19,7 @@ const scanner = Scanner(fs.readFileSync(fname));*/
 //                                                                                            ^16
 
 const parser = Parser().setDebug(true);
-const sourceFile = NilCfm(`<cfset x = url.x>`);
+const sourceFile = NilCfm(`<cfoutput>#     #</cfoutput>`);
 parser.setSourceFile(sourceFile);
 const binder = Binder().setDebug(true);
 
@@ -28,17 +28,16 @@ binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
 
 const flatProgram = flattenTree(sourceFile);
 
-const match = binarySearch(
+let match = binarySearch(
     flatProgram,
-    (v) => v.range.fromInclusive < 15
+    (v) => v.range.fromInclusive < 11
         ? -1
-        : v.range.fromInclusive === 15
+        : v.range.fromInclusive === 11
         ? 0 : 1);
 
-if (match >= 0) {
-    const node = binder.NodeMap.get(flatProgram[match].nodeId);
-    console.log(node);
-}
+match = match < 0 ? ~match : match;
+const node = binder.NodeMap.get(flatProgram[match].nodeId);
+console.log(node);
 
 const diagnostics = parser.getDiagnostics();
 console.log("got ", diagnostics.length + " diagnostics");

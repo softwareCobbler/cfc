@@ -43,6 +43,7 @@ const enum ParseOptions {
 
 const enum ParseContext {
     none = 0,
+    insideCfTagAngles,  // somewhere inside <cf ... > or </cf ... >
     hashWrappedExpr,    // in #...# in an expression context, like `a + #b#`
     cfScriptTagBody,    // in a <cfscript> block
     cfScriptTopLevel,   // in cfscript, but not within a containing <cfscript> block; e.g, a script-based cfc file
@@ -554,6 +555,23 @@ export function Parser() {
 
         if (tagMode()) {
             result = parseTagTrivia();
+
+            //
+            // if we're in a tag or hash-wrapped expr in tag mode, we want to parse tag trivia,
+            // but convert it to script-like trivia immediately
+            // this way, the tag treeifier doesn't need to concern itself with descending into hash-wrapped exprs perform these transformations
+            // all other trivia during tag-treeification is loose
+            //
+            if (isInSomeContext(ParseContext.hashWrappedExpr) || isInSomeContext(ParseContext.insideCfTagAngles)) {
+                result = (result as CfTag[]).map((v) => {
+                    if (v.tagType === CfTag.TagType.comment) {
+                        return Comment(CommentType.tag, v.range);
+                    }
+                    else {
+                        return TextSpan(v.range, "");
+                    }
+                })
+            }
         }
         else {
             result = [];
@@ -1276,13 +1294,13 @@ export function Parser() {
         while (lookahead() != TokenType.EOF) {
             switch (lookahead()) {
                 case TokenType.CF_START_TAG_START: {
-                    const tag = parseCfStartTag();
+                    const tag = doInExtendedContext(ParseContext.insideCfTagAngles, parseCfStartTag);
                     tagContext.update(tag);
                     result.push(tag);
                     continue;
                 }
                 case TokenType.CF_END_TAG_START: {
-                    const tag = parseCfEndTag();
+                    const tag = doInExtendedContext(ParseContext.insideCfTagAngles, parseCfEndTag);
                     tagContext.update(tag);
                     result.push(tag);
                     continue;
@@ -1794,38 +1812,15 @@ export function Parser() {
     function parseHashWrappedExpression() {
         if (isInSomeContext(ParseContext.hashWrappedExpr)) throw "parseHashWrappedExpr cannot be nested";
 
-
+        const savedContext = updateParseContext(ParseContext.hashWrappedExpr);
         const leftHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
-        const expr = doInExtendedContext(ParseContext.hashWrappedExpr, parseExpression);
-
-        /*
-        this is only true in some attributes; probably need to do this check later
-        if (!isInSomeContext(ParseContext.interpolatedText)) {
-            // in a non-interpolated text context, only a subset of call-expr-or-lower expressions are valid
-            // #foo()#     is ok
-            // #foo() + 1# is invalid
-            // #3#         is invalid
-            // #{x:1}#     is invalid
-            // etc.
-            switch (expr.type) {
-                case NodeType.identifier:
-                case NodeType.simpleStringLiteral:
-                case NodeType.interpolatedStringLiteral:
-                case NodeType.numericLiteral:
-                case NodeType.indexedAccess:
-                case NodeType.callExpression:
-                    break;
-                default:
-                    parseErrorAtRange(expr.range, "Hashed expressions in non-interpolated text contexts must be non-compound expressions")
-            }
-        }
-        */
-
+        const expr = parseExpression();
         const rightHash = parseExpectedTerminal(
             TokenType.HASH,
             isInSomeContext(ParseContext.interpolatedText) ? ParseOptions.noTrivia : ParseOptions.withTrivia, // if inside interpolated text, the 'trivia' outside the right-hash should be interpreted as raw text
             () => parseErrorAtRange(leftHash.range.fromInclusive, getIndex(), "Unterminated hash-wrapped expression."));
 
+        parseContext = savedContext;
         return HashWrappedExpr(leftHash, expr, rightHash);
     }
 
@@ -2267,6 +2262,7 @@ export function Parser() {
             canonicalName = terminal.token.text.toLowerCase();
         }
 
+        // @fixme: need to mark node with error flags if there was an error
         return Identifier(terminal, canonicalName);
     }
 

@@ -112,10 +112,12 @@ export function Binder() {
         switch (node.type) {
             case NodeType.sourceFile:
                 throw "Bind source files by binding its content";
-            case NodeType.terminal: // fallthrough
             case NodeType.comment:  // fallthrough
             case NodeType.textSpan:
-                node.parent = node;
+                node.parent = parent;
+                return;
+            case NodeType.terminal: // fallthrough
+                bindList(node.trivia, node);
                 return;
             case NodeType.hashWrappedExpr: // fallthrough
             case NodeType.parenthetical:   // fallthrough
@@ -242,6 +244,7 @@ export function Binder() {
             if (visitedNode?.type === NodeType.terminal) {
                 NodeMap.set(visitedNode.nodeId, visitedNode);
                 visitedNode.parent = node;
+                bindList(visitedNode.trivia, visitedNode);
             }
         });
     }

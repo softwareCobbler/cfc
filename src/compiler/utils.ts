@@ -231,20 +231,24 @@ export function getAttributeValue(attrs: TagAttribute[], name: string) : Node | 
     return null;
 }
 
-function forEachNode(nodeList: Node[], f: (node: Node) => any) : void {
+// falsy return values keep it going
+function forEachNode<T>(nodeList: Node[], f: (node: Node) => T) : T | undefined {
     for (let i = 0; i < nodeList.length; i++) {
-        if (!f(nodeList[i])) return;
+        const result = f(nodeList[i]);
+        if (result) return result;
     }
+    return undefined;
 }
 
 // a falsy value returned by the visitor keeps it going
 export function visit(node: Node, visitor: (arg: Node | undefined | null) => any) : void {
     switch (node.type) {
-        case NodeType.terminal:
         case NodeType.comment:
         case NodeType.textSpan:
             // bottomed out
             return;
+        case NodeType.terminal:
+            return forEachNode(node.trivia, visitor);
         case NodeType.sourceFile:
             return forEachNode(node.content, visitor);
         case NodeType.hashWrappedExpr:
@@ -583,8 +587,12 @@ export function flattenTree(tree: Node | Node[]) : NodeSourceMap[] {
 
     function visitor(node: Node | undefined | null) {
         if (node) {
-            if (node.type === NodeType.terminal) pushNode(node);
-            else visit(node, visitor);
+            if (node.type === NodeType.terminal || node.type === NodeType.comment || node.type === NodeType.textSpan) {
+                pushNode(node);
+            }
+
+            // we also want the trivia for a terminal, too
+            visit(node, visitor);
         }
     }
 
