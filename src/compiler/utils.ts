@@ -441,8 +441,12 @@ export function visit(node: Node, visitor: (arg: Node | undefined | null) => any
                 || visitor(node.fatArrow)
                 || visitor(node.body)
         case NodeType.dottedPath:
-            // @fixme
-            throw "nyi";
+            // @fixme dottedpath is just wrong
+            // the ...rest part of node needs to be a Node[],
+            // or we need to find the more correct abstraction of DottedPath
+            // really it is an indexed access where all elements are Dot?
+            return visitor(node.headKey)
+                || false;
         case NodeType.switch:
             if (node.tagOrigin.startTag) {
                 return visitor(node.tagOrigin.startTag)

@@ -1,16 +1,16 @@
 import * as assert from "assert";
 import * as fs from "fs";
 import * as path from "path";
-import {Scanner, Parser, Binder, CfFileType } from "../out/compiler";
+import {Scanner, Parser, Binder, CfFileType, SourceFile } from "../out/compiler";
 
 const parser = Parser().setDebug(true);
 const binder = Binder().setDebug(true);
 
 function assertDiagnosticsCount(text: string, cfFileType: CfFileType, count: number) {
-    const scanner = Scanner(text);
-    const tree = parser.setScanner(scanner).parse(cfFileType);
+    const sourceFile = SourceFile("", cfFileType, text);
+    parser.setSourceFile(sourceFile).parse(cfFileType);
     const diagnostics = parser.getDiagnostics();
-    binder.bindProgram(tree, scanner, diagnostics);
+    binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
     assert.strictEqual(diagnostics.length, count, `${count} diagnostics emitted`);
 }
 

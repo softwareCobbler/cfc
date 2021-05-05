@@ -246,15 +246,15 @@ export interface SourceFile extends NodeBase {
     type: NodeType.sourceFile,
     absPath: string,
     cfFileType: CfFileType,
-    sourceText: string,
+    source: string | Buffer,
     content: Node[]
 }
 
-export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: string) : SourceFile {
+export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: string | Buffer) : SourceFile {
     const sourceFile = NodeBase<SourceFile>(NodeType.sourceFile);
     sourceFile.absPath = absPath;
     sourceFile.cfFileType = cfFileType;
-    sourceFile.sourceText = sourceText;
+    sourceFile.source = sourceText;
     sourceFile.content = [];
     return sourceFile;
 }
@@ -1549,6 +1549,7 @@ export namespace For {
         rightParen: Terminal,
         body: Node) : For {
         const v = NodeBase<For>(NodeType.for, mergeRanges(forToken, body));
+        v.subType = ForSubType.for;
         v.forToken = forToken;
         v.leftParen = leftParen;
         v.for = {
@@ -1571,6 +1572,7 @@ export namespace For {
         rightParen: Terminal,
         body: Node) : For {
         const v = NodeBase<For>(NodeType.for, mergeRanges(forToken, body));
+        v.subType = ForSubType.forIn;
         v.forToken = forToken;
         v.leftParen = leftParen;
         v.forIn = {

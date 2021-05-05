@@ -323,7 +323,10 @@ export function Binder() {
             identifierBaseName = getTriviallyComputableString(node.identifier)?.toLowerCase();
         }
 
-        if (identifierBaseName) {
+        // make sure we got a useable name
+        // make sure there is a var/final modifier, because we can get a "declaration"
+        // in at least the initializer position in `for(x in y)`
+        if (identifierBaseName && (node.finalModifier || node.varModifier)) {
             const internId = internString(identifierBaseName);
             if (currentContainer.containedScope.local) {
                 (<Map<number, Variable>>currentContainer.containedScope.local).set(

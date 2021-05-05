@@ -1,7 +1,7 @@
 import * as assert from "assert";
 import * as fs from "fs";
 import * as path from "path";
-import {Scanner, Parser, Binder, cfmOrCfc } from "../out/compiler";
+import { Parser, Binder, cfmOrCfc, SourceFile } from "../out/compiler";
 
 const expectedDiagnosticCountByFile : Record<string, number> = {
     "./mxunit/mxunit-TestCase-Template.cfc": 0,
@@ -257,11 +257,12 @@ describe("MX-Unit smoke test", () => {
 
         it(`Should parse ${fileBaseName} with exactly ___${expectedDiagnosticCount}___ emitted diagnostics`, () => {
             const absPath = path.resolve(__dirname, fileBaseName);
-            const scanner = Scanner(fs.readFileSync(absPath));
-            const tree = parser.setScanner(scanner).parse(cfmOrCfc(fileBaseName));
+            const textBuffer = fs.readFileSync(absPath);
+            const sourceFile = SourceFile(absPath, cfmOrCfc(absPath)!, textBuffer);
+            parser.setSourceFile(sourceFile).parse();
             const diagnostics = parser.getDiagnostics();
 
-            binder.bindProgram(tree, scanner, diagnostics);
+            binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
             
             assert.strictEqual(diagnostics.length, expectedDiagnosticCount, `${fileBaseName} parsed with exactly ${expectedDiagnosticCount} emitted diagnostics`);
         });

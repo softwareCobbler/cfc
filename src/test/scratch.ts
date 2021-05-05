@@ -19,7 +19,14 @@ const scanner = Scanner(fs.readFileSync(fname));*/
 //                                                                                            ^16
 
 const parser = Parser().setDebug(true);
-const sourceFile = NilCfm(`<cfoutput>#     #</cfoutput>`);
+const sourceFile = NilCfm(`
+<cfscript>
+for (x in y) {
+    for (i = 0; i < 10; i++) {
+
+    }
+}
+</cfscript>`);
 parser.setSourceFile(sourceFile);
 const binder = Binder().setDebug(true);
 

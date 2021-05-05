@@ -117,7 +117,7 @@ export function Parser() {
 
     function setSourceFile(sourceFile_: SourceFile) {
         sourceFile = sourceFile_;
-        scanner = Scanner(sourceFile.sourceText);
+        scanner = Scanner(sourceFile.source);
         parseContext = ParseContext.none;
         diagnostics = [];
         return self_;
@@ -1430,6 +1430,7 @@ export function Parser() {
     }
 
     function isAssignmentTarget(node: Node) : boolean {
+        // @fixme: in script mode, it may not be possible to assign to a string
         switch (node.type) {
             case NodeType.indexedAccess:
             case NodeType.identifier:
