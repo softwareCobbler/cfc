@@ -18,17 +18,21 @@ import {
 	ConnectionOptions,
 	DocumentSymbolParams,
 	SymbolInformation,
-	SymbolKind
+	SymbolKind,
+	CompletionContext,
+	CompletionParams,
+	CompletionTriggerKind
 } from 'vscode-languageserver/node';
 
 import {
 	TextDocument
 } from 'vscode-languageserver-textdocument';
 
-import { SourceFile, Parser, Binder, Node as cfNode, CfFileType, Diagnostic as cfcDiagnostic, cfmOrCfc, flattenTree, NodeSourceMap } from "compiler";
+import { SourceFile, Parser, Binder, Node as cfNode, binarySearch, CfFileType, Diagnostic as cfcDiagnostic, cfmOrCfc, flattenTree, getScopeContainedNames, NodeSourceMap, isExpressionContext, getTriviallyComputableString } from "compiler";
+import { NodeType } from '../../../compiler/node';
 
-const parser = Parser();
-const binder = Binder();
+const parser = Parser().setDebug(true);
+const binder = Binder().setDebug(true);
 type TextDocumentUri = string;
 const lastParse = new Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[]}>();
 
@@ -83,7 +87,7 @@ connection.onInitialize((params: InitializeParams) => {
 		capabilities: {
 			textDocumentSync: TextDocumentSyncKind.Incremental,
 			// Tell the client that this server supports code completion.
-			completionProvider: {/*no specific options*/},
+			completionProvider: {triggerCharacters: ["."]},
 		}
 	};
 	/*
@@ -264,14 +268,47 @@ connection.onDidChangeWatchedFiles(_change => {
 
 // This handler provides the initial list of the completion items.
 connection.onCompletion(
-	(textDocumentPosition: TextDocumentPositionParams): CompletionItem[] => {
+	(textDocumentPosition: CompletionParams): CompletionItem[] => {
 		
 		const document = documents.get(textDocumentPosition.textDocument.uri);
 		if (!document) return [];
 
-		const index = document.offsetAt(textDocumentPosition.position);
+		const targetIndex = document.offsetAt(textDocumentPosition.position);
+		const docCache = lastParse.get(textDocumentPosition.textDocument.uri)!;
+		let match = binarySearch(
+			docCache.flatTree,
+			(v) => {
+				if (v.range.fromInclusive <= targetIndex && targetIndex < v.range.toExclusive) {
+					// match: on or in the target index
+					return 0;
+				}
+				else if (v.range.toExclusive < targetIndex) {
+					return -1;
+				}
+				else {
+					return 1;
+				}
+			});
 
-		
+		match = match < 0 ? ~match : match;
+		const node = binder.NodeMap.get(docCache.flatTree[match].nodeId);
+
+		if (!node) return [];
+
+		if (textDocumentPosition.context?.triggerKind === CompletionTriggerKind.TriggerCharacter && textDocumentPosition.context.triggerCharacter === ".") {
+			if (node.type === NodeType.indexedAccessChainElement && node.parent?.type === NodeType.indexedAccess) {
+				const name = getTriviallyComputableString(node.parent.root)?.toLowerCase();
+				if (name === "cgi") {
+					if (docCache.parsedSourceFile.containedScope?.cgi) {
+						return getScopeContainedNames(docCache.parsedSourceFile.containedScope.cgi).map(name => ({
+							label: name,
+							kind: CompletionItemKind.Field,
+							detail: "scope:url"
+						}));
+					}
+				}
+			}
+		}
 
 		// The pass parameter contains the position of the text document in
 		// which code complete got requested. For the example we ignore this

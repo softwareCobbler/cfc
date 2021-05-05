@@ -4,7 +4,7 @@ import { Diagnostic } from "./parser";
 import { Scanner, SourceRange } from "./scanner";
 
 type InternedStringId = number;
-const InternedStrings = new BiMap<number, string>();
+const InternedStrings = new BiMap<InternedStringId, string>();
 let internStringId = 0;
 
 function internString(s: string) {
@@ -15,6 +15,14 @@ function internString(s: string) {
     const freshInternId = internStringId++;
     InternedStrings.set(freshInternId, s);
     return freshInternId;
+}
+
+export function getScopeContainedNames(scope: Scope) : string[] {
+    const result = [];
+    for (const internId of scope.keys()) {
+        result.push(InternedStrings.getByKey(internId)!);
+    }
+    return result;
 }
 
 const staticCgiScope = (function () {
@@ -116,7 +124,7 @@ export function Binder() {
             case NodeType.textSpan:
                 node.parent = parent;
                 return;
-            case NodeType.terminal: // fallthrough
+            case NodeType.terminal:
                 bindList(node.trivia, node);
                 return;
             case NodeType.hashWrappedExpr: // fallthrough
@@ -269,6 +277,14 @@ export function Binder() {
                 bindNode(node.expr, node);
                 return;
             case CfTag.TagType.script:
+                // this seems like a bit of a kludge:
+                // the script tag's trailing ">" in "<cfscript>" has trivia bound to it
+                // we would like the trivia's parent to be the block the <cfscript> tag represents,
+                // not the <cfscript> tag itself
+                // then when doing lookups, a cursor in the the first part of a cfscript block naturally climbs to a block
+                // rather than a tag
+                bindList(node.tagEnd.trivia, node.parent!);
+                return;
             case CfTag.TagType.comment:
             case CfTag.TagType.text:
                 throw "These should be dealt with prior to binding.";
@@ -412,8 +428,9 @@ export function Binder() {
     function bindBlock(node: Block) {
         switch (node.subType) {
             case BlockType.fromTag:
-                // check against cf tag meta...
+                bindNode(node.tagOrigin.startTag, node);
                 bindList(node.stmtList, node);
+                bindNode(node.tagOrigin.endTag, node);
                 break;
             case BlockType.scriptSugaredTagCallBlock:
                 // check against cf tag meta
@@ -600,6 +617,7 @@ export function Binder() {
     function bindFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {
         node.containedScope = {
             container: currentContainer,
+            local: new Map(),
             arguments: new Map()
         };
 
@@ -609,7 +627,6 @@ export function Binder() {
 
         if (node.type === NodeType.functionDefinition) {
             // this is a non-arrow function definition
-            // it should have a name unless the source text is invalid, in which case it would be "" (the empty string)
             // tag functions and named script functions like `function foo() {}` are hoisted
             if (node.canonicalName) {
                 const internId = internString(node.canonicalName);
@@ -626,26 +643,6 @@ export function Binder() {
                     });
             }
         }
-
-        const paramIdentifiers = new Map<InternedStringId, Variable>();
-        for (let i = 0; i < node.params.length; i++) {
-            const staticallyKnownName = node.params[i].canonicalName;
-            if (staticallyKnownName) {
-                const internId = internString(staticallyKnownName)
-                paramIdentifiers.set(
-                    internId, {
-                        type: "any", // we could pull info from the type specifier if there is one
-                        name: internId,
-                        final: false,
-                        var: false,
-                        initializer: node.params[i].defaultValue ?? undefined
-                    });
-
-            }
-        }
-
-        node.containedScope.arguments = paramIdentifiers;
-        node.containedScope.local = new Map();
 
         bindNode(node.body, node);
         currentContainer = node.containedScope.container! as NodeWithScope;

@@ -1,7 +1,5 @@
 import * as assert from "assert";
-import * as fs from "fs";
-import * as path from "path";
-import {Scanner, Parser, Binder, CfFileType, SourceFile } from "../out/compiler";
+import { Parser, Binder, CfFileType, SourceFile, NilCfm, flattenTree } from "../out/compiler";
 
 const parser = Parser().setDebug(true);
 const binder = Binder().setDebug(true);
@@ -93,5 +91,17 @@ describe("general smoke test for particular constructs", () => {
                 }
             </cfscript>
         `, CfFileType.cfm, 6);
+    });
+    it("Should not throw an error during tree flattening", () => {
+        const string = `
+            <cfscript>
+                function foo() {
+                    cgi.
+                }
+            </cfscript>`;
+        const sourceFile = NilCfm(string);
+        parser.setSourceFile(sourceFile);
+        parser.parse();
+        flattenTree(sourceFile);
     });
 });

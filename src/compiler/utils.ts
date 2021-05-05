@@ -277,6 +277,11 @@ export function visit(node: Node, visitor: (arg: Node | undefined | null) => any
                         || visitor(node.expr)
                         || visitor(node.voidSlash)
                         || visitor(node.tagEnd);
+                case CfTag.TagType.script:
+                    return visitor(node.tagStart)
+                        || visitor(node.tagName)
+                        || visitor(node.voidSlash)
+                        || visitor(node.tagEnd);
                 default: return;
             }
         case NodeType.callExpression:
@@ -581,11 +586,14 @@ export function flattenTree(tree: Node | Node[]) : NodeSourceMap[] {
     const result : NodeSourceMap[] = [];
 
     function pushNode(node: Node) {
+        if (result.length > 0) {
+            if (result[result.length-1].range.toExclusive !== node.range.fromInclusive) {
+                throw "each subsequent node should be adjacent with the last";
+            }
+        }
         result.push({
             nodeId: node.nodeId,
-            range: node.type === NodeType.terminal
-                ? node.rangeWithTrivia
-                : node.range
+            range: node.range
         });
     }
 
@@ -650,6 +658,26 @@ export function binarySearch<T>(vs: T[], comparator: (v: T) => number) : number 
     }
 }
 
+export function isExpressionContext(node: Node | null) : boolean {
+    if (!node) return false;
+
+    switch (node.type) {
+        case NodeType.sourceFile: // fallthough
+        case NodeType.comment:
+            return false;
+        case NodeType.terminal: // fallthrough
+        case NodeType.textSpan:
+            return isExpressionContext(node.parent);
+        case NodeType.block:
+            if (node.tagOrigin.startTag) {
+                return node.tagOrigin.startTag.canonicalName === "script";
+            }
+            return true;
+        default:
+            return true;
+    }
+}
+
 export class BiMap<K,V> {
     #forward = new Map<K,V>();
     #reverse = new Map<V,K>();
@@ -682,5 +710,13 @@ export class BiMap<K,V> {
             this.#forward.delete(key);
             this.#reverse.delete(value);
         }
+    }
+
+    allKeys() : K[] {
+        return [...this.#forward.keys()];
+    }
+
+    allValues() : V[] {
+        return [...this.#reverse.keys()];
     }
 }

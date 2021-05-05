@@ -495,6 +495,10 @@ export function Parser() {
                 next();
                 trivia = parseTrivia();
             }
+
+            // this "error" lexeme has 0 range
+            const forcedLexemeToken = Token(TokenType.LEXEME, labelLike.text, labelLike.range.fromInclusive, labelLike.range.fromInclusive);
+            return Terminal(forcedLexemeToken, []);
         }
         else {
             next();
@@ -557,7 +561,7 @@ export function Parser() {
             result = parseTagTrivia();
 
             //
-            // if we're in a tag or hash-wrapped expr in tag mode, we want to parse tag trivia,
+            // if we're in a tag or a hash-wrapped expr in tag mode, we want to parse tag trivia,
             // but convert it to script-like trivia immediately
             // this way, the tag treeifier doesn't need to concern itself with descending into hash-wrapped exprs perform these transformations
             // all other trivia during tag-treeification is loose
@@ -657,7 +661,6 @@ export function Parser() {
                     const savedMode = mode;
                     setScannerMode(ScannerMode.script);
 
-                    // hm, probably mode should be a context flag, too
                     rightAngle.trivia = parseTrivia(); // <cfscript> is a tag but it gets script-based trivia (so it can have script comments attached to it)
                     const stmtList = parseList(ParseContext.cfScriptTagBody, parseStatement);
 
@@ -1481,8 +1484,13 @@ export function Parser() {
                 // a["b"]["c"] = 0 declares and inits a = {b: {c: 0}};
                 // a["b"].c = 0 is an error ("a" is not defined)
                 
-                const identifier = Identifier(root, getTriviallyComputableString(root));
-                return VariableDeclaration(finalModifier, varModifier, identifier, null);
+                const identifier = root.type === NodeType.identifier ? root : Identifier(root, getTriviallyComputableString(root));
+                if (isInSomeContext(ParseContext.for)) {
+                    return VariableDeclaration(finalModifier, varModifier, identifier, null);
+                }
+                else {
+                    return identifier;
+                }
             }
             else {
                 return root;
@@ -1934,7 +1942,7 @@ export function Parser() {
                             continue;
                         }
                         else {
-                            const propertyName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ true);
+                            const propertyName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ true);
                             root = transformingPushAccessElement(root, OptionalDotAccess(questionMark, dot, propertyName)) as T;
                             // todo -- parseError if first char of propertyName is an ascii digit
                             continue;
@@ -1955,11 +1963,11 @@ export function Parser() {
                     continue;
                 }
                 case TokenType.DOT: {
-                    const dot = parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
+                    const dot = parseExpectedTerminal(TokenType.DOT, ParseOptions.noTrivia);
                     // allow numeric lexeme-likes, to support:
                     // foo = {4: 42};
                     // bar = foo.4; -- ok, bar == 42;
-                    const propertyName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ true);
+                    const propertyName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ true);
 
                     root = transformingPushAccessElement(root, DotAccess(dot, propertyName)) as T;
                     continue;

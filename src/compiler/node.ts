@@ -135,15 +135,16 @@ type Type =
     | "any"
     | FunctionSignature
 
+export type InternId = number;
 export interface Variable {
     type: Type,
-    name: number, // interned string id
+    name: InternId,
     final: boolean,
     var: boolean,
     initializer: Node | undefined,
 }
 
-export type Scope = Map<number, Variable>;
+export type Scope = Map<InternId, Variable>;
 
 export interface ScopeDisplay {
     container: Node | null,
@@ -1229,7 +1230,9 @@ export interface IndexedAccess extends NodeBase {
 }
 
 export function IndexedAccess(root: Node) : IndexedAccess {
-    const v = NodeBase<IndexedAccess>(NodeType.indexedAccess, root.range);
+    // make a copy of the source range, so that we can update the range of the full indexed access expression without mutating
+    // the root's original range
+    const v = NodeBase<IndexedAccess>(NodeType.indexedAccess, new SourceRange(root.range.fromInclusive, root.range.toExclusive));
     v.root = root;
     v.accessElements = [];
     return v;

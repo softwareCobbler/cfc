@@ -2,31 +2,27 @@
 // throw some text into the scanner,
 // set the parser to either CFM/CFC mode,
 // rebuild and then run the debugger
-import { Scanner, Parser, Binder, NilCfc, NilCfm } from "../compiler";
+import { Scanner, Parser, Binder, NilCfc, NilCfm, SourceFile } from "../compiler";
 import { CfFileType } from "../compiler/scanner";
-import { binarySearch, flattenTree } from "../compiler/utils";
+import { binarySearch, cfmOrCfc, flattenTree } from "../compiler/utils";
 
-
-/*import * as fs from "fs";
+import * as fs from "fs";
 import * as path from "path";
 
-const fname = path.resolve("./test/mxunit/framework/TestCase.cfc");
+/*const fname = path.resolve("./test/mxunit/doc/colddoc/strategy/AbstractTemplateStrategy.cfc");
 console.error("parsing: " + fname);
-const scanner = Scanner(fs.readFileSync(fname));*/
-
-
-//                       ^0             ^15, which after typing the X, the text is like `url.x|>`
-//                                                                                            ^16
+const sourceFile = SourceFile(fname, cfmOrCfc(fname)!, fs.readFileSync(fname));*/
 
 const parser = Parser().setDebug(true);
-const sourceFile = NilCfm(`
-<cfscript>
-for (x in y) {
-    for (i = 0; i < 10; i++) {
 
+
+const sourceFile = NilCfm( `
+<cfscript>
+    function foo() {
+        cgi.
     }
-}
 </cfscript>`);
+
 parser.setSourceFile(sourceFile);
 const binder = Binder().setDebug(true);
 
@@ -37,14 +33,22 @@ const flatProgram = flattenTree(sourceFile);
 
 let match = binarySearch(
     flatProgram,
-    (v) => v.range.fromInclusive < 11
-        ? -1
-        : v.range.fromInclusive === 11
-        ? 0 : 1);
+    (v) => {
+        const target = 12;
+        if (v.range.fromInclusive <= target && target < v.range.toExclusive) {
+            // match: on or in the target index
+            return 0;
+        }
+        else if (v.range.fromInclusive < target) {
+            return -1;
+        }
+        else {
+            return 1;
+        }
+    });
 
 match = match < 0 ? ~match : match;
 const node = binder.NodeMap.get(flatProgram[match].nodeId);
-console.log(node);
 
 const diagnostics = parser.getDiagnostics();
 console.log("got ", diagnostics.length + " diagnostics");
