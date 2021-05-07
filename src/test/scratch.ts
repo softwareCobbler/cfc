@@ -4,25 +4,51 @@
 // rebuild and then run the debugger
 import { Scanner, Parser, Binder, NilCfc, NilCfm, SourceFile } from "../compiler";
 import { CfFileType } from "../compiler/scanner";
-import { binarySearch, cfmOrCfc, flattenTree } from "../compiler/utils";
+import { binarySearch, cfmOrCfc, findNodeInFlatSourceMap, flattenTree } from "../compiler/utils";
 
 import * as fs from "fs";
 import * as path from "path";
 
-/*const fname = path.resolve("./test/mxunit/doc/colddoc/strategy/AbstractTemplateStrategy.cfc");
-console.error("parsing: " + fname);
-const sourceFile = SourceFile(fname, cfmOrCfc(fname)!, fs.readFileSync(fname));*/
+function fromFile(fname: string) {
+    const absPath = path.resolve(fname);
+    return SourceFile(absPath, cfmOrCfc(fname)!, fs.readFileSync(absPath));
+}
 
-const parser = Parser().setDebug(true);
+function fromString(source: string) {
+    return NilCfm(source);
+}
 
+//const sourceFile = fromFile("./test/mxunit/PluginDemoTests/InvalidMarkupTest.cfc");
+const sourceFile = fromString(`<cfset var illegal_var_decl_at_top_level = 42>
 
-const sourceFile = NilCfm( `
+<cffunction name="foo">
+    <cfargument name="ARGNAME">
+    <cfset var ok_var_decl_inside_function = 42>
+    <cfset var argname = 42> <!--- can't re-declare a variable that is in arguments scope --->
+</cffunction>
+
 <cfscript>
-    function foo() {
-        cgi.
+    function foo(argName, argName2) {
+        var argName2 = 42;
+    }
+
+    f = function(argName) {
+        var argName = 42;
+
+        function nested(x) {
+            var argName = "ok because the outer arguments scope is not considered";
+        }
+    }
+
+    f = (argName) => {
+        var argName = 42;
+        var argName.f.z = 42;
+
+        argName = 42; // ok, not a redeclaration, just a reassignment
     }
 </cfscript>`);
 
+const parser = Parser().setDebug(true);
 parser.setSourceFile(sourceFile);
 const binder = Binder().setDebug(true);
 
@@ -30,27 +56,8 @@ parser.parse();
 binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
 
 const flatProgram = flattenTree(sourceFile);
-
-let match = binarySearch(
-    flatProgram,
-    (v) => {
-        const target = 12;
-        if (v.range.fromInclusive <= target && target < v.range.toExclusive) {
-            // match: on or in the target index
-            return 0;
-        }
-        else if (v.range.fromInclusive < target) {
-            return -1;
-        }
-        else {
-            return 1;
-        }
-    });
-
-match = match < 0 ? ~match : match;
-const node = binder.NodeMap.get(flatProgram[match].nodeId);
-
 const diagnostics = parser.getDiagnostics();
+
 console.log("got ", diagnostics.length + " diagnostics");
 for (const diag of parser.getDiagnostics()) {
     console.log(diag);

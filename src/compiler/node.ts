@@ -161,11 +161,29 @@ export interface ScopeDisplay {
     server?: Scope,
 }
 
+export type StaticallyKnownScopeName = keyof Omit<ScopeDisplay, "container">;
+
 export interface RootScope {
     url: Scope,
     form: Scope,
     cgi: Scope,
     server: Scope
+}
+
+export function isStaticallyKnownScopeName(name: string) : name is StaticallyKnownScopeName {
+    switch (name) {
+        case "variables":
+        case "this":
+        case "arguments":
+        case "local":
+        case "url":
+        case "form":
+        case "cgi":
+        case "server":
+            return true;
+        default:
+            return false;
+    }
 }
 
 export type NodeId = number;
@@ -284,7 +302,7 @@ export function Terminal(token: Token, trivia: Node[] = []) : Terminal {
     return v;
 }
 
-export const NilTerminal : Readonly<Terminal> = Terminal(NilToken);
+export const NilTerminal = (pos: number) => Terminal(NilToken(pos));
 
 export const enum CommentType { tag, scriptSingleLine, scriptMultiLine };
 export interface Comment extends NodeBase {
@@ -461,7 +479,7 @@ export namespace CfTag {
         tagType: TagType.text;
     }
     export function Text(range: SourceRange) : Text {
-        const nilTerminal = NilTerminal;
+        const nilTerminal = NilTerminal(-1);
         const v = TagBase<Text>(Which.start, TagType.text, nilTerminal, nilTerminal, null, nilTerminal, "");
         v.range = range;
         return v;
@@ -475,7 +493,7 @@ export namespace CfTag {
         tagStart: Terminal,
         body: TagBase[],
         tagEnd: Terminal) : Comment {
-        const nilTerminal = NilTerminal;
+        const nilTerminal = NilTerminal(-1);
         const v = TagBase<Comment>(Which.start, TagType.comment, tagStart, nilTerminal, nilTerminal, tagEnd, "");
         v.body = body;
         return v;
@@ -755,22 +773,17 @@ export interface VariableDeclaration extends NodeBase {
     type: NodeType.variableDeclaration,
     finalModifier: Terminal | null,
     varModifier: Terminal | null,
-    identifier: Identifier, // can be Identifier | HashWrappedExpr | SimpleStringLiteral | InterpolatedStringLiteral | IndexedAccess, but that's tough to constrain ergonomically
-
-    // @fixme : how are we storing var x = (expr), where's the assignment operator? is expr a binary operator, and we're storing identifier twice?
-    expr: Node | null
+    expr: Node,
 }
 
 export function VariableDeclaration(
     finalModifier: Terminal | null,
     varModifier: Terminal | null,
-    identifier: Identifier,
-    expr: Node | null
+    expr: Node
 ) : VariableDeclaration {
-    const v = NodeBase<VariableDeclaration>(NodeType.variableDeclaration, mergeRanges(finalModifier, varModifier, identifier, expr));
+    const v = NodeBase<VariableDeclaration>(NodeType.variableDeclaration, mergeRanges(finalModifier, varModifier, expr));
     v.finalModifier = finalModifier;
     v.varModifier = varModifier;
-    v.identifier = identifier;
     v.expr = expr;
     return v;
 }

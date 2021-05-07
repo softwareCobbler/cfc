@@ -4,6 +4,7 @@ export { Binder } from "./binder";
 export { cfmOrCfc, flattenTree, NodeSourceMap, binarySearch } from "./utils";
 export { Node, SourceFile, NilCfc, NilCfm } from "./node";
 
-
+// exports that we'd rather put wrappers on, in the form of services like "getCompletion" or etc.
 export { getScopeContainedNames } from "./binder";
-export { isExpressionContext, getTriviallyComputableString } from "./utils";
+export { getNearestEnclosingScope, isExpressionContext, getTriviallyComputableString } from "./utils";
+export { isStaticallyKnownScopeName, NodeId } from "./node";

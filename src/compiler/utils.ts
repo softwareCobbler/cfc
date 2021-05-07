@@ -1,4 +1,4 @@
-import { BlockType, CfTag, ForSubType, IndexedAccessType, Node, StatementType, TagAttribute, UnaryOperatorPos } from "./node";
+import { BlockType, CfTag, ForSubType, IndexedAccessType, Node, NodeId, Scope, StatementType, StaticallyKnownScopeName, TagAttribute, UnaryOperatorPos } from "./node";
 import { NodeType } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
 
@@ -318,7 +318,6 @@ export function visit(node: Node, visitor: (arg: Node | undefined | null) => any
         case NodeType.variableDeclaration:
             return visitor(node.finalModifier)
                 || visitor(node.varModifier)
-                || visitor(node.identifier)
                 || visitor(node.expr);
         case NodeType.statement:
             switch (node.subType) {
@@ -461,7 +460,7 @@ export function visit(node: Node, visitor: (arg: Node | undefined | null) => any
             return visitor(node.switchToken)
                 || visitor(node.leftParen)
                 || visitor(node.expr)
-                || visitor(node.rightBrace)
+                || visitor(node.rightParen)
                 || visitor(node.leftBrace)
                 || forEachNode(node.cases, visitor)
                 || visitor(node.rightBrace);
@@ -587,8 +586,8 @@ export function flattenTree(tree: Node | Node[]) : NodeSourceMap[] {
 
     function pushNode(node: Node) {
         if (result.length > 0) {
-            if (result[result.length-1].range.toExclusive !== node.range.fromInclusive) {
-                throw "each subsequent node should be adjacent with the last";
+            if (result[result.length-1].range.toExclusive > node.range.fromInclusive) {
+                throw "each subsequent node should start on or after the exclusive end of the previous node";
             }
         }
         result.push({
@@ -647,15 +646,41 @@ export function binarySearch<T>(vs: T[], comparator: (v: T) => number) : number 
         else if (compare === -1) {
             // T is less than target, move floor
             floor = index+1;
-            index = mid(floor, ceil, 'c');
+            index = mid(floor, ceil, 'f');
             continue;
         }
         else if (compare === 1) {
             // T is more than target, move ceil
             ceil = index-1;
-            index = mid(floor, ceil, 'f');
+            index = mid(floor, ceil, 'c');
         }
     }
+}
+
+export function findNodeInFlatSourceMap(flatSourceMap: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, Node>, index: number) {
+    let match = binarySearch(flatSourceMap,
+        (v) => {
+            //
+            // can be equal to range.toExclusive because if the cursor is "on" "abc.|x"
+            //                                            single char is [3,4)  ---^^--- on pos 4
+            // so cursor is right after the dot, on position 4
+            // we want to say were "in" the dot
+            //
+            if (v.range.fromInclusive < index && index <= v.range.toExclusive) {
+                // match: on or in the target index
+                return 0;
+            }
+            else if (v.range.toExclusive < index) {
+                return -1;
+            }
+            else {
+                return 1;
+            }
+        });
+
+    // if we didn't match get the closest to "leftmost" node
+    match = match < 0 ? ~match : match;
+    return nodeMap.get(flatSourceMap[match].nodeId);
 }
 
 export function isExpressionContext(node: Node | null) : boolean {
@@ -675,6 +700,27 @@ export function isExpressionContext(node: Node | null) : boolean {
             return true;
         default:
             return true;
+    }
+}
+
+export function getNearestEnclosingScope(node: Node, scopeName: StaticallyKnownScopeName) : Scope | undefined {
+    while (true) {
+        // scope on this node contains the target scope
+        if (node.containedScope?.[scopeName]) {
+            return node.containedScope[scopeName];
+        }
+        // didn't find it, but there is a container; we can jump to the parent container
+        else if (node.containedScope?.container) {
+            node = node.containedScope.container;
+        }
+        // didn't find it, and there is no container; climb to parent
+        else if (node.parent) {
+            node = node.parent;
+        }
+        // at the root, didn't find it
+        else {
+            return undefined;
+        }
     }
 }
 

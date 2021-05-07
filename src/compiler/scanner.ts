@@ -332,7 +332,7 @@ export function Scanner(source_: string | Buffer) {
     let end = annotatedChars.length;
     let index = 0;
     let lastScannedText = "";
-    let token : Token = NilToken;
+    let token : Token = NilToken(-1);
 
     //
     // if we get text, we assume it is already uft16-le, which is what node does by default
@@ -1007,6 +1007,6 @@ export function Token(type: TokenType, text: string, fromOrRange: number | Sourc
     }
 }
 
-export const NilToken : Readonly<Token> = Token(TokenType.NIL, "", SourceRange.Nil());
+export const NilToken = (pos: number) => Token(TokenType.NIL, "", new SourceRange(pos, pos));
 
 export const enum ScannerMode { tag, script, allow_both }

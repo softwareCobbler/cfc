@@ -1,5 +1,5 @@
-import { NodeWithScope, Variable, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, Scope, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral } from "./node";
-import { getTriviallyComputableString, visit, BiMap, getAttributeValue } from "./utils";
+import { NodeWithScope, Variable, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, Scope, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier } from "./node";
+import { getTriviallyComputableString, BiMap, getAttributeValue, visit } from "./utils";
 import { Diagnostic } from "./parser";
 import { Scanner, SourceRange } from "./scanner";
 
@@ -91,9 +91,10 @@ export function Binder() {
     let scanner : Scanner;
     let diagnostics: Diagnostic[];
 
-    const NodeMap = new Map<number, Node>();
+    let nodeMap = new Map<NodeId, Node>();
 
     function bind(sourceFile: SourceFile, scanner_: Scanner, diagnostics_: Diagnostic[]) {
+        nodeMap = new Map<NodeId, Node>();
         scanner = scanner_;
         diagnostics = diagnostics_;
 
@@ -113,7 +114,7 @@ export function Binder() {
     function bindNode(node: Node | null | undefined, parent: Node) {
         if (!node) return;
 
-        NodeMap.set(node.nodeId, node);
+        nodeMap.set(node.nodeId, node);
         bindDirectTerminals(node);
         node.parent = parent;
 
@@ -179,7 +180,7 @@ export function Binder() {
                 // no-op, just a terminal
                 return;
             case NodeType.identifier:
-                bindNode(node.source, node);
+                bindIdentifier(node);
                 return;
             case NodeType.indexedAccess:
                 bindIndexedAccess(node);
@@ -250,7 +251,7 @@ export function Binder() {
     function bindDirectTerminals(node: Node) {
         visit(node, function(visitedNode: Node | null | undefined) {
             if (visitedNode?.type === NodeType.terminal) {
-                NodeMap.set(visitedNode.nodeId, visitedNode);
+                nodeMap.set(visitedNode.nodeId, visitedNode);
                 visitedNode.parent = node;
                 bindList(visitedNode.trivia, visitedNode);
             }
@@ -331,12 +332,14 @@ export function Binder() {
     }
 
     function bindDeclaration(node: VariableDeclaration) {
-        let identifierBaseName : string | undefined;
-        if (node.identifier.source.type === NodeType.indexedAccess) {
-            identifierBaseName = getTriviallyComputableString(node.identifier.source.root)?.toLowerCase();
-        }
-        else {
-            identifierBaseName = getTriviallyComputableString(node.identifier)?.toLowerCase();
+        let identifierBaseName : string | undefined = undefined;
+        if (node.expr.type === NodeType.binaryOperator && node.expr.optype === BinaryOpType.assign) {
+            if (node.expr.left.type === NodeType.indexedAccess) {
+                identifierBaseName = getTriviallyComputableString(node.expr.left.root)?.toLowerCase();
+            }
+            else {
+                identifierBaseName = getTriviallyComputableString(node.expr.left)?.toLowerCase();
+            }
         }
 
         // make sure we got a useable name
@@ -356,7 +359,7 @@ export function Binder() {
             }
             else {
                 // there is no local scope, so we must be at top-level scope
-                errorAtRange(mergeRanges(node.finalModifier, node.varModifier, node.identifier), "Local variables may not be declared at top-level scope.");
+                errorAtRange(mergeRanges(node.finalModifier, node.varModifier, node.expr), "Local variables may not be declared at top-level scope.");
             }
         
             const enclosingFunction = getEnclosingFunction(node);
@@ -366,7 +369,7 @@ export function Binder() {
                 // function foo(bar) { var bar = 42; }
                 // is an error: "bar is already defined in argument scope"
                 if (enclosingFunction.containedScope.arguments.has(internId)) {
-                    errorAtRange(mergeRanges(node.finalModifier, node.varModifier, node.identifier), `'${identifierBaseName}' is already defined in argument scope.`);
+                    errorAtRange(mergeRanges(node.finalModifier, node.varModifier, node.expr), `'${identifierBaseName}' is already defined in argument scope.`);
                 }
             }
         }
@@ -457,12 +460,17 @@ export function Binder() {
         bindList(node.elements, node);
     }
 
+    function bindIdentifier(node: Identifier) {
+        bindNode(node.source, node);
+    }
+
     function bindIndexedAccess(node: IndexedAccess) {
         bindNode(node.root, node);
         let parent : Node = node;
         for (let i = 0; i < node.accessElements.length; i++) {
-            bindNode(node.accessElements[i], parent);
-            parent = node.accessElements[i];
+            const element = node.accessElements[i];
+            bindNode(element, parent);
+            parent = element;
         }
     }
 
@@ -797,7 +805,7 @@ export function Binder() {
     const self = {
         bind,
         setDebug,
-        NodeMap: <ReadonlyMap<NodeId, Node>>NodeMap,
+        getNodeMap: () => <ReadonlyMap<NodeId, Node>>nodeMap,
     }
 
     return self;

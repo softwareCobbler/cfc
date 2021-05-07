@@ -221,6 +221,10 @@ export function Parser() {
         return lookahead_;
     }
 
+    function pos() {
+        return scanner.getIndex();
+    }
+
     /**
      * just move the scanner forward and update lookahead
      * @returns 
@@ -462,7 +466,9 @@ export function Parser() {
                     "Expected '" + TokenTypeUiString[type] + "'");
             }
 
-            const phonyToken : Token = Token(type, "", scanner.currentToken().range);
+            const pos = scanner.currentToken().range.fromInclusive;
+            const emptyRange = new SourceRange(pos, pos);
+            const phonyToken : Token = Token(type, "", emptyRange);
             return createMissingNode(Terminal(phonyToken));
         }
     }
@@ -492,13 +498,17 @@ export function Parser() {
             }
             
             if (consumeOnFailure) {
-                next();
+                // consume on failure --- we'll eat trivia if there's trivia where we wanted a lexeme; otherwise, 
+                // we don't actually consume anything
                 trivia = parseTrivia();
+                const forcedLexemeToken = Token(TokenType.LEXEME, "", labelLike.range.fromInclusive, labelLike.range.fromInclusive);
+                return Terminal(forcedLexemeToken, trivia);
             }
-
-            // this "error" lexeme has 0 range
-            const forcedLexemeToken = Token(TokenType.LEXEME, labelLike.text, labelLike.range.fromInclusive, labelLike.range.fromInclusive);
-            return Terminal(forcedLexemeToken, []);
+            else {
+                // this "error" lexeme has 0 range
+                const forcedLexemeToken = Token(TokenType.LEXEME, labelLike.text, labelLike.range.fromInclusive, labelLike.range.fromInclusive);
+                return Terminal(forcedLexemeToken, []);
+            }
         }
         else {
             next();
@@ -572,7 +582,12 @@ export function Parser() {
                         return Comment(CommentType.tag, v.range);
                     }
                     else {
-                        return TextSpan(v.range, "");
+                        if (debugParseModule) {
+                            return TextSpan(v.range, scanner.getTextSlice(v.range));
+                        }
+                        else {
+                            return TextSpan(v.range, "");
+                        }
                     }
                 })
             }
@@ -588,7 +603,13 @@ export function Parser() {
                         result.push(parseScriptMultiLineComment());
                         continue;
                     case TokenType.WHITESPACE:
-                        result.push(TextSpan(next().range, "")); // not really any need to store the whitespace
+                        if (debugParseModule) {
+                            const nextToken = next();
+                            result.push(TextSpan(nextToken.range, scanner.getTextSlice(nextToken.range)));
+                        }
+                        else {
+                            result.push(TextSpan(next().range, ""));
+                        }
                         continue;
                 }
                 break;
@@ -708,7 +729,7 @@ export function Parser() {
                     }
                     else {
                         parseErrorAtCurrentToken("Expected a tag-attribute value here.");
-                        value = createMissingNode(NilTerminal);
+                        value = createMissingNode(NilTerminal(pos()));
                     }
                 }
                 else /* scriptMode */ {
@@ -954,10 +975,12 @@ export function Parser() {
                     // create fake placeholder tag
                     let missingTag : CfTag.Common;
                     if (which === CfTag.Which.start) {
-                        missingTag = CfTag.Common(which, NilTerminal, NilTerminal, null, NilTerminal, canonicalName, [])
+                        const nilTerminal = NilTerminal(pos());
+                        missingTag = CfTag.Common(which, nilTerminal, nilTerminal, null, nilTerminal, canonicalName, [])
                     }
                     else {
-                        missingTag = CfTag.Common(which, NilTerminal, NilTerminal, null, NilTerminal, canonicalName)
+                        const nilTerminal = NilTerminal(pos());
+                        missingTag = CfTag.Common(which, nilTerminal, nilTerminal, null, nilTerminal, canonicalName)
                     }
                     createMissingNode(missingTag);
                     return missingTag;
@@ -1486,7 +1509,7 @@ export function Parser() {
                 
                 const identifier = root.type === NodeType.identifier ? root : Identifier(root, getTriviallyComputableString(root));
                 if (isInSomeContext(ParseContext.for)) {
-                    return VariableDeclaration(finalModifier, varModifier, identifier, null);
+                    return VariableDeclaration(finalModifier, varModifier, identifier);
                 }
                 else {
                     return identifier;
@@ -1528,7 +1551,7 @@ export function Parser() {
             // `final local[dynamic_key]` is illegal
             // `final user_struct.foo = 42` is always illegal
             // `final no_struct` is illegal
-            return VariableDeclaration(finalModifier, varModifier, Identifier(root, getTriviallyComputableString(root)), assignmentExpr);
+            return VariableDeclaration(finalModifier, varModifier, assignmentExpr);
         }
         else {
             return assignmentExpr;
@@ -1956,18 +1979,25 @@ export function Parser() {
                     const leftBracket = parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
                     const expr = isStartOfExpression()
                         ? parseExpression()
-                        : (parseErrorAtCurrentToken("Expression expected."), createMissingNode(Identifier(NilTerminal, "")));
+                        : (parseErrorAtCurrentToken("Expression expected."), createMissingNode(Identifier(NilTerminal(pos()), "")));
                     const rightBracket = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
 
                     root = transformingPushAccessElement(root, BracketAccess(leftBracket, expr, rightBracket)) as T;
                     continue;
                 }
                 case TokenType.DOT: {
-                    const dot = parseExpectedTerminal(TokenType.DOT, ParseOptions.noTrivia);
+                    const dot = parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
                     // allow numeric lexeme-likes, to support:
                     // foo = {4: 42};
                     // bar = foo.4; -- ok, bar == 42;
-                    const propertyName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ true);
+                    const propertyName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ true);
+
+                    // `x. y`  is illegal
+                    // `x . y` is ok
+                    // `x .y`  is ok
+                    if (previousElementIsIdentifier() && previousElement()!.range.toExclusive === dot.range.fromInclusive && dot.trivia.length > 0) {
+                        parseErrorAtRange(dot.rangeWithTrivia, "Expected a property name.");
+                    }
 
                     root = transformingPushAccessElement(root, DotAccess(dot, propertyName)) as T;
                     continue;
@@ -1976,21 +2006,27 @@ export function Parser() {
             break;
         }
 
-        // we'll have to do this later during/after we bind parents
-        /*
-        if (root.type === NodeType.indexedAccess || root.type === NodeType.callExpression) {
-            switch (base.type) {
-                case NodeType.arrayLiteral:
-                    parseErrorAtRange(base.range, "An array literal may not be accessed in the same expression as its definition.");
-                    break;
-                case NodeType.structLiteral:
-                    parseErrorAtRange(base.range, "A struct literal may not be accessed in the same expression as its definition.");
-                    break;
+        return root;
+
+        function previousElement() : T | IndexedAccessChainElement {
+            if (root.type !== NodeType.indexedAccess) {
+                return root;
+            }
+            else {
+                const element = (root as IndexedAccess).accessElements[(root as IndexedAccess).accessElements.length-1];
+                return element;
             }
         }
-        */
 
-        return root;
+        function previousElementIsIdentifier() {
+            if (root.type !== NodeType.indexedAccess) {
+                return root.type === NodeType.identifier;
+            }
+
+            // if root is an IndexedAccess node, it is because there is at least one contained access element
+            const element = (root as IndexedAccess).accessElements[(root as IndexedAccess).accessElements.length-1];
+            return element.accessType === IndexedAccessType.dot
+        }
     }
 
     function parseNewExpression() {
@@ -2259,7 +2295,7 @@ export function Parser() {
             if (globalDiagnosticEmitter) globalDiagnosticEmitter();
             else parseErrorAtCurrentToken("Expected an identifier.");
 
-            terminal = Terminal(peek(), []);
+            terminal = NilTerminal(pos());
             canonicalName = "";
         }
         else {
@@ -2424,7 +2460,7 @@ export function Parser() {
                 else {
                     next();
                     parseTrivia();
-                    name = createMissingNode(Identifier(NilTerminal, ""));
+                    name = createMissingNode(Identifier(NilTerminal(pos()), ""));
                 }
             }
             
@@ -2694,7 +2730,7 @@ export function Parser() {
 
         if (peek().text.toLowerCase() === "in") {
             if (!init || init.type !== NodeType.variableDeclaration) {
-                init = createMissingNode(Identifier(NilTerminal, ""));
+                init = createMissingNode(Identifier(NilTerminal(pos()), ""));
                 parseErrorAtRange(leftParen.range.fromInclusive+1, leftParen.range.toExclusive+1, "Declaration expected.");
             }
             const inToken = Terminal(parseNextToken(), parseTrivia());
@@ -2733,7 +2769,7 @@ export function Parser() {
             const rightParen       = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
             const leftBrace        = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
             const catchBody        = parseList(ParseContext.awaitingRightBrace, parseStatement);
-            const rightBrace       = (leftBrace.flags & NodeFlags.missing) ? createMissingNode(NilTerminal) : parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
+            const rightBrace       = (leftBrace.flags & NodeFlags.missing) ? createMissingNode(NilTerminal(pos())) : parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
             catchBlocks.push(
                 Catch(catchToken, leftParen, exceptionType, exceptionBinding, rightParen, leftBrace, catchBody, rightBrace));
         }
@@ -2787,7 +2823,7 @@ export function Parser() {
 
         // if left brace was missing we don't eat right brace
         const rightBrace = (leftBrace.flags & NodeFlags.missing)
-            ? createMissingNode(NilTerminal)
+            ? createMissingNode(NilTerminal(pos()))
             : parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
 
         setScannerMode(savedMode);
@@ -2914,7 +2950,7 @@ export function Parser() {
                                     if (getTriviallyComputableString(statement.expr) !== undefined) {
                                         return ScriptSugaredTagCallStatement(
                                             terminal,
-                                            [TagAttribute(Terminal(peek()), "showerror", NilTerminal, statement.expr!)], // synthesize the "showerror" attribute
+                                            [TagAttribute(Terminal(peek()), "showerror", NilTerminal(pos()), statement.expr!)], // synthesize the "showerror" attribute
                                             parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia));
                                     }
                             }

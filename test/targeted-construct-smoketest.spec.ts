@@ -104,4 +104,19 @@ describe("general smoke test for particular constructs", () => {
         parser.parse();
         flattenTree(sourceFile);
     });
+    it("should accept 8 of 9 possible indexed access expression (dot|trivia) configurations", () => {
+        assertDiagnosticsCount(`
+            <cfscript>
+                z = x. y;     // expected a property name | cf engine error is "a variable may not end in '.'"
+                z = x . y;    // ok
+                z = x .y;     // ok
+                z = x[1]. y;  // ok
+                z = x[1] . y; // ok
+                z = x[1] .y;  // ok
+                z = x(). y    // ok
+                z = x() . y   // ok
+                z = x() .y    // ok
+            </cfscript>`,
+            CfFileType.cfm, 1);
+    })
 });

@@ -28,13 +28,14 @@ import {
 	TextDocument
 } from 'vscode-languageserver-textdocument';
 
-import { SourceFile, Parser, Binder, Node as cfNode, binarySearch, CfFileType, Diagnostic as cfcDiagnostic, cfmOrCfc, flattenTree, getScopeContainedNames, NodeSourceMap, isExpressionContext, getTriviallyComputableString } from "compiler";
-import { NodeType } from '../../../compiler/node';
+import { NodeId, SourceFile, Parser, Binder, Node as cfNode, binarySearch, CfFileType, Diagnostic as cfcDiagnostic, cfmOrCfc, flattenTree, getScopeContainedNames, NodeSourceMap, isExpressionContext, getTriviallyComputableString } from "compiler";
+import { isStaticallyKnownScopeName, NodeType, ScopeDisplay } from '../../../compiler/node';
+import { findNodeInFlatSourceMap, getNearestEnclosingScope } from '../../../compiler/utils';
 
 const parser = Parser().setDebug(true);
 const binder = Binder().setDebug(true);
 type TextDocumentUri = string;
-const lastParse = new Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[]}>();
+const parseCache = new Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, cfNode>}>();
 
 function naiveGetDiagnostics(uri: TextDocumentUri, text: string, fileType: CfFileType) : readonly cfcDiagnostic[] {
 	// how to tell if we were launched in debug mode ?
@@ -50,7 +51,11 @@ function naiveGetDiagnostics(uri: TextDocumentUri, text: string, fileType: CfFil
     parser.parse(fileType);
 	binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
 	
-	lastParse.set(uri, {parsedSourceFile: sourceFile, flatTree: flattenTree(sourceFile)});
+	parseCache.set(uri, {
+		parsedSourceFile: sourceFile,
+		flatTree: flattenTree(sourceFile),
+		nodeMap: binder.getNodeMap(),
+	});
 
     return parser.getDiagnostics();
 }
@@ -274,65 +279,92 @@ connection.onCompletion(
 		if (!document) return [];
 
 		const targetIndex = document.offsetAt(textDocumentPosition.position);
-		const docCache = lastParse.get(textDocumentPosition.textDocument.uri)!;
-		let match = binarySearch(
-			docCache.flatTree,
-			(v) => {
-				if (v.range.fromInclusive <= targetIndex && targetIndex < v.range.toExclusive) {
-					// match: on or in the target index
-					return 0;
-				}
-				else if (v.range.toExclusive < targetIndex) {
-					return -1;
-				}
-				else {
-					return 1;
-				}
-			});
+		const docCache = parseCache.get(textDocumentPosition.textDocument.uri)!;
 
-		match = match < 0 ? ~match : match;
-		const node = binder.NodeMap.get(docCache.flatTree[match].nodeId);
+		const node = findNodeInFlatSourceMap(docCache.flatTree, docCache.nodeMap, targetIndex);
 
 		if (!node) return [];
 
-		if (textDocumentPosition.context?.triggerKind === CompletionTriggerKind.TriggerCharacter && textDocumentPosition.context.triggerCharacter === ".") {
-			if (node.type === NodeType.indexedAccessChainElement && node.parent?.type === NodeType.indexedAccess) {
-				const name = getTriviallyComputableString(node.parent.root)?.toLowerCase();
-				if (name === "cgi") {
-					if (docCache.parsedSourceFile.containedScope?.cgi) {
-						return getScopeContainedNames(docCache.parsedSourceFile.containedScope.cgi).map(name => ({
+		
+			if (node.parent?.type === NodeType.indexedAccessChainElement && node.parent?.parent?.type === NodeType.indexedAccess) {
+				// if so, try to get the identifier used as the root of the chain
+				// if that name is a known scope, try to find the names in that scope
+				const scopeName = getTriviallyComputableString(node.parent.parent.root)?.toLowerCase();
+				if (scopeName && isStaticallyKnownScopeName(scopeName)) {
+					const scope = getNearestEnclosingScope(node, scopeName);
+					if (scope) {
+						const detailLabel = "scope:" + scopeName;
+						return getScopeContainedNames(scope).map(name => ({
 							label: name,
 							kind: CompletionItemKind.Field,
-							detail: "scope:url"
+							detail: detailLabel
 						}));
 					}
 				}
 			}
+		
+		else if (getNearestConstruct(node)?.type === NodeType.functionParameter) {
+			// don't offer completions in function parameter lists `f(a, b, c|)`
+			return [];
+		}
+		else {
+			const allVisibleNames = (function x(node: cfNode | null) {
+				const result = new Map<string, number>();
+				let scopeDistance = 0; // keep track of "how far away" some name is, in terms of parent scopes; we can then offer closer names first
+				while (node) {
+					if (node.containedScope) {
+						const names = getAllNamesOfScopeDisplay(node.containedScope);
+						for (const name of names ){
+							result.set(name, scopeDistance);
+						}
+						scopeDistance++;
+					}
+					node = node.containedScope?.container || node.parent;
+				}
+				return result;
+			})(node);
+
+			const result : CompletionItem[] = [];
+			for (const [key, scopeDistance] of allVisibleNames) { 
+				result.push({
+					label: key,
+					kind: CompletionItemKind.Field,
+					// sort the first two scopes to the top of the list; the rest get lexically sorted as one agglomerated scope
+					sortText: (scopeDistance === 0 ? 'a' : scopeDistance === 1 ? 'b' : 'c') + scopeDistance
+				});
+			}
+
+			return result;
 		}
 
-		// The pass parameter contains the position of the text document in
-		// which code complete got requested. For the example we ignore this
-		// info and always provide the same completion items.
-		return [
-			{
-				label: 'TypeScript',
-				kind: CompletionItemKind.Variable,
-				detail: "scope:variables"
-				//data: 1
-			},
-			{
-				label: 'JavaScript',
-				kind: CompletionItemKind.Text,
-				detail: "scope:url",
-				//data: 2
-			},
-			{
-				label: 'encodeForHTML',
-				kind: CompletionItemKind.Function,
-				detail: "scope:cf-builtin"
-				//data: 2
+		// find the nearest construct - a binary operator, function parameter, etc.
+		// 
+		function getNearestConstruct(node: cfNode | null) : cfNode | null {
+			while (node) {
+				switch (node.type) {
+					case NodeType.textSpan:
+					case NodeType.terminal:
+					case NodeType.identifier:
+					case NodeType.indexedAccessChainElement:
+						node = node.parent;
+						continue;
+					default:
+						return node;
+				}
 			}
-		];
+			return null;
+		}
+
+		function getAllNamesOfScopeDisplay(scopeDisplay : ScopeDisplay) : string[] {
+			const result : string[] = [];
+			for (const key of Object.keys(scopeDisplay) as (keyof ScopeDisplay)[]) {
+				if (key === "container") continue;
+				result.push(...getScopeContainedNames(scopeDisplay[key]!));
+			}
+			return result;
+		}
+
+		return [];
 	}
 );
 
