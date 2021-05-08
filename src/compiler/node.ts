@@ -1,5 +1,6 @@
 import { SourceRange, TokenType, Token, NilToken, TokenTypeUiString, CfFileType } from "./scanner";
 import { getAttributeValue, getTriviallyComputableString } from "./utils";
+import { Type as externType } from "./types";
 
 let debug = false;
 let nextNodeId : NodeId = 0;
@@ -1362,13 +1363,15 @@ export namespace Tag {
         kind: NodeType.functionParameter,
         fromTag: true,
         canonicalName: string | undefined,
+        type: externType | null,
     }
 
-    export function FunctionParameter(tag: CfTag.Common) : FunctionParameter {
+    export function FunctionParameter(tag: CfTag.Common, type: externType | null) : FunctionParameter {
         const v = NodeBase<FunctionParameter>(NodeType.functionParameter, tag.range);
         v.fromTag = true;
         v.tagOrigin.startTag = tag;
         v.canonicalName = getTriviallyComputableString(getAttributeValue(tag.attrs, "name"))?.toLowerCase() ?? undefined
+        v.type = type;
         return v;
     }
 }

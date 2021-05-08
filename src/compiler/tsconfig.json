@@ -2,6 +2,7 @@
   "files": [
     "scanner.ts",
     "node.ts",
+    "types.ts",
     "parser.ts",
     "binder.ts",
     "utils.ts",

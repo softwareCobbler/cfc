@@ -26,7 +26,8 @@ import {
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
-import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName } from "./utils";
+import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, getAttributeValue } from "./utils";
+import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type } from "./types";
 
 let debugParseModule = false;
 
@@ -39,20 +40,24 @@ const enum ParseOptions {
 
 const enum ParseContext {
     none = 0,
-    insideCfTagAngles,  // somewhere inside <cf ... > or </cf ... >
-    hashWrappedExpr,    // in #...# in an expression context, like `a + #b#`
-    cfScriptTagBody,    // in a <cfscript> block; similar to blockstatements, but </cfscript> can terminate it, and a stray `}` does not
-    blockStatements,    // inside a { ... }; a stray `}` will terminate this
-    for,                // in a for (...) expression
-    interpolatedText,   // in <cfoutput>#...#</cfoutput> or "#...#"
-    awaitingVoidSlash,  // <cfset foo = bar /> is just `foo=bar`, with a trailing tag-void-slash, not `foo=bar/` with a missing rhs to the `/` operator
-    argumentList,       // someCallWithArgs(...)
-    switchClause,       // in a switch statement
-    trivia,             // comments, whitespace
+    insideCfTagAngles,    // somewhere inside <cf ... > or </cf ... >
+    hashWrappedExpr,      // in #...# in an expression context, like `a + #b#`
+    cfScriptTagBody,      // in a <cfscript> block
+    cfScriptTopLevel,     // in cfscript, but not within a containing <cfscript> block; e.g, a script-based cfc file
+    for,                  // in a for (...) expression
+    interpolatedText,     // in <cfoutput>#...#</cfoutput> or "#...#"
+    awaitingVoidSlash,    // <cfset foo = bar /> is just `foo=bar`, with a trailing tag-void-slash, not `foo=bar/` with a missing rhs to the `/` operator
+    awaitingRightBrace,   // any time a loose '}' would end a parse
+    awaitingRightBracket, // any time a loose ']' would end a parse
+    awaitingRightParen,   // any time a loose ')' would end a parse
+    argumentList,         // someCallWithArgs(...)
+    switchClause,         // in a switch statement
+    trivia,               // comments, whitespace
     structBody,
     arrayBody,
-    sugaredAbort,       // inside an `abort ...;` statement
-    END                 // sentinel for looping over ParseContexts
+    sugaredAbort,         // inside an `abort ...;` statement
+    type,                 // inside a type annotation
+    END
 }
 
 function TagContext() {
@@ -750,7 +755,7 @@ export function Parser() {
     }
 
     function parseComponentPreamble() : "script" | "tag" | null {
-        setScannerMode(ScannerMode.allow_both);
+        setScannerMode(ScannerMode.tag_and_script);
         const preamble : Node[] = [];
 
         //
@@ -1103,7 +1108,12 @@ export function Parser() {
                         continue;
                     }
                     if (node.kind === NodeType.tag && node.canonicalName === "argument") {
-                        params.push(Tag.FunctionParameter(node as CfTag.Common));
+                        const tagArgumentTypeAnnotation = getAttributeValue((<CfTag.Common>node).attrs, "type:");
+                        let type : Type | null = null;
+                        if (tagArgumentTypeAnnotation?.kind === NodeType.simpleStringLiteral) {
+                            type = parseType(tagArgumentTypeAnnotation.range.fromInclusive+1, tagArgumentTypeAnnotation.range.toExclusive-1);
+                        }
+                        params.push(Tag.FunctionParameter(node as CfTag.Common, type));
                         i++;
                         continue;
                     }
@@ -2326,6 +2336,8 @@ export function Parser() {
             case ParseContext.structBody:
             case ParseContext.argumentList:
                 return isStartOfExpression();
+            case ParseContext.type:
+                lookahead() === TokenType.LEFT_BRACKET || isLexemeLikeToken(peek(), /*allowNumeric*/false);
             case ParseContext.cfScriptTagBody:
             case ParseContext.blockStatements:
             case ParseContext.switchClause:
@@ -2343,6 +2355,7 @@ export function Parser() {
             case ParseContext.argumentList:
                 return lookahead() === TokenType.RIGHT_PAREN;
             case ParseContext.arrayBody:
+            case ParseContext.awaitingRightBracket:
                 return lookahead() === TokenType.RIGHT_BRACKET;
             case ParseContext.structBody:
             case ParseContext.blockStatements:
@@ -2975,7 +2988,7 @@ export function Parser() {
     }
 
     function parseList<
-        F extends (...v: any) => Node,
+        F extends (...v: any) => any,
         Args extends Parameters<F> = Parameters<F>,
         R extends ReturnType<F> = ReturnType<F>>(thisContext: ParseContext, parser: F, ...args: Args) : R[] {
         const result : R[] = [];
@@ -3257,6 +3270,88 @@ export function Parser() {
         const nilStatement = Statement(null, null);
         nilStatement.range = scanner.currentToken().range;
         return nilStatement;
+    }
+
+    function parseType() : Type;
+    function parseType(fromInclusive: number, toExclusive: number) : Type;
+    function parseType(fromInclusive?: number, toExclusive?: number) : Type {
+        function parseTypename() {
+            const token = scanIdentifier();
+            parseTrivia();
+            switch (token?.text.toLowerCase()) {
+                case "number":
+                    return cfNumber();
+                case "string":
+                    return cfString();
+                case "any":
+                    return cfAny();
+                case "nil":
+                    return cfNil();
+                case "boolean":
+                    return cfBoolean();
+                case "true":
+                    return cfBoolean(true);
+                case "false":
+                    return cfBoolean(false);
+                default:
+                    return cfNil();
+            }
+        }
+
+        function maybeParseArrayModifier(type: Type) : Type {
+            outer:
+            while (true) {
+                switch (lookahead()) {
+                    case TokenType.LEFT_BRACKET:
+                        parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
+                        parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
+                        type = cfArray(type);
+                        continue outer;
+                    default:
+                        break;
+                }
+                break;
+            }
+            return type;
+        }
+
+        function parseTypeElement() : Type {
+            const type = parseType();
+            parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+            return type;
+        }
+
+        cfStruct; // unused 
+
+        let savedScannerState : ScannerState | null = null;
+        if (fromInclusive) {
+            savedScannerState = getScannerState();
+            restoreScannerState({
+                index: fromInclusive,
+                mode: mode,
+                artificialEndLimit: toExclusive
+            })
+        }
+
+        
+        switch (lookahead()) {
+            case TokenType.LEFT_BRACKET: {
+                parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
+                const tupleTypes = doInExtendedContext(ParseContext.awaitingRightBracket, () => parseList(ParseContext.type, parseTypeElement));
+                parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
+                return maybeParseArrayModifier(cfTuple(tupleTypes));
+            }
+            case TokenType.LEXEME: {
+                const literal = parseTypename();
+                return maybeParseArrayModifier(literal);
+            }
+        }
+
+        if (savedScannerState) {
+            restoreScannerState(savedScannerState);
+        }
+
+        return cfNil();
     }
 
     function getDiagnostics() : Diagnostic[] {
