@@ -1019,6 +1019,20 @@ export function Block(leftBrace: Terminal | null, stmtList: Node[], rightBrace: 
 }
 
 export namespace FromTag {
+    export function looseStatementsBlock(stmtList: Node[]) {
+        const v = NodeBase<Block>(NodeType.block, mergeRanges(...stmtList));
+        v.tagOrigin.startTag   = null;
+        v.tagOrigin.endTag     = null;
+
+        v.subType              = BlockType.fromTag;
+        v.name                 = null;
+        v.tagCallStatementArgs = null;
+        v.tagCallStatementArgs = null;
+        v.leftBrace            = null;
+        v.stmtList             = stmtList;
+        v.rightBrace           = null;
+        return v;
+    }
     export function Block(startTag: CfTag, endTag: CfTag) : Block;                                      // overload 1
     export function Block(startTag: CfTag, stmtList: Node[], endTag: CfTag | null) : Block;             // overload 2
     export function Block(startTag: CfTag, endTagOrStmtList: CfTag | Node[], endTag?: CfTag | null) {

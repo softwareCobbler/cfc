@@ -14,39 +14,11 @@ function fromFile(fname: string) {
     return SourceFile(absPath, cfmOrCfc(fname)!, fs.readFileSync(absPath));
 }
 
-function fromString(source: string) {
-    return NilCfm(source);
-}
-
 //const sourceFile = fromFile("./test/mxunit/PluginDemoTests/InvalidMarkupTest.cfc");
-const sourceFile = fromString(`<cfset var illegal_var_decl_at_top_level = 42>
 
-<cffunction name="foo">
-    <cfargument name="ARGNAME">
-    <cfset var ok_var_decl_inside_function = 42>
-    <cfset var argname = 42> <!--- can't re-declare a variable that is in arguments scope --->
-</cffunction>
-
-<cfscript>
-    function foo(argName, argName2) {
-        var argName2 = 42;
-    }
-
-    f = function(argName) {
-        var argName = 42;
-
-        function nested(x) {
-            var argName = "ok because the outer arguments scope is not considered";
-        }
-    }
-
-    f = (argName) => {
-        var argName = 42;
-        var argName.f.z = 42;
-
-        argName = 42; // ok, not a redeclaration, just a reassignment
-    }
-</cfscript>`);
+const sourceFile = NilCfc(`<cfcomponent>
+    
+`);
 
 const parser = Parser().setDebug(true);
 parser.setSourceFile(sourceFile);

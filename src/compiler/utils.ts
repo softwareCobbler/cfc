@@ -426,6 +426,7 @@ export function visit(node: Node, visitor: (arg: Node | undefined | null) => any
         case NodeType.functionDefinition:
             if (node.tagOrigin.startTag) {
                 return visitor(node.tagOrigin.startTag)
+                    || forEachNode(node.params, visitor)
                     || visitor(node.body)
                     || visitor(node.tagOrigin.endTag);
             }
@@ -630,7 +631,7 @@ export function binarySearch<T>(vs: T[], comparator: (v: T) => number) : number 
     let ceil = vs.length - 1;
     let index = mid(floor, ceil, 'f');
 
-    while (true) {
+    while (floor <= ceil) {
         const compare = comparator(vs[index]);
         if (compare === 0) {
             // match
@@ -652,12 +653,16 @@ export function binarySearch<T>(vs: T[], comparator: (v: T) => number) : number 
         else if (compare === 1) {
             // T is more than target, move ceil
             ceil = index-1;
-            index = mid(floor, ceil, 'c');
+            index = mid(floor, ceil, 'f');
         }
     }
+
+    return ~index;
 }
 
 export function findNodeInFlatSourceMap(flatSourceMap: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, Node>, index: number) {
+    if (flatSourceMap.length === 0) return undefined;
+
     let match = binarySearch(flatSourceMap,
         (v) => {
             //

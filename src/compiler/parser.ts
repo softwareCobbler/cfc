@@ -957,6 +957,18 @@ export function Parser() {
                 }
             }
 
+            function getTagErrorPos() {
+                if (hasNextTag()) {
+                    return peekTag()!.range.fromInclusive;
+                }
+                else {
+                    // if there is no next tag, we have already hit the final tag and consumed it;
+                    // so return the END of the last tag, because that is where our "cursor" is
+                    // unlike the scanner there is no magic EOF marker
+                    return tagList[tagList.length-1].range.toExclusive;
+                }
+            }
+
             function parseExpectedTag(which: CfTag.Which, canonicalName: string, diagnosticEmitter?: () => void) : CfTag {
                 const tag = parseOptionalTag(which, canonicalName);
                 if (tag) {
@@ -975,11 +987,11 @@ export function Parser() {
                     // create fake placeholder tag
                     let missingTag : CfTag.Common;
                     if (which === CfTag.Which.start) {
-                        const nilTerminal = NilTerminal(pos());
+                        const nilTerminal = NilTerminal(getTagErrorPos());
                         missingTag = CfTag.Common(which, nilTerminal, nilTerminal, null, nilTerminal, canonicalName, [])
                     }
                     else {
-                        const nilTerminal = NilTerminal(pos());
+                        const nilTerminal = NilTerminal(getTagErrorPos());
                         missingTag = CfTag.Common(which, nilTerminal, nilTerminal, null, nilTerminal, canonicalName)
                     }
                     createMissingNode(missingTag);
@@ -1097,17 +1109,23 @@ export function Parser() {
 
                 const params : FunctionParameter[] = [];
                 let i = 0;
-                for (; i < body.length; i++) {
+                while (i < body.length) {
                     const node = body[i];
                     if (node.type === NodeType.textSpan || node.type === NodeType.comment) {
+                        i++;
                         continue;
                     }
                     if (node.type === NodeType.tag && node.canonicalName === "argument") {
                         const param = parseParam(node as CfTag.Common);
                         if (param) params.push(param);
+                        i++;
                         continue;
                     }
                     break;
+                }
+                // if we got no <cfargument> tags, the body starts immediately after <cffunction>
+                if (params.length === 0) {
+                    i = 0;
                 }
 
                 //
@@ -1115,12 +1133,26 @@ export function Parser() {
                 // these are still tags because we had to be able to match the <cfargument> tags;
                 // at this point, we can convert the remainder into statements
                 //
+                // i think there are 4 conditions possible here:
+                // <cffunction></cffunction>
+                // <cffunction> </cffunction>
+                // <cffunction><cfargument></cffunction>
+                // <cffunction><cfargument> </cffunction>
+                //
+                // the spaces will have become textspans, so the body is not empty
+                // but without the spaces, we will have an absolutely empty body, and need to mark the block as such
+                //
                 body = looseTagsToStatements(body.splice(i));
+                const bodyBlock = FromTag.looseStatementsBlock(body);
+                if (body.length === 0) {
+                    const startAndEndOfEmptyBlock = mergeRanges(startTag, params).toExclusive
+                    bodyBlock.range = new SourceRange(startAndEndOfEmptyBlock, startAndEndOfEmptyBlock);
+                }
 
                 return FromTag.FunctionDefinition(
                     startTag,
                     params,
-                    Block(null, body, null), // there are no braces on a tag-originating function
+                    FromTag.looseStatementsBlock(body), // there are no braces on a tag-originating function
                     endTag,
                     functionName);
             }
@@ -1165,8 +1197,6 @@ export function Parser() {
                     result.push(FromTag.Block(startTag, blockChildren, endTag));
                 }
 
-
-
                 while (hasNextTag()) {
                     const tag = peekTag()!;
 
@@ -1178,11 +1208,13 @@ export function Parser() {
                         continue;
                     }
 
+                    // text tag placeholders get converted into TextSpans, which is conceptually lifting them out of Tag space
                     if (tag.tagType === CfTag.TagType.text) {
                         result.push(TextSpan(tag.range, scanner.getTextSlice(tag.range)));
                         nextTag();
                         continue;
                     }
+                    // comments are lifted out of Tag space
                     else if (tag.tagType === CfTag.TagType.comment) {
                         result.push(Comment(CommentType.tag, tag.range));
                         nextTag();
@@ -1290,6 +1322,7 @@ export function Parser() {
                             // this will naturally result in an "unmatched tag" error in the caller
                             const matchingOpenTagIndex = openTagStackFindMatchingStartTag(tag.canonicalName);
                             if (matchingOpenTagIndex !== null) {
+                                // @fixme: what if the reduction scheme, had we matched an appropriate end tag, was "return raw tags"?
                                 return looseTagsToStatements(result);
                             }
                             else {
