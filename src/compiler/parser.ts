@@ -4,8 +4,7 @@ import {
     Conditional, ConditionalSubtype, FunctionParameter, FromTag, FunctionDefinition, CommentType,
     HashWrappedExpr, BinaryOperator, Parenthetical, UnaryOperator, BooleanLiteral,
     CallExpression, IndexedAccess, pushAccessElement, CallArgument, Identifier, SimpleStringLiteral, InterpolatedStringLiteral,
-    NumericLiteral, DottedPath, ArrowFunctionDefinition, Statement, Block, Switch,
-    SwitchCase,
+    NumericLiteral, DottedPath, ArrowFunctionDefinition, Statement, Block, 
     Do,
     While,
     Ternary,
@@ -1252,8 +1251,30 @@ export function Parser() {
                     }
                 }
 
-
                 return Tag.Try(startTag, mainBody, catchBlocks, finallyBlock, endTag);
+            }
+
+            function treeifyTagSwitch(startTag: CfTag.Common, body: Node[], endTag: CfTag.Common) {
+                function getTriviaOwner() : Node[] {
+                    return [];
+                }
+
+                const cases : Tag.SwitchCase[] = [];
+
+                for (let i = 0; i < body.length; i++) {
+                    const node = body[i];
+                    if (node.type === NodeType.switchCase) {
+                        cases.push(node as Tag.SwitchCase);
+                        continue;
+                    }
+                    else if (node.type !== NodeType.textSpan && node.type !== NodeType.comment) {
+                        parseErrorAtRange(node.range, "Only comments and whitespace are valid outside of <cfcase> & <cfdefaultcase> blocks inside a <cfswitch> block.");
+                    }
+                    // push non-case blocks as trivia
+                    getTriviaOwner().push(node);
+                }
+
+                return Tag.Switch(startTag, cases, endTag);
             }
 
             function looseTagsToStatements(nodeList: Node[]) {
@@ -1282,7 +1303,7 @@ export function Parser() {
                     return null;
                 }
 
-                // handle a tag block that requires a matching start/end tag pair
+                // handle a general tag block that requires a matching start/end tag pair
                 function tagBlockWorker(tag: CfTag) {
                     openTagStack.push(tag.canonicalName);
 
@@ -1362,7 +1383,7 @@ export function Parser() {
                             case "try": {
                                 openTagStack.push("try");
                                 const startTag = parseExpectedTag(CfTag.Which.start, "try");
-                                const body = treeifyTags(stopAt(CfTag.Which.end, "try", ReductionScheme.default));
+                                const body = treeifyTags(stopAt(CfTag.Which.end, "try", ReductionScheme.return));
                                 const endTag = parseExpectedTag(CfTag.Which.end, "try", () => parseErrorAtRange(startTag.range, "Missing </cftry> tag."));
                                 openTagStack.pop();
                                 result.push(treeifyTagTry(startTag as CfTag.Common, body, endTag as CfTag.Common));
@@ -1376,16 +1397,48 @@ export function Parser() {
                                 }
                                 openTagStack.push("catch");
                                 const startTag = parseExpectedTag(CfTag.Which.start, "catch");
-                                const body = treeifyTags(stopAt(CfTag.Which.end, "catch", ReductionScheme.default));
+                                const body = treeifyTags(stopAt(CfTag.Which.end, "catch", ReductionScheme.return));
                                 const endTag = parseExpectedTag(CfTag.Which.end, "catch", () => parseErrorAtRange(startTag.range, "Missing </cfcatch> tag."));
                                 openTagStack.pop();
                                 result.push(Tag.Catch(startTag as CfTag.Common, body, endTag as CfTag.Common));
                                 continue;
                             }
-                            /*
+                            case "finally": {
+                                openTagStack.push("finally");
+                                const startTag = parseExpectedTag(CfTag.Which.start, "finally");
+                                const body = treeifyTags(stopAt(CfTag.Which.end, "finally", ReductionScheme.return));
+                                const endTag = parseExpectedTag(CfTag.Which.end, "finally", () => parseErrorAtRange(startTag.range, "Missing </cffinally> tag."));
+                                openTagStack.pop();
+                                result.push(Tag.Finally(startTag as CfTag.Common, body, endTag as CfTag.Common));
+                                continue;
+                            }
                             case "switch": {
-                                // ...
-                            }*/
+                                openTagStack.push("switch");
+                                const startTag = parseExpectedTag(CfTag.Which.start, "switch");
+                                const body = treeifyTags(stopAt(CfTag.Which.end, "switch", ReductionScheme.return));
+                                const endTag = parseExpectedTag(CfTag.Which.end, "switch", () => parseErrorAtRange(startTag.range, "Missing </cfswitch> tag."));
+                                openTagStack.pop();
+                                result.push(treeifyTagSwitch(startTag as CfTag.Common, body, endTag as CfTag.Common));
+                                continue;
+                            }
+                            case "case": {
+                                openTagStack.push("case");
+                                const startTag = parseExpectedTag(CfTag.Which.start, "case");
+                                const body = treeifyTags(stopAt(CfTag.Which.end, "case", ReductionScheme.return));
+                                const endTag = parseExpectedTag(CfTag.Which.end, "case", () => parseErrorAtRange(startTag.range, "Missing </cfcase> tag."));
+                                openTagStack.pop();
+                                result.push(Tag.SwitchCase(startTag as CfTag.Common, body, endTag as CfTag.Common));
+                                continue;
+                            }
+                            case "defaultcase": {
+                                openTagStack.push("defaultcase");
+                                const startTag = parseExpectedTag(CfTag.Which.start, "defaultcase");
+                                const body = treeifyTags(stopAt(CfTag.Which.end, "defaultcase", ReductionScheme.return));
+                                const endTag = parseExpectedTag(CfTag.Which.end, "defaultcase", () => parseErrorAtRange(startTag.range, "Missing </cfdefaultcase> tag."));
+                                openTagStack.pop();
+                                result.push(Tag.SwitchDefault(startTag as CfTag.Common, body, endTag as CfTag.Common));
+                                continue;
+                            }
                             case "script": {
                                 nextTag();
                                 const endTag = parseExpectedTag(CfTag.Which.end, "script", () => parseErrorAtRange(tag.range, "Missing </cfscript> tag."));
@@ -2746,7 +2799,7 @@ export function Parser() {
         const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
         const leftBrace = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
 
-        const cases : SwitchCase[] = [];
+        const cases : Script.SwitchCase[] = [];
         const savedContext = updateParseContext(ParseContext.awaitingRightBrace);
         parseContext &= ~(1 << ParseContext.switchClause); // we may be in a nested switch clause, clear the outer flag
 
@@ -2756,13 +2809,13 @@ export function Parser() {
                 const caseExpr = parseExpression();
                 const colon = parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
                 const body = parseList(ParseContext.switchClause, parseStatement);
-                cases.push(SwitchCase.Case(caseToken, caseExpr, colon, body));
+                cases.push(Script.SwitchCase(caseToken, caseExpr, colon, body));
             }
             else if (lookahead() === TokenType.KW_DEFAULT) {
                 const defaultToken = parseExpectedTerminal(TokenType.KW_DEFAULT, ParseOptions.withTrivia);
                 const colon = parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
                 const body = parseList(ParseContext.switchClause, parseStatement);
-                cases.push(SwitchCase.Default(defaultToken, colon, body));
+                cases.push(Script.SwitchDefault(defaultToken, colon, body));
             }
             else {
                 parseErrorAtCurrentToken("Expected a switch case or default.");
@@ -2772,7 +2825,7 @@ export function Parser() {
 
         parseContext = savedContext;
         const rightBrace = parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
-        return Switch(switchToken, leftParen, expr, rightParen, leftBrace, cases, rightBrace);
+        return Script.Switch(switchToken, leftParen, expr, rightParen, leftBrace, cases, rightBrace);
     }
 
     function parseIf() : Conditional {

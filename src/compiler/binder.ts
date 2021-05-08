@@ -658,7 +658,7 @@ export function Binder() {
     }
 
     function bindSwitch(node: Switch) {
-        if (node.tagOrigin.startTag) {
+        if (node.fromTag) {
             bindNode(node.tagOrigin.startTag, node);
             bindList(node.cases, node);
             bindNode(node.tagOrigin.endTag, node);
@@ -669,14 +669,14 @@ export function Binder() {
     }
 
     function bindSwitchCase(node: SwitchCase) {
-        if (node.tagOrigin.startTag) {
+        if (node.fromTag) {
             bindNode(node.tagOrigin.startTag, node);
-            bindList(node.statements, node);
+            bindList(node.body, node);
             bindNode(node.tagOrigin.endTag, node);
             return;
         }
         bindNode(node.expr, node);
-        bindList(node.statements, node);
+        bindList(node.body, node);
     }
 
     function bindDo(node: Do) {

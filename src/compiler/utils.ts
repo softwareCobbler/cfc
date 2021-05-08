@@ -455,7 +455,7 @@ export function visit(node: Node, visitor: (arg: Node | undefined | null) => any
             return visitor(node.headKey)
                 || false;
         case NodeType.switch:
-            if (node.tagOrigin.startTag) {
+            if (node.fromTag) {
                 return visitor(node.tagOrigin.startTag)
                     || forEachNode(node.cases, visitor)
                     || visitor(node.tagOrigin.endTag);
@@ -468,15 +468,15 @@ export function visit(node: Node, visitor: (arg: Node | undefined | null) => any
                 || forEachNode(node.cases, visitor)
                 || visitor(node.rightBrace);
         case NodeType.switchCase:
-            if (node.tagOrigin) {
+            if (node.fromTag) {
                 return visitor(node.tagOrigin.startTag)
-                    || forEachNode(node.statements, visitor)
+                    || forEachNode(node.body, visitor)
                     || visitor(node.tagOrigin.endTag);
             }
             return visitor(node.caseOrDefaultToken)
                 || visitor(node.expr)
                 || visitor(node.colon)
-                || forEachNode(node.statements, visitor)
+                || forEachNode(node.body, visitor)
         case NodeType.do:
             return visitor(node.doToken)
                 || visitor(node.body)

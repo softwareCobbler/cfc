@@ -1408,63 +1408,128 @@ export function DottedPath<T extends NodeBase>(headKey: T) : DottedPath<T> {
     return v;
 }
 
-export interface Switch extends NodeBase {
+interface SwitchBase extends NodeBase {
     type: NodeType.switch;
-    switchToken: Terminal;
-    leftParen: Terminal;
-    expr: Node;
-    rightParen: Terminal;
-    leftBrace: Terminal;
-    cases: SwitchCase[];
-    rightBrace: Terminal;
+    fromTag: boolean,
+    cases: SwitchCaseBase[],
 }
 
-export function Switch(
-    switchToken: Terminal,
-    leftParen: Terminal,
-    expr: Node,
-    rightParen: Terminal,
-    leftBrace: Terminal,
-    cases: SwitchCase[],
-    rightBrace: Terminal) : Switch {
-    const v = NodeBase<Switch>(NodeType.switch, mergeRanges(switchToken, rightBrace));
-    v.switchToken = switchToken;
-    v.leftParen = leftParen;
-    v.expr = expr;
-    v.rightParen = rightParen;
-    v.leftBrace = leftBrace;
-    v.cases = cases;
-    v.rightBrace = rightBrace;
-    return v;
+export type Switch = Script.Switch | Tag.Switch;
+
+export namespace Script {
+    export interface Switch extends SwitchBase {
+        type: NodeType.switch;
+        fromTag: false,
+        switchToken: Terminal;
+        leftParen: Terminal;
+        expr: Node;
+        rightParen: Terminal;
+        leftBrace: Terminal;
+        cases: Script.SwitchCase[];
+        rightBrace: Terminal;
+    }
+
+    export function Switch(
+        switchToken: Terminal,
+        leftParen: Terminal,
+        expr: Node,
+        rightParen: Terminal,
+        leftBrace: Terminal,
+        cases: Script.SwitchCase[],
+        rightBrace: Terminal) : Switch {
+        const v = NodeBase<Switch>(NodeType.switch, mergeRanges(switchToken, rightBrace));
+        v.fromTag = false;
+        v.switchToken = switchToken;
+        v.leftParen = leftParen;
+        v.expr = expr;
+        v.rightParen = rightParen;
+        v.leftBrace = leftBrace;
+        v.cases = cases;
+        v.rightBrace = rightBrace;
+        return v;
+    }
 }
+
+export namespace Tag {
+    export interface Switch extends SwitchBase {
+        type: NodeType.switch,
+        fromTag: true,
+        cases: Tag.SwitchCase[],
+    }
+    export function Switch(startTag: CfTag.Common, cases: Tag.SwitchCase[], endTag: CfTag.Common) : Tag.Switch{
+        const v = NodeBase<Switch>(NodeType.switch, mergeRanges(startTag, endTag));
+        v.fromTag = true;
+        v.tagOrigin.startTag = startTag;
+        v.tagOrigin.endTag = endTag;
+        v.cases = cases;
+        return v;
+    }
+}
+
+interface SwitchCaseBase extends NodeBase {
+    type: NodeType.switchCase;
+    fromTag: boolean,
+    caseType: SwitchCaseType;
+    body: Node[];
+}
+
+export type SwitchCase = Script.SwitchCase | Tag.SwitchCase;
 
 export const enum SwitchCaseType { case, default };
-export interface SwitchCase extends NodeBase {
-    type: NodeType.switchCase;
-    caseType: SwitchCaseType;
-    caseOrDefaultToken: Terminal;
-    expr: Node | null;
-    colon: Terminal;
-    statements: Node[];
-}
 
-export namespace SwitchCase {
-    export function Case(caseToken: Terminal, expr: Node, colon: Terminal, statements: Node[]) : SwitchCase {
-        const v = NodeBase<SwitchCase>(NodeType.switchCase, mergeRanges(caseToken, statements));
+export namespace Script {
+    export interface SwitchCase extends SwitchCaseBase {
+        type: NodeType.switchCase,
+        fromTag: false,
+        caseType: SwitchCaseType,
+        caseOrDefaultToken: Terminal,
+        expr: Node | null,
+        colon: Terminal,
+        body: Node[],
+    }
+
+    export function SwitchCase(caseToken: Terminal, expr: Node, colon: Terminal, body: Node[]) : SwitchCase {
+        const v = NodeBase<SwitchCase>(NodeType.switchCase, mergeRanges(caseToken, body));
+        v.fromTag = false;
         v.caseType = SwitchCaseType.case
         v.caseOrDefaultToken = caseToken;
         v.expr = expr;
         v.colon = colon;
-        v.statements = statements;
+        v.body = body;
         return v;
     }
-    export function Default(defaultToken: Terminal, colon: Terminal, statements: Node[]) : SwitchCase {
-        const v = NodeBase<SwitchCase>(NodeType.switchCase, mergeRanges(defaultToken, statements));
+    export function SwitchDefault(defaultToken: Terminal, colon: Terminal, body: Node[]) : SwitchCase {
+        const v = NodeBase<SwitchCase>(NodeType.switchCase, mergeRanges(defaultToken, body));
+        v.fromTag = false;
         v.caseType = SwitchCaseType.default;
         v.caseOrDefaultToken = defaultToken;
         v.expr = null;
         v.colon = colon;
-        v.statements = statements;
+        v.body = body;
+        return v;
+    }
+}
+
+export namespace Tag {
+    export interface SwitchCase extends SwitchCaseBase {
+        type: NodeType.switchCase,
+        fromTag: true,
+        caseType: SwitchCaseType,
+        body: Node[],
+    }
+
+    export function SwitchCase(startTag: CfTag.Common, body: Node[], endTag: CfTag.Common) : SwitchCase {
+        const v = NodeBase<SwitchCase>(NodeType.switchCase, mergeRanges(startTag, endTag));
+        v.fromTag = true;
+        v.caseType = SwitchCaseType.case
+        v.body = body;
+        return v;
+    }
+    export function SwitchDefault(startTag: CfTag.Common, body: Node[], endTag: CfTag.Common) : SwitchCase {
+        const v = NodeBase<SwitchCase>(NodeType.switchCase, mergeRanges(startTag, endTag));
+        v.fromTag = true;
+        v.caseType = SwitchCaseType.default;
+        v.body = body;
         return v;
     }
 }

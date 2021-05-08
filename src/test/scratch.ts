@@ -14,9 +14,14 @@ function fromFile(fname: string) {
     return SourceFile(absPath, cfmOrCfc(fname)!, fs.readFileSync(absPath));
 }
 
-//const sourceFile = fromFile("./test/mxunit/PluginDemoTests/InvalidMarkupTest.cfc");
+//const sourceFile = fromFile("./test/mxunit/tests/mightymock/fixture/Logger.cfc");
 
-const sourceFile = NilCfm(`<cftry><cfcatch/> <cfset x = 4></cftry>`);
+const sourceFile = NilCfm(`<cfswitch expression="#arguments.type#">
+<cfcase value="fatal"><cfset cfType = "fatal"></cfcase>
+<cfcase value="error"><cfset cfType = "error"></cfcase>
+<cfcase value="warn"><cfset cfType = "warning"></cfcase>
+<cfdefaultcase><cfset cfType="information"></cfdefaultcase>
+</cfswitch>`);
 
 const parser = Parser().setDebug(true);
 parser.setSourceFile(sourceFile);
