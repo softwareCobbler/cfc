@@ -34,22 +34,11 @@
 			"type": "object",
 			"title": "Example configuration",
 			"properties": {
-				"languageServerExample.maxNumberOfProblems": {
+				"cflsp.typefusion": {
 					"scope": "resource",
-					"type": "number",
-					"default": 100,
-					"description": "Controls the maximum number of problems produced by the server."
-				},
-				"languageServerExample.trace.server": {
-					"scope": "window",
-					"type": "string",
-					"enum": [
-						"off",
-						"messages",
-						"verbose"
-					],
-					"default": "off",
-					"description": "Traces the communication between VS Code and the language server."
+					"type": "boolean",
+					"default": false,
+					"description": "Enable experimental type annotations for better autocomplete."
 				}
 			}
 		}

@@ -129,19 +129,19 @@ export function isIllegalIdentifierName(text: string) {
  export function getTriviallyComputableString(node: Node | undefined | null) : string | undefined {
     if (!node) return undefined;
 
-    if (node.type === NodeType.simpleStringLiteral) {
+    if (node.kind === NodeType.simpleStringLiteral) {
         return node.textSpan.text;
     }
-    else if (node.type === NodeType.terminal) {
+    else if (node.kind === NodeType.terminal) {
         return node.token.text;
     }
-    else if (node.type === NodeType.numericLiteral) {
+    else if (node.kind === NodeType.numericLiteral) {
         return node.literal.token.text;
     }
-    else if (node.type === NodeType.hashWrappedExpr || node.type === NodeType.parenthetical) {
+    else if (node.kind === NodeType.hashWrappedExpr || node.kind === NodeType.parenthetical) {
         return getTriviallyComputableString(node.expr);
     }
-    else if (node.type === NodeType.interpolatedStringLiteral) {
+    else if (node.kind === NodeType.interpolatedStringLiteral) {
         let result = "";
         for (let i = 0; i < node.elements.length; i++) {
             let trivialElement = getTriviallyComputableString(node.elements[0]);
@@ -154,7 +154,7 @@ export function isIllegalIdentifierName(text: string) {
         }
         return result;
     }
-    else if (node.type === NodeType.identifier) {
+    else if (node.kind === NodeType.identifier) {
         return getTriviallyComputableString(node.source);
     }
 
@@ -169,13 +169,13 @@ export function getTriviallyComputableBoolean(node: Node | undefined | null) : b
         return castCfStringAsCfBoolean(trivialString);
     }
 
-    if (node.type === NodeType.booleanLiteral) {
+    if (node.kind === NodeType.booleanLiteral) {
         return node.literal.token.type === TokenType.KW_TRUE;
     }
-    else if (node.type === NodeType.numericLiteral) {
+    else if (node.kind === NodeType.numericLiteral) {
         return castCfNumericLiteralAsCfBoolean(node.literal.token.text);
     }
-    else if (node.type === NodeType.hashWrappedExpr || node.type === NodeType.parenthetical) {
+    else if (node.kind === NodeType.hashWrappedExpr || node.kind === NodeType.parenthetical) {
         return getTriviallyComputableBoolean(node.expr);
     }
 
@@ -242,7 +242,7 @@ function forEachNode<T>(nodeList: Node[], f: (node: Node) => T) : T | undefined 
 
 // a falsy value returned by the visitor keeps it going
 export function visit(node: Node, visitor: (arg: Node | undefined | null) => any) : void {
-    switch (node.type) {
+    switch (node.kind) {
         case NodeType.comment:
         case NodeType.textSpan:
             // bottomed out
@@ -416,7 +416,7 @@ export function visit(node: Node, visitor: (arg: Node | undefined | null) => any
                         || visitor(node.dot);
             }
         case NodeType.functionParameter:
-            if (node.tagOrigin.startTag) {
+            if (node.fromTag) {
                 return visitor(node.tagOrigin.startTag);
             }
             return visitor(node.requiredTerminal)
@@ -426,10 +426,10 @@ export function visit(node: Node, visitor: (arg: Node | undefined | null) => any
                 || visitor(node.defaultValue)
                 || visitor(node.comma)
         case NodeType.functionDefinition:
-            if (node.tagOrigin.startTag) {
+            if (node.fromTag) {
                 return visitor(node.tagOrigin.startTag)
                     || forEachNode(node.params, visitor)
-                    || visitor(node.body)
+                    || forEachNode(node.body, visitor)
                     || visitor(node.tagOrigin.endTag);
             }
             return visitor(node.accessModifier)
@@ -604,7 +604,7 @@ export function flattenTree(tree: Node | Node[]) : NodeSourceMap[] {
 
     function visitor(node: Node | undefined | null) {
         if (node) {
-            if (node.type === NodeType.terminal || node.type === NodeType.comment || node.type === NodeType.textSpan) {
+            if (node.kind === NodeType.terminal || node.kind === NodeType.comment || node.kind === NodeType.textSpan) {
                 pushNode(node);
             }
 
@@ -696,7 +696,7 @@ export function findNodeInFlatSourceMap(flatSourceMap: NodeSourceMap[], nodeMap:
 export function isExpressionContext(node: Node | null) : boolean {
     if (!node) return false;
 
-    switch (node.type) {
+    switch (node.kind) {
         case NodeType.sourceFile: // fallthough
         case NodeType.comment:
             return false;

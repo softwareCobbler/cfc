@@ -766,6 +766,7 @@ export function Scanner(source_: string | Buffer) {
         while (isTagAttributeNameRest(annotatedChars[index].codepoint)) {
             index += 1;
         }
+        lastScannedText = sourceText.slice(from, index);
         return setToken(TokenType.LEXEME, from, getIndex());
     }
 

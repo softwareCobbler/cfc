@@ -1,7 +1,7 @@
 import {
     setDebug as setNodeFactoryDebug,
     CfTag, Node, NodeType, TagAttribute, NodeFlags, Terminal, Comment, TextSpan, NilTerminal,
-    Conditional, ConditionalSubtype, FunctionParameter, FromTag, FunctionDefinition, CommentType,
+    Conditional, ConditionalSubtype, FunctionParameter, FromTag, CommentType,
     HashWrappedExpr, BinaryOperator, Parenthetical, UnaryOperator, BooleanLiteral,
     CallExpression, IndexedAccess, pushAccessElement, CallArgument, Identifier, SimpleStringLiteral, InterpolatedStringLiteral,
     NumericLiteral, DottedPath, ArrowFunctionDefinition, Statement, Block, 
@@ -26,7 +26,7 @@ import {
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
-import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, isSugaredTagName } from "./utils";
+import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName } from "./utils";
 
 let debugParseModule = false;
 
@@ -879,7 +879,16 @@ export function Parser() {
                 return null;
             }
 
-            const enum ReductionScheme { default, return, returnRawTags };
+            const enum ReductionScheme {
+                // follow the "default" code path, whatever that may be at the use-site that checks for the value
+                default,
+                // return to parent and perform a reduction
+                return,
+                // return to parent and do not perform a reduction
+                // this does automatically apply to nested blocks;
+                // currently we only need it for returning non-statement-wrapped <cfargument> tags in a <cffunction>
+                returnRawTags
+            }; 
             interface ReductionInstruction {
                 onHitWhich: CfTag.Which | Symbol,
                 onHitName: string,
@@ -956,7 +965,7 @@ export function Parser() {
             function parseOptionalTag(which: CfTag.Which, canonicalName: string) : CfTag | null {
                 if (!hasNextTag()) return null;
                 const tag = peekTag()!;
-                if (tag.type === NodeType.hashWrappedExpr) return null;
+                if (tag.kind === NodeType.hashWrappedExpr) return null;
 
                 if (tag.which === which && tag.canonicalName === canonicalName) {
                     nextTag();
@@ -1044,7 +1053,7 @@ export function Parser() {
 
                 if (hasNextTag()) {
                     const nextTag = peekTag()!;
-                    if (nextTag.type === NodeType.tag && nextTag.canonicalName === "if" && nextTag.which === CfTag.Which.end) {
+                    if (nextTag.kind === NodeType.tag && nextTag.canonicalName === "if" && nextTag.which === CfTag.Which.end) {
                         root.tagOrigin.endTag = parseExpectedTag(CfTag.Which.end, "if");
                         return root;
                     }
@@ -1055,116 +1064,40 @@ export function Parser() {
             }
 
             function treeifyTagFunction(startTag: CfTag.Common, body: Node[], endTag: CfTag.Common) {
-                function parseParam(tag: CfTag.Common) : FunctionParameter | null {
-                    const nameAttr = getAttributeValue(tag.attrs, "name");
-                    let name = "";
-                    if (!nameAttr) {
-                        parseErrorAtRange(tag.range, "<cfargument> requires a 'name' attribute.");
+                const params : Tag.FunctionParameter[] = [];
+
+                function getTriviaOwner() : Node[] {
+                    if (params.length === 0) {
+                        return startTag.tagEnd.trivia;
                     }
                     else {
-                        const nameVal = getTriviallyComputableString(nameAttr);
-                        if (!nameVal) {
-                            parseErrorAtRange(nameAttr.range, "<cfargument> 'name' attribute must be a constant string value.");
-                        }
-                        else {
-                            name = nameVal;
-                        }
-                    }
-
-                    const requiredAttr = getAttributeValue(tag.attrs, "required");
-                    let isRequired = false;
-                    if (requiredAttr) {
-                        if (parseFloat(getTriviallyComputableString(requiredAttr)!) < 0) {
-                            // parseFloat does accept undefined, but the TS signature is overly-safe
-                            // so we might get a NaN out of it, but that's ok because NaN comparisons always result in false
-                            // if we don't get a NaN, and we are less than 0, report an error, because there is a special rule,
-                            // or more of a actual cf-engine parse-failure, that negative numbers cannot be coerced to boolean
-                            // in the requires attribute of a <cfargument> tag
-                            parseErrorAtRange(requiredAttr.range, "<cfargument> 'required' attribute does not allow coercions to boolean from negative numbers.");
-                            isRequired = false;
-                        }
-                        else {
-                            const boolVal = getTriviallyComputableBoolean(requiredAttr);
-                            if (boolVal === undefined) { // whatever the value was, it was not coercible to bool
-                                parseErrorAtRange(requiredAttr.range, "<cfargument> 'required' attribute must be a constant boolean value.");
-                            }
-                            isRequired = boolVal ?? false;
-                        }
-                    }
-
-                    if (!nameAttr) {
-                        return null;
-                    }
-                    else {
-                        const identifier = Identifier(nameAttr, name);
-                        return FromTag.FunctionParameter(tag, identifier, isRequired, /* @FIXME default value */ null);
+                        return params[params.length-1].tagOrigin.startTag!.tagEnd.trivia;
                     }
                 }
 
-                let functionName = "";
-                const functionNameExpr = getAttributeValue(startTag.attrs, "name");
-                if (!functionNameExpr) {
-                    parseErrorAtRange(startTag.range, "<cffunction> requires a name attribute.");
-                }
-                else {
-                    const maybeFunctionName = getTriviallyComputableString(functionNameExpr)?.toLowerCase();
-                    if (maybeFunctionName === undefined) {
-                        parseErrorAtRange(functionNameExpr.range, "<cffunction> name attribute must be a constant.");
-                    }
-                    else if (maybeFunctionName === "") {
-                        parseErrorAtRange(functionNameExpr.range, "<cffunction> requires a name attribute.");
-                    }
-                    functionName = maybeFunctionName ?? "";
-                }
-
-                const params : FunctionParameter[] = [];
                 let i = 0;
                 while (i < body.length) {
                     const node = body[i];
-                    if (node.type === NodeType.textSpan || node.type === NodeType.comment) {
+                    if (node.kind === NodeType.textSpan || node.kind === NodeType.comment) {
+                        getTriviaOwner().push(node);
                         i++;
                         continue;
                     }
-                    if (node.type === NodeType.tag && node.canonicalName === "argument") {
-                        const param = parseParam(node as CfTag.Common);
-                        if (param) params.push(param);
+                    if (node.kind === NodeType.tag && node.canonicalName === "argument") {
+                        params.push(Tag.FunctionParameter(node as CfTag.Common));
                         i++;
                         continue;
                     }
                     break;
                 }
-                // if we got no <cfargument> tags, the body starts immediately after <cffunction>
-                if (params.length === 0) {
-                    i = 0;
-                }
 
-                //
-                // drop all the params and whitespace that we consumed as FunctionParameters
-                // these are still tags because we had to be able to match the <cfargument> tags;
-                // at this point, we can convert the remainder into statements
-                //
-                // i think there are 4 conditions possible here:
-                // <cffunction></cffunction>
-                // <cffunction> </cffunction>
-                // <cffunction><cfargument></cffunction>
-                // <cffunction><cfargument> </cffunction>
-                //
-                // the spaces will have become textspans, so the body is not empty
-                // but without the spaces, we will have an absolutely empty body, and need to mark the block as such
-                //
-                body = looseTagsToStatements(body.splice(i));
-                const bodyBlock = FromTag.looseStatementsBlock(body);
-                if (body.length === 0) {
-                    const startAndEndOfEmptyBlock = mergeRanges(startTag, params).toExclusive
-                    bodyBlock.range = new SourceRange(startAndEndOfEmptyBlock, startAndEndOfEmptyBlock);
+                body = body.splice(i);
+                for (const node of body) {
+                    if (node.kind === NodeType.tag && node.which === CfTag.Which.start && node.canonicalName === "argument") {
+                        parseErrorAtRange(node.range, "<cfargument> tags should precede any other tags within a <cffunction> body.");
+                    }
                 }
-
-                return FromTag.FunctionDefinition(
-                    startTag,
-                    params,
-                    FromTag.looseStatementsBlock(body), // there are no braces on a tag-originating function
-                    endTag,
-                    functionName);
+                return Tag.FunctionDefinition(startTag, params, looseTagsToStatements(body), endTag);
             }
 
             function treeifyTagTry(startTag: CfTag.Common, body: Node[], endTag: CfTag.Common) {
@@ -1179,11 +1112,11 @@ export function Parser() {
 
                 while (index < body.length) {
                     const node = body[index];
-                    if ((node.type === NodeType.catch)) {
+                    if ((node.kind === NodeType.catch)) {
                         gotCatch = true;
                         break;
                     }
-                    else if (node.type === NodeType.finally) {
+                    else if (node.kind === NodeType.finally) {
                         gotFinally = true;
                         break;
                     }
@@ -1210,15 +1143,15 @@ export function Parser() {
                 if (gotCatch) {
                     while (index < body.length) {
                         const node = body[index];
-                        if (node.type === NodeType.finally) {
+                        if (node.kind === NodeType.finally) {
                             gotFinally = true;
                             break;
                         }
 
-                        if (node.type === NodeType.catch) {
+                        if (node.kind === NodeType.catch) {
                             catchBlocks.push(node as Tag.Catch);
                         }
-                        else if (node.type !== NodeType.textSpan && node.type !== NodeType.comment) {
+                        else if (node.kind !== NodeType.textSpan && node.kind !== NodeType.comment) {
                             parseErrorAtRange(node.range, "Only comments and whitespace are valid between <cfcatch> and <cffinally> blocks.")
                             node.flags |= NodeFlags.error; // maybe invalidTagPosition or similar? also maybe mark the whole try block an error?
                             getTriviaOwner().push(node);
@@ -1243,7 +1176,7 @@ export function Parser() {
 
                     while (index < body.length) {
                         const node = body[index];
-                        if (node.type !== NodeType.textSpan && node.type !== NodeType.comment) {
+                        if (node.kind !== NodeType.textSpan && node.kind !== NodeType.comment) {
                             parseErrorAtRange(node.range, "Only comments and whitespace are valid between <cfcatch> and <cffinally> blocks.")
                         }
                         getTriviaOwner().push(node);
@@ -1255,19 +1188,24 @@ export function Parser() {
             }
 
             function treeifyTagSwitch(startTag: CfTag.Common, body: Node[], endTag: CfTag.Common) {
-                function getTriviaOwner() : Node[] {
-                    return [];
-                }
-
                 const cases : Tag.SwitchCase[] = [];
+
+                function getTriviaOwner() : Node[] {
+                    if (cases.length === 0) {
+                        return startTag.tagEnd.trivia;
+                    }
+                    else {
+                        return cases[cases.length-1].tagOrigin.endTag!.tagEnd.trivia;
+                    }
+                }
 
                 for (let i = 0; i < body.length; i++) {
                     const node = body[i];
-                    if (node.type === NodeType.switchCase) {
+                    if (node.kind === NodeType.switchCase) {
                         cases.push(node as Tag.SwitchCase);
                         continue;
                     }
-                    else if (node.type !== NodeType.textSpan && node.type !== NodeType.comment) {
+                    else if (node.kind !== NodeType.textSpan && node.kind !== NodeType.comment) {
                         parseErrorAtRange(node.range, "Only comments and whitespace are valid outside of <cfcase> & <cfdefaultcase> blocks inside a <cfswitch> block.");
                     }
                     // push non-case blocks as trivia
@@ -1280,7 +1218,7 @@ export function Parser() {
             function looseTagsToStatements(nodeList: Node[]) {
                 for (let i = 0; i < nodeList.length; i++) {
                     const node = nodeList[i];
-                    if (node.type === NodeType.tag) {
+                    if (node.kind === NodeType.tag) {
                         if (node.tagType !== CfTag.TagType.common) throw "should have been a common tag";
                         nodeList[i] = FromTag.Statement(node);
                     }
@@ -1293,7 +1231,7 @@ export function Parser() {
 
                 function localStackFindMatchingStartTag(tag: CfTag) : number | null {
                     for (let i = result.length - 1; i >= 0; i--) {
-                        if (result[i].type === NodeType.tag) {
+                        if (result[i].kind === NodeType.tag) {
                             const stackTag = result[i] as CfTag;
                             if (stackTag.which === CfTag.Which.start && stackTag.canonicalName === tag.canonicalName) {
                                 return i;
@@ -1322,7 +1260,7 @@ export function Parser() {
 
                     // we can have tags | HashWrappedExpr in our tag list, since when doing our tag pre-parse, we've scanned
                     // out all the text-spans and interpolated-text contexts (which may contain hash-wrapped expressions)
-                    if (tag.type === NodeType.hashWrappedExpr) {
+                    if (tag.kind === NodeType.hashWrappedExpr) {
                         result.push(tag);
                         nextTag();
                         continue;
@@ -1371,8 +1309,6 @@ export function Parser() {
                                 openTagStack.push("function");
                                 const startTag = parseExpectedTag(CfTag.Which.start, "function");
                                 const body = treeifyTags(
-                                    // @fixme - rawTags reduction scheme isn't correct, because as we descend we need to blockify some things
-                                    // the only reason we wanted raw tags was to not do the work of statement-izing <cfargument> tags
                                     stopAt(CfTag.Which.end, "function", ReductionScheme.returnRawTags),
                                     stopAt(ERROR_REDUCTION, ReductionScheme.returnRawTags));
                                 const endTag = parseExpectedTag(CfTag.Which.end, "function", () => parseErrorAtRange(startTag.range, "Missing </cffunction> tag."))
@@ -1686,7 +1622,7 @@ export function Parser() {
 
     function isAssignmentTarget(node: Node) : boolean {
         // @fixme: in script mode, it may not be possible to assign to a string
-        switch (node.type) {
+        switch (node.kind) {
             case NodeType.indexedAccess:
             case NodeType.identifier:
             case NodeType.simpleStringLiteral:          // <cfset "x" = "y">
@@ -1729,14 +1665,14 @@ export function Parser() {
                 parseErrorAtRange(root.range, "Variable declarations require initializers.");
             }
 
-            if (root.type === NodeType.identifier
-                || root.type === NodeType.indexedAccess
+            if (root.kind === NodeType.identifier
+                || root.kind === NodeType.indexedAccess
                 && root.accessElements.every(e => e.accessType === IndexedAccessType.dot || e.accessType === IndexedAccessType.bracket)) {
                 // @todo - if the access type is not homogenous cf will error, at least at the top-most scope
                 // a["b"]["c"] = 0 declares and inits a = {b: {c: 0}};
                 // a["b"].c = 0 is an error ("a" is not defined)
                 
-                const identifier = root.type === NodeType.identifier ? root : Identifier(root, getTriviallyComputableString(root));
+                const identifier = root.kind === NodeType.identifier ? root : Identifier(root, getTriviallyComputableString(root));
                 if (isInSomeContext(ParseContext.for)) {
                     return VariableDeclaration(finalModifier, varModifier, identifier);
                 }
@@ -2019,7 +1955,7 @@ export function Parser() {
                 // `() => ({x:1})` is illegal, but the message could be "Consider an explicit return"
                 // anyway, at least its flagged
                 //
-                switch (stripOuterParens(root).type) {
+                switch (stripOuterParens(root).kind) {
                     case NodeType.arrayLiteral:
                         parseErrorAtRange(root.range, "Parenthesized array literals are illegal. Consider removing the parentheses.");
                         break;
@@ -2037,9 +1973,9 @@ export function Parser() {
                 // ({x:1}).x              invalid
                 // ({x:1})["x"]           invalid
                 //
-                if ((root.type === NodeType.indexedAccess) ||
-                    (root.type === NodeType.unaryOperator && root.expr.type === NodeType.indexedAccess) ||
-                    (root.type === NodeType.callExpression && root.left.type === NodeType.indexedAccess)) {
+                if ((root.kind === NodeType.indexedAccess) ||
+                    (root.kind === NodeType.unaryOperator && root.expr.kind === NodeType.indexedAccess) ||
+                    (root.kind === NodeType.callExpression && root.left.kind === NodeType.indexedAccess)) {
                     parseErrorAtRange(root.range, "Illegal indexed access expression; consider removing the parentheses from the left-most expression.");
                 }
                 return root;
@@ -2156,7 +2092,7 @@ export function Parser() {
      * if it is not already an IndexedAccess node, convert it to one, and then push the access element into it
      */
     function transformingPushAccessElement(root: Node, accessElement: IndexedAccessChainElement) : IndexedAccess {
-        if (root.type !== NodeType.indexedAccess) {
+        if (root.kind !== NodeType.indexedAccess) {
             root = IndexedAccess(root);
         }
         pushAccessElement(root, accessElement);
@@ -2238,7 +2174,7 @@ export function Parser() {
         return root;
 
         function previousElement() : T | IndexedAccessChainElement {
-            if (root.type !== NodeType.indexedAccess) {
+            if (root.kind !== NodeType.indexedAccess) {
                 return root;
             }
             else {
@@ -2248,8 +2184,8 @@ export function Parser() {
         }
 
         function previousElementIsIdentifier() {
-            if (root.type !== NodeType.indexedAccess) {
-                return root.type === NodeType.identifier;
+            if (root.kind !== NodeType.indexedAccess) {
+                return root.kind === NodeType.identifier;
             }
 
             // if root is an IndexedAccess node, it is because there is at least one contained access element
@@ -2277,7 +2213,9 @@ export function Parser() {
             case TokenType.KW_RETURN:
             case TokenType.KW_SWITCH:
             case TokenType.KW_TRY:
+            case TokenType.KW_VAR:
             case TokenType.KW_WHILE:
+            case TokenType.SEMICOLON:
                 return true;
             default:
                 return (isSugaredTagName(peek().text.toLowerCase()))
@@ -2322,7 +2260,7 @@ export function Parser() {
         // like within a struct literals, `=` and `:` share the same meaning
         // we don't know from our current position if all of the args are named,
         // we can check that later; if one is, all of them must be
-        if (exprOrArgName.type === NodeType.identifier) {
+        if (exprOrArgName.kind === NodeType.identifier) {
             let equalOrComma : Terminal | null;
             if (equalOrComma =
                     (parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia) ??
@@ -2424,7 +2362,7 @@ export function Parser() {
         }
 
         let result = parseExpression();
-        switch (result.type) {
+        switch (result.kind) {
             case NodeType.hashWrappedExpr:
             case NodeType.simpleStringLiteral:
             case NodeType.interpolatedStringLiteral:
@@ -2553,7 +2491,7 @@ export function Parser() {
 
         if (stringElements.length === 1) {
             const onlyElement = stringElements[0];
-            if (onlyElement.type === NodeType.textSpan) {
+            if (onlyElement.kind === NodeType.textSpan) {
                 return SimpleStringLiteral(leftQuote, onlyElement, rightQuote);
             }
         }
@@ -2647,10 +2585,10 @@ export function Parser() {
     // use definite! syntax at non-speculative call-
     // the speculative mode is to support disambiguating arrow-function calls, which often look like other valid expressions
     // until we get a full parameter definition parse followed by `) <trivia>? =>`
-    function tryParseFunctionDefinitionParameters(speculative: false) : FunctionParameter[];
-    function tryParseFunctionDefinitionParameters(speculative: true) : FunctionParameter[] | null;
-    function tryParseFunctionDefinitionParameters(speculative: boolean) : FunctionParameter[] | null {
-        const result : FunctionParameter[] = [];
+    function tryParseFunctionDefinitionParameters(speculative: false) : Script.FunctionParameter[];
+    function tryParseFunctionDefinitionParameters(speculative: true) : Script.FunctionParameter[] | null;
+    function tryParseFunctionDefinitionParameters(speculative: boolean) : Script.FunctionParameter[] | null {
+        const result : Script.FunctionParameter[] = [];
         // might have to handle 'required' specially in "isIdentifier"
         // we could set a flag saying we're in a functionParameterList to help out
         while (isStartOfExpression()) {
@@ -2709,7 +2647,7 @@ export function Parser() {
             }
 
             comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
-            result.push(FunctionParameter(requiredTerminal, javaLikeTypename, name, equal, defaultValue, comma));
+            result.push(Script.FunctionParameter(requiredTerminal, javaLikeTypename, name, equal, defaultValue, comma));
         }
 
         if (result.length > 0 && result[result.length-1].comma) {
@@ -2725,7 +2663,7 @@ export function Parser() {
 
         if (SpeculationHelper.lookahead(isIdentifierThenFatArrow)) {
             params = [
-                FunctionParameter(
+                Script.FunctionParameter(
                     null,
                     null,
                     parseIdentifier(),
@@ -2786,7 +2724,7 @@ export function Parser() {
     }
 
     function stripOuterParens(node: Node) {
-        while (node.type === NodeType.parenthetical) {
+        while (node.kind === NodeType.parenthetical) {
             node = node.expr;
         }
         return node;
@@ -2864,7 +2802,7 @@ export function Parser() {
         let functionToken  : Terminal;
         let nameToken      = null;
         let leftParen      : Terminal;
-        let params         : FunctionParameter[];
+        let params         : Script.FunctionParameter[];
         let rightParen     : Terminal;
         let attrs          : TagAttribute[];
         let body           : Block;
@@ -2886,7 +2824,7 @@ export function Parser() {
         attrs      = parseTagAttributes();
         body       = parseBracedBlock(ScannerMode.script);
 
-        return FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body);
+        return Script.FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body);
     }
 
     function tryParseNamedFunctionDefinition(speculative: false) : Node;
@@ -2897,7 +2835,7 @@ export function Parser() {
         let functionToken : Terminal | null;
         let nameToken     : Terminal;
         let leftParen     : Terminal;
-        let params        : FunctionParameter[];
+        let params        : Script.FunctionParameter[];
         let rightParen    : Terminal;
         let attrs         : TagAttribute[];
         let body          : Block;
@@ -2926,7 +2864,7 @@ export function Parser() {
         attrs         = parseTagAttributes();
         body          = parseBracedBlock(ScannerMode.script);
 
-        return FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body);
+        return Script.FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body);
     }
 
     function parseDo() : Do {
@@ -2958,7 +2896,7 @@ export function Parser() {
             : null;
 
         if (peek().text.toLowerCase() === "in") {
-            if (!init || init.type !== NodeType.variableDeclaration) {
+            if (!init || init.kind !== NodeType.variableDeclaration) {
                 init = createMissingNode(Identifier(NilTerminal(pos()), ""));
                 parseErrorAtRange(leftParen.range.fromInclusive+1, leftParen.range.toExclusive+1, "Declaration expected.");
             }
@@ -3035,13 +2973,21 @@ export function Parser() {
                 break;
             }
             else {
-                // parseErrorBasedOnContext(...)
+                parseErrorBasedOnContext(thisContext);
                 next(), parseTrivia();
             }
         }
 
         parseContext = savedContext;
         return result as unknown as R[];
+    }
+
+    function parseErrorBasedOnContext(context: ParseContext) {
+        switch (context) {
+            case ParseContext.cfScriptTagBody:
+            case ParseContext.cfScriptTopLevel:
+                parseErrorAtRange(pos(), pos(), "Declaration or statement expected.");
+        }
     }
 
     function parseBracedBlock(parseBlockInMode: ScannerMode = mode) {
@@ -3174,8 +3120,8 @@ export function Parser() {
                             // we parsed a statement, so any string literal will be wrapped in it
                             // if we got a trivial string value, we are OK
                             // otherwise, emit a diagnostic
-                            if (statement.type === NodeType.statement
-                                && (statement.expr!.type === NodeType.simpleStringLiteral || statement.expr!.type === NodeType.interpolatedStringLiteral)) {
+                            if (statement.kind === NodeType.statement
+                                && (statement.expr!.kind === NodeType.simpleStringLiteral || statement.expr!.kind === NodeType.interpolatedStringLiteral)) {
                                     if (getTriviallyComputableString(statement.expr) !== undefined) {
                                         return ScriptSugaredTagCallStatement(
                                             terminal,

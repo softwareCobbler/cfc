@@ -1,5 +1,5 @@
 import { NodeWithScope, Variable, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, Scope, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName } from "./node";
-import { getTriviallyComputableString, BiMap, getAttributeValue, visit } from "./utils";
+import { getTriviallyComputableString, BiMap, visit } from "./utils";
 import { Diagnostic } from "./parser";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 
@@ -122,7 +122,7 @@ export function Binder() {
         bindDirectTerminals(node);
         node.parent = parent;
 
-        switch (node.type) {
+        switch (node.kind) {
             case NodeType.sourceFile:
                 throw "Bind source files by binding its content";
             case NodeType.comment:  // fallthrough
@@ -254,7 +254,7 @@ export function Binder() {
 
     function bindDirectTerminals(node: Node) {
         visit(node, function(visitedNode: Node | null | undefined) {
-            if (visitedNode?.type === NodeType.terminal) {
+            if (visitedNode?.kind === NodeType.terminal) {
                 nodeMap.set(visitedNode.nodeId, visitedNode);
                 visitedNode.parent = node;
                 bindList(visitedNode.trivia, visitedNode);
@@ -339,8 +339,8 @@ export function Binder() {
     // that is, VariableDeclarations just wrap assignment nodes (which are themselves just binary operators with '=' as the operator)
     function bindDeclaration(node: VariableDeclaration) {
         let identifierBaseName : string | undefined = undefined;
-        if (node.expr.type === NodeType.binaryOperator && node.expr.optype === BinaryOpType.assign) {
-            if (node.expr.left.type === NodeType.indexedAccess) {
+        if (node.expr.kind === NodeType.binaryOperator && node.expr.optype === BinaryOpType.assign) {
+            if (node.expr.left.kind === NodeType.indexedAccess) {
                 identifierBaseName = getTriviallyComputableString(node.expr.left.root)?.toLowerCase();
             }
             else {
@@ -360,7 +360,7 @@ export function Binder() {
 
             // if we got `url.foo`, put `foo` into the `url` scope
             // only descend the one child level, `url.foo.bar` still only puts `foo` into `url`
-            if ((<BinaryOperator>node.expr).left.type === NodeType.indexedAccess) {
+            if ((<BinaryOperator>node.expr).left.kind === NodeType.indexedAccess) {
                 const indexedAccess = (<BinaryOperator>node.expr).left as IndexedAccess;
                 const element = indexedAccess.accessElements[0];
 
@@ -532,13 +532,13 @@ export function Binder() {
     }
 
     function bindFunctionParameter(node: FunctionParameter) {
-        if (node.tagOrigin.startTag) {
+        if (node.fromTag) {
             bindNode(node.tagOrigin.startTag, node);
-            const nameAttr = getAttributeValue((<CfTag.Common>node.tagOrigin.startTag).attrs, "name");
-            if (nameAttr) {
-                const name = getTriviallyComputableString(nameAttr)?.toLowerCase();
-                if (name) weakBindIdentifierToScope(name, currentContainer.containedScope.arguments!);
+
+            if (node.canonicalName !== undefined) {
+                weakBindIdentifierToScope(node.canonicalName, currentContainer.containedScope.arguments!);
             }
+
             return;
         }
 
@@ -550,7 +550,7 @@ export function Binder() {
 
     function getEnclosingFunction(node: Node | null) : NodeWithScope<FunctionDefinition | ArrowFunctionDefinition, "arguments"> | undefined {
         while (node) {
-            if (node.type === NodeType.functionDefinition || node.type === NodeType.arrowFunctionDefinition) {
+            if (node.kind === NodeType.functionDefinition || node.kind === NodeType.arrowFunctionDefinition) {
                 return node as NodeWithScope<FunctionDefinition | ArrowFunctionDefinition, "arguments">;
             }
             node = node.parent;
@@ -560,7 +560,7 @@ export function Binder() {
 
     function getAncestorOfType(node: Node | null, nodeType: NodeType) : Node | undefined {
         while (node) {
-            if (node.type === nodeType) {
+            if (node.kind === nodeType) {
                 return node;
             }
             node = node.parent;
@@ -602,7 +602,7 @@ export function Binder() {
 
     function bindAssignment(node: BinaryOperator) {
         const target = node.left;
-        if (target.type === NodeType.indexedAccess) {
+        if (target.kind === NodeType.indexedAccess) {
             const targetBaseName = getTriviallyComputableString(target.root)?.toLowerCase();
 
             if (!targetBaseName) {
@@ -677,7 +677,7 @@ export function Binder() {
 
         bindList(node.params, node);
 
-        if (node.type === NodeType.functionDefinition) {
+        if (node.kind === NodeType.functionDefinition) {
             // this is a non-arrow function definition
             // tag functions and named script functions like `function foo() {}` are hoisted
             if (node.canonicalName) {
@@ -696,7 +696,13 @@ export function Binder() {
             }
         }
 
-        bindNode(node.body, node);
+        if (node.kind === NodeType.functionDefinition && node.fromTag) {
+            bindList(node.body, node);
+        }
+        else {
+            bindNode(node.body, node);
+        }
+
         currentContainer = node.containedScope.container! as NodeWithScope;
     }
 

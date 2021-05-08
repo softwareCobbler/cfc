@@ -1,4 +1,5 @@
 import { SourceRange, TokenType, Token, NilToken, TokenTypeUiString, CfFileType } from "./scanner";
+import { getAttributeValue, getTriviallyComputableString } from "./utils";
 
 let debug = false;
 let nextNodeId : NodeId = 0;
@@ -188,7 +189,7 @@ export function isStaticallyKnownScopeName(name: string) : name is StaticallyKno
 
 export type NodeId = number;
 interface NodeBase {
-    type: NodeType,
+    kind: NodeType,
     nodeId: NodeId,
     parent: Node | null,
     range: SourceRange,
@@ -209,10 +210,10 @@ export type NodeWithScope<
     T extends Node = Node,
     U extends keyof ScopeDisplay | never = never> = T & {containedScope: Pick<{[k in keyof ScopeDisplay]-?: ScopeDisplay[k]}, U | "container">};
 
-export function NodeBase<T extends NodeBase>(type: T["type"], range: SourceRange = SourceRange.Nil()) : T {
+export function NodeBase<T extends NodeBase>(type: T["kind"], range: SourceRange = SourceRange.Nil()) : T {
     const result : Partial<T> = {};
     result.nodeId = nextNodeId++;
-    result.type = type;
+    result.kind = type;
     result.parent = null;
     result.range = range ?? null;
     result.tagOrigin = {
@@ -264,7 +265,7 @@ export function mergeRanges(...nodes : (SourceRange | Node | Node[] | undefined 
 }
 
 export interface SourceFile extends NodeBase {
-    type: NodeType.sourceFile,
+    kind: NodeType.sourceFile,
     absPath: string,
     cfFileType: CfFileType,
     source: string | Buffer,
@@ -284,7 +285,7 @@ export const NilCfm = (text: string) => SourceFile("nil!", CfFileType.cfm, text)
 export const NilCfc = (text: string) => SourceFile("nil!", CfFileType.cfc, text);
 
 export interface Terminal extends NodeBase {
-    type: NodeType.terminal;
+    kind: NodeType.terminal;
     rangeWithTrivia: SourceRange;
     token: Token;
     trivia: Node[];
@@ -308,7 +309,7 @@ export const NilTerminal = (pos: number) => Terminal(NilToken(pos));
 
 export const enum CommentType { tag, scriptSingleLine, scriptMultiLine };
 export interface Comment extends NodeBase {
-    type: NodeType.comment;
+    kind: NodeType.comment;
     commentType: CommentType;
 }
 
@@ -319,7 +320,7 @@ export function Comment(commentType: CommentType, range: SourceRange) {
 }
 
 export interface TextSpan extends NodeBase {
-    type: NodeType.textSpan;
+    kind: NodeType.textSpan;
     text: string;
 }
 export function TextSpan(sourceRange: SourceRange, text: string) : TextSpan {
@@ -329,7 +330,7 @@ export function TextSpan(sourceRange: SourceRange, text: string) : TextSpan {
 }
 
 export interface HashWrappedExpr extends NodeBase {
-    type: NodeType.hashWrappedExpr;
+    kind: NodeType.hashWrappedExpr;
     leftHash: Terminal;
     expr: Node;
     rightHash: Terminal;
@@ -343,7 +344,7 @@ export function HashWrappedExpr(leftHash: Terminal, expr: Node, rightHash: Termi
 }
 
 export interface Parenthetical extends NodeBase {
-    type: NodeType.parenthetical;
+    kind: NodeType.parenthetical;
     leftParen: Terminal;
     expr: Node;
     rightParen: Terminal;
@@ -357,7 +358,7 @@ export function Parenthetical(leftParen: Terminal, expr: Node, rightParen: Termi
 }
 
 export interface TagAttribute extends NodeBase {
-    type: NodeType.tagAttribute;
+    kind: NodeType.tagAttribute;
     name: Terminal;
     equals: Terminal | null;
     expr: Node | null;
@@ -396,7 +397,7 @@ export namespace CfTag {
     // end tags are expected to be "common" tags; they should not have attributes or etc.
     //
     export interface TagBase extends NodeBase {
-        type: NodeType.tag;
+        kind: NodeType.tag;
         which: Which;
         tagType: TagType;
         tagStart: Terminal;         // <cf | </cf
@@ -503,7 +504,7 @@ export namespace CfTag {
 }
 
 export interface CallExpression extends NodeBase {
-    type: NodeType.callExpression;
+    kind: NodeType.callExpression;
     left: Node;
     leftParen: Terminal;
     args: CallArgument[];
@@ -520,7 +521,7 @@ export function CallExpression(left: Node, leftParen: Terminal, args: CallArgume
 }
 
 export interface CallArgument extends NodeBase {
-    type: NodeType.callArgument;
+    kind: NodeType.callArgument;
     name: Identifier | null;
     equals: Terminal | null;
     expr: Node;
@@ -539,7 +540,7 @@ export function CallArgument(name: Identifier | null, equals: Terminal | null, e
 export const enum UnaryOperatorPos { pre, post };
 export const enum UnaryOpType { inc, dec, pos, neg, not };
 export interface UnaryOperator extends NodeBase {
-    type: NodeType.unaryOperator;
+    kind: NodeType.unaryOperator;
     pos: UnaryOperatorPos;
     optype: UnaryOpType;
     operator: Terminal;
@@ -550,7 +551,7 @@ export function UnaryOperator(expr: Node, op: Terminal) : UnaryOperator;
 export function UnaryOperator(op: Terminal, expr: Node) : UnaryOperator;
 export function UnaryOperator(lexicallyFirst: Node, lexicallyAfter: Node) {
     const v = NodeBase<UnaryOperator>(NodeType.unaryOperator, mergeRanges(lexicallyFirst, lexicallyAfter));
-    if (lexicallyFirst.type === NodeType.terminal) {
+    if (lexicallyFirst.kind === NodeType.terminal) {
         v.pos = UnaryOperatorPos.pre;
         v.optype = tokenTypeToUnaryOpType(lexicallyFirst.token.type);
         v.operator = lexicallyFirst;
@@ -620,7 +621,7 @@ const BinaryOpTypeUiString : Record<BinaryOpType, string> = {
 };
 
 export interface BinaryOperator extends NodeBase {
-    type: NodeType.binaryOperator;
+    kind: NodeType.binaryOperator;
     optype: BinaryOpType;
     left: Node;
     operator: Terminal;
@@ -702,7 +703,7 @@ export function tokenTypeToBinaryOpType(tokenType: TokenType) : BinaryOpType {
 
 export const enum ConditionalSubtype { if, elseif, else };
 export interface Conditional extends NodeBase {
-    type: NodeType.conditional;
+    kind: NodeType.conditional;
     elseToken   : Terminal | null;
     ifToken     : Terminal | null;
     leftParen   : Terminal | null;
@@ -772,7 +773,7 @@ export namespace FromTag {
 }
 
 export interface VariableDeclaration extends NodeBase {
-    type: NodeType.variableDeclaration,
+    kind: NodeType.variableDeclaration,
     finalModifier: Terminal | null,
     varModifier: Terminal | null,
     expr: Node,
@@ -803,7 +804,7 @@ const StatementTypeUiString : Record<StatementType, string> = {
     [StatementType.scriptTagCallStatement]: "scriptTagCallStatement"
 }
 export interface Statement extends NodeBase {
-    type: NodeType.statement,
+    kind: NodeType.statement,
     subType: StatementType,
     expr: Node | null,              // null if from tag (originating node will be in tagOrigin.startTag)
     scriptSugaredTagStatement: {    // sugaredScriptTagCalls with no body become statements, and may have attributes; like `transaction action=rollback;`
@@ -896,8 +897,8 @@ export namespace FromTag {
     }
 }
 
-export interface ReturnStatement extends Omit<Statement, "type"> {
-    type: NodeType.returnStatement;
+export interface ReturnStatement extends Omit<Statement, "kind"> {
+    kind: NodeType.returnStatement;
     returnToken: Terminal | null; // null if from tag
 }
 export function ReturnStatement(returnToken: Terminal, expr: Node | null, semicolon: Terminal | null) : ReturnStatement {
@@ -919,7 +920,7 @@ export namespace FromTag {
 }
 
 export interface BreakStatement extends NodeBase {
-    type: NodeType.breakStatement,
+    kind: NodeType.breakStatement,
     breakToken: Terminal | null,
     semicolon: Terminal | null
 }
@@ -943,7 +944,7 @@ export namespace FromTag {
 }
 
 export interface ContinueStatement extends NodeBase {
-    type: NodeType.continueStatement,
+    kind: NodeType.continueStatement,
     continueToken: Terminal | null,
     semicolon: Terminal | null
 }
@@ -978,7 +979,7 @@ export const enum BlockType {
     cLike                               // a typical c-like block, just `{ ... }`
 }
 export interface Block extends NodeBase {
-    type: NodeType.block,
+    kind: NodeType.block,
     subType: BlockType,
     name: Terminal | null,
     sugaredCallStatementAttrs: TagAttribute[] | null,
@@ -1070,7 +1071,7 @@ export namespace FromTag {
 }
 
 export interface SimpleStringLiteral extends NodeBase {
-    type: NodeType.simpleStringLiteral;
+    kind: NodeType.simpleStringLiteral;
     leftQuote : Terminal;
     textSpan : TextSpan;
     rightQuote: Terminal;
@@ -1088,7 +1089,7 @@ export function SimpleStringLiteral(
 }
 
 export interface InterpolatedStringLiteral extends NodeBase {
-    type: NodeType.interpolatedStringLiteral;
+    kind: NodeType.interpolatedStringLiteral;
     delimiter: TokenType.QUOTE_DOUBLE | TokenType.QUOTE_SINGLE;
     leftQuote: Terminal;
     elements: (TextSpan | HashWrappedExpr)[];
@@ -1110,7 +1111,7 @@ export function InterpolatedStringLiteral(
 }
 
 export interface NumericLiteral extends NodeBase {
-    type: NodeType.numericLiteral;
+    kind: NodeType.numericLiteral;
     literal: Terminal;
 }
 
@@ -1121,7 +1122,7 @@ export function NumericLiteral(literal: Terminal) : NumericLiteral {
 }
 
 export interface BooleanLiteral extends NodeBase {
-    type: NodeType.booleanLiteral;
+    kind: NodeType.booleanLiteral;
     literal: Terminal;
 }
 
@@ -1132,7 +1133,7 @@ export function BooleanLiteral(literal: Terminal) {
 }
 
 export interface Identifier extends NodeBase {
-    type: NodeType.identifier;
+    kind: NodeType.identifier;
     source: Node; // can be e.g, `var x = 42`, `var 'x' = 42`, `var #x# = 42`; <cfargument name="#'interpolated_string_but_constant'#">`
     canonicalName: string | undefined;
 }
@@ -1147,7 +1148,7 @@ export function Identifier(identifier: Node, name: string | undefined) {
 export const enum IndexedAccessType { dot, bracket, optionalDot, optionalBracket, optionalCall };
 
 export interface DotAccess extends NodeBase {
-    type: NodeType.indexedAccessChainElement,
+    kind: NodeType.indexedAccessChainElement,
     accessType: IndexedAccessType.dot,
     dot: Terminal,
     property: Terminal,
@@ -1155,7 +1156,7 @@ export interface DotAccess extends NodeBase {
 }
 
 export interface BracketAccess extends NodeBase {
-    type: NodeType.indexedAccessChainElement,
+    kind: NodeType.indexedAccessChainElement,
     accessType: IndexedAccessType.bracket,
     leftBracket: Terminal,
     expr: Node,
@@ -1166,7 +1167,7 @@ export interface BracketAccess extends NodeBase {
 // note that for the optional accesses, like with the null coalescing operator `?:`
 // it is not one token, but two separate tokens, possibly with comments between them
 export interface OptionalDotAccess extends NodeBase {
-    type: NodeType.indexedAccessChainElement,
+    kind: NodeType.indexedAccessChainElement,
     accessType: IndexedAccessType.optionalDot,
     questionMark: Terminal,
     dot: Terminal,
@@ -1175,7 +1176,7 @@ export interface OptionalDotAccess extends NodeBase {
 }
 
 export interface OptionalBracketAccess extends NodeBase {
-    type: NodeType.indexedAccessChainElement,
+    kind: NodeType.indexedAccessChainElement,
     accessType: IndexedAccessType.optionalBracket,
     questionMark: Terminal,
     dot: Terminal,
@@ -1186,7 +1187,7 @@ export interface OptionalBracketAccess extends NodeBase {
 }
 
 export interface OptionalCall extends NodeBase {
-    type: NodeType.indexedAccessChainElement,
+    kind: NodeType.indexedAccessChainElement,
     accessType: IndexedAccessType.optionalCall,
     questionMark: Terminal,
     dot: Terminal,
@@ -1253,7 +1254,7 @@ export function OptionalCall(questionMark: Terminal, dot: Terminal) : OptionalCa
 }
 
 export interface IndexedAccess extends NodeBase {
-    type: NodeType.indexedAccess,
+    kind: NodeType.indexedAccess,
     root: Node,
     accessElements: IndexedAccessChainElement[],
 }
@@ -1272,113 +1273,137 @@ export function pushAccessElement(base: IndexedAccess, element: IndexedAccessCha
     base.range.toExclusive = element.range.toExclusive;
 }
 
-export interface FunctionParameter extends NodeBase {
-    type: NodeType.functionParameter;
-    requiredTerminal: Terminal | null;
-    javaLikeTypename: DottedPath<Terminal> | null;
-    identifier: Identifier;
-    equals: Terminal | null;
-    defaultValue: Node | null;
-    comma: Terminal | null;
-    canonicalName: string | undefined;
-    required: boolean;
+interface FunctionParameterBase extends NodeBase {
+    kind: NodeType.functionParameter,
+    fromTag: boolean,
 }
 
-export function FunctionParameter(
-    requiredTerminal : Terminal | null,
-    javaLikeTypename: DottedPath<Terminal> | null,
-    identifier: Identifier,
-    equals: Terminal | null,
-    defaultValue: Node | null,
-    comma: Terminal | null) : FunctionParameter {
-    const v = NodeBase<FunctionParameter>(NodeType.functionParameter, mergeRanges(requiredTerminal, javaLikeTypename, identifier, defaultValue, comma));
-    v.requiredTerminal = requiredTerminal;
-    v.javaLikeTypename = javaLikeTypename;
-    v.identifier = identifier;
-    v.equals = equals;
-    v.defaultValue = defaultValue;
-    v.comma = comma;
-    v.canonicalName = identifier.canonicalName;
-    v.required = !!requiredTerminal;
-    return v;
-}
+export type FunctionParameter = Script.FunctionParameter | Tag.FunctionParameter;
 
-export namespace FromTag {
-    export function FunctionParameter(tag: CfTag.Common, identifier: Identifier, required: boolean, defaultValue: Node | null) : FunctionParameter {
-        const v = NodeBase<FunctionParameter>(NodeType.functionParameter, tag.range);
-        v.tagOrigin.startTag = tag;
-        v.requiredTerminal = null;
-        v.javaLikeTypename = null;
+export namespace Script {
+    export interface FunctionParameter extends FunctionParameterBase {
+        kind: NodeType.functionParameter,
+        fromTag: false,
+        requiredTerminal: Terminal | null,
+        javaLikeTypename: DottedPath<Terminal> | null,
+        identifier: Identifier,
+        equals: Terminal | null,
+        defaultValue: Node | null,
+        comma: Terminal | null,
+        canonicalName: string | undefined,
+        required: boolean,
+    }
+
+    export function FunctionParameter(
+        requiredTerminal : Terminal | null,
+        javaLikeTypename: DottedPath<Terminal> | null,
+        identifier: Identifier,
+        equals: Terminal | null,
+        defaultValue: Node | null,
+        comma: Terminal | null) : FunctionParameter {
+        const v = NodeBase<FunctionParameter>(NodeType.functionParameter, mergeRanges(requiredTerminal, javaLikeTypename, identifier, defaultValue, comma));
+        v.fromTag = false;
+        v.requiredTerminal = requiredTerminal;
+        v.javaLikeTypename = javaLikeTypename;
         v.identifier = identifier;
-        v.equals = null;
+        v.equals = equals;
         v.defaultValue = defaultValue;
-        v.comma = null;
+        v.comma = comma;
         v.canonicalName = identifier.canonicalName;
-        v.required = required;
+        v.required = !!requiredTerminal;
         return v;
     }
 }
 
-export interface FunctionDefinition extends NodeBase {
-    type: NodeType.functionDefinition;
-    accessModifier: Terminal | null;
-    returnType    : DottedPath<Terminal> | null;
-    functionToken : Terminal | null;
-    nameToken     : Terminal | null;
-    leftParen     : Terminal | null;
-    params        : FunctionParameter[];
-    rightParen    : Terminal | null;
-    attrs         : TagAttribute[];
-    body          : Block;
-    canonicalName : string | null;
+export namespace Tag {
+    export interface FunctionParameter extends FunctionParameterBase {
+        kind: NodeType.functionParameter,
+        fromTag: true,
+        canonicalName: string | undefined,
+    }
+
+    export function FunctionParameter(tag: CfTag.Common) : FunctionParameter {
+        const v = NodeBase<FunctionParameter>(NodeType.functionParameter, tag.range);
+        v.fromTag = true;
+        v.tagOrigin.startTag = tag;
+        v.canonicalName = getTriviallyComputableString(getAttributeValue(tag.attrs, "name"))?.toLowerCase() ?? undefined
+        return v;
+    }
 }
 
-export function FunctionDefinition(
-    accessModifier: Terminal | null,
-    returnType    : DottedPath<Terminal> | null,
-    functionToken : Terminal,
-    nameToken     : Terminal | null,
-    leftParen     : Terminal,
-    params        : FunctionParameter[],
-    rightParen    : Terminal,
-    attrs         : TagAttribute[],
-    body          : Block
-) : FunctionDefinition {
-    const v = NodeBase<FunctionDefinition>(NodeType.functionDefinition, mergeRanges(accessModifier, returnType, functionToken, body));
-    v.accessModifier = accessModifier;
-    v.returnType     = returnType;
-    v.functionToken  = functionToken;
-    v.nameToken      = nameToken;
-    v.leftParen      = leftParen;
-    v.params         = params;
-    v.rightParen     = rightParen;
-    v.attrs          = attrs;
-    v.body           = body;
-    v.canonicalName  = nameToken?.token.text.toLowerCase() ?? null;
-    return v;
+interface FunctionDefinitionBase extends NodeBase {
+    kind: NodeType.functionDefinition,
+    fromTag: boolean,
 }
 
-export namespace FromTag {
-    export function FunctionDefinition(startTag: CfTag.Common, params: FunctionParameter[], body: Block, endTag: CfTag.Common, name: string) : FunctionDefinition {
+export type FunctionDefinition = Script.FunctionDefinition | Tag.FunctionDefinition;
+
+export namespace Script {
+    export interface FunctionDefinition extends FunctionDefinitionBase {
+        kind: NodeType.functionDefinition;
+        fromTag        : false,
+        accessModifier : Terminal | null,
+        returnType     : DottedPath<Terminal> | null,
+        functionToken  : Terminal,
+        nameToken      : Terminal | null,
+        leftParen      : Terminal,
+        params         : FunctionParameter[],
+        rightParen     : Terminal,
+        attrs          : TagAttribute[],
+        body           : Block,
+        canonicalName  : string | null,
+    }
+
+    export function FunctionDefinition(
+        accessModifier: Terminal | null,
+        returnType    : DottedPath<Terminal> | null,
+        functionToken : Terminal,
+        nameToken     : Terminal | null,
+        leftParen     : Terminal,
+        params        : FunctionParameter[],
+        rightParen    : Terminal,
+        attrs         : TagAttribute[],
+        body          : Block
+    ) : FunctionDefinition {
+        const v = NodeBase<FunctionDefinition>(NodeType.functionDefinition, mergeRanges(accessModifier, returnType, functionToken, body));
+        v.fromTag        = false;
+        v.accessModifier = accessModifier;
+        v.returnType     = returnType;
+        v.functionToken  = functionToken;
+        v.nameToken      = nameToken;
+        v.leftParen      = leftParen;
+        v.params         = params;
+        v.rightParen     = rightParen;
+        v.attrs          = attrs;
+        v.body           = body;
+        v.canonicalName  = nameToken?.token.text.toLowerCase() ?? null;
+        return v;
+    }
+}
+
+export namespace Tag {
+    export interface FunctionDefinition extends FunctionDefinitionBase {
+        kind: NodeType.functionDefinition;
+        fromTag        : true,
+        params         : FunctionParameter[],
+        body           : Node[],
+        canonicalName  : string | undefined,
+    }
+
+    export function FunctionDefinition(startTag: CfTag.Common, params: FunctionParameter[], body: Node[], endTag: CfTag.Common) : FunctionDefinition {
         const v = NodeBase<FunctionDefinition>(NodeType.functionDefinition, mergeRanges(startTag, endTag));
+        v.fromTag            = true;
         v.tagOrigin.startTag = startTag;
         v.tagOrigin.endTag   = endTag;
-        v.accessModifier     = null;
-        v.returnType         = null;
-        v.functionToken      = null;
-        v.nameToken          = null;
-        v.leftParen          = null;
         v.params             = params;
-        v.rightParen         = null;
-        v.attrs              = startTag.attrs;
         v.body               = body;
-        v.canonicalName      = name;
+        v.canonicalName      = getTriviallyComputableString(getAttributeValue(startTag.attrs, "name"))?.toLowerCase();
         return v;
     }
 }
 
 export interface ArrowFunctionDefinition extends NodeBase {
-    type: NodeType.arrowFunctionDefinition;
+    kind: NodeType.arrowFunctionDefinition;
     parens: {left: Terminal, right: Terminal} | null,
     params: FunctionParameter[];
     fatArrow: Terminal,
@@ -1397,7 +1422,7 @@ export function ArrowFunctionDefinition(leftParen: Terminal | null, params: Func
 
 // @fixme clean this up
 export interface DottedPath<T extends NodeBase> extends NodeBase {
-    type: NodeType.dottedPath;
+    kind: NodeType.dottedPath;
     headKey: T;
     rest: {dot: Terminal, key: T}[]
 }
@@ -1409,7 +1434,7 @@ export function DottedPath<T extends NodeBase>(headKey: T) : DottedPath<T> {
 }
 
 interface SwitchBase extends NodeBase {
-    type: NodeType.switch;
+    kind: NodeType.switch;
     fromTag: boolean,
     cases: SwitchCaseBase[],
 }
@@ -1418,7 +1443,7 @@ export type Switch = Script.Switch | Tag.Switch;
 
 export namespace Script {
     export interface Switch extends SwitchBase {
-        type: NodeType.switch;
+        kind: NodeType.switch;
         fromTag: false,
         switchToken: Terminal;
         leftParen: Terminal;
@@ -1452,7 +1477,7 @@ export namespace Script {
 
 export namespace Tag {
     export interface Switch extends SwitchBase {
-        type: NodeType.switch,
+        kind: NodeType.switch,
         fromTag: true,
         cases: Tag.SwitchCase[],
     }
@@ -1467,7 +1492,7 @@ export namespace Tag {
 }
 
 interface SwitchCaseBase extends NodeBase {
-    type: NodeType.switchCase;
+    kind: NodeType.switchCase;
     fromTag: boolean,
     caseType: SwitchCaseType;
     body: Node[];
@@ -1479,7 +1504,7 @@ export const enum SwitchCaseType { case, default };
 
 export namespace Script {
     export interface SwitchCase extends SwitchCaseBase {
-        type: NodeType.switchCase,
+        kind: NodeType.switchCase,
         fromTag: false,
         caseType: SwitchCaseType,
         caseOrDefaultToken: Terminal,
@@ -1512,7 +1537,7 @@ export namespace Script {
 
 export namespace Tag {
     export interface SwitchCase extends SwitchCaseBase {
-        type: NodeType.switchCase,
+        kind: NodeType.switchCase,
         fromTag: true,
         caseType: SwitchCaseType,
         body: Node[],
@@ -1521,6 +1546,8 @@ export namespace Tag {
     export function SwitchCase(startTag: CfTag.Common, body: Node[], endTag: CfTag.Common) : SwitchCase {
         const v = NodeBase<SwitchCase>(NodeType.switchCase, mergeRanges(startTag, endTag));
         v.fromTag = true;
+        v.tagOrigin.startTag = startTag;
+        v.tagOrigin.endTag = endTag;
         v.caseType = SwitchCaseType.case
         v.body = body;
         return v;
@@ -1528,6 +1555,8 @@ export namespace Tag {
     export function SwitchDefault(startTag: CfTag.Common, body: Node[], endTag: CfTag.Common) : SwitchCase {
         const v = NodeBase<SwitchCase>(NodeType.switchCase, mergeRanges(startTag, endTag));
         v.fromTag = true;
+        v.tagOrigin.startTag = startTag;
+        v.tagOrigin.endTag = endTag;
         v.caseType = SwitchCaseType.default;
         v.body = body;
         return v;
@@ -1535,7 +1564,7 @@ export namespace Tag {
 }
 
 export interface Do extends NodeBase {
-    type: NodeType.do;
+    kind: NodeType.do;
     doToken: Terminal;
     body: Node;
     whileToken: Terminal;
@@ -1564,7 +1593,7 @@ export function Do(
 }
 
 export interface While extends NodeBase {
-    type: NodeType.while;
+    kind: NodeType.while;
     whileToken: Terminal;
     leftParen: Terminal;
     expr: Node;
@@ -1589,7 +1618,7 @@ export function While(
 }
 
 export interface Ternary extends NodeBase {
-    type: NodeType.ternary;
+    kind: NodeType.ternary;
     expr: Node;
     questionMark: Terminal;
     ifTrue: Node;
@@ -1614,7 +1643,7 @@ export function Ternary(
 
 export const enum ForSubType { for, forIn}
 export interface For extends NodeBase {
-    type: NodeType.for;
+    kind: NodeType.for;
     subType: ForSubType;
     forToken: Terminal;
     leftParen: Terminal;
@@ -1684,7 +1713,7 @@ export namespace For {
 }
 
 export interface StructLiteral extends NodeBase {
-    type: NodeType.structLiteral,
+    kind: NodeType.structLiteral,
     ordered: boolean,
     leftDelimiter: Terminal,
     members: StructLiteralInitializerMember[],
@@ -1733,7 +1762,7 @@ export function EmptyOrderedStructLiteral(
 }
 
 export interface StructLiteralInitializerMember extends NodeBase {
-    type: NodeType.structLiteralInitializerMember;
+    kind: NodeType.structLiteralInitializerMember;
     key: Node,
     colon: Terminal,
     expr: Node,
@@ -1754,7 +1783,7 @@ export function StructLiteralInitializerMember(
 }
 
 export interface ArrayLiteral extends NodeBase {
-    type: NodeType.arrayLiteral,
+    kind: NodeType.arrayLiteral,
     leftBracket: Terminal;
     members: ArrayLiteralInitializerMember[];
     rightBracket: Terminal;
@@ -1773,7 +1802,7 @@ export function ArrayLiteral(
 }
 
 export interface ArrayLiteralInitializerMember extends NodeBase {
-    type: NodeType.arrayLiteralInitializerMember,
+    kind: NodeType.arrayLiteralInitializerMember,
     expr: Node,
     comma: Terminal | null
 }
@@ -1789,7 +1818,7 @@ export function ArrayLiteralInitializerMember(
 }
 
 interface TryBase extends NodeBase {
-    type: NodeType.try,
+    kind: NodeType.try,
     fromTag: boolean,
     body: Node[],
     catchBlocks: Catch[],
@@ -1800,7 +1829,7 @@ export type Try = Script.Try | Tag.Try;
 
 export namespace Script {
     export interface Try extends TryBase {
-        type: NodeType.try,
+        kind: NodeType.try,
         fromTag: false,
         tryToken: Terminal,
         leftBrace: Terminal,
@@ -1831,7 +1860,7 @@ export namespace Script {
 
 export namespace Tag {
     export interface Try extends TryBase {
-        type: NodeType.try,
+        kind: NodeType.try,
         fromTag: true,
         body: Node[],
         catchBlocks: Tag.Catch[],
@@ -1850,7 +1879,7 @@ export namespace Tag {
 }
 
 interface CatchBase extends NodeBase {
-    type: NodeType.catch,
+    kind: NodeType.catch,
     fromTag: boolean,
     body: Node[],
 }
@@ -1859,7 +1888,7 @@ export type Catch = Script.Catch | Tag.Catch;
 
 export namespace Script {
     export interface Catch extends CatchBase {
-        type: NodeType.catch
+        kind: NodeType.catch
         fromTag: false,
         catchToken: Terminal,
         leftParen: Terminal,
@@ -1897,7 +1926,7 @@ export namespace Script {
 
 export namespace Tag {
     export interface Catch extends CatchBase {
-        type: NodeType.catch
+        kind: NodeType.catch
         fromTag: true,
         body: Node[],
     }
@@ -1924,7 +1953,7 @@ export namespace Tag {
 }
 
 interface FinallyBase extends NodeBase {
-    type: NodeType.finally,
+    kind: NodeType.finally,
     fromTag: boolean,
     body: Node[],
 }
@@ -1933,7 +1962,7 @@ export type Finally = Script.Finally | Tag.Finally;
 
 export namespace Script {
     export interface Finally extends FinallyBase {
-        type: NodeType.finally,
+        kind: NodeType.finally,
         fromTag: false,
         finallyToken: Terminal,
         leftBrace: Terminal,
@@ -1958,7 +1987,7 @@ export namespace Script {
 
 export namespace Tag {
     export interface Finally extends FinallyBase {
-        type: NodeType.finally,
+        kind: NodeType.finally,
         fromTag: true,
         body: Node[],
     }
@@ -1973,7 +2002,7 @@ export namespace Tag {
 }
 
 export interface ImportStatement extends NodeBase {
-    type: NodeType.importStatement,
+    kind: NodeType.importStatement,
     importToken: Terminal,
     path: DottedPath<Terminal>,
     semicolon: Terminal | null,
@@ -1992,7 +2021,7 @@ export function ImportStatement(
 }
 
 export interface New extends NodeBase {
-    type: NodeType.new,
+    kind: NodeType.new,
     newToken: Terminal,
     callExpr: CallExpression
 }

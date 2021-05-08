@@ -132,9 +132,9 @@ describe("general smoke test for particular constructs", () => {
         const nodeMap = binder.getNodeMap();
 
         const node = findNodeInFlatSourceMap(flatSourceMap, nodeMap, completionsTestCase.index);
-        assert.strictEqual(node?.type, NodeType.terminal, "found node is a terminal");
-        assert.strictEqual(node?.parent?.type, NodeType.indexedAccessChainElement, "found node parent is an indexedAccessChainElement");
-        assert.strictEqual(node?.parent?.parent?.type, NodeType.indexedAccess, "found node parent.parent is an indexed access");
+        assert.strictEqual(node?.kind, NodeType.terminal, "found node is a terminal");
+        assert.strictEqual(node?.parent?.kind, NodeType.indexedAccessChainElement, "found node parent is an indexedAccessChainElement");
+        assert.strictEqual(node?.parent?.parent?.kind, NodeType.indexedAccess, "found node parent.parent is an indexed access");
         assert.strictEqual(getTriviallyComputableString((<IndexedAccess>node?.parent?.parent).root), "arguments", "indexed access root is arguments scope");
     })
 });

@@ -286,8 +286,8 @@ connection.onCompletion(
 		if (!node) return [];
 
 		// if we got an indexed access chain, we only want to provide completions for the first dot
-		if (node.type === NodeType.terminal && node.token.text === "." && node.parent?.type === NodeType.indexedAccessChainElement) {
-			if (node.parent?.parent?.type === NodeType.indexedAccess) {
+		if (node.kind === NodeType.terminal && node.token.text === "." && node.parent?.kind === NodeType.indexedAccessChainElement) {
+			if (node.parent?.parent?.kind === NodeType.indexedAccess) {
 				// if so, try to get the identifier used as the root of the chain
 				// if that name is a known scope, try to find the names in that scope
 				const scopeName = getTriviallyComputableString(node.parent.parent.root)?.toLowerCase();
@@ -308,7 +308,7 @@ connection.onCompletion(
 		}
 		
 		const nearestConstruct = getNearestConstruct(node);
-		if (nearestConstruct?.type === NodeType.functionParameter || nearestConstruct?.type === NodeType.comment) {
+		if (nearestConstruct?.kind === NodeType.functionParameter || nearestConstruct?.kind === NodeType.comment) {
 			// don't offer completions in function parameter lists `f(a, b, c|)`
 			return [];
 		}
@@ -346,7 +346,7 @@ connection.onCompletion(
 		// 
 		function getNearestConstruct(node: cfNode | null) : cfNode | null {
 			while (node) {
-				switch (node.type) {
+				switch (node.kind) {
 					case NodeType.textSpan:
 					case NodeType.terminal:
 					case NodeType.identifier:
