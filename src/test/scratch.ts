@@ -16,9 +16,7 @@ function fromFile(fname: string) {
 
 //const sourceFile = fromFile("./test/mxunit/PluginDemoTests/InvalidMarkupTest.cfc");
 
-const sourceFile = NilCfc(`<cfcomponent>
-    
-`);
+const sourceFile = NilCfm(`<cftry><cfcatch/> <cfset x = 4></cftry>`);
 
 const parser = Parser().setDebug(true);
 parser.setSourceFile(sourceFile);

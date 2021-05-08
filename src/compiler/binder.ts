@@ -520,6 +520,7 @@ export function Binder() {
             if (node.type === nodeType) {
                 return node;
             }
+            node = node.parent;
         }
         return undefined;
     }
@@ -740,12 +741,12 @@ export function Binder() {
     }
 
     function bindCatch(node: Catch) {
-        if (node.tagOrigin.startTag) {
+        if (node.fromTag) {
             bindNode(node.tagOrigin.startTag, node);
             bindList(node.body, node);
             bindNode(node.tagOrigin.endTag, node);
             if (!getAncestorOfType(node, NodeType.try)) {
-                errorAtRange(node.tagOrigin.startTag.range, "A catch tag must be contained within a try tag-block.");
+                errorAtRange(node.tagOrigin.startTag!.range, "A catch tag must be contained within a try tag-block.");
             }
             return;
         }

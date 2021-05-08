@@ -17,9 +17,6 @@ import {
     EmptyOrderedStructLiteral,
     OrderedStructLiteral,
     ReturnStatement,
-    Try,
-    Catch,
-    Finally,
     BreakStatement,
     ContinueStatement,
     mergeRanges,
@@ -28,7 +25,7 @@ import {
     New,
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
-    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile } from "./node";
+    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, isSugaredTagName } from "./utils";
 
@@ -885,10 +882,11 @@ export function Parser() {
 
             const enum ReductionScheme { default, return, returnRawTags };
             interface ReductionInstruction {
-                onHitWhich: CfTag.Which,
+                onHitWhich: CfTag.Which | Symbol,
                 onHitName: string,
                 reduction: ReductionScheme;
             }
+            const ERROR_REDUCTION = Symbol("onHitWhich:Error");
             const reductionInstructions = {
                 cfif: <readonly ReductionInstruction[]>[
                     { onHitWhich: CfTag.Which.start, onHitName: "elseif", reduction: ReductionScheme.return },
@@ -906,20 +904,33 @@ export function Parser() {
                 default: <readonly ReductionInstruction[]>[]
             };
 
-            function stopAt(which: CfTag.Which, name: string, reduction: ReductionScheme) : ReductionInstruction[] {
-                return [{
+            function stopAt(which: CfTag.Which, name: string, reduction: ReductionScheme) : ReductionInstruction; // overload 1
+            function stopAt(which: Symbol,                    reduction: ReductionScheme) : ReductionInstruction; // overload 2
+            function stopAt(which: CfTag.Which | Symbol, nameOrReduction: string | ReductionScheme, reduction?: ReductionScheme) : ReductionInstruction {
+                return {
                     onHitWhich: which,
-                    onHitName: name,
-                    reduction: reduction
-                }]
+                    onHitName: typeof nameOrReduction === "string" ? /*ol1*/ nameOrReduction : /*ol2*/ "",
+                    reduction: typeof nameOrReduction === "string" ? /*ol1*/ reduction! : /*ol2*/ nameOrReduction
+                };
             }
 
-            function getReductionScheme(tag: CfTag, instructions: readonly ReductionInstruction[]) : ReductionScheme {
+            function getReductionScheme(hit: CfTag | Symbol, instructions: readonly ReductionInstruction[]) : ReductionScheme {
+                function isTag(val: any) : val is CfTag {
+                    return typeof val !== "symbol";
+                }
                 for (const instr of instructions) {
-                    if (instr.onHitWhich === tag.which && instr.onHitName === tag.canonicalName) {
-                        return instr.reduction;
+                    if (typeof instr.onHitWhich === "symbol") {
+                        if (instr.onHitWhich === hit) {
+                            return instr.reduction;
+                        }
+                    }
+                    else {
+                        if (isTag(hit) && instr.onHitWhich === hit.which && instr.onHitName === hit.canonicalName) {
+                            return instr.reduction;
+                        }
                     }
                 }
+
                 return ReductionScheme.default;
             }
 
@@ -1002,7 +1013,7 @@ export function Parser() {
             function treeifyConditionalTag() {
                 const ifTag = parseExpectedTag(CfTag.Which.start, "if");
                 openTagStack.push("if");
-                const rootConsequent = treeifyTags(reductionInstructions.cfif);
+                const rootConsequent = treeifyTags(...reductionInstructions.cfif);
 
                 const consequentAsBlock = Block(null, rootConsequent, null);
                 consequentAsBlock.tagOrigin.startTag = ifTag;
@@ -1013,7 +1024,7 @@ export function Parser() {
                 while (true) {
                     const elseIfTag = parseOptionalTag(CfTag.Which.start, "elseif");
                     if (elseIfTag) {
-                        const consequent = treeifyTags(reductionInstructions.cfelseif);
+                        const consequent = treeifyTags(...reductionInstructions.cfelseif);
                         const consequentAsBlock = Block(null, consequent, null);
                         consequentAsBlock.tagOrigin.startTag = elseIfTag;
                         working.alternative = FromTag.Conditional(ConditionalSubtype.elseif, elseIfTag, consequentAsBlock);
@@ -1022,7 +1033,7 @@ export function Parser() {
                     }
                     const elseTag = parseOptionalTag(CfTag.Which.start, "else");
                     if (elseTag) {
-                        const consequent = treeifyTags(reductionInstructions.cfelse);
+                        const consequent = treeifyTags(...reductionInstructions.cfelse);
                         const consequentAsBlock = Block(null, consequent, null);
                         consequentAsBlock.tagOrigin.startTag = elseTag;
                         working.alternative = FromTag.Conditional(ConditionalSubtype.else, elseTag, consequentAsBlock);
@@ -1157,6 +1168,94 @@ export function Parser() {
                     functionName);
             }
 
+            function treeifyTagTry(startTag: CfTag.Common, body: Node[], endTag: CfTag.Common) {
+                const mainBody : Node[] = [];
+                const catchBlocks : Tag.Catch[] = [];
+                let finallyBlock : Tag.Finally | null = null;
+                
+                let gotCatch = false;
+                let gotFinally = false;
+
+                let index = 0;
+
+                while (index < body.length) {
+                    const node = body[index];
+                    if ((node.type === NodeType.catch)) {
+                        gotCatch = true;
+                        break;
+                    }
+                    else if (node.type === NodeType.finally) {
+                        gotFinally = true;
+                        break;
+                    }
+                    else {
+                        mainBody.push(node);
+                        index++;
+                    }
+                }
+
+                function getTriviaOwner() : Node[] {
+                    if (finallyBlock) {
+                        return finallyBlock.tagOrigin.endTag!.tagEnd.trivia;
+                    }
+                    else if (gotCatch) {
+                        return (catchBlocks[catchBlocks.length-1].tagOrigin.endTag?.tagEnd.trivia // if a <catch>...</catch> block, it has an end tag
+                            || catchBlocks[catchBlocks.length-1].tagOrigin.startTag?.tagEnd.trivia)!; // if a <catch /> statement, it is just a start tag
+                    }
+                    else {
+                        if (debugParseModule) throw "no trivia owner?";
+                        else return [];
+                    }
+                }
+
+                if (gotCatch) {
+                    while (index < body.length) {
+                        const node = body[index];
+                        if (node.type === NodeType.finally) {
+                            gotFinally = true;
+                            break;
+                        }
+
+                        if (node.type === NodeType.catch) {
+                            catchBlocks.push(node as Tag.Catch);
+                        }
+                        else if (node.type !== NodeType.textSpan && node.type !== NodeType.comment) {
+                            parseErrorAtRange(node.range, "Only comments and whitespace are valid between <cfcatch> and <cffinally> blocks.")
+                            node.flags |= NodeFlags.error; // maybe invalidTagPosition or similar? also maybe mark the whole try block an error?
+                            getTriviaOwner().push(node);
+                        }
+                        
+                        index++;
+                    }
+                }
+
+                if (gotFinally) {
+                    finallyBlock = body[index] as Tag.Finally;
+                    index++;
+                }
+
+                if (index !== body.length) {
+                    // after a series of possible <cfcatch> and <cffinally> there is still likely to be at least a text span or comments,
+                    // and a user might place tags in this position but they are all invalid
+                    // we will attach all of this to the trivia of the end tag of the final catch/finally block
+                    //
+                    // if there were no catch/finally blocks, we should not get here because all of the <ctry>...</cftry> content would have been consumed
+                    // as part of the <cftry> block
+
+                    while (index < body.length) {
+                        const node = body[index];
+                        if (node.type !== NodeType.textSpan && node.type !== NodeType.comment) {
+                            parseErrorAtRange(node.range, "Only comments and whitespace are valid between <cfcatch> and <cffinally> blocks.")
+                        }
+                        getTriviaOwner().push(node);
+                        index++;
+                    }
+                }
+
+
+                return Tag.Try(startTag, mainBody, catchBlocks, finallyBlock, endTag);
+            }
+
             function looseTagsToStatements(nodeList: Node[]) {
                 for (let i = 0; i < nodeList.length; i++) {
                     const node = nodeList[i];
@@ -1168,7 +1267,7 @@ export function Parser() {
                 return nodeList;
             }
 
-            function treeifyTags(reductionInstructions: readonly ReductionInstruction[]) : Node[] {
+            function treeifyTags(...reductionInstructions: readonly ReductionInstruction[]) : Node[] {
                 const result : Node[] = [];
 
                 function localStackFindMatchingStartTag(tag: CfTag) : number | null {
@@ -1250,12 +1349,43 @@ export function Parser() {
                             case "function": {
                                 openTagStack.push("function");
                                 const startTag = parseExpectedTag(CfTag.Which.start, "function");
-                                const body = treeifyTags(stopAt(CfTag.Which.end, "function", ReductionScheme.returnRawTags));
+                                const body = treeifyTags(
+                                    // @fixme - rawTags reduction scheme isn't correct, because as we descend we need to blockify some things
+                                    // the only reason we wanted raw tags was to not do the work of statement-izing <cfargument> tags
+                                    stopAt(CfTag.Which.end, "function", ReductionScheme.returnRawTags),
+                                    stopAt(ERROR_REDUCTION, ReductionScheme.returnRawTags));
                                 const endTag = parseExpectedTag(CfTag.Which.end, "function", () => parseErrorAtRange(startTag.range, "Missing </cffunction> tag."))
                                 openTagStack.pop();
                                 result.push(treeifyTagFunction(startTag as CfTag.Common, body, endTag as CfTag.Common));
                                 continue;
                             }
+                            case "try": {
+                                openTagStack.push("try");
+                                const startTag = parseExpectedTag(CfTag.Which.start, "try");
+                                const body = treeifyTags(stopAt(CfTag.Which.end, "try", ReductionScheme.default));
+                                const endTag = parseExpectedTag(CfTag.Which.end, "try", () => parseErrorAtRange(startTag.range, "Missing </cftry> tag."));
+                                openTagStack.pop();
+                                result.push(treeifyTagTry(startTag as CfTag.Common, body, endTag as CfTag.Common));
+                                continue;
+                            }
+                            case "catch": {
+                                if (tag.voidSlash) {
+                                    result.push(Tag.Catch(tag as CfTag.Common));
+                                    nextTag();
+                                    continue;
+                                }
+                                openTagStack.push("catch");
+                                const startTag = parseExpectedTag(CfTag.Which.start, "catch");
+                                const body = treeifyTags(stopAt(CfTag.Which.end, "catch", ReductionScheme.default));
+                                const endTag = parseExpectedTag(CfTag.Which.end, "catch", () => parseErrorAtRange(startTag.range, "Missing </cfcatch> tag."));
+                                openTagStack.pop();
+                                result.push(Tag.Catch(startTag as CfTag.Common, body, endTag as CfTag.Common));
+                                continue;
+                            }
+                            /*
+                            case "switch": {
+                                // ...
+                            }*/
                             case "script": {
                                 nextTag();
                                 const endTag = parseExpectedTag(CfTag.Which.end, "script", () => parseErrorAtRange(tag.range, "Missing </cfscript> tag."));
@@ -1273,7 +1403,7 @@ export function Parser() {
                                 else {
                                     // a single loose tag
                                     // it will become a statement
-                                    // e.g., <cfhttp args /> is essentially a call to a fictitious "cfhttp(args)" function, except it is a statement instead of a value producing expression
+                                    // e.g., <cfhttp args (/)?> is essentially a call to a fictitious "cfhttp(args)" function, except it is a statement instead of a value producing expression
                                     // but first we push it into the result as a tag, so that any possible matching end tags can walk up the local results list
                                     // and find it 
                                     result.push(tag);
@@ -1294,13 +1424,14 @@ export function Parser() {
                         // if we can't find the target tag in our local result, this tag has no matching start tag
                         // if this tag isn't allowed to have a block body, it's an error, and gets discarded
                         if (!allowTagBody(tag)) {
+                            // fixme, unknown tags should allow tag bodies
                             // parse error - end tag for tag type that does not support tag bodys (like cfargument)
                             nextTag();
                             continue;
                         }
 
                         const maybeMatchingStartTagIndex = localStackFindMatchingStartTag(tag);
-                        if (maybeMatchingStartTagIndex) {
+                        if (maybeMatchingStartTagIndex !== null) {
                             const matchingStartTagIndex = maybeMatchingStartTagIndex;
                             const matchingStartTag = result[matchingStartTagIndex] as CfTag;
 
@@ -1322,8 +1453,13 @@ export function Parser() {
                             // this will naturally result in an "unmatched tag" error in the caller
                             const matchingOpenTagIndex = openTagStackFindMatchingStartTag(tag.canonicalName);
                             if (matchingOpenTagIndex !== null) {
-                                // @fixme: what if the reduction scheme, had we matched an appropriate end tag, was "return raw tags"?
-                                return looseTagsToStatements(result);
+                                const reductionScheme = getReductionScheme(ERROR_REDUCTION, reductionInstructions);
+                                if (reductionScheme === ReductionScheme.returnRawTags) {
+                                    return result;
+                                }
+                                else {
+                                    return looseTagsToStatements(result);
+                                }
                             }
                             else {
                                 parseErrorAtRange(tag.range, "End tag without a matching start tag (cf" + tag.canonicalName + ").")
@@ -1337,11 +1473,18 @@ export function Parser() {
                     }
                 }
 
-                // should we check if we want to return raw tags here ? i.e, consider the reduction instruction
-                return looseTagsToStatements(result);
+                // if we got here we're out of tags; this is possibly an error, dependening on context
+                // caller can indicate that by setting an error reduction scheme
+                const reductionScheme = getReductionScheme(ERROR_REDUCTION, reductionInstructions);
+                if (reductionScheme === ReductionScheme.returnRawTags) {
+                    return result;
+                }
+                else {
+                    return looseTagsToStatements(result);
+                }
             }
 
-            return treeifyTags(reductionInstructions.default);
+            return treeifyTags(...reductionInstructions.default);
         }
 
         const savedMode = mode;
@@ -2787,13 +2930,13 @@ export function Parser() {
         }
     }
 
-    function parseTry() : Try {
+    function parseTry() : Script.Try {
         const tryToken   = parseExpectedTerminal(TokenType.KW_TRY, ParseOptions.withTrivia);
         const leftBrace  = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
         const body       = parseList(ParseContext.awaitingRightBrace, parseStatement);
         const rightBrace = parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
         
-        const catchBlocks : Catch[] = [];
+        const catchBlocks : Script.Catch[] = [];
         while (lookahead() === TokenType.KW_CATCH) {
             const catchToken       = parseExpectedTerminal(TokenType.KW_CATCH, ParseOptions.withTrivia);
             const leftParen        = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
@@ -2804,19 +2947,19 @@ export function Parser() {
             const catchBody        = parseList(ParseContext.awaitingRightBrace, parseStatement);
             const rightBrace       = (leftBrace.flags & NodeFlags.missing) ? createMissingNode(NilTerminal(pos())) : parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
             catchBlocks.push(
-                Catch(catchToken, leftParen, exceptionType, exceptionBinding, rightParen, leftBrace, catchBody, rightBrace));
+                Script.Catch(catchToken, leftParen, exceptionType, exceptionBinding, rightParen, leftBrace, catchBody, rightBrace));
         }
 
-        let finallyBlock : Finally | null = null;
+        let finallyBlock : Script.Finally | null = null;
         if (lookahead() === TokenType.KW_FINALLY) {
             const finallyToken = parseExpectedTerminal(TokenType.KW_FINALLY, ParseOptions.withTrivia);
             const leftBrace = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
             const body = parseList(ParseContext.awaitingRightBrace, parseStatement);
             const rightBrace = parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
-            finallyBlock = Finally(finallyToken, leftBrace, body, rightBrace);
+            finallyBlock = Script.Finally(finallyToken, leftBrace, body, rightBrace);
         }
 
-        return Try(tryToken, leftBrace, body, rightBrace, catchBlocks, finallyBlock);
+        return Script.Try(tryToken, leftBrace, body, rightBrace, catchBlocks, finallyBlock);
     }
 
     function parseList<

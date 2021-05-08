@@ -192,6 +192,8 @@ interface NodeBase {
     nodeId: NodeId,
     parent: Node | null,
     range: SourceRange,
+
+    fromTag?: boolean,
     tagOrigin: {
         startTag: CfTag | null,
         endTag: CfTag | null,
@@ -1721,88 +1723,186 @@ export function ArrayLiteralInitializerMember(
     return v;
 }
 
-export interface Try extends NodeBase {
+interface TryBase extends NodeBase {
     type: NodeType.try,
-    tryToken: Terminal,
-    leftBrace: Terminal,
+    fromTag: boolean,
     body: Node[],
-    rightBrace: Terminal,
     catchBlocks: Catch[],
     finallyBlock: Finally | null
 }
 
-export function Try(
-    tryToken: Terminal,
-    leftBrace: Terminal,
-    body: Node[],
-    rightBrace: Terminal,
-    catchBlocks: Catch[],
-    finallyBlock: Finally | null
-) : Try {
-    const v = NodeBase<Try>(NodeType.try, mergeRanges(tryToken, finallyBlock));
-    v.tryToken = tryToken;
-    v.leftBrace = leftBrace;
-    v.body = body;
-    v.rightBrace = rightBrace;
-    v.catchBlocks = catchBlocks;
-    v.finallyBlock = finallyBlock;
-    return v;
+export type Try = Script.Try | Tag.Try;
+
+export namespace Script {
+    export interface Try extends TryBase {
+        type: NodeType.try,
+        fromTag: false,
+        tryToken: Terminal,
+        leftBrace: Terminal,
+        body: Node[],
+        rightBrace: Terminal,
+        catchBlocks: Script.Catch[],
+        finallyBlock: Script.Finally | null
+    }
+    export function Try(
+        tryToken: Terminal,
+        leftBrace: Terminal,
+        body: Node[],
+        rightBrace: Terminal,
+        catchBlocks: Script.Catch[],
+        finallyBlock: Script.Finally | null
+    ) : Try {
+        const v = NodeBase<Try>(NodeType.try, mergeRanges(tryToken, finallyBlock));
+        v.fromTag = false;
+        v.tryToken = tryToken;
+        v.leftBrace = leftBrace;
+        v.body = body;
+        v.rightBrace = rightBrace;
+        v.catchBlocks = catchBlocks;
+        v.finallyBlock = finallyBlock;
+        return v;
+    }
 }
 
-export interface Catch extends NodeBase {
+export namespace Tag {
+    export interface Try extends TryBase {
+        type: NodeType.try,
+        fromTag: true,
+        body: Node[],
+        catchBlocks: Tag.Catch[],
+        finallyBlock: Tag.Finally | null
+    }
+    export function Try(startTag: CfTag.Common, body: Node[], catchBlocks: Tag.Catch[], finallyBlock: Tag.Finally | null, endTag: CfTag.Common) : Try {
+        const v = NodeBase<Try>(NodeType.try, mergeRanges(startTag, endTag));
+        v.fromTag = true;
+        v.body = body;
+        v.catchBlocks = catchBlocks;
+        v.finallyBlock = finallyBlock;
+        return v;
+    }
+}
+
+interface CatchBase extends NodeBase {
     type: NodeType.catch,
-    catchToken: Terminal,
-    leftParen: Terminal,
-    exceptionType: DottedPath<Terminal>,
-    exceptionBinding: Identifier,
-    rightParen: Terminal,
-    leftBrace: Terminal,
+    fromTag: boolean,
     body: Node[],
-    rightBrace: Terminal
 }
 
-export function Catch(
-    catchToken: Terminal,
-    leftParen: Terminal,
-    exceptionType: DottedPath<Terminal>,
-    exceptionBinding: Identifier,
-    rightParen: Terminal,
-    leftBrace: Terminal,
-    body: Node[],
-    rightBrace: Terminal
-) : Catch {
-    const v = NodeBase<Catch>(NodeType.catch, mergeRanges(leftParen, rightBrace));
-    v.catchToken = catchToken;
-    v.leftParen = leftParen;
-    v.exceptionType = exceptionType;
-    v.exceptionBinding = exceptionBinding;
-    v.rightParen = rightParen;
-    v.leftBrace = leftBrace;
-    v.body = body;
-    v.rightBrace = rightBrace;
-    return v;
+export type Catch = Script.Catch | Tag.Catch;
+
+export namespace Script {
+    export interface Catch extends CatchBase {
+        type: NodeType.catch
+        fromTag: false,
+        catchToken: Terminal,
+        leftParen: Terminal,
+        exceptionType: DottedPath<Terminal>,
+        exceptionBinding: Identifier,
+        rightParen: Terminal,
+        leftBrace: Terminal,
+        body: Node[],
+        rightBrace: Terminal
+    }
+
+    export function Catch(
+        catchToken: Terminal,
+        leftParen: Terminal,
+        exceptionType: DottedPath<Terminal>,
+        exceptionBinding: Identifier,
+        rightParen: Terminal,
+        leftBrace: Terminal,
+        body: Node[],
+        rightBrace: Terminal
+    ) : Catch {
+        const v = NodeBase<Catch>(NodeType.catch, mergeRanges(leftParen, rightBrace));
+        v.fromTag = false;
+        v.catchToken = catchToken;
+        v.leftParen = leftParen;
+        v.exceptionType = exceptionType;
+        v.exceptionBinding = exceptionBinding;
+        v.rightParen = rightParen;
+        v.leftBrace = leftBrace;
+        v.body = body;
+        v.rightBrace = rightBrace;
+        return v;
+    }
 }
 
-export interface Finally extends NodeBase {
+export namespace Tag {
+    export interface Catch extends CatchBase {
+        type: NodeType.catch
+        fromTag: true,
+        body: Node[],
+    }
+
+    export function Catch(tag: CfTag.Common) : Catch;
+    export function Catch(tag: CfTag.Common, body: Node[], endTag: CfTag.Common) : Catch;
+    export function Catch(tag: CfTag.Common, body?: Node[], endTag?: CfTag.Common) {
+        if (!body) {
+            const v = NodeBase<Catch>(NodeType.catch, tag.range);
+            v.fromTag = true;
+            v.tagOrigin.startTag = tag;
+            v.body = [];
+            return v;
+        }
+        else {
+            const v = NodeBase<Catch>(NodeType.catch, mergeRanges(tag, endTag));
+            v.fromTag = true;
+            v.tagOrigin.startTag = tag;
+            v.tagOrigin.endTag = endTag!;
+            v.body = body;
+            return v;
+        }
+    }
+}
+
+interface FinallyBase extends NodeBase {
     type: NodeType.finally,
-    finallyToken: Terminal,
-    leftBrace: Terminal,
+    fromTag: boolean,
     body: Node[],
-    rightBrace: Terminal
 }
 
-export function Finally(
-    finallyToken: Terminal,
-    leftBrace: Terminal,
-    body: Node[],
-    rightBrace: Terminal
-) : Finally {
-    const v = NodeBase<Finally>(NodeType.finally, mergeRanges(finallyToken, rightBrace));
-    v.finallyToken = finallyToken;
-    v.leftBrace = leftBrace;
-    v.body = body;
-    v.rightBrace = rightBrace;
-    return v;
+export type Finally = Script.Finally | Tag.Finally;
+
+export namespace Script {
+    export interface Finally extends FinallyBase {
+        type: NodeType.finally,
+        fromTag: false,
+        finallyToken: Terminal,
+        leftBrace: Terminal,
+        body: Node[],
+        rightBrace: Terminal
+    }
+    export function Finally(
+        finallyToken: Terminal,
+        leftBrace: Terminal,
+        body: Node[],
+        rightBrace: Terminal
+    ) : Finally {
+        const v = NodeBase<Finally>(NodeType.finally, mergeRanges(finallyToken, rightBrace));
+        v.fromTag = false;
+        v.finallyToken = finallyToken;
+        v.leftBrace = leftBrace;
+        v.body = body;
+        v.rightBrace = rightBrace;
+        return v;
+    }
+}
+
+export namespace Tag {
+    export interface Finally extends FinallyBase {
+        type: NodeType.finally,
+        fromTag: true,
+        body: Node[],
+    }
+    export function Finally(startTag: CfTag.Common, body: Node[], endTag: CfTag.Common) {
+        const v = NodeBase<Finally>(NodeType.finally, mergeRanges(startTag, endTag));
+        v.fromTag = true;
+        v.tagOrigin.startTag = startTag;
+        v.tagOrigin.endTag = endTag;
+        v.body = body;
+        return v;
+    }
 }
 
 export interface ImportStatement extends NodeBase {

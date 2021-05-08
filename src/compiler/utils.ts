@@ -248,6 +248,8 @@ export function visit(node: Node, visitor: (arg: Node | undefined | null) => any
             // bottomed out
             return;
         case NodeType.terminal:
+            // trivia is generally expected to be text/comments,
+            // but it can be anything; for example, an incorrectly placed tag between </cfcatch> ... </cftry>
             return forEachNode(node.trivia, visitor);
         case NodeType.sourceFile:
             return forEachNode(node.content, visitor);
@@ -530,7 +532,7 @@ export function visit(node: Node, visitor: (arg: Node | undefined | null) => any
             return visitor(node.expr)
                 || visitor(node.comma);
         case NodeType.try:
-            if (node.tagOrigin.startTag) {
+            if (node.fromTag) {
                 return visitor(node.tagOrigin.startTag)
                     || forEachNode(node.body, visitor)
                     || visitor(node.tagOrigin.endTag);
@@ -542,11 +544,12 @@ export function visit(node: Node, visitor: (arg: Node | undefined | null) => any
                 || forEachNode(node.catchBlocks, visitor)
                 || visitor(node.finallyBlock);
         case NodeType.catch:
-            if (node.tagOrigin.startTag) {
+            if (node.fromTag) {
                 return visitor(node.tagOrigin.startTag)
                     || forEachNode(node.body, visitor)
                     || visitor(node.tagOrigin.endTag);
             }
+            
             return visitor(node.catchToken)
                 || visitor(node.leftParen)
                 || visitor(node.exceptionType)
@@ -556,7 +559,7 @@ export function visit(node: Node, visitor: (arg: Node | undefined | null) => any
                 || forEachNode(node.body, visitor)
                 || visitor(node.rightBrace);
         case NodeType.finally:
-            if (node.tagOrigin.startTag) {
+            if (node.fromTag) {
                 return visitor(node.tagOrigin.startTag)
                     || forEachNode(node.body, visitor)
                     || visitor(node.tagOrigin.endTag);
