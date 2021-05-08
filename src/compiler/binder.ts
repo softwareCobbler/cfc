@@ -732,6 +732,8 @@ export function Binder() {
         if (node.tagOrigin.startTag) {
             bindNode(node.tagOrigin.startTag, node);
             bindList(node.body, node);
+            bindList(node.catchBlocks, node);
+            bindNode(node.finallyBlock, node);
             bindNode(node.tagOrigin.endTag, node);
             return;
         }

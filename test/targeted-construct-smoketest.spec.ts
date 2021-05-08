@@ -1,5 +1,8 @@
 import * as assert from "assert";
-import { Parser, Binder, CfFileType, SourceFile, NilCfm, flattenTree } from "../out/compiler";
+import { Parser, Binder, CfFileType, SourceFile, NilCfm, flattenTree, NilCfc } from "../out/compiler";
+import { IndexedAccess, NodeType } from "../src/compiler/node";
+import { findNodeInFlatSourceMap, getTriviallyComputableString } from "../src/compiler/utils";
+import * as TestLoader from "./TestLoader";
 
 const parser = Parser().setDebug(true);
 const binder = Binder().setDebug(true);
@@ -118,5 +121,20 @@ describe("general smoke test for particular constructs", () => {
                 z = x() .y    // ok
             </cfscript>`,
             CfFileType.cfm, 1);
+    });
+    it("Should find a dot terminal attached to an indexed access expression with a root scope name of arguments", () => {
+        const completionsTestCase = TestLoader.loadCompletionAtTest("./test/sourcefiles/arguments_lookup.cfc");
+
+        const sourceFile = NilCfc(completionsTestCase.sourceText);
+        parser.setSourceFile(sourceFile).parse();
+        binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
+        const flatSourceMap = flattenTree(sourceFile);
+        const nodeMap = binder.getNodeMap();
+
+        const node = findNodeInFlatSourceMap(flatSourceMap, nodeMap, completionsTestCase.index);
+        assert.strictEqual(node?.type, NodeType.terminal, "found node is a terminal");
+        assert.strictEqual(node?.parent?.type, NodeType.indexedAccessChainElement, "found node parent is an indexedAccessChainElement");
+        assert.strictEqual(node?.parent?.parent?.type, NodeType.indexedAccess, "found node parent.parent is an indexed access");
+        assert.strictEqual(getTriviallyComputableString((<IndexedAccess>node?.parent?.parent).root), "arguments", "indexed access root is arguments scope");
     })
 });

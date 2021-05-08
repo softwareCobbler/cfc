@@ -535,6 +535,8 @@ export function visit(node: Node, visitor: (arg: Node | undefined | null) => any
             if (node.fromTag) {
                 return visitor(node.tagOrigin.startTag)
                     || forEachNode(node.body, visitor)
+                    || forEachNode(node.catchBlocks, visitor)
+                    || visitor(node.finallyBlock)
                     || visitor(node.tagOrigin.endTag);
             }
             return visitor(node.tryToken)

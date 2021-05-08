@@ -1840,6 +1840,8 @@ export namespace Tag {
     export function Try(startTag: CfTag.Common, body: Node[], catchBlocks: Tag.Catch[], finallyBlock: Tag.Finally | null, endTag: CfTag.Common) : Try {
         const v = NodeBase<Try>(NodeType.try, mergeRanges(startTag, endTag));
         v.fromTag = true;
+        v.tagOrigin.startTag = startTag
+        v.tagOrigin.endTag = endTag;
         v.body = body;
         v.catchBlocks = catchBlocks;
         v.finallyBlock = finallyBlock;
