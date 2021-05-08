@@ -1,7 +1,7 @@
-import { NodeWithScope, Variable, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, Scope, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier } from "./node";
+import { NodeWithScope, Variable, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, Scope, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName } from "./node";
 import { getTriviallyComputableString, BiMap, getAttributeValue, visit } from "./utils";
 import { Diagnostic } from "./parser";
-import { Scanner, SourceRange } from "./scanner";
+import { CfFileType, Scanner, SourceRange } from "./scanner";
 
 type InternedStringId = number;
 const InternedStrings = new BiMap<InternedStringId, string>();
@@ -106,6 +106,10 @@ export function Binder() {
             url: new Map(),
             form: new Map(),
         };
+
+        if (sourceFile.cfFileType === CfFileType.cfc) {
+            RootNode.containedScope.this = new Map();
+        }
 
         currentContainer = RootNode;
         bindList(sourceFile.content, sourceFile);
@@ -331,6 +335,8 @@ export function Binder() {
         }
     }
 
+    // all declarations should be of the s-expr form (decl (binary-op<assignment>))
+    // that is, VariableDeclarations just wrap assignment nodes (which are themselves just binary operators with '=' as the operator)
     function bindDeclaration(node: VariableDeclaration) {
         let identifierBaseName : string | undefined = undefined;
         if (node.expr.type === NodeType.binaryOperator && node.expr.optype === BinaryOpType.assign) {
@@ -343,9 +349,46 @@ export function Binder() {
         }
 
         // make sure we got a useable name
-        // make sure there is a var/final modifier, because we can get a "declaration"
-        // in at least the initializer position in `for(x in y)`
-        if (identifierBaseName && (node.finalModifier || node.varModifier)) {
+        if (!identifierBaseName) {
+            return;
+        }
+
+        if (isStaticallyKnownScopeName(identifierBaseName)) {
+            if (node.varModifier) {
+                errorAtRange(mergeRanges(node.finalModifier, node.varModifier, (<BinaryOperator>node.expr).left), "Variable declaration shadows built-in scope `" + identifierBaseName + "`");
+            }
+
+            // if we got `url.foo`, put `foo` into the `url` scope
+            // only descend the one child level, `url.foo.bar` still only puts `foo` into `url`
+            if ((<BinaryOperator>node.expr).left.type === NodeType.indexedAccess) {
+                const indexedAccess = (<BinaryOperator>node.expr).left as IndexedAccess;
+                const element = indexedAccess.accessElements[0];
+
+                let accessName : string | undefined;
+                if (element?.accessType === IndexedAccessType.dot) {
+                    accessName = getTriviallyComputableString((element.property));
+                }
+                else if (element?.accessType === IndexedAccessType.bracket) {
+                    accessName = getTriviallyComputableString((element.expr));
+                }
+
+                if (accessName) {
+                    const internId = internString(accessName);
+                    RootNode.containedScope[identifierBaseName]!.set(
+                        internId, {
+                            type: "any",
+                            name: internId,
+                            final: true,
+                            var: false,
+                            initializer: (<BinaryOperator>node.expr).right
+                        });
+                }
+            }
+
+            return;
+        }
+
+        if (node.finalModifier || node.varModifier) {
             const internId = internString(identifierBaseName);
             if (currentContainer.containedScope.local) {
                 (<Map<number, Variable>>currentContainer.containedScope.local).set(

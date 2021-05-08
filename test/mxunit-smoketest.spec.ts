@@ -8,7 +8,7 @@ const expectedDiagnosticCountByFile : Record<string, number> = {
     "./mxunit/mxunit-TestSuiteTemplate.cfm": 0,
     "./mxunit/doc/build.cfm": 0,
     "./mxunit/doc/colddoc/ColdDoc.cfc": 0,
-    "./mxunit/doc/colddoc/strategy/AbstractTemplateStrategy.cfc": 0,
+    "./mxunit/doc/colddoc/strategy/AbstractTemplateStrategy.cfc": 4, // assignments to `local`
     "./mxunit/doc/colddoc/strategy/api/HTMLAPIStrategy.cfc": 0,
     "./mxunit/doc/colddoc/strategy/uml2tools/XMIStrategy.cfc": 0,
     "./mxunit/framework/Assert.cfc": 0,
@@ -26,7 +26,7 @@ const expectedDiagnosticCountByFile : Record<string, number> = {
     "./mxunit/framework/mail.cfc": 0,
     "./mxunit/framework/MockFactoryFactory.cfc": 0,
     "./mxunit/framework/MXUnitAssertionExtensions.cfc": 0,
-    "./mxunit/framework/POIUtility.cfc": 0,
+    "./mxunit/framework/POIUtility.cfc": 9, // assignments to `local`
     "./mxunit/framework/PublicProxyMaker.cfc": 0,
     "./mxunit/framework/QueryTestResult.cfc": 0,
     "./mxunit/framework/RemoteFacade.cfc": 0,
@@ -48,7 +48,7 @@ const expectedDiagnosticCountByFile : Record<string, number> = {
     "./mxunit/framework/decorators/TransactionRollbackDecorator.cfc": 0,
     "./mxunit/framework/ext/AssertionExtensionTemplate.cfc": 0,
     "./mxunit/framework/javaloader/JavaCompiler.cfc": 0,
-    "./mxunit/framework/javaloader/JavaLoader.cfc": 0,
+    "./mxunit/framework/javaloader/JavaLoader.cfc": 1, // assignment to `local`
     "./mxunit/framework/javaloader/JavaProxy.cfc": 0,
     "./mxunit/framework/mightymock/AbstractMock.cfc": 0,
     "./mxunit/framework/mightymock/ArgumentMatcher.cfc": 0,
@@ -144,7 +144,7 @@ const expectedDiagnosticCountByFile : Record<string, number> = {
     "./mxunit/tests/compatability/DoesNotHaveTestAtEndOrBegining.cfc": 0,
     "./mxunit/tests/framework/AssertDecoratorTest.cfc": 0,
     "./mxunit/tests/framework/AssertionChainingTest.cfc": 0,
-    "./mxunit/tests/framework/AssertSameTest.cfc": 0,
+    "./mxunit/tests/framework/AssertSameTest.cfc": 2, // assignments to `local`
     "./mxunit/tests/framework/AssertTest.cfc": 0,
     "./mxunit/tests/framework/ComponentBlenderTest.cfc": 0,
     "./mxunit/tests/framework/ComponentUtilsTest.cfc": 0,
