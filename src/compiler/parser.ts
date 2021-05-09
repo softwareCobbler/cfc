@@ -41,19 +41,18 @@ const enum ParseContext {
     none = 0,
     insideCfTagAngles,  // somewhere inside <cf ... > or </cf ... >
     hashWrappedExpr,    // in #...# in an expression context, like `a + #b#`
-    cfScriptTagBody,    // in a <cfscript> block
-    cfScriptTopLevel,   // in cfscript, but not within a containing <cfscript> block; e.g, a script-based cfc file
+    cfScriptTagBody,    // in a <cfscript> block; similar to blockstatements, but </cfscript> can terminate it, and a stray `}` does not
+    blockStatements,    // inside a { ... }; a stray `}` will terminate this
     for,                // in a for (...) expression
     interpolatedText,   // in <cfoutput>#...#</cfoutput> or "#...#"
     awaitingVoidSlash,  // <cfset foo = bar /> is just `foo=bar`, with a trailing tag-void-slash, not `foo=bar/` with a missing rhs to the `/` operator
-    awaitingRightBrace, // any time a loose '}' would end a parse
     argumentList,       // someCallWithArgs(...)
     switchClause,       // in a switch statement
     trivia,             // comments, whitespace
     structBody,
     arrayBody,
     sugaredAbort,       // inside an `abort ...;` statement
-    END
+    END                 // sentinel for looping over ParseContexts
 }
 
 function TagContext() {
@@ -554,7 +553,7 @@ export function Parser() {
     function parseScriptMultiLineComment() : Comment {
         const startToken = parseExpectedTerminal(TokenType.FORWARD_SLASH_STAR, ParseOptions.noTrivia);
         scanToNextToken([TokenType.STAR_FORWARD_SLASH]);
-        const endToken = parseExpectedTerminal(TokenType.STAR_FORWARD_SLASH, ParseOptions.noTrivia, () => parseErrorAtRange(startToken.range.fromInclusive, scanner.getIndex(), "Unterminated multiline script comment."));
+        const endToken = parseExpectedTerminal(TokenType.STAR_FORWARD_SLASH, ParseOptions.noTrivia, () => parseErrorAtRange(startToken.range.fromInclusive, startToken.range.fromInclusive + 2, "Unterminated multiline script comment."));
         return Comment(CommentType.scriptMultiLine, new SourceRange(startToken.range.fromInclusive, endToken.range.toExclusive));
     }
 
@@ -678,11 +677,19 @@ export function Parser() {
                     const savedMode = mode;
                     setScannerMode(ScannerMode.script);
 
+                    // capture the full range of the script body, which is hard to figure out after the fact,
+                    // for example, an unterminated script comment will eat any remaining tags, and just be parsed as trivia,
+                    // and so if we use "range" (as we usually do) rather than "range with trivia", we'll get an incorrect result
+                    // this has implications in the tag treeifier, where we use the "last tag position" to compute missing tag zero-length positions
+                    // if the last tag is a <cfscript> tag and the cfscript ate to EOF, the "last tag position" of the <cfscript>'s right angle is incorrect
+
+                    const startPos = pos();            // start pos is before any possible trivia
                     rightAngle.trivia = parseTrivia(); // <cfscript> is a tag but it gets script-based trivia (so it can have script comments attached to it)
                     const stmtList = parseList(ParseContext.cfScriptTagBody, parseStatement);
+                    const endPos = pos();
 
                     setScannerMode(savedMode);
-                    return CfTag.Script(tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, stmtList);
+                    return CfTag.Script(tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, stmtList, new SourceRange(startPos, endPos));
                 }
                 else {
                     return CfTag.Common(CfTag.Which.start, tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, tagAttrs);
@@ -855,7 +862,7 @@ export function Parser() {
 
     function parseScript() : Node[] {
         setScannerMode(ScannerMode.script);
-        return parseList(ParseContext.cfScriptTopLevel, parseStatement);
+        return parseList(ParseContext.blockStatements, parseStatement);
     }
 
     function parseTags() : Node[] {
@@ -984,7 +991,17 @@ export function Parser() {
                     // if there is no next tag, we have already hit the final tag and consumed it;
                     // so return the END of the last tag, because that is where our "cursor" is
                     // unlike the scanner there is no magic EOF marker
-                    return tagList[tagList.length-1].range.toExclusive;
+                    // generally, tags (and in-tag hash-wrapped exprs) do not consume trivia on their tagEnd terminal, because that is possible HTML content, not trivia
+
+                    const lastTag = tagList[tagList.length-1];
+
+                    // a <cfscript> tag as last tag means the script body consumed to EOF
+                    if (lastTag.kind === NodeType.tag && lastTag.tagType === CfTag.TagType.script) {
+                        return lastTag.scriptRange.toExclusive;
+                    }
+                    else {
+                        return lastTag.range.toExclusive;
+                    }
                 }
             }
 
@@ -2308,9 +2325,9 @@ export function Parser() {
             case ParseContext.argumentList:
                 return isStartOfExpression();
             case ParseContext.cfScriptTagBody:
-            case ParseContext.cfScriptTopLevel:
+            case ParseContext.blockStatements:
             case ParseContext.switchClause:
-            case ParseContext.awaitingRightBrace:
+            case ParseContext.blockStatements:
                 return isStartOfStatement();
             default:
                 return false; // ? yeah ?
@@ -2326,7 +2343,7 @@ export function Parser() {
             case ParseContext.arrayBody:
                 return lookahead() === TokenType.RIGHT_BRACKET;
             case ParseContext.structBody:
-            case ParseContext.awaitingRightBrace:
+            case ParseContext.blockStatements:
                 return lookahead() === TokenType.RIGHT_BRACE;
             case ParseContext.switchClause:
                 return lookahead() === TokenType.KW_CASE
@@ -2738,10 +2755,10 @@ export function Parser() {
         const leftBrace = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
 
         const cases : Script.SwitchCase[] = [];
-        const savedContext = updateParseContext(ParseContext.awaitingRightBrace);
+        const savedContext = updateParseContext(ParseContext.blockStatements);
         parseContext &= ~(1 << ParseContext.switchClause); // we may be in a nested switch clause, clear the outer flag
 
-        while (!endsParseInContext(ParseContext.awaitingRightBrace)) {
+        while (!endsParseInContext(ParseContext.blockStatements)) {
             if (lookahead() === TokenType.KW_CASE) {
                 const caseToken = parseExpectedTerminal(TokenType.KW_CASE, ParseOptions.withTrivia);
                 const caseExpr = parseExpression();
@@ -2924,7 +2941,7 @@ export function Parser() {
     function parseTry() : Script.Try {
         const tryToken   = parseExpectedTerminal(TokenType.KW_TRY, ParseOptions.withTrivia);
         const leftBrace  = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
-        const body       = parseList(ParseContext.awaitingRightBrace, parseStatement);
+        const body       = parseList(ParseContext.blockStatements, parseStatement);
         const rightBrace = parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
         
         const catchBlocks : Script.Catch[] = [];
@@ -2935,7 +2952,7 @@ export function Parser() {
             const exceptionBinding = parseIdentifier();
             const rightParen       = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
             const leftBrace        = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
-            const catchBody        = parseList(ParseContext.awaitingRightBrace, parseStatement);
+            const catchBody        = parseList(ParseContext.blockStatements, parseStatement);
             const rightBrace       = (leftBrace.flags & NodeFlags.missing) ? createMissingNode(NilTerminal(pos())) : parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
             catchBlocks.push(
                 Script.Catch(catchToken, leftParen, exceptionType, exceptionBinding, rightParen, leftBrace, catchBody, rightBrace));
@@ -2945,7 +2962,7 @@ export function Parser() {
         if (lookahead() === TokenType.KW_FINALLY) {
             const finallyToken = parseExpectedTerminal(TokenType.KW_FINALLY, ParseOptions.withTrivia);
             const leftBrace = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
-            const body = parseList(ParseContext.awaitingRightBrace, parseStatement);
+            const body = parseList(ParseContext.blockStatements, parseStatement);
             const rightBrace = parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
             finallyBlock = Script.Finally(finallyToken, leftBrace, body, rightBrace);
         }
@@ -2985,7 +3002,7 @@ export function Parser() {
     function parseErrorBasedOnContext(context: ParseContext) {
         switch (context) {
             case ParseContext.cfScriptTagBody:
-            case ParseContext.cfScriptTopLevel:
+            case ParseContext.blockStatements:
                 parseErrorAtRange(pos(), pos(), "Declaration or statement expected.");
         }
     }
@@ -2994,7 +3011,7 @@ export function Parser() {
         const savedMode = mode;
         setScannerMode(parseBlockInMode);
         const leftBrace = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
-        const body = parseList(ParseContext.awaitingRightBrace, parseStatement);
+        const body = parseList(ParseContext.blockStatements, parseStatement);
 
         // if left brace was missing we don't eat right brace
         const rightBrace = (leftBrace.flags & NodeFlags.missing)

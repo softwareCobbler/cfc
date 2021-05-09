@@ -14,9 +14,16 @@ function fromFile(fname: string) {
     return SourceFile(absPath, cfmOrCfc(fname)!, fs.readFileSync(absPath));
 }
 
-const sourceFile = fromFile("./test/mxunit/tests/framework/AssertSameTest.cfc");
+//const sourceFile = fromFile("./test/mxunit/doc/build.cfm");
 
-//const sourceFile = NilCfm(``);
+const sourceFile = NilCfm(`
+<cfscript>
+function rm(fileInfo){
+ fileDelete(fileInfo[7] & '/' & fileInfo[1]);
+  //writeoutput(fileInfo[7] & '/' & fileInfo[1] & '<br/>');
+}
+</cfscript>
+`);
 
 const parser = Parser().setDebug(true);
 parser.setSourceFile(sourceFile);

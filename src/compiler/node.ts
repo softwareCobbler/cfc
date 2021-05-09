@@ -465,6 +465,7 @@ export namespace CfTag {
     export interface Script extends TagBase {
         tagType: TagType.script;
         stmtList: Node[];
+        scriptRange: SourceRange,
     }
     export function Script(
         tagStart: Terminal,
@@ -472,9 +473,11 @@ export namespace CfTag {
         voidSlash: Terminal | null,
         tagEnd: Terminal,
         canonicalName: string,
-        stmtList: Node[]) : Script {
+        stmtList: Node[],
+        scriptBodyRange: SourceRange) : Script {
         const v = TagBase<Script>(Which.start, TagType.script, tagStart, tagName, voidSlash, tagEnd, canonicalName);
         v.stmtList = stmtList;
+        v.scriptRange = scriptBodyRange;
         return v;
     }
 
