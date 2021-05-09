@@ -490,8 +490,8 @@ export function Scanner(source_: string | Buffer) {
             );
         }
 
-        const tag = mode === ScannerMode.tag || mode === ScannerMode.tag_and_script;
-        const script = mode === ScannerMode.script || mode === ScannerMode.tag_and_script;
+        const tag = mode === ScannerMode.tag || mode === ScannerMode.allow_both;
+        const script = mode === ScannerMode.script || mode === ScannerMode.allow_both;
         const from = getIndex();
 
         const c = peekChar()!.codepoint;
@@ -1010,4 +1010,4 @@ export function Token(type: TokenType, text: string, fromOrRange: number | Sourc
 
 export const NilToken = (pos: number) => Token(TokenType.NIL, "", new SourceRange(pos, pos));
 
-export const enum ScannerMode { tag, script, tag_and_script }
+export const enum ScannerMode { tag, script, allow_both }

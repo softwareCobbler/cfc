@@ -40,19 +40,16 @@ const enum ParseOptions {
 
 const enum ParseContext {
     none = 0,
-    insideCfTagAngles,    // somewhere inside <cf ... > or </cf ... >
-    hashWrappedExpr,      // in #...# in an expression context, like `a + #b#`
-    cfScriptTagBody,      // in a <cfscript> block
-    cfScriptTopLevel,     // in cfscript, but not within a containing <cfscript> block; e.g, a script-based cfc file
-    for,                  // in a for (...) expression
-    interpolatedText,     // in <cfoutput>#...#</cfoutput> or "#...#"
-    awaitingVoidSlash,    // <cfset foo = bar /> is just `foo=bar`, with a trailing tag-void-slash, not `foo=bar/` with a missing rhs to the `/` operator
-    awaitingRightBrace,   // any time a loose '}' would end a parse
-    awaitingRightBracket, // any time a loose ']' would end a parse
-    awaitingRightParen,   // any time a loose ')' would end a parse
-    argumentList,         // someCallWithArgs(...)
-    switchClause,         // in a switch statement
-    trivia,               // comments, whitespace
+    insideCfTagAngles,  // somewhere inside <cf ... > or </cf ... >
+    hashWrappedExpr,    // in #...# in an expression context, like `a + #b#`
+    cfScriptTagBody,    // in a <cfscript> block; similar to blockstatements, but </cfscript> can terminate it, and a stray `}` does not
+    blockStatements,    // inside a { ... }; a stray `}` will terminate this
+    for,                // in a for (...) expression
+    interpolatedText,   // in <cfoutput>#...#</cfoutput> or "#...#"
+    awaitingVoidSlash,  // <cfset foo = bar /> is just `foo=bar`, with a trailing tag-void-slash, not `foo=bar/` with a missing rhs to the `/` operator
+    argumentList,       // someCallWithArgs(...)
+    switchClause,       // in a switch statement
+    trivia,             // comments, whitespace
     structBody,
     arrayBody,
     sugaredAbort,       // inside an `abort ...;` statement
@@ -757,7 +754,7 @@ export function Parser() {
     }
 
     function parseComponentPreamble() : "script" | "tag" | null {
-        setScannerMode(ScannerMode.tag_and_script);
+        setScannerMode(ScannerMode.allow_both);
         const preamble : Node[] = [];
 
         //
