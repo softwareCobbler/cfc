@@ -2,7 +2,7 @@
 // throw some text into the scanner,
 // set the parser to either CFM/CFC mode,
 // rebuild and then run the debugger
-import { Scanner, Parser, Binder, NilCfc, NilCfm, SourceFile } from "../compiler";
+import { Scanner, Parser, Binder, NilDCfm, NilCfc, NilCfm, SourceFile } from "../compiler";
 import { CfFileType } from "../compiler/scanner";
 import { binarySearch, cfmOrCfc, findNodeInFlatSourceMap, flattenTree } from "../compiler/utils";
 

@@ -589,6 +589,8 @@ export function visit(node: Node, visitor: (arg: Node | undefined | null) => any
         case NodeType.new:
             return visitor(node.newToken)
                 || visitor(node.callExpr);
+        case NodeType.type:
+            return;
         default:
             ((_:never) => { throw "Non-exhaustive case or unintentional fallthrough." })(node);
     }

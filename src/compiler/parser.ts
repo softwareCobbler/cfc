@@ -27,7 +27,7 @@ import {
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, getAttributeValue } from "./utils";
-import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type } from "./types";
+import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type, TypeFlags, cfFunctionSignature, cfTypeCall, cfVoid } from "./types";
 
 let debugParseModule = false;
 
@@ -55,9 +55,11 @@ const enum ParseContext {
     trivia,               // comments, whitespace
     structBody,
     arrayBody,
-    sugaredAbort,         // inside an `abort ...;` statement
-    type,                 // inside a type annotation
-    END
+    sugaredAbort,       // inside an `abort ...;` statement
+    typeTupleOrArrayElement,
+    typeParamList,
+    awaitingRightBracket,
+    END                 // sentinel for looping over ParseContexts
 }
 
 function TagContext() {
@@ -849,19 +851,24 @@ export function Parser() {
     }
 
     function parse(cfFileType: CfFileType = sourceFile?.cfFileType || CfFileType.cfm) : Node[] {
-        if (cfFileType === CfFileType.cfm) {
-            return sourceFile.content = parseTags();
-        }
-
-        const componentType = parseComponentPreamble();
-        if (!componentType) {
-            return sourceFile.content = [];
-        }
-        else if (componentType === "tag") {
-            return sourceFile.content = parseTags();
-        }
-        else {
-            return sourceFile.content = parseScript();
+        switch (cfFileType) {
+            case CfFileType.cfm:
+                return sourceFile.content = parseTags();
+            case CfFileType.cfc: {
+                const componentType = parseComponentPreamble();
+                if (!componentType) {
+                    return sourceFile.content = [];
+                }
+                else if (componentType === "tag") {
+                    return sourceFile.content = parseTags();
+                }
+                else {
+                    return sourceFile.content = parseScript();
+                }
+            }
+            case CfFileType.dCfm: {
+                return sourceFile.content = parseDeclarationFile();
+            }
         }
     }
 
@@ -1576,6 +1583,33 @@ export function Parser() {
         setScannerMode(savedMode);
 
         return treeifyTagList(result);
+    }
+
+    function parseDeclarationFile() : Type[] {
+        setScannerMode(ScannerMode.script);
+        const result : Type[] = []; // declarations (function | global)
+        while (lookahead() !== TokenType.EOF) {
+            scanToNextChar("@", /*endOnOrAfter*/ "after");
+            const declareToken = peek();
+            if (declareToken.text === "declare") {
+                next(), parseTrivia();
+                const declarationSpecifier = peek();
+                if (declarationSpecifier.text === "function") {
+                    const functionDecl = tryParseNamedFunctionDefinition(/*speculative*/false, /*asDeclaration*/true);
+                    if (!functionDecl.returnTypeAnnotation) {
+                        parseErrorAtRange(functionDecl.range, "A function declaration in a declaration file requires a return type.");
+                    }
+                    result.push(cfFunctionSignature(functionDecl.nameToken!.token.text, functionDecl.params.map(param => param.type!), functionDecl.returnTypeAnnotation || cfNil()));
+                }
+            }
+            else if (declareToken.text === "global") {
+
+            }
+            else {
+                parseErrorAtRange(declareToken.range, "Invalid declaration specifier.");
+            }
+        }
+        return result;
     }
 
     function parseInterpolatedText(quoteDelimiter: TokenType.QUOTE_SINGLE | TokenType.QUOTE_DOUBLE) : (TextSpan | HashWrappedExpr)[] {
@@ -2336,8 +2370,11 @@ export function Parser() {
             case ParseContext.structBody:
             case ParseContext.argumentList:
                 return isStartOfExpression();
-            case ParseContext.type:
-                lookahead() === TokenType.LEFT_BRACKET || isLexemeLikeToken(peek(), /*allowNumeric*/false);
+            case ParseContext.typeTupleOrArrayElement:
+            case ParseContext.typeParamList:
+                lookahead() === TokenType.LEFT_BRACKET
+                || lookahead() === TokenType.LEFT_ANGLE
+                || isLexemeLikeToken(peek(), /*allowNumeric*/false)
             case ParseContext.cfScriptTagBody:
             case ParseContext.blockStatements:
             case ParseContext.switchClause:
@@ -2355,8 +2392,11 @@ export function Parser() {
             case ParseContext.argumentList:
                 return lookahead() === TokenType.RIGHT_PAREN;
             case ParseContext.arrayBody:
+            case ParseContext.typeTupleOrArrayElement:
             case ParseContext.awaitingRightBracket:
                 return lookahead() === TokenType.RIGHT_BRACKET;
+            case ParseContext.typeParamList:
+                return lookahead() === TokenType.RIGHT_ANGLE;
             case ParseContext.structBody:
             case ParseContext.blockStatements:
                 return lookahead() === TokenType.RIGHT_BRACE;
@@ -2488,7 +2528,9 @@ export function Parser() {
             && tokenType !== TokenType.KW_VAR; // `var` is a valid identifier, so `var var = expr` is OK
     }
 
-    function parseIdentifier() : Identifier {
+    // withTrivia is to support instances where the caller may want to manually consume trivia,
+    // in order to grab type annotations
+    function parseIdentifier(withTrivia = true) : Identifier {
         let terminal : Terminal;
         let canonicalName : string;
 
@@ -2504,7 +2546,7 @@ export function Parser() {
                 parseErrorAtCurrentToken(`Reserved keyword \`${peek().text.toLowerCase()}\` cannot be used as a variable name.`);
             }
 
-            terminal = Terminal(scanIdentifier()!, parseTrivia());
+            terminal = Terminal(scanIdentifier()!, withTrivia ? parseTrivia() : []);
             canonicalName = terminal.token.text.toLowerCase();
         }
 
@@ -2619,9 +2661,9 @@ export function Parser() {
     // use definite! syntax at non-speculative call-
     // the speculative mode is to support disambiguating arrow-function calls, which often look like other valid expressions
     // until we get a full parameter definition parse followed by `) <trivia>? =>`
-    function tryParseFunctionDefinitionParameters(speculative: false) : Script.FunctionParameter[];
+    function tryParseFunctionDefinitionParameters(speculative: false, asDeclaration: boolean) : Script.FunctionParameter[];
     function tryParseFunctionDefinitionParameters(speculative: true) : Script.FunctionParameter[] | null;
-    function tryParseFunctionDefinitionParameters(speculative: boolean) : Script.FunctionParameter[] | null {
+    function tryParseFunctionDefinitionParameters(speculative: boolean, asDeclaration = false) : Script.FunctionParameter[] | null {
         const result : Script.FunctionParameter[] = [];
         // might have to handle 'required' specially in "isIdentifier"
         // we could set a flag saying we're in a functionParameterList to help out
@@ -2632,6 +2674,7 @@ export function Parser() {
             let equal : Terminal | null = null;
             let defaultValue : Node | null = null;
             let comma : Terminal | null = null;
+            let type : Type | null = null;
 
             //
             // required is not a keyword, it just has a special use in exactly this position
@@ -2651,7 +2694,30 @@ export function Parser() {
             // function foo((required)? name (= defaultExpr)?) { ... }
             //                          ^^^^
             else if (isLexemeLikeToken(peek())) {
-                name = parseIdentifier();
+                if (asDeclaration) {
+                    name = parseIdentifier(/*withTrivia*/ false);
+
+                    // we're already in a triva-based type annotation, e.g,
+                    // function foo(x /*: (name: type) => void*/)
+                    //                   ^^^^^^^^^^^^^^^^^^^^^
+                    // in which case we can just parse types without comment-delimiters
+                    if (isInSomeContext(ParseContext.trivia)) {
+                        parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
+                        type = parseType();
+                        type.name = (<Terminal>name.source).token.text;
+                    }
+                    else {
+                        const triviaAndType = parseScriptTriviaWithPossibleTypeAnnotation((<Terminal>name.source).token.text);
+                        if (!triviaAndType.type) {
+                            parseErrorAtRange(name.range, "Expected a type annotation.");
+                        }
+                        (<Terminal>name.source).trivia = triviaAndType.trivia;
+                        type = triviaAndType.type;
+                    }
+                }
+                else {
+                    name = parseIdentifier(/*withTrivia*/ true);
+                }
             }
             // didn't match anything
             else {
@@ -2681,7 +2747,12 @@ export function Parser() {
             }
 
             comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
-            result.push(Script.FunctionParameter(requiredTerminal, javaLikeTypename, name, equal, defaultValue, comma));
+
+            if (type && !requiredTerminal) {
+                type.typeFlags |= TypeFlags.optional;
+            }
+
+            result.push(Script.FunctionParameter(requiredTerminal, javaLikeTypename, name, equal, defaultValue, comma, type));
         }
 
         if (result.length > 0 && result[result.length-1].comma) {
@@ -2701,6 +2772,7 @@ export function Parser() {
                     null,
                     null,
                     parseIdentifier(),
+                    null,
                     null,
                     null,
                     null)
@@ -2853,17 +2925,17 @@ export function Parser() {
         }
 
         leftParen  = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
-        params     = tryParseFunctionDefinitionParameters(/*speculative*/ false);
+        params     = tryParseFunctionDefinitionParameters(/*speculative*/ false, /*asDeclaration*/ false);
         rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
         attrs      = parseTagAttributes();
         body       = parseBracedBlock(ScannerMode.script);
 
-        return Script.FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body);
+        return Script.FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body, null);
     }
 
-    function tryParseNamedFunctionDefinition(speculative: false) : Node;
-    function tryParseNamedFunctionDefinition(speculative: true) : Node | null;
-    function tryParseNamedFunctionDefinition(speculative: boolean) : Node | null {
+    function tryParseNamedFunctionDefinition(speculative: false, asDeclaration: boolean) : Script.FunctionDefinition;
+    function tryParseNamedFunctionDefinition(speculative: true) : Script.FunctionDefinition | null;
+    function tryParseNamedFunctionDefinition(speculative: boolean, asDeclaration = false) : Script.FunctionDefinition | null {
         let accessModifier: Terminal | null = null;
         let returnType    : DottedPath<Terminal> | null = null;
         let functionToken : Terminal | null;
@@ -2873,6 +2945,7 @@ export function Parser() {
         let rightParen    : Terminal;
         let attrs         : TagAttribute[];
         let body          : Block;
+        let returnTypeAnnotation : Type | null = null;
         
         if (SpeculationHelper.lookahead(isAccessModifier)) {
             accessModifier = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ false);
@@ -2893,12 +2966,26 @@ export function Parser() {
 
         nameToken     = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
         leftParen     = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
-        params        = tryParseFunctionDefinitionParameters(/*speculative*/ false);
-        rightParen    = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
-        attrs         = parseTagAttributes();
-        body          = parseBracedBlock(ScannerMode.script);
+        params        = tryParseFunctionDefinitionParameters(/*speculative*/ false, asDeclaration);
+        
+        if (asDeclaration) {
+            rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.noTrivia);
+            const triviaAndType = parseScriptTriviaWithPossibleTypeAnnotation();
+            if (triviaAndType.type) {
+                returnTypeAnnotation = triviaAndType.type;
+            }
+            rightParen.trivia = triviaAndType.trivia;
+            attrs = [];
+            body = Block(null, [], null);
+            body.range = new SourceRange(pos(), pos());
+        }
+        else {
+            rightParen    = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+            attrs         = parseTagAttributes();
+            body          = parseBracedBlock(ScannerMode.script);
+        }
 
-        return Script.FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body);
+        return Script.FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body, returnTypeAnnotation);
     }
 
     function parseDo() : Do {
@@ -3099,7 +3186,7 @@ export function Parser() {
                     return parseIf();
                 }
                 case TokenType.KW_FUNCTION: {
-                    return tryParseNamedFunctionDefinition(/*speculative*/ false);
+                    return tryParseNamedFunctionDefinition(/*speculative*/ false, /*asDeclaration*/false);
                 }
                 case TokenType.KW_FOR: {
                     return parseFor();
@@ -3273,12 +3360,10 @@ export function Parser() {
     }
 
     function parseType() : Type;
-    function parseType(fromInclusive: number, toExclusive: number) : Type;
-    function parseType(fromInclusive?: number, toExclusive?: number) : Type {
-        function parseTypename() {
-            const token = scanIdentifier();
-            parseTrivia();
-            switch (token?.text.toLowerCase()) {
+    function parseType(fromInclusive: number, toExclusive: number, name?: string) : Type;
+    function parseType(fromInclusive?: number, toExclusive?: number, name?: string) : Type {
+        function lexemeToType(lexeme: Token) {
+            switch (lexeme.text.toLowerCase()) {
                 case "number":
                     return cfNumber();
                 case "string":
@@ -3293,8 +3378,22 @@ export function Parser() {
                     return cfBoolean(true);
                 case "false":
                     return cfBoolean(false);
+                case "void":
+                    return cfVoid();
                 default:
                     return cfNil();
+            }
+        }
+
+        function maybeParseTypeParameters(type: Type) : Type {
+            if (lookahead() === TokenType.LEFT_ANGLE) {
+                parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
+                const params = parseList(ParseContext.typeParamList, parseTypeElement);
+                parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia)
+                return cfTypeCall(type, params, null);
+            }
+            else {
+                return type;
             }
         }
 
@@ -3333,17 +3432,59 @@ export function Parser() {
             })
         }
 
-        
+        parseTrivia();
+
+        let result : Type = cfNil();
+
         switch (lookahead()) {
             case TokenType.LEFT_BRACKET: {
                 parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
-                const tupleTypes = doInExtendedContext(ParseContext.awaitingRightBracket, () => parseList(ParseContext.type, parseTypeElement));
+                const tupleTypes = parseList(ParseContext.typeTupleOrArrayElement, parseTypeElement);
                 parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
-                return maybeParseArrayModifier(cfTuple(tupleTypes));
+                result = maybeParseArrayModifier(cfTuple(tupleTypes));
+                break;
             }
             case TokenType.LEXEME: {
-                const literal = parseTypename();
-                return maybeParseArrayModifier(literal);
+                const lexeme = next();
+                result = lexemeToType(lexeme);
+                result = maybeParseTypeParameters(maybeParseArrayModifier(result));
+                break;
+            }
+            case TokenType.LEFT_PAREN: {
+                parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
+                
+                const parenthesizedType = SpeculationHelper.speculate(() => {
+                    const lexeme = next();
+                    parseTrivia();
+                    if (lookahead() === TokenType.COLON) {
+                        // this is a non-type name, used to give a name to an inline function type signature parameter,
+                        // i.e, (foo : any) => any
+                        //       ^^^^^
+                        return null;
+                    }
+                    else if (lexeme.text === "required") {
+                        next();
+                        parseTrivia();
+                        if (lookahead() === TokenType.COLON) {
+                            return null;
+                        }
+                    }
+
+                    return lexemeToType(lexeme);
+                })
+
+                if (parenthesizedType) {
+                    parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+                    result = maybeParseArrayModifier(parenthesizedType);
+                    break;
+                }
+                else {
+                    const params = tryParseFunctionDefinitionParameters(/*speculative*/false, /*asDeclaration*/ true);
+                    parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+                    parseExpectedTerminal(TokenType.EQUAL_RIGHT_ANGLE, ParseOptions.withTrivia);
+                    const returnType = parseType();
+                    result = cfFunctionSignature("", params.map(param => param.type!), returnType);
+                }
             }
         }
 
@@ -3351,7 +3492,48 @@ export function Parser() {
             restoreScannerState(savedScannerState);
         }
 
-        return cfNil();
+        if (name) {
+            result.name = name;
+        }
+
+        return result;
+    }
+
+    function parseScriptTriviaWithPossibleTypeAnnotation(name?: string) : {trivia: Node[], type: Type | null} {
+        const trivia : Node[] = [];
+        let type : Type | null = null;
+
+        const savedContext = updateParseContext(ParseContext.trivia);
+
+        while (lookahead() !== TokenType.EOF) {
+            if (lookahead() === TokenType.WHITESPACE) {
+                trivia.push(TextSpan(next().range, ""));
+            }
+            else if (lookahead() === TokenType.FORWARD_SLASH_STAR) {
+                if (peek(1).type === TokenType.COLON) {
+                    if (type !== null) {
+                        parseErrorAtCurrentToken("A comment containing a type annotation must contain exactly one type annotation.");
+                        trivia.push(...parseTrivia());
+                    }
+                    else {
+                        const commentStart = pos();
+                        scanToNextToken([TokenType.STAR_FORWARD_SLASH], /*endOnOrAfter*/ "after");
+                        const commentEnd = pos();
+
+                        type = parseType(commentStart+3, commentEnd-2, name);
+
+                        trivia.push(Comment(CommentType.scriptMultiLine, new SourceRange(commentStart, commentEnd)));
+                    }
+                }
+            }
+            else { 
+                break;
+            }
+        }
+
+        parseContext = savedContext;
+
+        return {trivia, type};
     }
 
     function getDiagnostics() : Diagnostic[] {

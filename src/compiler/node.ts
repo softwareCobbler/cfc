@@ -26,7 +26,7 @@ export const enum NodeType {
     dottedPath, switch, switchCase, do, while, ternary, for, structLiteral, arrayLiteral,
     structLiteralInitializerMember, arrayLiteralInitializerMember, try, catch, finally,
     breakStatement, continueStatement, returnStatement, importStatement,
-    new
+    new, type
 }
 
 const NodeTypeUiString : Record<NodeType, string> = {
@@ -75,6 +75,7 @@ const NodeTypeUiString : Record<NodeType, string> = {
     [NodeType.continueStatement]: "continue",
     [NodeType.importStatement]: "import",
     [NodeType.new]: "new",
+    [NodeType.type]: "type",
 };
 
 export type Node =
@@ -127,6 +128,7 @@ export type Node =
     | OptionalDotAccess
     | OptionalBracketAccess
     | OptionalCall
+    | externType
 
 interface FunctionSignature {
     params: FunctionParameter[],
@@ -138,8 +140,10 @@ type Type =
     | FunctionSignature
 
 export type InternId = number;
+
 export interface Variable {
     type: Type,
+    mType: externType,
     name: InternId,
     final: boolean,
     var: boolean,
@@ -189,7 +193,7 @@ export function isStaticallyKnownScopeName(name: string) : name is StaticallyKno
 }
 
 export type NodeId = number;
-interface NodeBase {
+export interface NodeBase {
     kind: NodeType,
     nodeId: NodeId,
     parent: Node | null,
@@ -284,6 +288,7 @@ export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: 
 
 export const NilCfm = (text: string) => SourceFile("nil!", CfFileType.cfm, text);
 export const NilCfc = (text: string) => SourceFile("nil!", CfFileType.cfc, text);
+export const NilDCfm = (text: string) => SourceFile("nil!", CfFileType.dCfm, text);
 
 export interface Terminal extends NodeBase {
     kind: NodeType.terminal;
@@ -1334,7 +1339,7 @@ export namespace Script {
         defaultValue: Node | null,
         comma: Terminal | null,
         canonicalName: string | undefined,
-        required: boolean,
+        type: externType | null,
     }
 
     export function FunctionParameter(
@@ -1343,7 +1348,8 @@ export namespace Script {
         identifier: Identifier,
         equals: Terminal | null,
         defaultValue: Node | null,
-        comma: Terminal | null) : FunctionParameter {
+        comma: Terminal | null,
+        type: externType | null) : FunctionParameter {
         const v = NodeBase<FunctionParameter>(NodeType.functionParameter, mergeRanges(requiredTerminal, javaLikeTypename, identifier, defaultValue, comma));
         v.fromTag = false;
         v.requiredTerminal = requiredTerminal;
@@ -1353,7 +1359,7 @@ export namespace Script {
         v.defaultValue = defaultValue;
         v.comma = comma;
         v.canonicalName = identifier.canonicalName;
-        v.required = !!requiredTerminal;
+        v.type = type;
         return v;
     }
 }
@@ -1397,6 +1403,7 @@ export namespace Script {
         attrs          : TagAttribute[],
         body           : Block,
         canonicalName  : string | null,
+        returnTypeAnnotation : externType | null,
     }
 
     export function FunctionDefinition(
@@ -1408,7 +1415,8 @@ export namespace Script {
         params        : FunctionParameter[],
         rightParen    : Terminal,
         attrs         : TagAttribute[],
-        body          : Block
+        body          : Block,
+        returnTypeAnnotation : externType | null
     ) : FunctionDefinition {
         const v = NodeBase<FunctionDefinition>(NodeType.functionDefinition, mergeRanges(accessModifier, returnType, functionToken, body));
         v.fromTag        = false;
@@ -1421,6 +1429,7 @@ export namespace Script {
         v.rightParen     = rightParen;
         v.attrs          = attrs;
         v.body           = body;
+        v.returnTypeAnnotation = returnTypeAnnotation;
         v.canonicalName  = nameToken?.token.text.toLowerCase() ?? null;
         return v;
     }

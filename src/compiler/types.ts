@@ -1,20 +1,10 @@
-`
-
-declare arrayFindNoCase(required array /*: []*/, required value /*: any*/, parallel /*: boolean*/, maxThreadCount /*: number*/): number;
-declare arrayFindNoCase(required array /*: []*/, required callback /*: (v: any) => boolean*/): number;
-
-function foo(bar /*: [number, string][]*/) {}
-
-<cffunction name="foo">
-    <cfargument name="bar" type:="[const number, const string][]">
-</cffunction>
-
-`
+import { NodeBase, NodeType } from "./node";
 
 let debugTypeModule = true;
 
 const enum TypeKind {
     any,
+    void,
     string,
     number,
     boolean,
@@ -23,46 +13,58 @@ const enum TypeKind {
     tuple,
     struct,
     union,
+    functionSignature,
+    typeCall,
 }
 
 const TypeKindUiString : Record<TypeKind, string> = {
-    [TypeKind.any]:     "any",
-    [TypeKind.string]:  "string",
-    [TypeKind.number]:  "number",
-    [TypeKind.boolean]: "boolean",
-    [TypeKind.nil]:     "nil",
-    [TypeKind.array]:   "array",
-    [TypeKind.tuple]:   "tuple",
-    [TypeKind.struct]:  "struct",
-    [TypeKind.union]:   "union",
+    [TypeKind.any]:               "any",
+    [TypeKind.void]:               "void",
+    [TypeKind.string]:            "string",
+    [TypeKind.number]:            "number",
+    [TypeKind.boolean]:           "boolean",
+    [TypeKind.nil]:               "nil",
+    [TypeKind.array]:             "array",
+    [TypeKind.tuple]:             "tuple",
+    [TypeKind.struct]:            "struct",
+    [TypeKind.union]:             "union",
+    [TypeKind.functionSignature]: "function-signature", // (name: type, ...) => type
+    [TypeKind.typeCall]:          "type-call", // type<type-list, ...> => type
 }
 
-const enum TypeFlags {
+export const enum TypeFlags {
+    none     = 0,
     optional = 1 << 1,
     const    = 1 << 2
 }
 
 if (TypeFlags.optional) {};
 
-export interface TypeBase {
-    kind: TypeKind,
-    __debug_kind: string,
+export interface TypeBase extends NodeBase {
+    kind: NodeType.type,
+    typeKind: TypeKind,
+    typeFlags: TypeFlags,
+
+    name?: string,
+    __debug_kind?: string,
 }
 
-export function TypeBase<T extends TypeBase>(kind: T["kind"]) : T {
-    const result = {kind} as T;
+export function TypeBase<T extends Type>(typeKind: T["typeKind"]) : T {
+    const result = NodeBase<Type>(NodeType.type);
+    result.typeKind = typeKind;
+    result.typeFlags = TypeFlags.none;
 
     if (debugTypeModule) {
-        result.__debug_kind = TypeKindUiString[kind];
+        result.__debug_kind = TypeKindUiString[typeKind];
     }
 
-    return result;
+    return result as T;
 }
 
-export type Type = cfAny | cfString | cfNumber | cfBoolean | cfNil | cfArray | cfTuple | cfStruct;
+export type Type = cfAny | cfVoid | cfString | cfNumber | cfBoolean | cfNil | cfArray | cfTuple | cfStruct | cfFunctionSignature | cfTypeCall;
 
 export interface cfAny extends TypeBase {
-    kind: TypeKind.any;
+    typeKind: TypeKind.any;
 }
 
 export function cfAny() : cfAny {
@@ -70,8 +72,17 @@ export function cfAny() : cfAny {
     return v;
 }
 
+export interface cfVoid extends TypeBase {
+    typeKind: TypeKind.void;
+}
+
+export function cfVoid() : cfVoid {
+    const v = TypeBase<cfVoid>(TypeKind.void);
+    return v;
+}
+
 export interface cfString extends TypeBase {
-    kind: TypeKind.string,
+    typeKind: TypeKind.string,
     literal?: string,
 }
 
@@ -84,7 +95,7 @@ export function cfString(literal?: string) : cfString {
 }
 
 export interface cfNumber extends TypeBase {
-    kind: TypeKind.number,
+    typeKind: TypeKind.number,
     literal?: number,
 }
 
@@ -97,7 +108,7 @@ export function cfNumber(literal?: number) : cfNumber {
 }
 
 export interface cfBoolean extends TypeBase {
-    kind: TypeKind.boolean,
+    typeKind: TypeKind.boolean,
     literal?: boolean
 }
 
@@ -110,7 +121,7 @@ export function cfBoolean(literal?: boolean) : cfBoolean {
 }
 
 export interface cfNil extends TypeBase {
-    kind: TypeKind.nil
+    typeKind: TypeKind.nil
 }
 
 export function cfNil() : cfNil {
@@ -119,7 +130,7 @@ export function cfNil() : cfNil {
 }
 
 export interface cfArray extends TypeBase {
-    kind: TypeKind.array
+    typeKind: TypeKind.array
     T: Type
 }
 
@@ -130,7 +141,7 @@ export function cfArray(T: Type) : cfArray {
 }
 
 export interface cfTuple extends TypeBase {
-    kind: TypeKind.tuple,
+    typeKind: TypeKind.tuple,
     T: Type[]
 }
 
@@ -141,14 +152,44 @@ export function cfTuple(T: Type[]) : cfTuple {
 }
 
 export interface cfStruct extends TypeBase {
-    kind: TypeKind.struct,
-    stringIndex: boolean;
-    T: Map<string, Type>
+    typeKind: TypeKind.struct,
+    stringIndex: boolean,
+    T: Map<string, Type>,
 }
 
 export function cfStruct(T: Map<string, Type>, stringIndex = false) : cfStruct {
     const v = TypeBase<cfStruct>(TypeKind.struct);
     v.T = T;
     v.stringIndex = stringIndex;
+    return v;
+}
+
+export interface cfFunctionSignature extends TypeBase {
+    typeKind: TypeKind.functionSignature,
+    name: string,
+    params: Type[],
+    returns: Type
+}
+
+export function cfFunctionSignature(name: string, params: Type[], returns: Type) : cfFunctionSignature {
+    const v = TypeBase<cfFunctionSignature>(TypeKind.functionSignature);
+    v.name = name;
+    v.params = params;
+    v.returns = returns;
+    return v;
+}
+
+export interface cfTypeCall extends TypeBase {
+    typeKind: TypeKind.typeCall,
+    left: Type,
+    params: Type[]
+    returnType: Type | null,
+}
+
+export function cfTypeCall(left: Type, params: Type[], returnType: Type | null) : cfTypeCall {
+    const v = TypeBase<cfTypeCall>(TypeKind.typeCall);
+    v.left = left;
+    v.params = params;
+    v.returnType = returnType;
     return v;
 }

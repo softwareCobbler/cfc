@@ -2,6 +2,7 @@ import { NodeWithScope, Variable, ArrowFunctionDefinition, BinaryOperator, Block
 import { getTriviallyComputableString, BiMap, visit } from "./utils";
 import { Diagnostic } from "./parser";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
+import { cfAny } from "./types";
 
 type InternedStringId = number;
 const InternedStrings = new BiMap<InternedStringId, string>();
@@ -76,6 +77,7 @@ const staticCgiScope = (function () {
         result.set(
             internId, {
                 type: "any",
+                mType: cfAny(),
                 name: internId,
                 final: false,
                 var: false,
@@ -247,6 +249,8 @@ export function Binder() {
             case NodeType.new:
                 bindNew(node);
                 return;
+            case NodeType.type:
+                return;
             default:
                 ((_:never) => { throw "Non-exhaustive case or unintentional fallthrough." })(node);
         }
@@ -377,6 +381,7 @@ export function Binder() {
                     RootNode.containedScope[identifierBaseName]!.set(
                         internId, {
                             type: "any",
+                            mType: cfAny(),
                             name: internId,
                             final: true,
                             var: false,
@@ -394,6 +399,7 @@ export function Binder() {
                 (<Map<number, Variable>>currentContainer.containedScope.local).set(
                     internId, {
                         type: "any",
+                        mType: cfAny(),
                         name: internId,
                         final: !!node.finalModifier,
                         var: !!node.varModifier,
@@ -593,6 +599,7 @@ export function Binder() {
         }
         scope.set(internId, {
             type: "any",
+            mType: cfAny(),
             name: internId,
             final: false,
             var: false,
@@ -688,6 +695,7 @@ export function Binder() {
                             params: node.params,
                             return: "any"
                         },
+                        mType: cfAny(),
                         name: internId,
                         final: false,
                         var: false,
