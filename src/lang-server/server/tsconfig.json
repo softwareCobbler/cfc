@@ -12,7 +12,7 @@
 			"compiler": ["../../compiler"]
 		}
 	},
-	"include": ["src/server.ts"],
+	"files": ["src/server.ts", "src/tagnames.ts"],
 	"references": [
 		{"path": "../../compiler"}
 	]

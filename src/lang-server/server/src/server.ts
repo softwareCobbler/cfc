@@ -29,8 +29,11 @@ import {
 } from 'vscode-languageserver-textdocument';
 
 import { NodeId, SourceFile, Parser, Binder, Node as cfNode, binarySearch, CfFileType, Diagnostic as cfcDiagnostic, cfmOrCfc, flattenTree, getScopeContainedNames, NodeSourceMap, isExpressionContext, getTriviallyComputableString } from "compiler";
-import { isStaticallyKnownScopeName, NodeType, ScopeDisplay } from '../../../compiler/node';
-import { findNodeInFlatSourceMap, getNearestEnclosingScope } from '../../../compiler/utils';
+import { CfTag, isStaticallyKnownScopeName, NodeType, ScopeDisplay, StaticallyKnownScopeName } from '../../../compiler/node';
+import { findNodeInFlatSourceMap, getNearestEnclosingScope, isCfScriptTagBlock } from '../../../compiler/utils';
+
+import { tagNames } from "./tagnames";
+import { TokenType } from '../../../compiler/scanner';
 
 const parser = Parser().setDebug(true);
 const binder = Binder().setDebug(true);
@@ -285,8 +288,23 @@ connection.onCompletion(
 
 		if (!node) return [];
 
+		const expressionContext = isExpressionContext(node);
+
+		if (!expressionContext) {
+			if (node.parent?.kind === NodeType.tag && (node === node.parent.tagStart || node === node.parent.tagName)) {
+				return tagNames.map((name) : CompletionItem => {
+					return { 
+						label: "cf" + name,
+						kind: CompletionItemKind.Property,
+						detail: "cflsp:<<taginfo?>>"
+					}
+				});
+			}
+			return [];
+		}
+
 		// if we got an indexed access chain, we only want to provide completions for the first dot
-		if (node.kind === NodeType.terminal && node.token.text === "." && node.parent?.kind === NodeType.indexedAccessChainElement) {
+		if (node.parent?.kind === NodeType.indexedAccessChainElement) {
 			if (node.parent?.parent?.kind === NodeType.indexedAccess) {
 				// if so, try to get the identifier used as the root of the chain
 				// if that name is a known scope, try to find the names in that scope
@@ -308,17 +326,44 @@ connection.onCompletion(
 		}
 		
 		const nearestConstruct = getNearestConstruct(node);
-		if (nearestConstruct?.kind === NodeType.functionParameter || nearestConstruct?.kind === NodeType.comment) {
+		if (nearestConstruct?.kind === NodeType.functionParameter || nearestConstruct?.kind === NodeType.comment || nearestConstruct?.kind === NodeType.sourceFile) {
 			// don't offer completions in function parameter lists `f(a, b, c|)`
+			// don't offer completions outside of any construct (in cfm's this is html output space; in cfcs this void space where only comments should go)
+			//          actually at root we could offer <cfcomponent> tag completion, and `component ` sugared tag block completion, and that's it
+			// don't offer completions inside comments
 			return [];
 		}
-		else {
+		else if (isExpressionContext(node)) {
+			if (isCfScriptTagBlock(node)) {
+				let justCfScriptCompletion = false;
+				// if we got </cf then we are in an unfinished tag node
+				if (node.parent?.kind === NodeType.tag && node.parent?.which === CfTag.Which.end) {
+					justCfScriptCompletion = true;
+				}
+				// if we got got an identifier but the previous text is "</" (not valid in any expression) then just provide a cfscript completion
+				else if (node.parent?.kind === NodeType.identifier && node.range.fromInclusive >= 2) {
+					const text = document.getText();
+					if (text[node.range.fromInclusive-2] === "<" && text[node.range.fromInclusive-1] === "/") {
+						justCfScriptCompletion = true;
+					}
+				}
+
+				if (justCfScriptCompletion) {
+					return [{
+						label: "cfscript",
+						kind: CompletionItemKind.Property,
+						detail: "cflsp:<<taginfo?>>",
+						insertText: "cfscript>",
+					}];
+				}
+			}
+
 			const allVisibleNames = (function x(node: cfNode | null) {
 				const result = new Map<string, number>();
 				let scopeDistance = 0; // keep track of "how far away" some name is, in terms of parent scopes; we can then offer closer names first
 				while (node) {
 					if (node.containedScope) {
-						const names = getAllNamesOfScopeDisplay(node.containedScope);
+						const names = getAllNamesOfScopeDisplay(node.containedScope, "variables", "local", "arguments");
 						for (const name of names ){
 							result.set(name, scopeDistance);
 						}
@@ -360,10 +405,11 @@ connection.onCompletion(
 			return null;
 		}
 
-		function getAllNamesOfScopeDisplay(scopeDisplay : ScopeDisplay) : string[] {
+		function getAllNamesOfScopeDisplay(scopeDisplay : ScopeDisplay, ...keys: StaticallyKnownScopeName[]) : string[] {
 			const result : string[] = [];
-			for (const key of Object.keys(scopeDisplay) as (keyof ScopeDisplay)[]) {
-				if (key === "container") continue;
+			const targetKeys = keys.length > 0 ? keys : Object.keys(scopeDisplay) as (keyof ScopeDisplay)[];
+			for (const key of targetKeys) {
+				if (key === "container" || !(key in scopeDisplay)) continue;
 				result.push(...getScopeContainedNames(scopeDisplay[key]!));
 			}
 			return result;

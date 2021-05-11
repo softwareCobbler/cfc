@@ -336,6 +336,10 @@ export function visit(node: Node, visitor: (arg: Node | undefined | null) => any
                         return visitor(node.expr)
                             || visitor(node.semicolon)
                     }
+                case StatementType.fromTag:
+                    return visitor(node.tagOrigin.startTag);
+                case StatementType.scriptSugaredTagCallStatement:
+                case StatementType.scriptTagCallStatement:
                 default: return;
             }
         case NodeType.returnStatement:
@@ -366,7 +370,7 @@ export function visit(node: Node, visitor: (arg: Node | undefined | null) => any
                         || forEachNode(node.stmtList, visitor)
                         || visitor(node.rightBrace);
                 }
-                case BlockType.tagCallBlock: {
+                case BlockType.scriptTagCallBlock: {
                     return visitor(node.name)
                         || visitor(node.tagCallStatementArgs!.leftParen)
                         || forEachNode(node.tagCallStatementArgs!.args, visitor)
@@ -694,23 +698,69 @@ export function findNodeInFlatSourceMap(flatSourceMap: NodeSourceMap[], nodeMap:
 }
 
 export function isExpressionContext(node: Node | null) : boolean {
-    if (!node) return false;
-
-    switch (node.kind) {
-        case NodeType.sourceFile: // fallthough
-        case NodeType.comment:
-            return false;
-        case NodeType.terminal: // fallthrough
-        case NodeType.textSpan:
-            return isExpressionContext(node.parent);
-        case NodeType.block:
-            if (node.tagOrigin.startTag) {
-                return node.tagOrigin.startTag.canonicalName === "script";
-            }
-            return true;
-        default:
-            return true;
+    outer:
+    while (node) {
+        switch (node.kind) {
+            case NodeType.sourceFile: // fallthough
+            case NodeType.comment:
+                return false;
+            case NodeType.terminal: // fallthrough
+            case NodeType.identifier:
+            case NodeType.textSpan:
+                node = node.parent;
+                continue outer;
+            case NodeType.hashWrappedExpr:
+                return true;
+            case NodeType.try:
+            case NodeType.catch:
+            case NodeType.finally:
+            case NodeType.switch:
+            case NodeType.functionDefinition:
+                return !node.fromTag;
+            case NodeType.tag:
+                return node.canonicalName === "if" || node.canonicalName === "elseif" || node.canonicalName === "return" || node.canonicalName === "set";
+            case NodeType.statement:
+                switch (node.subType) {
+                    case StatementType.fromTag:
+                        return false;
+                    case StatementType.expressionWrapper:
+                    case StatementType.scriptSugaredTagCallStatement:
+                    case StatementType.scriptTagCallStatement:
+                        return true;
+                    default:
+                        // fixme: clean up union so we can detect we've exhaustively checked
+                        return false;
+                }
+            case NodeType.block:
+                switch (node.subType) {
+                    case BlockType.fromTag:
+                        return node.tagOrigin.startTag!.canonicalName === "script";
+                    case BlockType.scriptSugaredTagCallBlock:
+                    case BlockType.cLike:
+                    case BlockType.scriptSugaredTagCallBlock:
+                        return true;
+                    default:
+                        return false;
+                        // need to setup the Block union such that we can detect that we've exhausted all options
+                }
+            default:
+                node = node.parent;
+        }
     }
+
+    return false;
+}
+
+export function isCfScriptTagBlock(node: Node | null) : boolean {
+    while (node) {
+        if (node.kind === NodeType.block && node.subType === BlockType.fromTag) {
+            if (node.tagOrigin.startTag?.canonicalName === "script") {
+                return true;
+            }
+        }
+        node = node.parent;
+    }
+    return false;
 }
 
 export function getNearestEnclosingScope(node: Node, scopeName: StaticallyKnownScopeName) : Scope | undefined {

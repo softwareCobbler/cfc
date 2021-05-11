@@ -978,7 +978,7 @@ export namespace FromTag {
 export const enum BlockType {
     fromTag,                            // a full tag block, like <cftransaction> ... </cftransaction>
     scriptSugaredTagCallBlock, // a "named" block, where the name is a sugared tag name: `transaction <attrs> { ... }`
-    tagCallBlock,              // a tag call in script syntax with body: `cftransaction(action=foo) { ... }`
+    scriptTagCallBlock,              // a tag call in script syntax with body: `cftransaction(action=foo) { ... }`
     cLike                               // a typical c-like block, just `{ ... }`
 }
 export interface Block extends NodeBase {
@@ -1006,7 +1006,7 @@ export function ScriptSugaredTagCallBlock(name: Terminal, attrs: TagAttribute[],
 
 // e.g, `cftransaction(action='foo') {}`
 export function ScriptTagCallBlock(name: Terminal, leftParen: Terminal, args: CallArgument[], rightParen: Terminal, block: Block) : Block {
-    block.subType              = BlockType.tagCallBlock;
+    block.subType              = BlockType.scriptTagCallBlock;
     block.name                 = name;
     block.tagCallStatementArgs = {leftParen, args, rightParen};
     return block;

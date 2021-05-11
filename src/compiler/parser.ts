@@ -2353,6 +2353,8 @@ export function Parser() {
             case ParseContext.interpolatedText:
             case ParseContext.hashWrappedExpr:
                 return lookahead() === TokenType.HASH;
+            case ParseContext.insideCfTagAngles:
+                return lookahead() === TokenType.RIGHT_ANGLE;
             default:
                 return false;
         }

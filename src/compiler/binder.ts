@@ -402,7 +402,7 @@ export function Binder() {
             }
             else {
                 // there is no local scope, so we must be at top-level scope
-                errorAtRange(mergeRanges(node.finalModifier, node.varModifier, node.expr), "Local variables may not be declared at top-level scope.");
+                errorAtRange(mergeRanges(node.finalModifier, node.varModifier, (<BinaryOperator>node.expr)?.left), "Local variables may not be declared at top-level scope.");
             }
         
             const enclosingFunction = getEnclosingFunction(node);
@@ -483,7 +483,7 @@ export function Binder() {
                 bindList(node.sugaredCallStatementAttrs!, node);
                 bindList(node.stmtList, node);
                 break;
-            case BlockType.tagCallBlock:
+            case BlockType.scriptTagCallBlock:
                 // check against cf tag meta
                 // maybe push context to make sure children are correct
                 bindList(node.tagCallStatementArgs!.args, node);
