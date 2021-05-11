@@ -17,12 +17,17 @@ function fromFile(fname: string) {
 //const sourceFile = fromFile("./test/mxunit/doc/build.cfm");
 
 const sourceFile = NilCfm(`
-<cfscript>
-function rm(fileInfo){
- fileDelete(fileInfo[7] & '/' & fileInfo[1]);
-  //writeoutput(fileInfo[7] & '/' & fileInfo[1] & '<br/>');
-}
-</cfscript>
+<cfif a>
+
+<cfelseif b>
+
+<cfelseif c>
+
+<cfelseif d>
+
+<cfelse>
+
+</cfif>
 `);
 
 const parser = Parser().setDebug(true);

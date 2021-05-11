@@ -705,20 +705,35 @@ export function tokenTypeToBinaryOpType(tokenType: TokenType) : BinaryOpType {
 }
 
 export const enum ConditionalSubtype { if, elseif, else };
-export interface Conditional extends NodeBase {
-    kind: NodeType.conditional;
-    elseToken   : Terminal | null;
-    ifToken     : Terminal | null;
-    leftParen   : Terminal | null;
-    expr        : Node | null;
-    rightParen  : Terminal | null;
-    consequent  : Node;
-    alternative : Conditional | null;
+
+interface ConditionalBase extends NodeBase {
+    kind: NodeType.conditional,
+    subType: ConditionalSubtype,
+    fromTag: boolean,
+    consequent: Node,
+    alternative: ConditionalBase | null,
 }
 
-export namespace Conditional {
+export type Conditional = Script.Conditional | Tag.Conditional;
+
+
+export namespace Script {
+    export interface Conditional extends ConditionalBase {
+        kind: NodeType.conditional,
+        fromTag     : false,
+        elseToken   : Terminal | null,
+        ifToken     : Terminal | null,
+        leftParen   : Terminal | null,
+        expr        : Node | null,
+        rightParen  : Terminal | null,
+        consequent  : Node,
+        alternative : Conditional | null,
+    }
+
     export function If(ifToken: Terminal, leftParen: Terminal, expr: Node, rightParen: Terminal, consequent: Node) : Conditional {
         const v       = NodeBase<Conditional>(NodeType.conditional, mergeRanges(ifToken, consequent));
+        v.fromTag     = false;
+        v.subType     = ConditionalSubtype.if;
         v.elseToken   = null;
         v.ifToken     = ifToken;
         v.leftParen   = leftParen;
@@ -730,6 +745,8 @@ export namespace Conditional {
     }
     export function ElseIf(elseToken: Terminal, ifToken: Terminal, leftParen: Terminal, expr: Node, rightParen: Terminal, consequent: Node) : Conditional {
         const v       = NodeBase<Conditional>(NodeType.conditional, mergeRanges(ifToken, consequent));
+        v.fromTag     = false;
+        v.subType     = ConditionalSubtype.elseif;
         v.elseToken   = elseToken;
         v.ifToken     = ifToken;
         v.leftParen   = leftParen;
@@ -741,6 +758,8 @@ export namespace Conditional {
     }
     export function Else(elseToken: Terminal, consequent: Node) : Conditional {
         const v       = NodeBase<Conditional>(NodeType.conditional, mergeRanges(elseToken, consequent));
+        v.fromTag     = false;
+        v.subType     = ConditionalSubtype.else;
         v.elseToken   = elseToken;
         v.ifToken     = null;
         v.leftParen   = null;
@@ -752,25 +771,45 @@ export namespace Conditional {
     }
 }
 
-export namespace FromTag {
-    export function Conditional(subtype: ConditionalSubtype, fromTag: CfTag, consequent: Node) : Conditional {
-        const v = NodeBase<Conditional>(NodeType.conditional, fromTag.range);
-        v.ifToken     = null;
-        v.elseToken   = null;
-        v.leftParen   = null;
-        v.rightParen  = null;
-        v.consequent  = consequent;
-        v.alternative = null;
-        v.tagOrigin.startTag = fromTag;
+export namespace Tag {
+    export interface Conditional extends ConditionalBase {
+        kind: NodeType.conditional,
+        fromTag: true,
+        tagOrigin: {startTag: CfTag.ScriptLike | CfTag.Common, endTag: CfTag.Common | null},
+        consequent: Node,
+        alternative: Conditional | null,
+    }
 
-        if (subtype === ConditionalSubtype.if || subtype === ConditionalSubtype.elseif) {
-            if (fromTag.tagType !== CfTag.TagType.scriptLike) throw "conditional created from tag must be created from a script-like tag";
-            v.expr = fromTag.expr;
-        }
-        else /* tag is an else tag */ {
-            v.expr = null;
-        }
+    export function If(startTag: CfTag.ScriptLike, consequent: Block, alternative: Conditional | null, endTag: CfTag.Common) : Conditional {
+        const v = NodeBase<Conditional>(NodeType.conditional, mergeRanges(startTag, endTag));
+        v.fromTag            = true;
+        v.subType            = ConditionalSubtype.if;
+        v.tagOrigin.startTag = startTag;
+        v.tagOrigin.endTag   = endTag;
+        v.consequent         = consequent;
+        v.alternative        = alternative;
+        return v;
+    }
 
+    export function ElseIf(startTag: CfTag.ScriptLike, block: Block, alternative: Conditional | null) : Conditional {
+        const v = NodeBase<Conditional>(NodeType.conditional, mergeRanges(startTag, block));
+        v.fromTag            = true;
+        v.subType            = ConditionalSubtype.elseif;
+        v.tagOrigin.startTag = startTag;
+        v.tagOrigin.endTag   = null;
+        v.consequent         = block;
+        v.alternative        = alternative;
+        return v;
+    }
+
+    export function Else(startTag: CfTag.Common, block: Block) : Conditional {
+        const v = NodeBase<Conditional>(NodeType.conditional, mergeRanges(startTag, block));
+        v.fromTag            = true;
+        v.subType            = ConditionalSubtype.else;
+        v.tagOrigin.startTag = startTag;
+        v.tagOrigin.endTag   = null;
+        v.consequent         = block;
+        v.alternative        = null;
         return v;
     }
 }

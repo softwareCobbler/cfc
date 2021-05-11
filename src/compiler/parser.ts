@@ -1,7 +1,7 @@
 import {
     setDebug as setNodeFactoryDebug,
     CfTag, Node, NodeType, TagAttribute, NodeFlags, Terminal, Comment, TextSpan, NilTerminal,
-    Conditional, ConditionalSubtype, FunctionParameter, FromTag, CommentType,
+    Conditional, FunctionParameter, FromTag, CommentType,
     HashWrappedExpr, BinaryOperator, Parenthetical, UnaryOperator, BooleanLiteral,
     CallExpression, IndexedAccess, pushAccessElement, CallArgument, Identifier, SimpleStringLiteral, InterpolatedStringLiteral,
     NumericLiteral, DottedPath, ArrowFunctionDefinition, Statement, Block, 
@@ -1035,48 +1035,50 @@ export function Parser() {
                 }
             }
 
-            function treeifyConditionalTag() {
-                const ifTag = parseExpectedTag(CfTag.Which.start, "if");
+            function treeifyTagConditional() {
+                const ifTag = parseExpectedTag(CfTag.Which.start, "if") as CfTag.ScriptLike;
                 openTagStack.push("if");
+                
+                //
+                // this is a kind-of RL approach, we'll scan and hold onto elseif/else tag/blocks (terminating after we see an else)
+                // after we match to the </cfif> we reduce to a single Tag.Conditional node
+                //
                 const rootConsequent = treeifyTags(...reductionInstructions.cfif);
+                const rootConsequentAsBlock = Block(null, rootConsequent, null);
 
-                const consequentAsBlock = Block(null, rootConsequent, null);
-                consequentAsBlock.tagOrigin.startTag = ifTag;
-
-                let root = FromTag.Conditional(ConditionalSubtype.if, ifTag, consequentAsBlock);
-                let working = root;
+                let elseIfs : [CfTag.ScriptLike, Block][] = [];
+                let else_ : Conditional | null = null;
 
                 while (true) {
-                    const elseIfTag = parseOptionalTag(CfTag.Which.start, "elseif");
+                    const elseIfTag = parseOptionalTag(CfTag.Which.start, "elseif") as CfTag.ScriptLike;
                     if (elseIfTag) {
                         const consequent = treeifyTags(...reductionInstructions.cfelseif);
                         const consequentAsBlock = Block(null, consequent, null);
-                        consequentAsBlock.tagOrigin.startTag = elseIfTag;
-                        working.alternative = FromTag.Conditional(ConditionalSubtype.elseif, elseIfTag, consequentAsBlock);
-                        working = root.alternative!;
+                        elseIfs.push([elseIfTag, consequentAsBlock]);
                         continue;
                     }
-                    const elseTag = parseOptionalTag(CfTag.Which.start, "else");
+                    const elseTag = parseOptionalTag(CfTag.Which.start, "else") as CfTag.Common;
                     if (elseTag) {
                         const consequent = treeifyTags(...reductionInstructions.cfelse);
                         const consequentAsBlock = Block(null, consequent, null);
-                        consequentAsBlock.tagOrigin.startTag = elseTag;
-                        working.alternative = FromTag.Conditional(ConditionalSubtype.else, elseTag, consequentAsBlock);
+                        else_ = Tag.Else(elseTag, consequentAsBlock);
                     }
                     break;
                 }
 
-                openTagStack.pop();
+                const endTag = parseExpectedTag(CfTag.Which.end, "if", () => parseErrorAtRange(ifTag.range, "Missing </cfif> tag.")) as CfTag.Common;
 
-                if (hasNextTag()) {
-                    const nextTag = peekTag()!;
-                    if (nextTag.kind === NodeType.tag && nextTag.canonicalName === "if" && nextTag.which === CfTag.Which.end) {
-                        root.tagOrigin.endTag = parseExpectedTag(CfTag.Which.end, "if");
-                        return root;
-                    }
+                //
+                // reduce from </cfif> back to <cfif>
+                //
+                let root : Tag.Conditional | null = else_ || null;
+
+                for (let i = elseIfs.length-1; i >= 0; i--) {
+                    root = Tag.ElseIf(elseIfs[i][0], elseIfs[i][1], root);
                 }
 
-                parseErrorAtRange(root.range, "Missing </cfif> tag.");
+                root = Tag.If(ifTag, rootConsequentAsBlock, root, endTag);
+                openTagStack.pop();
                 return root;
             }
 
@@ -1309,7 +1311,7 @@ export function Parser() {
 
                         switch (tag.canonicalName) {
                             case "if": {
-                                result.push(treeifyConditionalTag());
+                                result.push(treeifyTagConditional());
                                 continue;
                             }
                             case "set": {
@@ -2785,14 +2787,14 @@ export function Parser() {
         return Script.Switch(switchToken, leftParen, expr, rightParen, leftBrace, cases, rightBrace);
     }
 
-    function parseIf() : Conditional {
+    function parseIf() : Script.Conditional {
         const ifToken = parseExpectedTerminal(TokenType.KW_IF, ParseOptions.withTrivia);
         const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
         const expr = parseExpression();
         const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
         const stmt = parseStatement();
 
-        const root = Conditional.If(ifToken, leftParen, expr, rightParen, stmt);
+        const root = Script.If(ifToken, leftParen, expr, rightParen, stmt);
         let workingRoot = root;
 
         while (lookahead() === TokenType.KW_ELSE) {
@@ -2803,11 +2805,11 @@ export function Parser() {
                 const expr = parseExpression();
                 const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
                 const stmt = parseStatement();
-                workingRoot.alternative = Conditional.ElseIf(elseToken, maybeIfToken, leftParen, expr, rightParen, stmt);
+                workingRoot.alternative = Script.ElseIf(elseToken, maybeIfToken, leftParen, expr, rightParen, stmt);
                 workingRoot = workingRoot.alternative!;
             }
             else {
-                workingRoot.alternative = Conditional.Else(elseToken, parseStatement());
+                workingRoot.alternative = Script.Else(elseToken, parseStatement());
                 break;
             }
         }

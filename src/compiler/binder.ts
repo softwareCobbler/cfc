@@ -322,7 +322,7 @@ export function Binder() {
     }
 
     function bindConditional(node: Conditional) {
-        if (node.tagOrigin.startTag) {
+        if (node.fromTag) {
             bindNode(node.tagOrigin.startTag, node);
             bindNode(node.consequent, node);
             bindNode(node.alternative, node);

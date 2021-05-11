@@ -310,13 +310,21 @@ export function visit(node: Node, visitor: (arg: Node | undefined | null) => any
                 || visitor(node.operator)
                 || visitor(node.right);
         case NodeType.conditional:
-            return visitor(node.elseToken)
-                || visitor(node.ifToken)
-                || visitor(node.leftParen)
-                || visitor(node.expr)
-                || visitor(node.rightParen)
-                || visitor(node.consequent)
-                || visitor(node.alternative);
+            if (node.fromTag) {
+                return visitor(node.tagOrigin.startTag)
+                    || visitor(node.consequent)
+                    || visitor(node.alternative)
+                    || visitor(node.tagOrigin.endTag);
+            }
+            else {
+                return visitor(node.elseToken)
+                    || visitor(node.ifToken)
+                    || visitor(node.leftParen)
+                    || visitor(node.expr)
+                    || visitor(node.rightParen)
+                    || visitor(node.consequent)
+                    || visitor(node.alternative);
+            }
         case NodeType.variableDeclaration:
             return visitor(node.finalModifier)
                 || visitor(node.varModifier)
