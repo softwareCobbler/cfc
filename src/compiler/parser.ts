@@ -2735,7 +2735,7 @@ export function Parser() {
             // speculative or not, we return an arrow function
             if (!isStartOfExpression()) {
                 parseErrorAtRange(fatArrow.range.toExclusive, fatArrow.range.toExclusive+1, "Expression expected.");
-                return ArrowFunctionDefinition(leftParen, params, rightParen, fatArrow, createMissingNode(Terminal(peek())));
+                return ArrowFunctionDefinition(leftParen, params, rightParen, fatArrow, createMissingNode(NilTerminal(pos())));
             }
             else {
                 return ArrowFunctionDefinition(leftParen, params, rightParen, fatArrow, parseAnonymousFunctionDefinitionOrExpression());

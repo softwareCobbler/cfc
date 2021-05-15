@@ -137,4 +137,10 @@ describe("general smoke test for particular constructs", () => {
         assert.strictEqual(node?.parent?.parent?.kind, NodeType.indexedAccess, "found node parent.parent is an indexed access");
         assert.strictEqual(getTriviallyComputableString((<IndexedAccess>node?.parent?.parent).root), "arguments", "indexed access root is arguments scope");
     })
+    it ("Should not throw error on tree-flatten of arrow function with missing expression after fat arrow", () => {
+        const sourceFile = NilCfm("<cfscript>foo = bar((row) => )</cfscript>");
+        parser.setSourceFile(sourceFile).parse();
+        binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
+        flattenTree(sourceFile);
+    })
 });
