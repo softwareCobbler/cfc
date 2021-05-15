@@ -1,12 +1,12 @@
-@declare function arrayFindNoCase(required array /*: any[]*/, required value /*: any[]*/, parallel /*: boolean*/, maxThreadCount /*: number*/) /*: number*/;
-@declare function arrayFindNoCase(required array /*: any[]*/, required callback /*: (arg: any) => boolean*/) /*: number*/;
+<!--- in a declaration file, comments are tag comments, and they nest just as they do in <!--- cfm files ---> --->
+<!--- type annotations are placed in comments so that it works in CFMs/CFCs without having to compile/emit --->
 
 @declare function queryFilter(
-    required query /*: query<any> */,
     required callback /*: (required row: number, currentRow: number, query: query<any>) => void*/,
-    parallel /*:boolean*/,
-    maxThreadCount: /*: number*/) /*: query<any>*/;
+    parallel /*: {v: number, u: string}[]*/ = 42,
+    maxThreadCount /*: number*/) /*: query<any>*/;
 
+<!---
 @declare global cgi /*: {
     auth_password: string,
     auth_type: string,
@@ -50,46 +50,4 @@
     server_protocol: string,
     server_software: string,
 }*/;
-
-
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
+--->

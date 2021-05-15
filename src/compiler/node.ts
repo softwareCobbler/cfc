@@ -1328,6 +1328,13 @@ interface FunctionParameterBase extends NodeBase {
 
 export type FunctionParameter = Script.FunctionParameter | Tag.FunctionParameter;
 
+export function copyFunctionParameterForTypePurposes(param: FunctionParameter) {
+    if (param.fromTag) {
+        return Tag.FunctionParameter(param.tagOrigin.startTag! as CfTag.Common, param.type);
+    }
+    return Script.FunctionParameter(param.requiredTerminal, param.javaLikeTypename, param.identifier, param.equals, param.defaultValue, param.comma, param.type)
+}
+
 export namespace Script {
     export interface FunctionParameter extends FunctionParameterBase {
         kind: NodeType.functionParameter,

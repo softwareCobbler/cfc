@@ -920,10 +920,14 @@ export function Scanner(source_: string | Buffer) {
     function lexeme() {
         const from = getIndex();
         if (maybeEat(/[$_a-z][$_a-z0-9]*/iy)) {
-            return setToken(TokenType.LEXEME, from, getIndex());
+            const index = getIndex();
+            lastScannedText = getTextSlice(new SourceRange(from, index))
+            return setToken(TokenType.LEXEME, from, index);
         }
         else {
             nextChar();
+            const index = getIndex();
+            lastScannedText = getTextSlice(new SourceRange(from, index))
             return setToken(TokenType.CHAR, from, getIndex());
         }
     }

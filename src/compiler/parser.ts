@@ -25,9 +25,9 @@ import {
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag } from "./node";
-import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
+import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug, NilToken } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, getAttributeValue } from "./utils";
-import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type, TypeFlags, cfFunctionSignature, cfTypeCall, cfVoid } from "./types";
+import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type, TypeFlags, cfFunctionSignature, cfTypeCall, cfVoid, cfTypeFunctionParam, cfTypeFunctionDefinition, cfIntersection, cfTypeId, KLUDGE_FOR_DEV_register_type_function_name, TypeKind } from "./types";
 
 let debugParseModule = false;
 
@@ -55,7 +55,9 @@ const enum ParseContext {
     sugaredAbort,       // inside an `abort ...;` statement
     typeTupleOrArrayElement,
     typeParamList,
+    typeStruct,
     awaitingRightBracket,
+    typeAnnotation,
     END                 // sentinel for looping over ParseContexts
 }
 
@@ -1583,29 +1585,49 @@ export function Parser() {
     }
 
     function parseDeclarationFile() : Type[] {
-        setScannerMode(ScannerMode.script);
+        setScannerMode(ScannerMode.allow_both);
+        const savedContext = updateParseContext(ParseContext.typeAnnotation);
         const result : Type[] = []; // declarations (function | global)
         while (lookahead() !== TokenType.EOF) {
-            scanToNextChar("@", /*endOnOrAfter*/ "after");
-            const declareToken = peek();
-            if (declareToken.text === "declare") {
-                next(), parseTrivia();
-                const declarationSpecifier = peek();
-                if (declarationSpecifier.text === "function") {
-                    const functionDecl = tryParseNamedFunctionDefinition(/*speculative*/false, /*asDeclaration*/true);
-                    if (!functionDecl.returnTypeAnnotation) {
-                        parseErrorAtRange(functionDecl.range, "A function declaration in a declaration file requires a return type.");
+            parseTagTrivia();
+            if (next().text === "@") {
+                const contextualKeyword = next();
+                if (contextualKeyword.text === "declare") {
+                    parseTrivia();
+                    const declarationSpecifier = peek();
+                    if (declarationSpecifier.text === "function") {
+                        const functionDecl = tryParseNamedFunctionDefinition(/*speculative*/false, /*asDeclaration*/true);
+                        if (!functionDecl.returnTypeAnnotation) {
+                            parseErrorAtRange(functionDecl.range, "A function declaration in a declaration file requires a return type.");
+                        }
+                        result.push(cfFunctionSignature(functionDecl.nameToken!.token.text, functionDecl.params, functionDecl.returnTypeAnnotation || cfNil()));
                     }
-                    result.push(cfFunctionSignature(functionDecl.nameToken!.token.text, functionDecl.params.map(param => param.type!), functionDecl.returnTypeAnnotation || cfNil()));
+                    else if (declarationSpecifier.text === "global") {
+                        parseErrorAtRange(contextualKeyword.range, "Global declarations are not yet supported. This would be for the cgi and etc. scopes.");
+                        next();
+                    }
+                    else {
+                        parseErrorAtRange(contextualKeyword.range, "Invalid declaration specifier.");
+                        next();
+                    }
+                }
+                else if (contextualKeyword.text === "type") {
+                    parseTrivia();
+                    const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
+                    parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
+                    const type = parseType();
+                    type.name = name.token.text;
+                    result.push(type);
+                    if (type.typeKind === TypeKind.typeFunctionDefinition) {
+                        KLUDGE_FOR_DEV_register_type_function_name(type.name, type);
+                    }
+                }
+                else {
+                    // parse error ?
                 }
             }
-            else if (declareToken.text === "global") {
-
-            }
-            else {
-                parseErrorAtRange(declareToken.range, "Invalid declaration specifier.");
-            }
         }
+        parseContext = savedContext;
         return result;
     }
 
@@ -2365,11 +2387,12 @@ export function Parser() {
         switch (what) {
             case ParseContext.arrayBody:
             case ParseContext.structBody:
+            case ParseContext.typeStruct:
             case ParseContext.argumentList:
                 return isStartOfExpression();
             case ParseContext.typeTupleOrArrayElement:
             case ParseContext.typeParamList:
-                lookahead() === TokenType.LEFT_BRACKET
+                return lookahead() === TokenType.LEFT_BRACKET
                 || lookahead() === TokenType.LEFT_ANGLE
                 || isLexemeLikeToken(peek(), /*allowNumeric*/false)
             case ParseContext.cfScriptTagBody:
@@ -2395,6 +2418,7 @@ export function Parser() {
             case ParseContext.typeParamList:
                 return lookahead() === TokenType.RIGHT_ANGLE;
             case ParseContext.structBody:
+            case ParseContext.typeStruct:
             case ParseContext.blockStatements:
                 return lookahead() === TokenType.RIGHT_BRACE;
             case ParseContext.switchClause:
@@ -2526,7 +2550,7 @@ export function Parser() {
     }
 
     // withTrivia is to support instances where the caller may want to manually consume trivia,
-    // in order to grab type annotations
+    // in order to grab type annotations that are inside comments
     function parseIdentifier(withTrivia = true) : Identifier {
         let terminal : Terminal;
         let canonicalName : string;
@@ -2692,18 +2716,19 @@ export function Parser() {
             //                          ^^^^
             else if (isLexemeLikeToken(peek())) {
                 if (asDeclaration) {
-                    name = parseIdentifier(/*withTrivia*/ false);
+                    
 
                     // we're already in a triva-based type annotation, e.g,
                     // function foo(x /*: (name: type) => void*/)
                     //                   ^^^^^^^^^^^^^^^^^^^^^
                     // in which case we can just parse types without comment-delimiters
-                    if (isInSomeContext(ParseContext.trivia)) {
+                    if (isInSomeContext(ParseContext.typeAnnotation)) {
+                        name = parseIdentifier(/*withTrivia*/ true);
                         parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
                         type = parseType();
-                        type.name = (<Terminal>name.source).token.text;
                     }
                     else {
+                        name = parseIdentifier(/*withTrivia*/ false);
                         const triviaAndType = parseScriptTriviaWithPossibleTypeAnnotation((<Terminal>name.source).token.text);
                         if (!triviaAndType.type) {
                             parseErrorAtRange(name.range, "Expected a type annotation.");
@@ -3360,7 +3385,7 @@ export function Parser() {
     function parseType(fromInclusive: number, toExclusive: number, name?: string) : Type;
     function parseType(fromInclusive?: number, toExclusive?: number, name?: string) : Type {
         function lexemeToType(lexeme: Token) {
-            switch (lexeme.text.toLowerCase()) {
+            switch (lexeme.text) {
                 case "number":
                     return cfNumber();
                 case "string":
@@ -3378,20 +3403,30 @@ export function Parser() {
                 case "void":
                     return cfVoid();
                 default:
-                    return cfNil();
+                    return cfTypeId(lexeme.text);
             }
         }
 
-        function maybeParseTypeParameters(type: Type) : Type {
-            if (lookahead() === TokenType.LEFT_ANGLE) {
-                parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
-                const params = parseList(ParseContext.typeParamList, parseTypeElement);
-                parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia)
-                return cfTypeCall(type, params, null);
+        function parseTypeParam() : cfTypeFunctionParam {
+            const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/false, /*allowNumeric*/false);
+            let extendsToken : Terminal | null = null;
+            let extendsType : Type | null = null;
+
+            if (peek().text === "extends") {
+                extendsToken = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/false, /*allowNumeric*/false);
+                extendsType = parseType();
             }
-            else {
-                return type;
-            }
+
+            const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+
+            return cfTypeFunctionParam(name.token.text, extendsToken, extendsType, comma);
+        }
+
+        function parseTypeCall(left: Type) : Type {
+            parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
+            const args = parseList(ParseContext.typeParamList, parseTypeElement);
+            parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia)
+            return cfTypeCall(left, args)
         }
 
         function maybeParseArrayModifier(type: Type) : Type {
@@ -3417,7 +3452,13 @@ export function Parser() {
             return type;
         }
 
-        cfStruct; // unused 
+        function parseTypeStructMemberElement() {
+            const name = scanLexemeLikeStructKey() || NilToken(-1);
+            parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
+            const type = parseType();
+            parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+            return [name.text, type] as const;
+        }
 
         let savedScannerState : ScannerState | null = null;
         if (fromInclusive) {
@@ -3429,7 +3470,7 @@ export function Parser() {
             })
         }
 
-        parseTrivia();
+        parseTrivia(); // only necessary if we just updated scanner state? caller can maybe guarantee that the target scanner state begins on non-trivial input?
 
         let result : Type = cfNil();
 
@@ -3444,12 +3485,19 @@ export function Parser() {
             case TokenType.LEXEME: {
                 const lexeme = next();
                 result = lexemeToType(lexeme);
-                result = maybeParseTypeParameters(maybeParseArrayModifier(result));
+                if (lookahead() === TokenType.LEFT_ANGLE) {
+                    result = parseTypeCall(result);
+                }
+
                 break;
             }
             case TokenType.LEFT_PAREN: {
                 parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
                 
+                if (lookahead() === TokenType.LEFT_PAREN) {
+                    return parseType();
+                }
+
                 const parenthesizedType = SpeculationHelper.speculate(() => {
                     const lexeme = next();
                     parseTrivia();
@@ -3480,9 +3528,32 @@ export function Parser() {
                     parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
                     parseExpectedTerminal(TokenType.EQUAL_RIGHT_ANGLE, ParseOptions.withTrivia);
                     const returnType = parseType();
-                    result = cfFunctionSignature("", params.map(param => param.type!), returnType);
+                    result = maybeParseArrayModifier(cfFunctionSignature("", params, returnType));
+                    break;
                 }
             }
+            case TokenType.LEFT_BRACE: {
+                parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
+                const kvPairs = parseList(ParseContext.typeStruct, parseTypeStructMemberElement);
+                parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
+                result = cfStruct(new Map<string, Type>(kvPairs));
+                result = maybeParseArrayModifier(result);
+                break;
+            }
+            case TokenType.LEFT_ANGLE: {
+                parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
+                const typeParams = parseList(ParseContext.typeParamList, parseTypeParam);
+                parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);
+                parseExpectedTerminal(TokenType.EQUAL_RIGHT_ANGLE, ParseOptions.withTrivia);
+                const body = parseType();
+                result = cfTypeFunctionDefinition(typeParams, body);
+                return result; // don't do intersections or unions with type functions
+            }
+        }
+
+        if (lookahead() === TokenType.AMPERSAND) {
+            next(), parseTrivia(); // eat ampersand and trivia; if we get the type system kinda working we can save this on the type node
+            result = cfIntersection(result, parseType());
         }
 
         if (savedScannerState) {

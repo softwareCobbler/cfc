@@ -8,6 +8,7 @@ import { binarySearch, cfmOrCfc, findNodeInFlatSourceMap, flattenTree } from "..
 
 import * as fs from "fs";
 import * as path from "path";
+import { cfTypeFunctionDefinition, evaluateType, evaluateTypeCall, Type } from "../compiler/types";
 
 function fromFile(fname: string) {
     const absPath = path.resolve(fname);
@@ -16,18 +17,24 @@ function fromFile(fname: string) {
 
 //const sourceFile = fromFile("./test/mxunit/doc/build.cfm");
 
-const sourceFile = NilCfm(`
-<cfif a>
+const sourceFile = NilDCfm(`
+<!--- in a declaration file, comments are tag comments, and they nest just as they do in <!--- cfm files ---> --->
 
-<cfelseif b>
+@type Query = <T> => {
+    recordCount: number,
+    columnList: string,
+    filter: (required predicate: (row: T) => boolean, currentRow: number, query: Query<T>) => Query<T>,
+} & T;
 
-<cfelseif c>
+<!---
+@declare function queryFilter(
+    query: Query<Q>,
+    required callback /*: (required row: number, currentRow: number, query: query<any>) => void*/,
+    parallel /*: {v: number, u: string}[]*/ = 42,
+    maxThreadCount /*: number*/) /*: query<any>*/;--->
 
-<cfelseif d>
-
-<cfelse>
-
-</cfif>
+@type MySchema = {rec_uid: number};
+@type OtherSchema = {someDbCol: string};
 `);
 
 const parser = Parser().setDebug(true);
@@ -38,7 +45,11 @@ parser.parse();
 binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
 
 const flatProgram = flattenTree(sourceFile);
+
 const diagnostics = parser.getDiagnostics();
+
+evaluateTypeCall(sourceFile.content[0] as cfTypeFunctionDefinition, [sourceFile.content[1]] as Type[]);
+evaluateTypeCall(sourceFile.content[0] as cfTypeFunctionDefinition, [sourceFile.content[1]] as Type[]);
 
 console.log("got ", diagnostics.length + " diagnostics");
 for (const diag of parser.getDiagnostics()) {

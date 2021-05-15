@@ -21,12 +21,19 @@ import {
 	SymbolKind,
 	CompletionContext,
 	CompletionParams,
-	CompletionTriggerKind
+	CompletionTriggerKind,
+	SignatureInformation,
+	ParameterInformation
 } from 'vscode-languageserver/node';
+
+import { SignatureHelp } from "vscode-languageserver-types"
 
 import {
 	TextDocument
 } from 'vscode-languageserver-textdocument';
+
+import * as fs from "fs";
+import * as path from "path";
 
 import { NodeId, SourceFile, Parser, Binder, Node as cfNode, binarySearch, CfFileType, Diagnostic as cfcDiagnostic, cfmOrCfc, flattenTree, getScopeContainedNames, NodeSourceMap, isExpressionContext, getTriviallyComputableString } from "compiler";
 import { CfTag, isStaticallyKnownScopeName, NodeType, ScopeDisplay, StaticallyKnownScopeName } from '../../../compiler/node';
@@ -40,9 +47,22 @@ const binder = Binder().setDebug(true);
 type TextDocumentUri = string;
 const parseCache = new Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, cfNode>}>();
 
+const libfile = SourceFile("nil!", CfFileType.dCfm, `
+
+@declare function queryFilter(
+    required callback /*: (required row: number, currentRow: number, query: query<any>) => void*/,
+    parallel /*: {v: number, u: string}[]*/ = 42,
+    maxThreadCount /*: number*/) /*: query<any>*/;
+
+`);
+parser.setSourceFile(libfile);
+parser.parse();
+
+
 function naiveGetDiagnostics(uri: TextDocumentUri, text: string, fileType: CfFileType) : readonly cfcDiagnostic[] {
 	// how to tell if we were launched in debug mode ?
 
+	libfile;
 	const cfFileType = cfmOrCfc(uri);
 	if (!cfFileType) {
 		return [];
@@ -96,6 +116,7 @@ connection.onInitialize((params: InitializeParams) => {
 			textDocumentSync: TextDocumentSyncKind.Incremental,
 			// Tell the client that this server supports code completion.
 			completionProvider: {triggerCharacters: ["."]},
+			signatureHelpProvider: {triggerCharacters: ["("]},
 		}
 	};
 	/*
@@ -418,6 +439,19 @@ connection.onCompletion(
 		return [];
 	}
 );
+
+connection.onSignatureHelp((params) : SignatureHelp => {
+	params;
+	const x : ParameterInformation[] = [];
+	x.push(ParameterInformation.create("someparam1", "1111 where does type info go"));
+	x.push(ParameterInformation.create("someparam2", "2222 where does type info go"));
+	const siginfo = SignatureInformation.create("foo", "docstring goes here\nmaybe a newline?", ...x);
+	return {
+		signatures: [siginfo],
+		activeSignature: null,
+		activeParameter: 0 // 0 indexed
+	}
+})
 
 // This handler resolves additional information for the item selected in
 // the completion list.
