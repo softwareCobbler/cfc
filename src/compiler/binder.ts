@@ -1,33 +1,15 @@
-import { NodeWithScope, Variable, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, Scope, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName } from "./node";
-import { getTriviallyComputableString, BiMap, visit } from "./utils";
+import { NodeWithScope, Term, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, Scope, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName } from "./node";
+import { getTriviallyComputableString, visit, getAttributeValue } from "./utils";
 import { Diagnostic } from "./parser";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
-import { cfAny } from "./types";
-
-type InternedStringId = number;
-const InternedStrings = new BiMap<InternedStringId, string>();
-let internStringId = 0;
-
-function internString(s: string) {
-    const internId = InternedStrings.getByValue(s);
-    if (internId !== undefined) {
-        return internId;
-    }
-    const freshInternId = internStringId++;
-    InternedStrings.set(freshInternId, s);
-    return freshInternId;
-}
+import { cfAny, cfFunctionSignature, Type } from "./types";
 
 export function getScopeContainedNames(scope: Scope) : string[] {
-    const result = [];
-    for (const internId of scope.keys()) {
-        result.push(InternedStrings.getByKey(internId)!);
-    }
-    return result;
+    return [...scope.keys()];
 }
 
-const staticCgiScope = (function () {
-    const result = new Map<number, Variable>();
+const staticCgiScope : Scope = (function () {
+    const result = new Map<string, Term>();
     // https://helpx.adobe.com/coldfusion/cfml-reference/reserved-words-and-variables/cgi-environment-cgi-scope-variables.html
     const staticNames = [
         "auth_password",
@@ -73,15 +55,13 @@ const staticCgiScope = (function () {
         "server_software",
     ];
     for (const name of staticNames) {
-        const internId = internString(name);
         result.set(
-            internId, {
-                type: "any",
-                mType: cfAny(),
-                name: internId,
+            name, {
+                type: cfAny(),
+                name: name,
                 final: false,
                 var: false,
-                initializer: undefined,
+                target: undefined,
             })
     }
     return result;
@@ -103,6 +83,7 @@ export function Binder() {
         RootNode = sourceFile as NodeWithScope<SourceFile>;
         RootNode.containedScope = {
             container: null,
+            typedefs: new Map<string, Type>(),
             cgi: staticCgiScope,
             variables: new Map(),
             url: new Map(),
@@ -127,9 +108,15 @@ export function Binder() {
         switch (node.kind) {
             case NodeType.sourceFile:
                 throw "Bind source files by binding its content";
-            case NodeType.comment:  // fallthrough
+            case NodeType.comment:
+                if (node.typedefs) {
+                    bindList(node.typedefs, node);
+                }
+                return;
+            case NodeType.type:
+                bindType(node);
+                return;
             case NodeType.textSpan:
-                node.parent = parent;
                 return;
             case NodeType.terminal:
                 bindList(node.trivia, node);
@@ -272,6 +259,13 @@ export function Binder() {
         }
     }
 
+    function bindType(node: Type) {
+        // types always have names here?
+        // we get them from `@type x = ` so presumably always...
+        // also `@declare function foo` and possibly `@declare global <identifier-name> : type`
+        currentContainer.containedScope.typedefs.set(node.name!, node);
+    }
+
     function bindTag(node: CfTag) {
         if (node.which === CfTag.Which.end) {
             // all terminals, already bound
@@ -377,15 +371,13 @@ export function Binder() {
                 }
 
                 if (accessName) {
-                    const internId = internString(accessName);
                     RootNode.containedScope[identifierBaseName]!.set(
-                        internId, {
-                            type: "any",
-                            mType: cfAny(),
-                            name: internId,
+                        accessName, {
+                            type: cfAny(),
+                            name: accessName,
                             final: true,
                             var: false,
-                            initializer: (<BinaryOperator>node.expr).right
+                            target: (<BinaryOperator>node.expr).right
                         });
                 }
             }
@@ -394,16 +386,14 @@ export function Binder() {
         }
 
         if (node.finalModifier || node.varModifier) {
-            const internId = internString(identifierBaseName);
             if (currentContainer.containedScope.local) {
-                (<Map<number, Variable>>currentContainer.containedScope.local).set(
-                    internId, {
-                        type: "any",
-                        mType: cfAny(),
-                        name: internId,
+                (<Map<string, Term>>currentContainer.containedScope.local).set(
+                    identifierBaseName, {
+                        type: cfAny(),
+                        name: identifierBaseName,
                         final: !!node.finalModifier,
                         var: !!node.varModifier,
-                        initializer: node.expr ?? undefined
+                        target: node.expr ?? undefined
                     });
             }
             else {
@@ -417,7 +407,7 @@ export function Binder() {
                 // e.g, 
                 // function foo(bar) { var bar = 42; }
                 // is an error: "bar is already defined in argument scope"
-                if (enclosingFunction.containedScope.arguments.has(internId)) {
+                if (enclosingFunction.containedScope.arguments.has(identifierBaseName)) {
                     errorAtRange(mergeRanges(node.finalModifier, node.varModifier, node.expr), `'${identifierBaseName}' is already defined in argument scope.`);
                 }
             }
@@ -479,10 +469,12 @@ export function Binder() {
 
     function bindBlock(node: Block) {
         switch (node.subType) {
+            // @fixme better fromTag type safety (always a common tag? never scriptlike, definitely never script or comment or text)
             case BlockType.fromTag:
-                bindNode(node.tagOrigin.startTag, node);
+                maybeBindTagResult(node.tagOrigin.startTag!);
+                bindNode(node.tagOrigin.startTag!, node);
                 bindList(node.stmtList, node);
-                bindNode(node.tagOrigin.endTag, node);
+                bindNode(node.tagOrigin.endTag!, node);
                 break;
             case BlockType.scriptSugaredTagCallBlock:
                 // check against cf tag meta
@@ -501,6 +493,80 @@ export function Binder() {
         }
     }
 
+    function STUB_RELOCATEME_isValidIdentifier(s: string) {
+        s;
+        return true;
+    }
+
+    function maybeBindTagResult(tag: CfTag) : void {
+        if (tag.tagType !== CfTag.TagType.common) {
+            return;
+        }
+
+        function getReturnValueIdentifier(attrName: string) {
+            const string = getTriviallyComputableString(getAttributeValue((<CfTag.Common>tag).attrs, attrName));
+            if (string !== undefined && STUB_RELOCATEME_isValidIdentifier(string)) {
+               return string.split(".");
+            }
+            return undefined;
+        }
+
+        let type = getAttributeValue(tag.attrs, "type:");
+        if (!type || type.kind !== NodeType.type) {
+            return;
+        }
+        let name : string[] | undefined = undefined;
+
+        switch (tag.canonicalName) {
+            case "query": {
+                name = getReturnValueIdentifier("name");
+                break;
+            }
+            case "savecontent": {
+                name = getReturnValueIdentifier("variable");
+                break;
+            }
+            case "http": {
+                name = getReturnValueIdentifier("result");
+                break;
+            }
+        }
+
+        if (!name || name.length > 2) {
+            return;
+        }
+
+        let targetScope : Scope = RootNode.containedScope.variables!;
+        let targetName = name.length === 1 ? name[0] : name[1];
+
+        if (name.length === 2) {
+            switch (name[0].toLowerCase()) {
+                case "local": {
+                    if (currentContainer.containedScope.local) {
+                        targetScope = currentContainer.containedScope.local;
+                    }
+                    else {
+                        return;
+                    }
+                }
+                case "variables": {
+                    break;
+                }
+                default: {
+                    return;
+                }
+            }
+        }
+
+        targetScope.set(targetName, {
+            type: type,
+            name: targetName,
+            final: false,
+            var: false,
+            target: type
+        });
+    }
+
     function bindSimpleStringLiteral(node: SimpleStringLiteral) {
         bindNode(node.textSpan, node);
     }
@@ -515,7 +581,7 @@ export function Binder() {
 
     function bindIndexedAccess(node: IndexedAccess) {
         bindNode(node.root, node);
-        let parent : Node = node;
+        let parent : Node = node.root;
         for (let i = 0; i < node.accessElements.length; i++) {
             const element = node.accessElements[i];
             bindNode(element, parent);
@@ -574,7 +640,7 @@ export function Binder() {
         return undefined;
     }
 
-    function isBuiltinScopeName(s: string | undefined) : s is keyof Omit<ScopeDisplay, "container"> {
+    function isBuiltinScopeName(s: string | undefined) : s is keyof Omit<ScopeDisplay, "container" | "typedefs"> {
         switch (s) {
             case "url":
             case "form":
@@ -593,17 +659,15 @@ export function Binder() {
      * we just want to know that some name is available in this scope
      */
     function weakBindIdentifierToScope(name: string, scope: Scope) : void {
-        const internId = internString(name);
-        if (scope.has(internId)) {
+        if (scope.has(name)) {
             return;
         }
-        scope.set(internId, {
-            type: "any",
-            mType: cfAny(),
-            name: internId,
+        scope.set(name, {
+            type: cfAny(),
+            name: name,
             final: false,
             var: false,
-            initializer: undefined
+            target: undefined
         })
     }
 
@@ -663,12 +727,21 @@ export function Binder() {
         else {
             const targetBaseName = getTriviallyComputableString(target)?.toLowerCase();
             if (targetBaseName) {
+                let targetScope = RootNode.containedScope.variables!;
+
                 if (currentContainer.containedScope.local) {
-                    weakBindIdentifierToScope(targetBaseName, currentContainer.containedScope.local);
+                    targetScope = currentContainer.containedScope.local;
                 }
-                else {
-                    weakBindIdentifierToScope(targetBaseName, RootNode.containedScope.variables!);
+                if (targetScope.has(targetBaseName)) {
+                        return;
                 }
+                targetScope.set(targetBaseName, {
+                    type: cfAny(),
+                    name: targetBaseName,
+                    final: false,
+                    var: false,
+                    target: node.right,
+                });
             }
         }
     }
@@ -676,6 +749,7 @@ export function Binder() {
     function bindFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {
         node.containedScope = {
             container: currentContainer,
+            typedefs: new Map(),
             local: new Map(),
             arguments: new Map()
         };
@@ -688,18 +762,13 @@ export function Binder() {
             // this is a non-arrow function definition
             // tag functions and named script functions like `function foo() {}` are hoisted
             if (node.canonicalName) {
-                const internId = internString(node.canonicalName);
                 RootNode.containedScope.variables!.set(
-                    internId, {
-                        type: {
-                            params: node.params,
-                            return: "any"
-                        },
-                        mType: cfAny(),
-                        name: internId,
+                    node.canonicalName, {
+                        type: cfFunctionSignature(node.canonicalName, node.params, cfAny()),
+                        name: node.canonicalName,
                         final: false,
                         var: false,
-                        initializer: undefined
+                        target: undefined
                     });
             }
         }

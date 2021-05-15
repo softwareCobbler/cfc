@@ -5,6 +5,7 @@
 import { Scanner, Parser, Binder, NilDCfm, NilCfc, NilCfm, SourceFile } from "../compiler";
 import { CfFileType } from "../compiler/scanner";
 import { binarySearch, cfmOrCfc, findNodeInFlatSourceMap, flattenTree } from "../compiler/utils";
+import { Checker } from "../compiler/checker";
 
 import * as fs from "fs";
 import * as path from "path";
@@ -17,39 +18,46 @@ function fromFile(fname: string) {
 
 //const sourceFile = fromFile("./test/mxunit/doc/build.cfm");
 
-const sourceFile = NilDCfm(`
-<!--- in a declaration file, comments are tag comments, and they nest just as they do in <!--- cfm files ---> --->
-
-@type Query = <T> => {
-    recordCount: number,
-    columnList: string,
-    filter: (required predicate: (row: T) => boolean, currentRow: number, query: Query<T>) => Query<T>,
-} & T;
-
+const sourceFile = NilCfm(`
 <!---
-@declare function queryFilter(
-    query: Query<Q>,
-    required callback /*: (required row: number, currentRow: number, query: query<any>) => void*/,
-    parallel /*: {v: number, u: string}[]*/ = 42,
-    maxThreadCount /*: number*/) /*: query<any>*/;--->
+    @type Query = <T> => {
+        recordCount: number,
+        columnList: string,
+        filter: (required predicate: (row: T) => boolean, currentRow: number, query: Query<T>) => Query<T>,
+    } & T;
+    @type MySchema = {rec_uid: number};
+--->
 
-@type MySchema = {rec_uid: number};
-@type OtherSchema = {someDbCol: string};
+<cfquery name="q" type:="Query<MySchema>">
+    select * from foo where bar = baz;
+</cfquery>
+
+<cfquery name="q" type:="Query<MySchema>">
+    select * from foo where bar = baz;
+</cfquery>
+
+<cfscript>
+    x = 3;
+    q.filter((row) => { row. });
+    q.filter();
+</cfscript>
 `);
 
-const parser = Parser().setDebug(true);
-parser.setSourceFile(sourceFile);
+const parser = Parser().setDebug(true).setParseTypes(true);
 const binder = Binder().setDebug(true);
+const checker = Checker();
+parser.setSourceFile(sourceFile);
 
 parser.parse();
 binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
+checker.check(sourceFile, parser.getScanner(), parser.getDiagnostics());
 
 const flatProgram = flattenTree(sourceFile);
 
 const diagnostics = parser.getDiagnostics();
 
-evaluateTypeCall(sourceFile.content[0] as cfTypeFunctionDefinition, [sourceFile.content[1]] as Type[]);
-evaluateTypeCall(sourceFile.content[0] as cfTypeFunctionDefinition, [sourceFile.content[1]] as Type[]);
+//evaluateTypeCall(sourceFile.content[0] as cfTypeFunctionDefinition, [sourceFile.content[1]] as Type[]);
+//evaluateTypeCall(sourceFile.content[0] as cfTypeFunctionDefinition, [sourceFile.content[1]] as Type[]);
 
 console.log("got ", diagnostics.length + " diagnostics");
 for (const diag of parser.getDiagnostics()) {

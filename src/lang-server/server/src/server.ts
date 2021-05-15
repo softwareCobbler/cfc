@@ -35,15 +35,17 @@ import {
 import * as fs from "fs";
 import * as path from "path";
 
-import { NodeId, SourceFile, Parser, Binder, Node as cfNode, binarySearch, CfFileType, Diagnostic as cfcDiagnostic, cfmOrCfc, flattenTree, getScopeContainedNames, NodeSourceMap, isExpressionContext, getTriviallyComputableString } from "compiler";
+import { NodeId, SourceFile, Parser, Binder, Node as cfNode, binarySearch, CfFileType, Diagnostic as cfcDiagnostic, cfmOrCfc, flattenTree, getScopeContainedNames, NodeSourceMap, isExpressionContext, getTriviallyComputableString, Checker } from "compiler";
 import { CfTag, isStaticallyKnownScopeName, NodeType, ScopeDisplay, StaticallyKnownScopeName } from '../../../compiler/node';
 import { findNodeInFlatSourceMap, getNearestEnclosingScope, isCfScriptTagBlock } from '../../../compiler/utils';
 
 import { tagNames } from "./tagnames";
 import { TokenType } from '../../../compiler/scanner';
+import { TypeKind } from '../../../compiler/types';
 
-const parser = Parser().setDebug(true);
+const parser = Parser().setDebug(true).setParseTypes(true);
 const binder = Binder().setDebug(true);
+const checker = Checker();
 type TextDocumentUri = string;
 const parseCache = new Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, cfNode>}>();
 
@@ -54,7 +56,14 @@ const libfile = SourceFile("nil!", CfFileType.dCfm, `
     parallel /*: {v: number, u: string}[]*/ = 42,
     maxThreadCount /*: number*/) /*: query<any>*/;
 
-`);
+@type Query = <T> => {
+	recordCount: number,
+	columnList: string,
+	filter: (required predicate: (row: T) => boolean, currentRow: number, query: Query<T>) => Query<T>,
+} & T;
+`
+
+);
 parser.setSourceFile(libfile);
 parser.parse();
 
@@ -73,6 +82,7 @@ function naiveGetDiagnostics(uri: TextDocumentUri, text: string, fileType: CfFil
 
     parser.parse(fileType);
 	binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
+	checker.check(sourceFile, parser.getScanner(), parser.getDiagnostics());
 	
 	parseCache.set(uri, {
 		parsedSourceFile: sourceFile,
@@ -326,21 +336,38 @@ connection.onCompletion(
 
 		// if we got an indexed access chain, we only want to provide completions for the first dot
 		if (node.parent?.kind === NodeType.indexedAccessChainElement) {
-			if (node.parent?.parent?.kind === NodeType.indexedAccess) {
+			if (node.parent?.parent?.parent?.kind === NodeType.indexedAccess) {
 				// if so, try to get the identifier used as the root of the chain
 				// if that name is a known scope, try to find the names in that scope
-				const scopeName = getTriviallyComputableString(node.parent.parent.root)?.toLowerCase();
-				if (scopeName && isStaticallyKnownScopeName(scopeName)) {
-					const scope = getNearestEnclosingScope(node, scopeName);
-					if (scope) {
-						const detailLabel = "scope:" + scopeName;
-						return getScopeContainedNames(scope).map(name => ({
-							label: name,
-							kind: CompletionItemKind.Field,
-							detail: detailLabel
-						}));
+				const rootName = getTriviallyComputableString(node.parent.parent.parent.root)?.toLowerCase();
+				if (rootName) {
+					if (isStaticallyKnownScopeName(rootName)) {
+						const scope = getNearestEnclosingScope(node, rootName);
+						if (scope) {
+							const detailLabel = "scope:" + rootName;
+							return getScopeContainedNames(scope).map(name => ({
+								label: name,
+								kind: CompletionItemKind.Field,
+								detail: detailLabel
+							}));
+						}
 					}
 				}
+			}
+
+			const typeinfo = checker.getCachedTermEvaluatedType(node.parent.parent);
+			if (typeinfo.typeKind === TypeKind.struct) {
+				const result : CompletionItem[] = [];
+				for (const [name,type] of typeinfo.members.entries()) {
+					result.push({
+						label: name,
+						kind: type.typeKind === TypeKind.functionSignature
+							? CompletionItemKind.Function
+							: CompletionItemKind.Field,
+						detail: ""
+					})
+				}
+				return result;
 			}
 
 			return [];
@@ -430,7 +457,7 @@ connection.onCompletion(
 			const result : string[] = [];
 			const targetKeys = keys.length > 0 ? keys : Object.keys(scopeDisplay) as (keyof ScopeDisplay)[];
 			for (const key of targetKeys) {
-				if (key === "container" || !(key in scopeDisplay)) continue;
+				if (key === "container" || key === "typedefs" || !(key in scopeDisplay)) continue;
 				result.push(...getScopeContainedNames(scopeDisplay[key]!));
 			}
 			return result;

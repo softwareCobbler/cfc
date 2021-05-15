@@ -1,6 +1,6 @@
 import { SourceRange, TokenType, Token, NilToken, TokenTypeUiString, CfFileType } from "./scanner";
-import { getAttributeValue, getTriviallyComputableString } from "./utils";
-import { Type as externType } from "./types";
+import { getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString } from "./utils";
+import { Type as Type } from "./types";
 
 let debug = false;
 let nextNodeId : NodeId = 0;
@@ -128,32 +128,22 @@ export type Node =
     | OptionalDotAccess
     | OptionalBracketAccess
     | OptionalCall
-    | externType
+    | Type
 
-interface FunctionSignature {
-    params: FunctionParameter[],
-    return: Type
-}
-
-type Type =
-    | "any"
-    | FunctionSignature
-
-export type InternId = number;
-
-export interface Variable {
+export interface Term {
     type: Type,
-    mType: externType,
-    name: InternId,
+    name: string,
     final: boolean,
     var: boolean,
-    initializer: Node | undefined,
+    target: Node | undefined,
 }
 
-export type Scope = Map<InternId, Variable>;
+export type Scope = Map<string, Term>;
 
+// fixme: scopes should just be structs registered on containers
 export interface ScopeDisplay {
     container: Node | null,
+    typedefs: Map<string, Type>,
     
     variables?: Scope,
     this?: Scope,
@@ -165,9 +155,30 @@ export interface ScopeDisplay {
     form?: Scope,
     cgi?: Scope,
     server?: Scope,
+
+    /*
+    application
+    arguments
+    attributes
+    caller
+    cgi
+    client
+    cookie
+
+    form
+    local
+    request
+    server
+    session
+    this
+    thisTag
+    thread
+    threadLocal
+    url
+    */
 }
 
-export type StaticallyKnownScopeName = keyof Omit<ScopeDisplay, "container">;
+export type StaticallyKnownScopeName = keyof Omit<ScopeDisplay, "container" | "typedefs">;
 
 export interface RootScope {
     url: Scope,
@@ -193,6 +204,9 @@ export function isStaticallyKnownScopeName(name: string) : name is StaticallyKno
 }
 
 export type NodeId = number;
+export type TypeId = number;
+export type IdentifierId = number;
+
 export interface NodeBase {
     kind: NodeType,
     nodeId: NodeId,
@@ -213,7 +227,7 @@ export interface NodeBase {
 
 export type NodeWithScope<
     T extends Node = Node,
-    U extends keyof ScopeDisplay | never = never> = T & {containedScope: Pick<{[k in keyof ScopeDisplay]-?: ScopeDisplay[k]}, U | "container">};
+    U extends keyof ScopeDisplay | never = never> = T & {containedScope: Pick<{[k in keyof ScopeDisplay]-?: ScopeDisplay[k]}, U | "container" | "typedefs">};
 
 export function NodeBase<T extends NodeBase>(type: T["kind"], range: SourceRange = SourceRange.Nil()) : T {
     const result : Partial<T> = {};
@@ -317,6 +331,7 @@ export const enum CommentType { tag, scriptSingleLine, scriptMultiLine };
 export interface Comment extends NodeBase {
     kind: NodeType.comment;
     commentType: CommentType;
+    typedefs?: Type[],
 }
 
 export function Comment(commentType: CommentType, range: SourceRange) {
@@ -530,11 +545,11 @@ export function CallExpression(left: Node, leftParen: Terminal, args: CallArgume
 }
 
 export interface CallArgument extends NodeBase {
-    kind: NodeType.callArgument;
-    name: Identifier | null;
-    equals: Terminal | null;
-    expr: Node;
-    comma: Terminal | null;
+    kind: NodeType.callArgument,
+    name: Identifier | null,
+    equals: Terminal | null,
+    expr: Node,
+    comma: Terminal | null,
 }
 
 export function CallArgument(name: Identifier | null, equals: Terminal | null, expr: Node, comma: Terminal | null) : CallArgument {
@@ -1323,6 +1338,7 @@ export function pushAccessElement(base: IndexedAccess, element: IndexedAccessCha
 
 interface FunctionParameterBase extends NodeBase {
     kind: NodeType.functionParameter,
+    required: boolean | null,
     fromTag: boolean,
 }
 
@@ -1345,8 +1361,8 @@ export namespace Script {
         equals: Terminal | null,
         defaultValue: Node | null,
         comma: Terminal | null,
-        canonicalName: string | undefined,
-        type: externType | null,
+        canonicalName: string,
+        type: Type | null,
     }
 
     export function FunctionParameter(
@@ -1356,7 +1372,7 @@ export namespace Script {
         equals: Terminal | null,
         defaultValue: Node | null,
         comma: Terminal | null,
-        type: externType | null) : FunctionParameter {
+        type: Type | null) : FunctionParameter {
         const v = NodeBase<FunctionParameter>(NodeType.functionParameter, mergeRanges(requiredTerminal, javaLikeTypename, identifier, defaultValue, comma));
         v.fromTag = false;
         v.requiredTerminal = requiredTerminal;
@@ -1365,8 +1381,9 @@ export namespace Script {
         v.equals = equals;
         v.defaultValue = defaultValue;
         v.comma = comma;
-        v.canonicalName = identifier.canonicalName;
+        v.canonicalName = identifier.canonicalName || "<<ERROR>>";
         v.type = type;
+        v.required = !!(requiredTerminal);
         return v;
     }
 }
@@ -1375,15 +1392,16 @@ export namespace Tag {
     export interface FunctionParameter extends FunctionParameterBase {
         kind: NodeType.functionParameter,
         fromTag: true,
-        canonicalName: string | undefined,
-        type: externType | null,
+        canonicalName: string,
+        type: Type | null,
     }
 
-    export function FunctionParameter(tag: CfTag.Common, type: externType | null) : FunctionParameter {
+    export function FunctionParameter(tag: CfTag.Common, type: Type | null) : FunctionParameter {
         const v = NodeBase<FunctionParameter>(NodeType.functionParameter, tag.range);
         v.fromTag = true;
         v.tagOrigin.startTag = tag;
-        v.canonicalName = getTriviallyComputableString(getAttributeValue(tag.attrs, "name"))?.toLowerCase() ?? undefined
+        v.canonicalName = getTriviallyComputableString(getAttributeValue(tag.attrs, "name"))?.toLowerCase() ?? "<<ERROR>>";
+        v.required = getTriviallyComputableBoolean(getAttributeValue(tag.attrs, "required")) ?? null;
         v.type = type;
         return v;
     }
@@ -1410,7 +1428,7 @@ export namespace Script {
         attrs          : TagAttribute[],
         body           : Block,
         canonicalName  : string | null,
-        returnTypeAnnotation : externType | null,
+        returnTypeAnnotation : Type | null,
     }
 
     export function FunctionDefinition(
@@ -1423,7 +1441,7 @@ export namespace Script {
         rightParen    : Terminal,
         attrs         : TagAttribute[],
         body          : Block,
-        returnTypeAnnotation : externType | null
+        returnTypeAnnotation : Type | null
     ) : FunctionDefinition {
         const v = NodeBase<FunctionDefinition>(NodeType.functionDefinition, mergeRanges(accessModifier, returnType, functionToken, body));
         v.fromTag        = false;
@@ -1447,7 +1465,7 @@ export namespace Tag {
         kind: NodeType.functionDefinition;
         fromTag        : true,
         params         : FunctionParameter[],
-        body           : Node[],
+        body           : Node[], // fixme: block?
         canonicalName  : string | undefined,
     }
 

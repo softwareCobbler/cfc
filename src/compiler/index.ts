@@ -1,6 +1,7 @@
 export { Scanner, CfFileType } from "./scanner";
 export { Parser, Diagnostic } from "./parser";
 export { Binder } from "./binder";
+export { Checker } from "./checker";
 export { cfmOrCfc, flattenTree, NodeSourceMap, binarySearch } from "./utils";
 export { Node, SourceFile, NilDCfm, NilCfc, NilCfm } from "./node";
 

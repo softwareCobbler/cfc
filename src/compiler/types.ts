@@ -20,6 +20,7 @@ export const enum TypeKind {
     typeCall,
     typeFunctionParam,
     typeId,
+    deferred,
 }
 
 const TypeKindUiString : Record<TypeKind, string> = {
@@ -40,6 +41,7 @@ const TypeKindUiString : Record<TypeKind, string> = {
     [TypeKind.typeFunctionParam]:      "type-function-param", // type param in a type function
     [TypeKind.typeId]:                 "type-id",             // name of non-builtin type, e.g, "T"
     [TypeKind.never]:                  "never",
+    [TypeKind.deferred]:               "deferred",
 }
 
 export const enum TypeFlags {
@@ -74,7 +76,7 @@ export function TypeBase<T extends Type>(typeKind: T["typeKind"]) : T {
 export type Type =
     | cfAny | cfVoid | cfString | cfNumber | cfBoolean | cfNil | cfArray
     | cfUnion | cfIntersection
-    | cfTypeId | cfNever
+    | cfTypeId | cfNever | cfDeferred
     | cfTuple | cfStruct | cfFunctionSignature | cfTypeCall | cfTypeFunctionDefinition | cfTypeFunctionParam;
 
 export interface cfAny extends TypeBase {
@@ -168,12 +170,12 @@ export function cfTuple(T: Type[]) : cfTuple {
 export interface cfStruct extends TypeBase {
     typeKind: TypeKind.struct,
     stringIndex: boolean,
-    T: Map<string, Type>,
+    members: Map<string, Type>,
 }
 
-export function cfStruct(T: Map<string, Type>, stringIndex = false) : cfStruct {
+export function cfStruct(T: Map<string, Type> = new Map(), stringIndex = false) : cfStruct {
     const v = TypeBase<cfStruct>(TypeKind.struct);
-    v.T = T;
+    v.members = T;
     v.stringIndex = stringIndex;
     return v;
 }
@@ -263,7 +265,7 @@ export function cfIntersection(left: Type, right: Type) : cfIntersection {
     const v = TypeBase<cfIntersection>(TypeKind.intersection);
     v.left = left;
     v.right = right;
-    v.typeList = [];
+    v.typeList = [left, right];
     return v;
 }
 
@@ -282,10 +284,19 @@ export function cfNever() : cfNever {
     return v;
 }
 
+export interface cfDeferred extends TypeBase {
+    typeKind: TypeKind.deferred,
+}
+
+export function cfDeferred() {
+    const v = TypeBase<cfDeferred>(TypeKind.deferred);
+    return v;
+}
+
 const typeCacheByNodeId = new Map<NodeId, Type>();
 const typeCacheByName = new Map<string, Type>();
 
-type NodeTrie = Map<null, Type | "PENDING"> & Map<NodeId, NodeTrie>;
+type NodeTrie = Map<NodeId, NodeTrie> & Map<null, Type | "PENDING"> ;
 
 const typeCallCacheTrie : NodeTrie = new Map();
 
@@ -380,6 +391,8 @@ export function evaluateTypeCall(typeFunction: cfTypeFunctionDefinition, args: T
         typeParamMap.set(typeFunction.params[i].name, args[i]);
     }
 
+    // say our current evaluation is for `T<U>`
+    // set `T<U>` to "PENDING" so that we have something to check for to not recurse infinitely on something like `T<U> = {foo: T<U>}`
     setCachedTypeCall(typeFunction, args, "PENDING");
     const result = evaluateType(typeFunction.body, typeParamMap);
 
@@ -388,36 +401,72 @@ export function evaluateTypeCall(typeFunction: cfTypeFunctionDefinition, args: T
     return result;
 }
 
-function intersect(left: Type, right: Type) : Type[] {
+/*function intersect(left: Type, right: Type) : Type[] {
     const types : Type[] = [];
     if (left.typeKind === TypeKind.intersection) {
-        types.push(left.left, left.right);
+        types.push(...left.typeList);
     }
     else {
         types.push(left);
     }
     if (right.typeKind === TypeKind.intersection) {
-        types.push(right.left, right.right);
+        types.push(...right.typeList);
     }
     else {
         types.push(right);
     }
     return types;
+}*/
+
+function evaluateIntersection(left: Type, right: Type, typeParamMap: Map<string, Type>) : Type {
+    if (left.typeKind === TypeKind.struct && right.typeKind === TypeKind.struct) {
+        let longest = left.members.size > right.members.size ? left.members : right.members;
+        let shortest = longest === left.members ? right.members : left.members;
+
+        const remainingLongestKeys = new Set([...longest.keys()]);
+        const result = new Map<string, Type>();
+        for (const key of shortest.keys()) {
+            remainingLongestKeys.delete(key);
+            const evaluatedShortest = evaluateType(shortest.get(key)!, typeParamMap);
+            const evaluatedLongest = longest.has(key) ? evaluateType(longest.get(key)!, typeParamMap) : null;
+            if (!evaluatedLongest) {
+                result.set(key, evaluatedShortest);
+                continue;
+            }
+            const intersect = evaluateIntersection(evaluatedShortest, evaluatedLongest, typeParamMap);
+            if (intersect.typeKind === TypeKind.never) {
+                return cfNever();
+            }
+            else {
+                result.set(key, intersect);
+            }
+        }
+
+        for (const key of remainingLongestKeys) {
+            result.set(key, longest.get(key)!);
+        }
+
+        return cfStruct(result);
+    }
+    else {
+        // only valid type operands to the "&" type operator are {}
+        // which is not the "empty interface" but just a shorthand for "struct"
+        return cfNever();
+    }
 }
 
 export function evaluateType(type: Type, typeParamMap = new Map<string, Type>()) : Type {
     switch (type.typeKind) {
         case TypeKind.intersection: {
             const left = evaluateType(type.left, typeParamMap);
-            const right = evaluateType(type.right, typeParamMap)
-            const result = cfIntersection(cfNil(), cfNil());
-            result.typeList = intersect(left, right);
-            return result;
+            const right = evaluateType(type.right, typeParamMap);
+            return evaluateIntersection(left, right, typeParamMap);
+            return cfIntersection(left, right);
         }
         case TypeKind.struct: {
             const evaluatedStructContents = new Map<string, Type>();
-            for (const key of type.T.keys()) {
-                evaluatedStructContents.set(key, evaluateType(type.T.get(key)!, typeParamMap));
+            for (const key of type.members.keys()) {
+                evaluatedStructContents.set(key, evaluateType(type.members.get(key)!, typeParamMap));
             }
             return cfStruct(evaluatedStructContents, type.stringIndex);
         }
@@ -452,17 +501,11 @@ export function evaluateType(type: Type, typeParamMap = new Map<string, Type>())
                 return type;
             }
             else {
-                evaluateTypeCall(typeFunction, args);
+                return evaluateTypeCall(typeFunction, args);
             }
-        case TypeKind.number:
-        case TypeKind.string:
-        case TypeKind.boolean:
-        case TypeKind.any:
-        case TypeKind.void:
-            return type;
         case TypeKind.typeId:
             return typeParamMap.get(type.name)!
         default:
-            throw "not yet implemented";
+            return type;
     }
 }

@@ -26,10 +26,11 @@ import {
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug, NilToken } from "./scanner";
-import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, getAttributeValue } from "./utils";
+import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, getAttributeValue, visit } from "./utils";
 import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type, TypeFlags, cfFunctionSignature, cfTypeCall, cfVoid, cfTypeFunctionParam, cfTypeFunctionDefinition, cfIntersection, cfTypeId, KLUDGE_FOR_DEV_register_type_function_name, TypeKind } from "./types";
 
 let debugParseModule = false;
+let parseTypes = false;
 
 const enum ParseOptions {
     none     = 0,
@@ -141,6 +142,11 @@ export function Parser() {
         return self_;
     }
 
+    function setParseTypes(b: boolean) {
+        parseTypes = b;
+        return self_;
+    }
+
     let scanner : Scanner;
     let sourceFile: SourceFile;
     let mode: ScannerMode;
@@ -202,7 +208,10 @@ export function Parser() {
         setScannerMode,
         getScanner,
         setSourceFile,
+
         setDebug,
+        setParseTypes,
+
         getDiagnostics,
         parseTags,
         parseScript,
@@ -563,6 +572,11 @@ export function Parser() {
         return Comment(CommentType.scriptMultiLine, new SourceRange(startToken.range.fromInclusive, endToken.range.toExclusive));
     }
 
+    /**
+     * parse triva - comments and whitespace
+     * what type of comments are parsed depends on current scanner mode (tag | script)
+     * we need to consider the case where we are parsing types, do we parse both tag and script comments?
+     */
     function parseTrivia() : Node[] {
         let result : Node[];
 
@@ -727,7 +741,11 @@ export function Parser() {
                 let value : Node;
 
                 if (tagMode()) {
-                    if (isLexemeLikeToken(peek(), /*allowNumeric*/ true)) {
+                    if (parseTypes && attrName.token.text === "type:") {
+                        const stringLiteral = parseStringLiteral();
+                        value = parseType(stringLiteral.range.fromInclusive+1, stringLiteral.range.toExclusive-1);
+                    }
+                    else if (isLexemeLikeToken(peek(), /*allowNumeric*/ true)) {
                         value = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ true);
                     }
                     else if (lookahead() === TokenType.QUOTE_SINGLE || lookahead() === TokenType.QUOTE_DOUBLE) {
@@ -852,23 +870,51 @@ export function Parser() {
     function parse(cfFileType: CfFileType = sourceFile?.cfFileType || CfFileType.cfm) : Node[] {
         switch (cfFileType) {
             case CfFileType.cfm:
-                return sourceFile.content = parseTags();
+                sourceFile.content = parseTags();
+                break;
             case CfFileType.cfc: {
                 const componentType = parseComponentPreamble();
                 if (!componentType) {
-                    return sourceFile.content = [];
+                    sourceFile.content = [];
+                    break;
                 }
                 else if (componentType === "tag") {
-                    return sourceFile.content = parseTags();
+                    sourceFile.content = parseTags();
+                    break;
                 }
                 else {
-                    return sourceFile.content = parseScript();
+                    sourceFile.content = parseScript();
+                    break;
                 }
             }
             case CfFileType.dCfm: {
-                return sourceFile.content = parseDeclarationFile();
+                sourceFile.content = parseTypeAnnotations(/*asDeclarationFile*/ true);
+                break;
             }
         }
+
+        if (parseTypes) {
+            visit(sourceFile, function(node: Node | null | undefined) {
+                if (!node) return;
+                if (node.kind === NodeType.comment) {
+                    // const scannerState = getScannerState(); - no need to pay to save
+                    restoreScannerState({
+                        index: node.range.fromInclusive,
+                        artificialEndLimit: node.range.toExclusive,
+                        mode: ScannerMode.allow_both, // make this optional? it is set in parseTypeAnnotations, too; so we only set it because it is required here
+                    })
+
+                    const types = parseTypeAnnotations(/*asDeclarationFile*/ false);
+                    if (types.length > 0) {
+                        node.typedefs = types;
+                    }
+                    // restoreScannerState() - we don't need to pay to restore it since the only remaining use of the scanner
+                    // is to continue setting it's position to parse comment-bound type annotations
+                }
+            })
+        }
+
+        return sourceFile.content;
     }
 
     function parseScript() : Node[] {
@@ -1584,12 +1630,17 @@ export function Parser() {
         return treeifyTagList(result);
     }
 
-    function parseDeclarationFile() : Type[] {
+    /**
+     * parse type annotations, 
+     */
+    function parseTypeAnnotations(asDeclarationFile: boolean) : Type[] {
         setScannerMode(ScannerMode.allow_both);
         const savedContext = updateParseContext(ParseContext.typeAnnotation);
         const result : Type[] = []; // declarations (function | global)
         while (lookahead() !== TokenType.EOF) {
-            parseTagTrivia();
+            if (asDeclarationFile) {
+                parseTagTrivia();
+            }
             if (next().text === "@") {
                 const contextualKeyword = next();
                 if (contextualKeyword.text === "declare") {
@@ -1623,7 +1674,7 @@ export function Parser() {
                     }
                 }
                 else {
-                    // parse error ?
+                    // parse error ? if skipUnrecognized === false?
                 }
             }
         }
