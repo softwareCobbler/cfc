@@ -20,7 +20,7 @@ export const enum NodeType {
     tag, callExpression, callArgument, unaryOperator, binaryOperator,
     conditional, variableDeclaration, statement, block, simpleStringLiteral, interpolatedStringLiteral, numericLiteral, booleanLiteral,
     identifier,
-    indexedAccess, indexedAccessChainElement,
+    indexedAccess, indexedAccessChainElement, sliceExpression,
     functionDefinition, arrowFunctionDefinition, functionParameter,
     dottedPath, switch, switchCase, do, while, ternary, for, structLiteral, arrayLiteral,
     structLiteralInitializerMember, arrayLiteralInitializerMember, try, catch, finally,
@@ -52,6 +52,7 @@ const NodeTypeUiString : Record<NodeType, string> = {
     [NodeType.identifier]: "identifier",
     [NodeType.indexedAccess]: "indexedAccess",
     [NodeType.indexedAccessChainElement]: "indexedAccessChainElement",
+    [NodeType.sliceExpression]: "sliceExpression",
     [NodeType.functionDefinition]: "functionDefinition",
     [NodeType.arrowFunctionDefinition]: "arrowFunctionDefinition",
     [NodeType.functionParameter]: "functionParameter",
@@ -102,6 +103,7 @@ export type Node =
     | BooleanLiteral
     | Identifier
     | IndexedAccess
+    | SliceExpression
     | FunctionParameter
     | FunctionDefinition
     | ArrowFunctionDefinition
@@ -1238,6 +1240,30 @@ export interface OptionalCall extends NodeBase {
     __debug_access_type?: string
     // the call itself will "own" this node as its left-side
     // foo?.() is a call expression where the left side is an indexed-access expression with a trailing OptionalCall access chain element
+}
+
+export interface SliceExpression extends NodeBase {
+    kind: NodeType.sliceExpression,
+    from : Node | null,
+    colon1: Terminal,
+    to : Node | null,
+    colon2: Terminal,
+    stride : Node | null,
+}
+
+export function SliceExpression(
+    from : Node | null,
+    colon1: Terminal,
+    to : Node | null,
+    colon2: Terminal,
+    stride : Node | null) : SliceExpression {
+    const v = NodeBase<SliceExpression>(NodeType.sliceExpression, mergeRanges(from, colon1, to, colon2, stride));
+    v.from = from;
+    v.colon1 = colon1;
+    v.to = to;
+    v.colon2 = colon2;
+    v.stride = stride;
+    return v;
 }
 
 export type IndexedAccessChainElement =

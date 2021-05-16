@@ -165,4 +165,34 @@ describe("general smoke test for particular constructs", () => {
             }
         </cfscript>`, CfFileType.cfm, 0);
     });
+    it("Should accept slice expressions in bracket access context", () => {
+        assertDiagnosticsCount(`<cfscript>
+            function foo(first, ...rest) {
+                rest[  :   :   ];
+                rest[v :   :   ];
+                rest[  : v :   ];
+                rest[  :   : v ];
+                rest[v : v :   ];
+                rest[v :   : v ];
+                rest[  : v : v ];
+                rest[v : v : v ];
+
+                first.x()[3::][4:5:6]().z; // some random expression chain
+            }
+        </cfscript>`, CfFileType.cfm, 0);
+    });
+    it("Should accept optional slice expressions in bracket access context but emit diagnostics due to optional bracket access being unsupported", () => {
+        assertDiagnosticsCount(`<cfscript>
+            function foo(first, ...rest) {
+                rest?.[  :   :   ];
+                rest?.[v :   :   ];
+                rest?.[  : v :   ];
+                rest?.[  :   : v ];
+                rest?.[v : v :   ];
+                rest?.[v :   : v ];
+                rest?.[  : v : v ];
+                rest?.[v : v : v ];
+            }
+        </cfscript>`, CfFileType.cfm, 8);
+    });
 });

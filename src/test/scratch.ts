@@ -18,22 +18,7 @@ function fromFile(fname: string) {
 
 const sourceFile = NilCfm(`
 <cfscript>
-    function foo(first, ...rest) {
-        final var bar = (...rest) => rest;
-        final var struct_check = () => {
-            var base = {x: 1, y:2};
-            var spread_target = {a:0, ...base};
-            spread_target = {...base};
-            spread_target = {a:0, ...base, ...base};
-        }
-
-        final var array_check = () => {
-            var base = [1,2,3];
-            var spread_target = [42, ...base];
-            spread_target = [...base];
-            spread_target = [42, ...base, ...base];
-        }
-    }
+    first.x()[3][4]().z; // some random expression chain
 </cfscript>
 `);
 

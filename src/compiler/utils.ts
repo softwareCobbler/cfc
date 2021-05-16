@@ -427,6 +427,12 @@ export function visit(node: Node, visitor: (arg: Node | undefined | null) => any
                     return visitor(node.questionMark)
                         || visitor(node.dot);
             }
+        case NodeType.sliceExpression:
+            return visitor(node.from)
+                || visitor(node.colon1)
+                || visitor(node.to)
+                || visitor(node.colon2)
+                || visitor(node.stride);
         case NodeType.functionParameter:
             if (node.fromTag) {
                 return visitor(node.tagOrigin.startTag);

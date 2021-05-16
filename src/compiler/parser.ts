@@ -24,7 +24,7 @@ import {
     New,
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
-    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember } from "./node";
+    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName } from "./utils";
 
@@ -2135,7 +2135,7 @@ export function Parser() {
                         }
                         if (lookahead() === TokenType.LEFT_BRACKET) {
                             const leftBracket           = parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
-                            const expr                  = parseExpression();
+                            const expr                  = parseArrayIndexOrSliceExpression();
                             const rightBracket          = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
                             const optionalBracketAccess = OptionalBracketAccess(questionMark, dot, leftBracket, expr, rightBracket);
                             root                        = transformingPushAccessElement(root, optionalBracketAccess) as T;
@@ -2161,9 +2161,7 @@ export function Parser() {
                 }
                 case TokenType.LEFT_BRACKET: {
                     const leftBracket = parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
-                    const expr = isStartOfExpression()
-                        ? parseExpression()
-                        : (parseErrorAtCurrentToken("Expression expected."), createMissingNode(Identifier(NilTerminal(pos()), "")));
+                    const expr = parseArrayIndexOrSliceExpression();
                     const rightBracket = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
 
                     root = transformingPushAccessElement(root, BracketAccess(leftBracket, expr, rightBracket)) as T;
@@ -2191,6 +2189,28 @@ export function Parser() {
         }
 
         return root;
+
+        function parseArrayIndexOrSliceExpression() {
+            const first = isStartOfExpression()
+                ? parseExpression()
+                : lookahead() === TokenType.COLON
+                ? parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia)
+                : (parseErrorAtCurrentToken("Expression expected."), createMissingNode(Identifier(NilTerminal(pos()), "")));
+            
+            // we got an expression and the next token is not a colon -- so this is just a basic index expression
+            // like `x[e]`
+            if (first.kind !== NodeType.terminal && lookahead() !== TokenType.COLON) {
+                return first;
+            }
+
+            // otherwise, we got a slice expression
+            let from : Node | null = first.kind === NodeType.terminal ? null : first;
+            let colon1: Terminal = first.kind === NodeType.terminal ? first : parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
+            let to : Node | null = isStartOfExpression() ? parseExpression() : null;
+            let colon2: Terminal = parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
+            let stride : Node | null = isStartOfExpression() ? parseExpression() : null;
+            return SliceExpression(from, colon1, to, colon2, stride);
+        }
 
         function previousElement() : T | IndexedAccessChainElement {
             if (root.kind !== NodeType.indexedAccess) {
