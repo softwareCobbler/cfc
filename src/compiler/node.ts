@@ -215,8 +215,10 @@ export interface NodeBase {
     parent: Node | null,
     range: SourceRange,
 
+    typeAnnotation: Type | null,
+
     fromTag?: boolean,
-    tagOrigin: {
+    tagOrigin: { // todo: make this only present on particular tags, and flatten it
         startTag: CfTag | null,
         endTag: CfTag | null,
     }
@@ -237,6 +239,7 @@ export function NodeBase<T extends NodeBase>(type: T["kind"], range: SourceRange
     result.kind = type;
     result.parent = null;
     result.range = range ?? null;
+    result.typeAnnotation = null;
     result.tagOrigin = {
         startTag: null,
         endTag: null,
@@ -336,10 +339,24 @@ export interface Comment extends NodeBase {
     typedefs?: Type[],
 }
 
-export function Comment(commentType: CommentType, range: SourceRange) {
-    const comment = NodeBase<Comment>(NodeType.comment, range);
-    comment.commentType = commentType;
-    return comment;
+export function Comment(tagOrigin: CfTag.Comment) : Comment;
+export function Comment(commentType: CommentType, range: SourceRange, typedefs?: Type[]) : Comment;
+export function Comment(commentType: CfTag.Comment | CommentType, range?: SourceRange, typedefs?: Type[]) {
+    if (typeof commentType === "number") { // overload 2
+        const comment = NodeBase<Comment>(NodeType.comment, range);
+        comment.commentType = commentType;
+        if (typedefs) comment.typedefs = typedefs;
+        return comment;
+    }
+    else { // overload 1
+        const tagOrigin = commentType as CfTag.Comment;
+        const comment = NodeBase<Comment>(NodeType.comment, tagOrigin.range);
+        comment.commentType = CommentType.tag;
+        if (tagOrigin.typedefs) {
+            comment.typedefs = tagOrigin.typedefs;
+        }
+        return comment;
+    }
 }
 
 export interface TextSpan extends NodeBase {
@@ -515,8 +532,9 @@ export namespace CfTag {
     }
 
     export interface Comment extends TagBase {
-        tagType: TagType.comment;
-        body: TagBase[];
+        tagType: TagType.comment,
+        body: TagBase[],
+        typedefs?: Type[],
     }
     export function Comment(
         tagStart: Terminal,

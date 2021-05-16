@@ -9,7 +9,7 @@ import { Checker } from "../compiler/checker";
 
 import * as fs from "fs";
 import * as path from "path";
-import { cfTypeFunctionDefinition, evaluateType, evaluateTypeCall, Type } from "../compiler/types";
+import { cfTypeConstructor, evaluateType, invokeTypeConstructor, Type } from "../compiler/types";
 
 function fromFile(fname: string) {
     const absPath = path.resolve(fname);
@@ -28,18 +28,13 @@ const sourceFile = NilCfm(`
     @type MySchema = {rec_uid: number};
 --->
 
-<cfquery name="q" type:="Query<MySchema>">
-    select * from foo where bar = baz;
-</cfquery>
-
-<cfquery name="q" type:="Query<MySchema>">
+<!--- @type Query<MySchema> --->
+<cfquery name="q">
     select * from foo where bar = baz;
 </cfquery>
 
 <cfscript>
-    x = 3;
     q.filter((row) => { row. });
-    q.filter();
 </cfscript>
 `);
 

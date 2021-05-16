@@ -241,7 +241,10 @@ function forEachNode<T>(nodeList: Node[], f: (node: Node) => T) : T | undefined 
 }
 
 // a falsy value returned by the visitor keeps it going
-export function visit(node: Node, visitor: (arg: Node | undefined | null) => any) : void {
+export function visit(node: Node | Node[], visitor: (arg: Node | undefined | null) => any) : void {
+    if (Array.isArray(node)) {
+        return forEachNode(node, visitor);
+    }
     switch (node.kind) {
         case NodeType.comment:
         case NodeType.textSpan:

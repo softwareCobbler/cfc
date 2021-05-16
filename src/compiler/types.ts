@@ -16,32 +16,34 @@ export const enum TypeKind {
     union,
     intersection,
     functionSignature,
-    typeFunctionDefinition,
+    typeConstructor,
     typeCall,
+    cachedTypeConstructorInvocation,
     typeFunctionParam,
     typeId,
     deferred,
 }
 
 const TypeKindUiString : Record<TypeKind, string> = {
-    [TypeKind.any]:                    "any",
-    [TypeKind.void]:                   "void",
-    [TypeKind.string]:                 "string",
-    [TypeKind.number]:                 "number",
-    [TypeKind.boolean]:                "boolean",
-    [TypeKind.nil]:                    "nil",
-    [TypeKind.array]:                  "array",
-    [TypeKind.tuple]:                  "tuple",
-    [TypeKind.struct]:                 "struct",
-    [TypeKind.union]:                  "union",
-    [TypeKind.intersection]:           "intersection",
-    [TypeKind.functionSignature]:      "function-signature",  // (name: type, ...) => type
-    [TypeKind.typeCall]:               "type-call",           // type<type-list, ...>
-    [TypeKind.typeFunctionDefinition]: "type-function",       // type<type-list, ...> => type
-    [TypeKind.typeFunctionParam]:      "type-function-param", // type param in a type function
-    [TypeKind.typeId]:                 "type-id",             // name of non-builtin type, e.g, "T"
-    [TypeKind.never]:                  "never",
-    [TypeKind.deferred]:               "deferred",
+    [TypeKind.any]:                             "any",
+    [TypeKind.void]:                            "void",
+    [TypeKind.string]:                          "string",
+    [TypeKind.number]:                          "number",
+    [TypeKind.boolean]:                         "boolean",
+    [TypeKind.nil]:                             "nil",
+    [TypeKind.array]:                           "array",
+    [TypeKind.tuple]:                           "tuple",
+    [TypeKind.struct]:                          "struct",
+    [TypeKind.union]:                           "union",
+    [TypeKind.intersection]:                    "intersection",
+    [TypeKind.functionSignature]:               "function-signature",  // (name: type, ...) => type
+    [TypeKind.typeCall]:                        "type-call",           // type<type-list, ...>
+    [TypeKind.cachedTypeConstructorInvocation]: "cached-type-constructor-invocation",    // same as a type call but we can see that is cached; sort of a "type call closure" with inital args captured
+    [TypeKind.typeConstructor]:                 "type-constructor",    // type<type-list, ...> => type
+    [TypeKind.typeFunctionParam]:               "type-function-param", // type param in a type function
+    [TypeKind.typeId]:                          "type-id",             // name of non-builtin type, e.g, "T"
+    [TypeKind.never]:                           "never",
+    [TypeKind.deferred]:                        "deferred",
 }
 
 export const enum TypeFlags {
@@ -77,7 +79,8 @@ export type Type =
     | cfAny | cfVoid | cfString | cfNumber | cfBoolean | cfNil | cfArray
     | cfUnion | cfIntersection
     | cfTypeId | cfNever | cfDeferred
-    | cfTuple | cfStruct | cfFunctionSignature | cfTypeCall | cfTypeFunctionDefinition | cfTypeFunctionParam;
+    | cfTuple | cfStruct | cfFunctionSignature
+    | cfTypeCall | cfCachedTypeConstructorInvocation | cfTypeConstructor | cfTypeConstructorParam;
 
 export interface cfAny extends TypeBase {
     typeKind: TypeKind.any;
@@ -208,25 +211,40 @@ export function cfTypeCall(left: Type, args: Type[]) : cfTypeCall {
     return v;
 }
 
-export interface cfTypeFunctionDefinition extends TypeBase {
-    typeKind: TypeKind.typeFunctionDefinition,
+interface cfCachedTypeConstructorInvocation extends TypeBase {
+    typeKind: TypeKind.cachedTypeConstructorInvocation,
+    left: cfTypeConstructor,
+    args: Type[],
+}
+
+function cfCachedTypeConstructorInvocation(left: cfTypeConstructor, args: Type[]) : cfCachedTypeConstructorInvocation {
+    const v = TypeBase<cfCachedTypeConstructorInvocation>(TypeKind.cachedTypeConstructorInvocation);
+    v.left = left;
+    v.args = args;
+    return v;
+}
+
+export interface cfTypeConstructor extends TypeBase {
+    typeKind: TypeKind.typeConstructor,
     name: string,
-    params: cfTypeFunctionParam[],
+    params: cfTypeConstructorParam[],
     body: Type,
 }
 
-export function cfTypeFunctionDefinition(params: cfTypeFunctionParam[], body: Type) : cfTypeFunctionDefinition {
-    const v = TypeBase<cfTypeFunctionDefinition>(TypeKind.typeFunctionDefinition);
+export function cfTypeConstructor(params: cfTypeConstructorParam[], body: Type) : cfTypeConstructor {
+    const v = TypeBase<cfTypeConstructor>(TypeKind.typeConstructor);
     v.params = params;
     v.body = body;
     return v;
 }
 
-export function KLUDGE_FOR_DEV_register_type_function_name(name: string, type: cfTypeFunctionDefinition) {
+
+
+export function KLUDGE_FOR_DEV_register_type_constructor_name(name: string, type: cfTypeConstructor) {
     typeCacheByName.set(name, type);
 }
 
-export interface cfTypeFunctionParam extends TypeBase {
+export interface cfTypeConstructorParam extends TypeBase {
     typeKind: TypeKind.typeFunctionParam,
     name: string,
     extendsToken: Terminal | null,
@@ -234,8 +252,8 @@ export interface cfTypeFunctionParam extends TypeBase {
     comma: Terminal | null
 }
 
-export function cfTypeFunctionParam(name: string, extendsToken: Terminal | null, extendsType: Type | null, comma: Terminal | null) {
-    const v = TypeBase<cfTypeFunctionParam>(TypeKind.typeFunctionParam);
+export function cfTypeConstructorParam(name: string, extendsToken: Terminal | null, extendsType: Type | null, comma: Terminal | null) {
+    const v = TypeBase<cfTypeConstructorParam>(TypeKind.typeFunctionParam);
     v.name = name;
     v.extendsToken = extendsToken;
     v.extendsType = extendsType;
@@ -300,13 +318,13 @@ type NodeTrie = Map<NodeId, NodeTrie> & Map<null, Type | "PENDING"> ;
 
 const typeCallCacheTrie : NodeTrie = new Map();
 
-function getTypeFunctionDefintionByName(name: string) {
-    return typeCacheByName.get(name)! as cfTypeFunctionDefinition;
+function KLUDGE_FOR_DEV_getTypeConstructorDefintionByName(name: string) {
+    return typeCacheByName.get(name)! as cfTypeConstructor;
 }
 
 const enum TypeCacheResult { resolved, resolving, noCache };
 
-function setCachedTypeCall(typeFunction: cfTypeFunctionDefinition, args: Type[], val: "PENDING" | Type) : void {
+function setCachedTypeCall(typeFunction: cfTypeConstructor, args: Type[], val: "PENDING" | Type) : void {
     function getChildTrieMapOrNull(thisLevel: NodeTrie, nodeId: NodeId) : NodeTrie | null {
         const result = thisLevel.get(nodeId);
         if (result && typeof result === "object") {
@@ -315,6 +333,13 @@ function setCachedTypeCall(typeFunction: cfTypeFunctionDefinition, args: Type[],
         else {
             return null;
         }
+    }
+
+    if (args.length === 0) {
+        const bottom : NodeTrie = new Map();
+        bottom.set(null, val);
+        typeCallCacheTrie.set(typeFunction.nodeId, bottom);
+        return;
     }
 
     let workingMap = getChildTrieMapOrNull(typeCallCacheTrie, typeFunction.nodeId);
@@ -353,7 +378,7 @@ function setCachedTypeCall(typeFunction: cfTypeFunctionDefinition, args: Type[],
     }
 }
 
-function getCachedTypeCall(typeFunction: cfTypeFunctionDefinition, args: Type[]) : {status: TypeCacheResult, value?: Type} {
+function getCachedTypeConstructorInvocation(typeFunction: cfTypeConstructor, args: Type[]) : {status: TypeCacheResult, value?: Type} {
     let trieDescender = typeCallCacheTrie.get(typeFunction.nodeId);
     for (let i = 0; i < args.length; i++) {
         if (!trieDescender) {
@@ -376,12 +401,15 @@ function getCachedTypeCall(typeFunction: cfTypeFunctionDefinition, args: Type[])
     }
 }
 
-export function evaluateTypeCall(typeFunction: cfTypeFunctionDefinition, args: Type[]) : Type {
+export function invokeTypeConstructor(typeFunction: cfTypeConstructor, args: Type[]) : Type {
     if (typeFunction.params.length !== args.length) {
+        // hit this once by writing @type U<T>
+        // when only @type T<U> was valid;
+        // need some type checking of the type system
         throw "args.length !== typeFunction.params.length"
     }
 
-    const cached = getCachedTypeCall(typeFunction, args);
+    const cached = getCachedTypeConstructorInvocation(typeFunction, args);
     if (cached.status === TypeCacheResult.resolved) {
         return cached.value!;
     }
@@ -455,13 +483,14 @@ function evaluateIntersection(left: Type, right: Type, typeParamMap: Map<string,
     }
 }
 
-export function evaluateType(type: Type, typeParamMap = new Map<string, Type>()) : Type {
+export function evaluateType(type: Type | null, typeParamMap = new Map<string, Type>()) : Type {
+    if (!type) return cfAny();
+    
     switch (type.typeKind) {
         case TypeKind.intersection: {
             const left = evaluateType(type.left, typeParamMap);
             const right = evaluateType(type.right, typeParamMap);
             return evaluateIntersection(left, right, typeParamMap);
-            return cfIntersection(left, right);
         }
         case TypeKind.struct: {
             const evaluatedStructContents = new Map<string, Type>();
@@ -481,8 +510,8 @@ export function evaluateType(type: Type, typeParamMap = new Map<string, Type>())
             }
             const returns = evaluateType(type.returns, typeParamMap);
             return cfFunctionSignature(type.name, params, returns);
-        case TypeKind.typeCall:
-            const typeFunction = getTypeFunctionDefintionByName((type.left as cfTypeId).name);
+        case TypeKind.typeCall: {
+            const typeConstructor = KLUDGE_FOR_DEV_getTypeConstructorDefintionByName((type.left as cfTypeId).name);
             const args : Type[] = [];
             for (const arg of type.args) {
                 if (arg.typeKind === TypeKind.typeId) {
@@ -493,7 +522,19 @@ export function evaluateType(type: Type, typeParamMap = new Map<string, Type>())
                 }
             }
 
-            const cachedTypeCall = getCachedTypeCall(typeFunction, args);
+            const cachedTypeCall = getCachedTypeConstructorInvocation(typeConstructor, args);
+            if (cachedTypeCall.status === TypeCacheResult.resolved) {
+                return cachedTypeCall.value!;
+            }
+            else if (cachedTypeCall.status === TypeCacheResult.resolving) {
+                return cfCachedTypeConstructorInvocation(typeConstructor, args);
+            }
+            else {
+                return invokeTypeConstructor(typeConstructor, args);
+            }
+        }
+        case TypeKind.cachedTypeConstructorInvocation: {
+            const cachedTypeCall = getCachedTypeConstructorInvocation(type.left, type.args);
             if (cachedTypeCall.status === TypeCacheResult.resolved) {
                 return cachedTypeCall.value!;
             }
@@ -501,10 +542,18 @@ export function evaluateType(type: Type, typeParamMap = new Map<string, Type>())
                 return type;
             }
             else {
-                return evaluateTypeCall(typeFunction, args);
+                throw "expected resolved or resolving cache result but got none";
             }
-        case TypeKind.typeId:
-            return typeParamMap.get(type.name)!
+        }
+        case TypeKind.typeId: {
+            const result = typeParamMap.get(type.name)!;
+            if (result.typeKind === TypeKind.typeConstructor) {
+                return invokeTypeConstructor(result, []);
+            }
+            else {
+                return result;
+            }
+        }
         default:
             return type;
     }

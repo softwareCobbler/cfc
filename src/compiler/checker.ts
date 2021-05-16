@@ -1,7 +1,7 @@
 import { SourceFile, Node, NodeType, BlockType, IndexedAccess, isStaticallyKnownScopeName, Scope, StaticallyKnownScopeName, ScopeDisplay, Term, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition } from "./node";
 import { Scanner } from "./scanner";
 import { Diagnostic } from "./parser";
-import { cfAny, cfFunctionSignature, cfIntersection, cfNil, cfTypeId, evaluateTypeCall, Type, TypeKind } from "./types";
+import { cfAny, cfFunctionSignature, cfIntersection, cfNil, cfTypeId, invokeTypeConstructor, evaluateType, Type, TypeKind } from "./types";
 
 export function Checker() {
     let sourceFile!: SourceFile;
@@ -24,7 +24,9 @@ export function Checker() {
         }
     }
 
-    function checkNode(node: Node) {
+    function checkNode(node: Node | null) {
+        if (!node) return;
+
         switch (node.kind) {
             case NodeType.sourceFile:
                 throw "Check source files by binding its content";
@@ -60,7 +62,7 @@ export function Checker() {
             case NodeType.statement:
                 switch (node.subType) {
                     case StatementType.expressionWrapper: {
-                        checkNode(node.expr!);
+                        checkNode(node.expr);
                     }
                 }
                 return;
@@ -272,7 +274,7 @@ export function Checker() {
                 // error, "cannot find typename 'foo'"
                 return undefined;
             }
-            if (typeFunction.typeKind !== TypeKind.typeFunctionDefinition) {
+            if (typeFunction.typeKind !== TypeKind.typeConstructor) {
                 // error, "type 'foo' is not generic"
                 return undefined;
             }
@@ -288,7 +290,7 @@ export function Checker() {
                 }
             }
 
-            return evaluateTypeCall(typeFunction, typeArgs);
+            return invokeTypeConstructor(typeFunction, typeArgs);
         }
 
         return type;
@@ -364,7 +366,7 @@ export function Checker() {
             }
             if (existingArgumentsScope.has(signature.params[i].canonicalName)) {
                 existingArgumentsScope.set(signature.params[i].canonicalName, {
-                    type: signature.params[i].type ?? cfAny(),
+                    type: evaluateType(signature.params[i].type),
                     name: signature.params[i].canonicalName,
                     final: false,
                     var: false,
@@ -394,7 +396,7 @@ export function Checker() {
                 }
 
                 for (let i = 0; i < node.args.length; i++) {
-                    const paramType = type.params[i].type ?? null;
+                    const paramType = type.params[i]?.type ?? null;
                     if (!paramType) break;
                     const arg = node.args[i];
                     const argType = getCachedTermEvaluatedType(arg);

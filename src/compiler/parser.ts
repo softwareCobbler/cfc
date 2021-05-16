@@ -26,8 +26,8 @@ import {
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug, NilToken } from "./scanner";
-import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, getAttributeValue, visit } from "./utils";
-import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type, TypeFlags, cfFunctionSignature, cfTypeCall, cfVoid, cfTypeFunctionParam, cfTypeFunctionDefinition, cfIntersection, cfTypeId, KLUDGE_FOR_DEV_register_type_function_name, TypeKind } from "./types";
+import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, getAttributeValue } from "./utils";
+import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type, TypeFlags, cfFunctionSignature, cfTypeCall, cfVoid, cfTypeConstructorParam, cfTypeConstructor, cfIntersection, cfTypeId, KLUDGE_FOR_DEV_register_type_constructor_name, TypeKind } from "./types";
 
 let debugParseModule = false;
 let parseTypes = false;
@@ -154,6 +154,8 @@ export function Parser() {
     let lookahead_ : TokenType;
     let lastNonTriviaToken : Token;
     let diagnostics : Diagnostic[] = [];
+
+    let lastTypeAnnotation : Type | null = null;
     
     let globalDiagnosticEmitter : (() => void) | null = null; // @fixme: find a way to not need this
 
@@ -334,10 +336,10 @@ export function Parser() {
     }
 
     function tagMode() : boolean {
-        return mode === ScannerMode.tag;
+        return mode === ScannerMode.tag || mode === ScannerMode.allow_both;
     }
     function scriptMode() : boolean {
-        return mode === ScannerMode.script;
+        return mode === ScannerMode.script || mode === ScannerMode.allow_both;
     }
     function isInSomeContext(context: ParseContext) : boolean {
         return !!(parseContext & (1 << context));
@@ -547,16 +549,22 @@ export function Parser() {
             }
         }
         
+        let result : CfTag.Comment;
         if (lookahead() !== TokenType.CF_TAG_COMMENT_END) {
             if (nestedComments.length > 0) parseErrorAtRange(commentStart.range.fromInclusive, nestedComments[0].range.fromInclusive, "Unterminated tag comment.");
             else parseErrorAtRange(commentStart.range.fromInclusive, scanner.getIndex(), "Unterminated tag comment.");
             const commentEnd = createMissingNode(Terminal(parseNextToken()));
-            return CfTag.Comment(commentStart, nestedComments, commentEnd);
+            result = CfTag.Comment(commentStart, nestedComments, commentEnd);
         }
         else {
             const commentEnd = parseExpectedTerminal(TokenType.CF_TAG_COMMENT_END, ParseOptions.noTrivia);
-            return CfTag.Comment(commentStart, nestedComments, commentEnd);
+            result = CfTag.Comment(commentStart, nestedComments, commentEnd);
         }
+
+        if (parseTypes) {
+            parseTypeAnnotationsFromPreParsedTrivia(result);
+        }
+        return result;
     }
 
     function parseScriptSingleLineComment() : Comment {
@@ -583,18 +591,36 @@ export function Parser() {
         const savedContext = updateParseContext(ParseContext.trivia);
 
         if (tagMode()) {
-            result = parseTagTrivia();
+            result = [];
+            while (true) {
+                switch (lookahead()) {
+                    case TokenType.CF_TAG_COMMENT_START: {
+                        result.push(parseTagComment());
+                        continue;
+                    }
+                    case TokenType.WHITESPACE: {
+                        result.push(CfTag.Text(next().range));
+                        continue;
+                    }
+                }
+                // if we didn't match tag comment start or whitespace, we're done
+                break;
+            }
 
             //
             // if we're in a tag or a hash-wrapped expr in tag mode, we want to parse tag trivia,
-            // but convert it to script-like trivia immediately
-            // this way, the tag treeifier doesn't need to concern itself with descending into hash-wrapped exprs perform these transformations
+            // but immediately convert it to script-like trivia
+            // this way, the tag treeifier doesn't need to concern itself with descending into hash-wrapped exprs to perform these transformations
+            // (where it is otherwise responsible for transforming all tags into some common script syntax tree)
             // all other trivia during tag-treeification is loose
+            // @fixme: does this only handle "top-level" comments, i.e., we need to handle `#1 + <!--- foo ---> 2#`
+            // also the same logic applies to something like <cfset x = {x: "tag comment in struct" <!--- tag comment here --->}
+            // which is maybe just on script-like tags
             //
             if (isInSomeContext(ParseContext.hashWrappedExpr) || isInSomeContext(ParseContext.insideCfTagAngles)) {
                 result = (result as CfTag[]).map((v) => {
                     if (v.tagType === CfTag.TagType.comment) {
-                        return Comment(CommentType.tag, v.range);
+                        return Comment(v);
                     }
                     else {
                         if (debugParseModule) {
@@ -629,29 +655,60 @@ export function Parser() {
                 }
                 break;
             }
+
+            if (parseTypes) {
+                parseTypeAnnotationsFromPreParsedTrivia(result);
+            }
         }
 
         parseContext = savedContext;
+
         return result;
     }
 
-    function parseTagTrivia() : CfTag[] {
-        const result : CfTag[] = [];
-        while (true) {
-            switch (lookahead()) {
-                case TokenType.CF_TAG_COMMENT_START: {
-                    result.push(parseTagComment());
-                    continue;
-                }
-                case TokenType.WHITESPACE: {
-                    result.push(CfTag.Text(next().range));
-                    continue;
-                }
-            }
-            // if we didn't match tag comment start or whitespace, we're done
-            break;
+    /**
+     * every call to this method clears the last known trivia-bound type annotation,
+     * and sets it to the final type annotation of the current trivia collection, if it exists
+     */
+    function parseTypeAnnotationsFromPreParsedTrivia(trivia: Node | Node[]) : void {
+        lastTypeAnnotation = null;
+
+        if (!Array.isArray(trivia)) trivia = [trivia];
+
+        if (trivia.length === 0) {
+            return;
         }
-        return result;
+
+        const savedScannerState = getScannerState();
+
+        for (const node of trivia) {
+            if (node.kind === NodeType.comment || (node.kind === NodeType.tag && node.tagType === CfTag.TagType.comment)) {
+                restoreScannerState({
+                    index: node.range.fromInclusive,
+                    artificialEndLimit: node.range.toExclusive,
+                    mode: ScannerMode.allow_both, // make this optional? it is set in parseTypeAnnotations, too; so we only set it because it is required here
+                })
+
+                const types = parseTypeAnnotations(/*asDeclarationFile*/ false);
+                
+                const typeConstructors = types.filter(type => type.typeKind === TypeKind.typeConstructor);
+                if (typeConstructors.length > 0) {
+                    node.typedefs = typeConstructors; // store the parsed type functions on the trivia node
+                }
+
+                const typeAssignments = types.filter(type => type.typeKind !== TypeKind.typeConstructor);
+                if (typeAssignments.length > 1) {
+                    // we need to get the type's ranges and terminals and etc.
+                    parseErrorAtRange(node.range, "Only one @type annotation is permitted per comment.");
+                }
+
+                // <whitespace><comment><whitespace><comment>
+                // only the last final comment's type annotation will be considered for the next non-trivial production
+                lastTypeAnnotation = typeAssignments.length === 1 ? typeAssignments[0] : null;
+            }
+        }
+
+        restoreScannerState(savedScannerState);
     }
 
     function parseCfStartTag() {
@@ -741,11 +798,7 @@ export function Parser() {
                 let value : Node;
 
                 if (tagMode()) {
-                    if (parseTypes && attrName.token.text === "type:") {
-                        const stringLiteral = parseStringLiteral();
-                        value = parseType(stringLiteral.range.fromInclusive+1, stringLiteral.range.toExclusive-1);
-                    }
-                    else if (isLexemeLikeToken(peek(), /*allowNumeric*/ true)) {
+                    if (isLexemeLikeToken(peek(), /*allowNumeric*/ true)) {
                         value = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ true);
                     }
                     else if (lookahead() === TokenType.QUOTE_SINGLE || lookahead() === TokenType.QUOTE_DOUBLE) {
@@ -891,27 +944,6 @@ export function Parser() {
                 sourceFile.content = parseTypeAnnotations(/*asDeclarationFile*/ true);
                 break;
             }
-        }
-
-        if (parseTypes) {
-            visit(sourceFile, function(node: Node | null | undefined) {
-                if (!node) return;
-                if (node.kind === NodeType.comment) {
-                    // const scannerState = getScannerState(); - no need to pay to save
-                    restoreScannerState({
-                        index: node.range.fromInclusive,
-                        artificialEndLimit: node.range.toExclusive,
-                        mode: ScannerMode.allow_both, // make this optional? it is set in parseTypeAnnotations, too; so we only set it because it is required here
-                    })
-
-                    const types = parseTypeAnnotations(/*asDeclarationFile*/ false);
-                    if (types.length > 0) {
-                        node.typedefs = types;
-                    }
-                    // restoreScannerState() - we don't need to pay to restore it since the only remaining use of the scanner
-                    // is to continue setting it's position to parse comment-bound type annotations
-                }
-            })
         }
 
         return sourceFile.content;
@@ -1353,9 +1385,10 @@ export function Parser() {
                         nextTag();
                         continue;
                     }
-                    // comments are lifted out of Tag space
+                    // comments are lifted out of Tag space; this brings any associated typedefs along with it
                     else if (tag.tagType === CfTag.TagType.comment) {
-                        result.push(Comment(CommentType.tag, tag.range));
+                        const liftedTagComment = Comment(tag);
+                        result.push(liftedTagComment);
                         nextTag();
                         continue;
                     }
@@ -1566,15 +1599,21 @@ export function Parser() {
         while (lookahead() != TokenType.EOF) {
             switch (lookahead()) {
                 case TokenType.CF_START_TAG_START: {
+                    const savedLastTypeAnnotation = lastTypeAnnotation;
                     const tag = doInExtendedContext(ParseContext.insideCfTagAngles, parseCfStartTag);
                     tagContext.update(tag);
+                    if (savedLastTypeAnnotation) {
+                        tag.typeAnnotation = savedLastTypeAnnotation;
+                    }
                     result.push(tag);
+                    lastTypeAnnotation = null;
                     continue;
                 }
                 case TokenType.CF_END_TAG_START: {
                     const tag = doInExtendedContext(ParseContext.insideCfTagAngles, parseCfEndTag);
                     tagContext.update(tag);
                     result.push(tag);
+                    lastTypeAnnotation = null;
                     continue;
                 }
                 case TokenType.CF_TAG_COMMENT_START: {
@@ -1639,7 +1678,7 @@ export function Parser() {
         const result : Type[] = []; // declarations (function | global)
         while (lookahead() !== TokenType.EOF) {
             if (asDeclarationFile) {
-                parseTagTrivia();
+                parseTrivia();
             }
             if (next().text === "@") {
                 const contextualKeyword = next();
@@ -1664,13 +1703,43 @@ export function Parser() {
                 }
                 else if (contextualKeyword.text === "type") {
                     parseTrivia();
-                    const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
-                    parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
-                    const type = parseType();
-                    type.name = name.token.text;
-                    result.push(type);
-                    if (type.typeKind === TypeKind.typeFunctionDefinition) {
-                        KLUDGE_FOR_DEV_register_type_function_name(type.name, type);
+                    
+                    const nameIfIsTypeConstructor = SpeculationHelper.speculate(() => {
+                        const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
+                        if (lookahead() === TokenType.EQUAL) {
+                            return name;
+                        }
+                        else return null;
+                    });
+                    
+                    // a type definition, valid for the current enclosing context
+                    // like @type foo = bar<baz>
+                    // `@type foo = number` is a type function from () -> number
+                    // in ts this would be `type foo = number;`
+                    // `@type foo = <T> => T` is the identity type function from T -> T
+                    // in ts this would be `type foo<T> = T`;
+                    // `@type foo = <T> => <U> => T` maps T to <U> => T, which is then a constant map from U to T
+                    // in ts this is not (easily?) expressible
+                    if (nameIfIsTypeConstructor) {
+                        parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
+                        let type = parseType();
+                        // the type parser saw only a type; but from here, we know that we are defining a type constructor (giving a
+                        // name to something that will eventually resolve to become a term's type)
+                        // in this case, the type is already concrete; but we will say it is a 0 argument type constructor for uniformity
+                        if (type.typeKind !== TypeKind.typeConstructor) {
+                            type = cfTypeConstructor([], type);
+                        }
+                        type.name = nameIfIsTypeConstructor.token.text;
+                        result.push(type);
+                        KLUDGE_FOR_DEV_register_type_constructor_name(type.name, type);
+                    }
+                    // a non-definition is a type-to-term assignment, it will be bound to the next non-trivia/non-type production
+                    // like 
+                    // <!--- @type Query<Schema> --->
+                    // <cfquery name="q"> <!--- q has type `Query<Schema>` --->
+                    //
+                    else {
+                        result.push(parseType());
                     }
                 }
                 else {
@@ -3564,7 +3633,7 @@ export function Parser() {
             }
         }
 
-        function parseTypeParam() : cfTypeFunctionParam {
+        function parseTypeParam() : cfTypeConstructorParam {
             const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/false, /*allowNumeric*/false);
             let extendsToken : Terminal | null = null;
             let extendsType : Type | null = null;
@@ -3576,7 +3645,7 @@ export function Parser() {
 
             const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
 
-            return cfTypeFunctionParam(name.token.text, extendsToken, extendsType, comma);
+            return cfTypeConstructorParam(name.token.text, extendsToken, extendsType, comma);
         }
 
         function parseTypeCall(left: Type) : Type {
@@ -3703,7 +3772,7 @@ export function Parser() {
                 parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);
                 parseExpectedTerminal(TokenType.EQUAL_RIGHT_ANGLE, ParseOptions.withTrivia);
                 const body = parseType();
-                result = cfTypeFunctionDefinition(typeParams, body);
+                result = cfTypeConstructor(typeParams, body);
                 return result; // don't do intersections or unions with type functions
             }
         }

@@ -450,6 +450,7 @@ connection.onCompletion(
 						return node;
 				}
 			}
+
 			return null;
 		}
 

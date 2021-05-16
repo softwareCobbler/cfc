@@ -501,6 +501,11 @@ export function Binder() {
         return true;
     }
 
+    /**
+     * some tags write their results in the current environment
+     * it would be better if we defined this at a library level, but then we would need some minimal effect system
+     * to say "this binds the name E to a type of T in some visible scope G"
+     */
     function maybeBindTagResult(tag: CfTag) : void {
         if (tag.tagType !== CfTag.TagType.common) {
             return;
@@ -514,10 +519,10 @@ export function Binder() {
             return undefined;
         }
 
-        let type = getAttributeValue(tag.attrs, "type:");
-        if (!type || type.kind !== NodeType.type) {
+        if (!tag.typeAnnotation) {
             return;
         }
+
         let name : string[] | undefined = undefined;
 
         switch (tag.canonicalName) {
@@ -562,11 +567,11 @@ export function Binder() {
         }
 
         targetScope.set(targetName, {
-            type: type,
+            type: tag.typeAnnotation,
             name: targetName,
             final: false,
             var: false,
-            target: type
+            target: getAttributeValue(tag.attrs, "name") ?? undefined,
         });
     }
 
