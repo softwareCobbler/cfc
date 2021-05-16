@@ -21,7 +21,7 @@ export const enum NodeType {
     tag, callExpression, callArgument, unaryOperator, binaryOperator,
     conditional, variableDeclaration, statement, block, simpleStringLiteral, interpolatedStringLiteral, numericLiteral, booleanLiteral,
     identifier,
-    indexedAccess, indexedAccessChainElement,
+    indexedAccess, indexedAccessChainElement, sliceExpression,
     functionDefinition, arrowFunctionDefinition, functionParameter,
     dottedPath, switch, switchCase, do, while, ternary, for, structLiteral, arrayLiteral,
     structLiteralInitializerMember, arrayLiteralInitializerMember, try, catch, finally,
@@ -53,6 +53,7 @@ const NodeTypeUiString : Record<NodeType, string> = {
     [NodeType.identifier]: "identifier",
     [NodeType.indexedAccess]: "indexedAccess",
     [NodeType.indexedAccessChainElement]: "indexedAccessChainElement",
+    [NodeType.sliceExpression]: "sliceExpression",
     [NodeType.functionDefinition]: "functionDefinition",
     [NodeType.arrowFunctionDefinition]: "arrowFunctionDefinition",
     [NodeType.functionParameter]: "functionParameter",
@@ -104,6 +105,7 @@ export type Node =
     | BooleanLiteral
     | Identifier
     | IndexedAccess
+    | SliceExpression
     | FunctionParameter
     | FunctionDefinition
     | ArrowFunctionDefinition
@@ -545,17 +547,19 @@ export function CallExpression(left: Node, leftParen: Terminal, args: CallArgume
 }
 
 export interface CallArgument extends NodeBase {
-    kind: NodeType.callArgument,
-    name: Identifier | null,
-    equals: Terminal | null,
-    expr: Node,
-    comma: Terminal | null,
+    kind: NodeType.callArgument;
+    name: Identifier | null;
+    equals: Terminal | null;
+    dotDotDot: Terminal | null;
+    expr: Node;
+    comma: Terminal | null;
 }
 
-export function CallArgument(name: Identifier | null, equals: Terminal | null, expr: Node, comma: Terminal | null) : CallArgument {
+export function CallArgument(name: Identifier | null, equals: Terminal | null, dotDotDot: Terminal | null, expr: Node, comma: Terminal | null) : CallArgument {
     const v = NodeBase<CallArgument>(NodeType.callArgument, mergeRanges(name, expr, comma));
     v.name = name;
     v.equals = equals;
+    v.dotDotDot = dotDotDot;
     v.expr = expr;
     v.comma = comma;
     return v;
@@ -1259,6 +1263,30 @@ export interface OptionalCall extends NodeBase {
     // foo?.() is a call expression where the left side is an indexed-access expression with a trailing OptionalCall access chain element
 }
 
+export interface SliceExpression extends NodeBase {
+    kind: NodeType.sliceExpression,
+    from : Node | null,
+    colon1: Terminal,
+    to : Node | null,
+    colon2: Terminal,
+    stride : Node | null,
+}
+
+export function SliceExpression(
+    from : Node | null,
+    colon1: Terminal,
+    to : Node | null,
+    colon2: Terminal,
+    stride : Node | null) : SliceExpression {
+    const v = NodeBase<SliceExpression>(NodeType.sliceExpression, mergeRanges(from, colon1, to, colon2, stride));
+    v.from = from;
+    v.colon1 = colon1;
+    v.to = to;
+    v.colon2 = colon2;
+    v.stride = stride;
+    return v;
+}
+
 export type IndexedAccessChainElement =
     | DotAccess
     | BracketAccess
@@ -1348,7 +1376,7 @@ export function copyFunctionParameterForTypePurposes(param: FunctionParameter) {
     if (param.fromTag) {
         return Tag.FunctionParameter(param.tagOrigin.startTag! as CfTag.Common, param.type);
     }
-    return Script.FunctionParameter(param.requiredTerminal, param.javaLikeTypename, param.identifier, param.equals, param.defaultValue, param.comma, param.type)
+    return Script.FunctionParameter(param.requiredTerminal, param.javaLikeTypename, param.dotDotDot, param.identifier, param.equals, param.defaultValue, param.comma, param.type)
 }
 
 export namespace Script {
@@ -1357,6 +1385,7 @@ export namespace Script {
         fromTag: false,
         requiredTerminal: Terminal | null,
         javaLikeTypename: DottedPath<Terminal> | null,
+        dotDotDot: Terminal | null,
         identifier: Identifier,
         equals: Terminal | null,
         defaultValue: Node | null,
@@ -1368,6 +1397,7 @@ export namespace Script {
     export function FunctionParameter(
         requiredTerminal : Terminal | null,
         javaLikeTypename: DottedPath<Terminal> | null,
+        dotDotDot: Terminal | null,
         identifier: Identifier,
         equals: Terminal | null,
         defaultValue: Node | null,
@@ -1377,6 +1407,7 @@ export namespace Script {
         v.fromTag = false;
         v.requiredTerminal = requiredTerminal;
         v.javaLikeTypename = javaLikeTypename;
+        v.dotDotDot = dotDotDot;
         v.identifier = identifier;
         v.equals = equals;
         v.defaultValue = defaultValue;
@@ -1840,22 +1871,53 @@ export function EmptyOrderedStructLiteral(
     return v;
 }
 
-export interface StructLiteralInitializerMember extends NodeBase {
+export type StructLiteralInitializerMember = KeyedStructLiteralInitializerMember | SpreadStructLiteralInitializerMember;
+
+export const enum StructLiteralInitializerMemberSubtype { keyed, spread };
+
+interface StructLiteralInitializerMemberBase extends NodeBase {
     kind: NodeType.structLiteralInitializerMember;
-    key: Node,
-    colon: Terminal,
-    expr: Node,
-    comma: Node | null
+    subType: StructLiteralInitializerMemberSubtype,
 }
 
-export function StructLiteralInitializerMember(
+export interface KeyedStructLiteralInitializerMember extends StructLiteralInitializerMemberBase {
+    kind: NodeType.structLiteralInitializerMember;
+    subType: StructLiteralInitializerMemberSubtype.keyed,
     key: Node,
     colon: Terminal,
     expr: Node,
-    comma: Node | null) : StructLiteralInitializerMember {
-    const v = NodeBase<StructLiteralInitializerMember>(NodeType.structLiteralInitializerMember, mergeRanges(key, expr, comma));
+    comma: Terminal | null
+}
+
+export function KeyedStructLiteralInitializerMember(
+    key: Node,
+    colon: Terminal,
+    expr: Node,
+    comma: Terminal | null) : KeyedStructLiteralInitializerMember {
+    const v = NodeBase<KeyedStructLiteralInitializerMember>(NodeType.structLiteralInitializerMember, mergeRanges(key, expr, comma));
+    v.subType = StructLiteralInitializerMemberSubtype.keyed;
     v.key = key;
     v.colon = colon;
+    v.expr = expr;
+    v.comma = comma;
+    return v;
+}
+
+export interface SpreadStructLiteralInitializerMember extends StructLiteralInitializerMemberBase {
+    kind: NodeType.structLiteralInitializerMember;
+    subType: StructLiteralInitializerMemberSubtype.spread,
+    dotDotDot: Terminal,
+    expr: Node,
+    comma: Terminal| null,
+}
+
+export function SpreadStructLiteralInitializerMember(
+    dotDotDot: Terminal,
+    expr: Node,
+    comma: Terminal | null) : SpreadStructLiteralInitializerMember {
+    const v = NodeBase<SpreadStructLiteralInitializerMember>(NodeType.structLiteralInitializerMember, mergeRanges(dotDotDot, expr, comma));
+    v.subType = StructLiteralInitializerMemberSubtype.spread;
+    v.dotDotDot = dotDotDot;
     v.expr = expr;
     v.comma = comma;
     return v;
@@ -1880,17 +1942,44 @@ export function ArrayLiteral(
     return v;
 }
 
-export interface ArrayLiteralInitializerMember extends NodeBase {
+export type ArrayLiteralInitializerMember = SimpleArrayLiteralInitializerMember | SpreadArrayLiteralInitializerMember;
+
+export const enum ArrayLiteralInitializerMemberSubtype { simple, spread }
+
+export interface SimpleArrayLiteralInitializerMember extends NodeBase {
     kind: NodeType.arrayLiteralInitializerMember,
+    subType: ArrayLiteralInitializerMemberSubtype.simple,
     expr: Node,
     comma: Terminal | null
 }
 
-export function ArrayLiteralInitializerMember(
+export function SimpleArrayLiteralInitializerMember(
     expr: Node,
     comma: Terminal | null
-) : ArrayLiteralInitializerMember {
-    const v = NodeBase<ArrayLiteralInitializerMember>(NodeType.arrayLiteralInitializerMember, mergeRanges(expr, comma));
+) : SimpleArrayLiteralInitializerMember {
+    const v = NodeBase<SimpleArrayLiteralInitializerMember>(NodeType.arrayLiteralInitializerMember, mergeRanges(expr, comma));
+    v.subType = ArrayLiteralInitializerMemberSubtype.simple;
+    v.expr = expr;
+    v.comma = comma;
+    return v;
+}
+
+export interface SpreadArrayLiteralInitializerMember extends NodeBase {
+    kind: NodeType.arrayLiteralInitializerMember,
+    subType: ArrayLiteralInitializerMemberSubtype.spread,
+    dotDotDot: Terminal,
+    expr: Node,
+    comma: Terminal | null
+}
+
+export function SpreadArrayLiteralInitializerMember(
+    dotDotDot: Terminal,
+    expr: Node,
+    comma: Terminal | null
+) : SpreadArrayLiteralInitializerMember {
+    const v = NodeBase<SpreadArrayLiteralInitializerMember>(NodeType.arrayLiteralInitializerMember, mergeRanges(expr, comma));
+    v.subType = ArrayLiteralInitializerMemberSubtype.spread;
+    v.dotDotDot = dotDotDot;
     v.expr = expr;
     v.comma = comma;
     return v;

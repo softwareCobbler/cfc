@@ -1,4 +1,4 @@
-import { BlockType, CfTag, ForSubType, IndexedAccessType, Node, NodeId, Scope, StatementType, StaticallyKnownScopeName, TagAttribute, UnaryOperatorPos } from "./node";
+import { ArrayLiteralInitializerMemberSubtype, BlockType, CfTag, ForSubType, IndexedAccessType, Node, NodeId, Scope, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, TagAttribute, UnaryOperatorPos } from "./node";
 import { NodeType } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
 
@@ -427,12 +427,19 @@ export function visit(node: Node, visitor: (arg: Node | undefined | null) => any
                     return visitor(node.questionMark)
                         || visitor(node.dot);
             }
+        case NodeType.sliceExpression:
+            return visitor(node.from)
+                || visitor(node.colon1)
+                || visitor(node.to)
+                || visitor(node.colon2)
+                || visitor(node.stride);
         case NodeType.functionParameter:
             if (node.fromTag) {
                 return visitor(node.tagOrigin.startTag);
             }
             return visitor(node.requiredTerminal)
                 || visitor(node.javaLikeTypename)
+                || visitor(node.dotDotDot)
                 || visitor(node.identifier)
                 || visitor(node.equals)
                 || visitor(node.defaultValue)
@@ -532,17 +539,30 @@ export function visit(node: Node, visitor: (arg: Node | undefined | null) => any
                 || forEachNode(node.members, visitor)
                 || visitor(node.rightDelimiter);
         case NodeType.structLiteralInitializerMember:
-            return visitor(node.key)
-                || visitor(node.colon)
-                || visitor(node.expr)
-                || visitor(node.comma)
+            if (node.subType === StructLiteralInitializerMemberSubtype.keyed) {
+                return visitor(node.key)
+                    || visitor(node.colon)
+                    || visitor(node.expr)
+                    || visitor(node.comma);
+            }
+            else {
+                return visitor(node.dotDotDot)
+                    || visitor(node.expr);
+            }
         case NodeType.arrayLiteral:
             return visitor(node.leftBracket)
                 || forEachNode(node.members, visitor)
                 || visitor(node.rightBracket)
         case NodeType.arrayLiteralInitializerMember:
-            return visitor(node.expr)
-                || visitor(node.comma);
+            if (node.subType === ArrayLiteralInitializerMemberSubtype.simple) {
+                return visitor(node.expr)
+                    || visitor(node.comma);
+            }
+            else {
+                return visitor(node.dotDotDot)
+                    || visitor(node.expr)
+                    || visitor(node.comma);
+            }
         case NodeType.try:
             if (node.fromTag) {
                 return visitor(node.tagOrigin.startTag)

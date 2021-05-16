@@ -1,4 +1,4 @@
-import { NodeWithScope, Term, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, Scope, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName } from "./node";
+import { NodeWithScope, Term, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, Scope, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue } from "./utils";
 import { Diagnostic } from "./parser";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
@@ -180,6 +180,9 @@ export function Binder() {
                 return;
             case NodeType.indexedAccessChainElement:
                 bindIndexedAccessChainElement(node);
+                return;
+            case NodeType.sliceExpression:
+                bindSliceExpression(node);
                 return;
             case NodeType.functionParameter:
                 bindFunctionParameter(node);
@@ -603,6 +606,12 @@ export function Binder() {
         }
     }
 
+    function bindSliceExpression(node: SliceExpression) {
+        bindNode(node.from, node);
+        bindNode(node.to, node);
+        bindNode(node.stride, node);
+    }
+
     function bindFunctionParameter(node: FunctionParameter) {
         if (node.fromTag) {
             bindNode(node.tagOrigin.startTag, node);
@@ -842,8 +851,13 @@ export function Binder() {
     }
 
     function bindStructLiteralInitializerMember(node: StructLiteralInitializerMember) {
-        bindNode(node.key, node);
-        bindNode(node.expr, node);
+        if (node.subType === StructLiteralInitializerMemberSubtype.keyed) {
+            bindNode(node.key, node);
+            bindNode(node.expr, node);
+        }
+        else {
+            bindNode(node.expr, node);
+        }
     }
 
     function bindArrayLiteral(node: ArrayLiteral) {

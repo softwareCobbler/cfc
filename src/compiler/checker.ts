@@ -109,6 +109,8 @@ export function Checker() {
                 return;
             case NodeType.indexedAccessChainElement:
                 return;
+            case NodeType.sliceExpression:
+                return;
             case NodeType.functionParameter:
                 return;
             case NodeType.functionDefinition: // fallthrough
