@@ -9,7 +9,7 @@ import {
     While,
     Ternary,
     For,
-    StructLiteralInitializerMember,
+    KeyedStructLiteralInitializerMember,
     StructLiteral,
     ArrayLiteralInitializerMember,
     ArrayLiteral,
@@ -24,7 +24,7 @@ import {
     New,
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
-    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag } from "./node";
+    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName } from "./utils";
 
@@ -46,11 +46,11 @@ const enum ParseContext {
     for,                // in a for (...) expression
     interpolatedText,   // in <cfoutput>#...#</cfoutput> or "#...#"
     awaitingVoidSlash,  // <cfset foo = bar /> is just `foo=bar`, with a trailing tag-void-slash, not `foo=bar/` with a missing rhs to the `/` operator
-    argumentList,       // someCallWithArgs(...)
+    argOrParamList,     // someCallWithArgs(...)
     switchClause,       // in a switch statement
     trivia,             // comments, whitespace
-    structBody,
-    arrayBody,
+    structLiteralBody,
+    arrayLiteralBody,
     sugaredAbort,       // inside an `abort ...;` statement
     END                 // sentinel for looping over ParseContexts
 }
@@ -2249,6 +2249,10 @@ export function Parser() {
                 return false;
             case TokenType.HASH:
                 return !isInSomeContext(ParseContext.hashWrappedExpr);
+            case TokenType.DOT_DOT_DOT:
+                return isInSomeContext(ParseContext.arrayLiteralBody)
+                    || isInSomeContext(ParseContext.structLiteralBody)
+                    || isInSomeContext(ParseContext.argOrParamList);
             case TokenType.LEFT_PAREN:
             case TokenType.LEFT_BRACE:
             case TokenType.LEFT_BRACKET:
@@ -2271,7 +2275,25 @@ export function Parser() {
         }
     }
 
+    /**
+     * 1. (e)          argument
+     * 2. (x=e)        named argument
+     * 3. (...e)       spread argument
+     * 4. (x=...e)     named spread argument
+     */
     function parseArgument() : CallArgument {
+        if (lookahead() === TokenType.DOT_DOT_DOT) {
+            const dotDotDot = parseExpectedTerminal(TokenType.DOT_DOT_DOT, ParseOptions.withTrivia);
+            const expr = parseExpression();
+            const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+            if (!comma && isStartOfExpression()) {
+                parseErrorAtRange(expr.range.toExclusive, expr.range.toExclusive + 1, "Expected ','");
+            }
+
+            // (#3): spread argument
+            return CallArgument(null, null, dotDotDot, expr, comma);
+        }
+
         const exprOrArgName = parseAnonymousFunctionDefinitionOrExpression();
 
         // if we got an identifier, peek ahead to see if there is an equals or colon token
@@ -2284,14 +2306,26 @@ export function Parser() {
             if (equalOrComma =
                     (parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia) ??
                     (parseOptionalTerminal(TokenType.COLON, ParseOptions.withTrivia)))) {
-                const namedArgValue = parseAnonymousFunctionDefinitionOrExpression();
+                const name = exprOrArgName;
+                let dotDotDot : Terminal | null = null;
+                let expr : Node;
+
+                if (lookahead() === TokenType.DOT_DOT_DOT) {
+                    dotDotDot = parseExpectedTerminal(TokenType.DOT_DOT_DOT, ParseOptions.withTrivia);
+                    expr = parseExpression();
+                }
+                else {
+                    expr = parseAnonymousFunctionDefinitionOrExpression();
+                }
+
                 const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
 
                 if (!comma && isStartOfExpression()) {
-                    parseErrorAtRange(namedArgValue.range.toExclusive, namedArgValue.range.toExclusive + 1, "Expected ','");
+                    parseErrorAtRange(expr.range.toExclusive, expr.range.toExclusive + 1, "Expected ','");
                 }
 
-                return CallArgument(exprOrArgName, equalOrComma, namedArgValue, comma);
+                // (#2 / #4): named / named spread
+                return CallArgument(name, equalOrComma, dotDotDot, expr, comma);
             }
         }
 
@@ -2303,12 +2337,12 @@ export function Parser() {
             parseErrorAtRange(exprOrArgName.range.toExclusive, exprOrArgName.range.toExclusive + 1, "Expected ','");
         }
 
-        return CallArgument(null, null, exprOrArgName, comma);
+        return CallArgument(null, null, null, exprOrArgName, comma);
     }
 
     function parseCallExpression(root: Node) : CallExpression {
         const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
-        const args = parseList(ParseContext.argumentList, parseArgument);
+        const args = parseList(ParseContext.argOrParamList, parseArgument);
 
         if (args.length > 0) {
             if (args[args.length-1].comma) {
@@ -2322,9 +2356,9 @@ export function Parser() {
 
     function startsParseInContext(what: ParseContext) : boolean {
         switch (what) {
-            case ParseContext.arrayBody:
-            case ParseContext.structBody:
-            case ParseContext.argumentList:
+            case ParseContext.arrayLiteralBody:
+            case ParseContext.structLiteralBody:
+            case ParseContext.argOrParamList:
                 return isStartOfExpression();
             case ParseContext.cfScriptTagBody:
             case ParseContext.blockStatements:
@@ -2340,11 +2374,11 @@ export function Parser() {
         if (lookahead() === TokenType.EOF) return true;
 
         switch (what) {
-            case ParseContext.argumentList:
+            case ParseContext.argOrParamList:
                 return lookahead() === TokenType.RIGHT_PAREN;
-            case ParseContext.arrayBody:
+            case ParseContext.arrayLiteralBody:
                 return lookahead() === TokenType.RIGHT_BRACKET;
-            case ParseContext.structBody:
+            case ParseContext.structLiteralBody:
             case ParseContext.blockStatements:
                 return lookahead() === TokenType.RIGHT_BRACE;
             case ParseContext.switchClause:
@@ -2396,26 +2430,44 @@ export function Parser() {
     }
 
     function parseStructLiteralInitializerMember(terminator: TokenType.RIGHT_BRACE | TokenType.RIGHT_BRACKET) : StructLiteralInitializerMember {
-        const key = parseStructLiteralInitializerKey();
-        const colonOrEqual = lookahead() === TokenType.EQUAL
-            ? parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia)
-            : parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
-        const value = parseAnonymousFunctionDefinitionOrExpression();
-        const maybeComma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+        // move comma checks into checker, then we can put error range where TS does:
+        // {abc: foo def: bar},
+        //           ^^^ expected ','
+        //
+        if (lookahead() === TokenType.DOT_DOT_DOT) {
+            const dotdotdot = parseExpectedTerminal(TokenType.DOT_DOT_DOT, ParseOptions.withTrivia);
+            const expr = parseExpression();
+            const maybeComma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
 
-        if (!maybeComma && lookahead() !== terminator) {
-            parseErrorAtRange(value.range.toExclusive - 1, value.range.toExclusive + 1, "Expected ','");
+            if (!maybeComma && lookahead() !== terminator) {
+                parseErrorAtRange(expr.range.toExclusive - 1, expr.range.toExclusive + 1, "Expected ','");
+            }
+            if (maybeComma && lookahead() === terminator) {
+                parseErrorAtRange(maybeComma.range, "Illegal trailing comma.");
+            }
+            return SpreadStructLiteralInitializerMember(dotdotdot, expr, maybeComma);
         }
-        if (maybeComma && lookahead() === terminator) {
-            parseErrorAtRange(maybeComma.range, "Illegal trailing comma.");
+        else {
+            const key = parseStructLiteralInitializerKey();
+            const colonOrEqual = lookahead() === TokenType.EQUAL
+                ? parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia)
+                : parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
+            const value = parseAnonymousFunctionDefinitionOrExpression();
+            const maybeComma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+    
+            if (!maybeComma && lookahead() !== terminator) {
+                parseErrorAtRange(value.range.toExclusive - 1, value.range.toExclusive + 1, "Expected ','");
+            }
+            if (maybeComma && lookahead() === terminator) {
+                parseErrorAtRange(maybeComma.range, "Illegal trailing comma.");
+            }
+            return KeyedStructLiteralInitializerMember(key, colonOrEqual, value, maybeComma);
         }
-
-        return StructLiteralInitializerMember(key, colonOrEqual, value, maybeComma);
     }
 
     function parseStructLiteral() : Node {
         const leftBrace = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
-        const kvPairs = parseList(ParseContext.structBody, parseStructLiteralInitializerMember, TokenType.RIGHT_BRACE);
+        const kvPairs = parseList(ParseContext.structLiteralBody, parseStructLiteralInitializerMember, TokenType.RIGHT_BRACE);
         const rightBrace = parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
         return parseCallExpressionOrLowerRest(
             StructLiteral(leftBrace, kvPairs, rightBrace));
@@ -2443,27 +2495,45 @@ export function Parser() {
         }
 
         if (SpeculationHelper.lookahead(isExpressionThenColon)) {
-            const useArrayBodyListTerminator = ParseContext.arrayBody;
+            const useArrayBodyListTerminator = ParseContext.arrayLiteralBody;
             const structMembers = parseList(useArrayBodyListTerminator, parseStructLiteralInitializerMember, TokenType.RIGHT_BRACKET);
             const rightBracket = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
             return OrderedStructLiteral(leftBracket, structMembers, rightBracket);
         }
         else {
+            const savedContext = updateParseContext(ParseContext.arrayLiteralBody);
             const elements : ArrayLiteralInitializerMember[] = [];
             while (isStartOfExpression()) {
-                const expr = parseExpression();
-                const maybeComma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
-
-                if (!maybeComma && lookahead() !== TokenType.RIGHT_BRACKET) {
-                    parseErrorAtRange(expr.range.toExclusive-1, expr.range.toExclusive, "Expected ','");
+                if (lookahead() === TokenType.DOT_DOT_DOT) {
+                    const dotDotDot = parseExpectedTerminal(TokenType.DOT_DOT_DOT, ParseOptions.withTrivia);
+                    const expr = parseExpression();
+                    const maybeComma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+                    if (!maybeComma && lookahead() !== TokenType.RIGHT_BRACKET) {
+                        parseErrorAtRange(expr.range.toExclusive-1, expr.range.toExclusive, "Expected ','");
+                    }
+                    if (maybeComma && lookahead() === TokenType.RIGHT_BRACKET) {
+                        parseErrorAtRange(maybeComma.range, "Illegal trailing comma.");
+                    }
+                    elements.push(SpreadArrayLiteralInitializerMember(dotDotDot, expr, maybeComma));
                 }
-                if (maybeComma && lookahead() === TokenType.RIGHT_BRACKET) {
-                    parseErrorAtRange(maybeComma.range, "Illegal trailing comma.");
-                }
+                else {
+                    const expr = parseExpression();
+                    const maybeComma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
 
-                elements.push(ArrayLiteralInitializerMember(expr, maybeComma))
+                    if (!maybeComma && lookahead() !== TokenType.RIGHT_BRACKET) {
+                        parseErrorAtRange(expr.range.toExclusive-1, expr.range.toExclusive, "Expected ','");
+                    }
+                    if (maybeComma && lookahead() === TokenType.RIGHT_BRACKET) {
+                        parseErrorAtRange(maybeComma.range, "Illegal trailing comma.");
+                    }
+
+                    elements.push(SimpleArrayLiteralInitializerMember(expr, maybeComma))
+                }
             }
             const rightBracket = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
+
+            parseContext = savedContext;
+            
             return ArrayLiteral(leftBracket, elements, rightBracket);
         }
     }
@@ -2609,71 +2679,87 @@ export function Parser() {
     function tryParseFunctionDefinitionParameters(speculative: false) : Script.FunctionParameter[];
     function tryParseFunctionDefinitionParameters(speculative: true) : Script.FunctionParameter[] | null;
     function tryParseFunctionDefinitionParameters(speculative: boolean) : Script.FunctionParameter[] | null {
+        const savedContext = updateParseContext(ParseContext.argOrParamList);
         const result : Script.FunctionParameter[] = [];
         // might have to handle 'required' specially in "isIdentifier"
         // we could set a flag saying we're in a functionParameterList to help out
         while (isStartOfExpression()) {
             let requiredTerminal : Terminal | null = null;
             let javaLikeTypename : DottedPath<Terminal> | null = null;
+            let dotDotDot : Terminal | null = null;
             let name : Identifier;
             let equal : Terminal | null = null;
             let defaultValue : Node | null = null;
             let comma : Terminal | null = null;
 
             //
-            // required is not a keyword, it just has a special use in exactly this position
+            // required is a contextual keyword when in left-most parameter definition position
             //
-            // function foo(required (type(.name)*)? name (= defaultExpr)?) { ... }
+            // function foo(required (type(.name)*)? name (= defaultExpr)?) {  }
             //              ^^^^^^^^
             if (peek().text.toLowerCase() === "required") {
                 requiredTerminal = parseOptionalTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
             }
 
-            // function foo((required)? type(.name)* name (= defaultExpr)?) { ... }
-            //                          ^^^^^^^^^^^^^
-            if (SpeculationHelper.lookahead(isJavaLikeTypenameThenName)) {
-                javaLikeTypename = parseDottedPathTypename();
+            //
+            // function foo((required)? ...name) {  }
+            //
+            if (lookahead() === TokenType.DOT_DOT_DOT) {
+                dotDotDot = parseExpectedTerminal(TokenType.DOT_DOT_DOT, ParseOptions.withTrivia);
                 name = parseIdentifier();
             }
-            // function foo((required)? name (= defaultExpr)?) { ... }
-            //                          ^^^^
-            else if (isLexemeLikeToken(peek())) {
-                name = parseIdentifier();
-            }
-            // didn't match anything
             else {
-                if (speculative) {
-                    return null;
+                // function foo((required)? type(.name)* name (= defaultExpr)?) {  }
+                //                          ^^^^^^^^^^^^^
+                if (SpeculationHelper.lookahead(isJavaLikeTypenameThenName)) {
+                    javaLikeTypename = parseDottedPathTypename();
+                    name = parseIdentifier();
                 }
+                // function foo((required)? name (= defaultExpr)?) {  }
+                //                          ^^^^
+                else if (isLexemeLikeToken(peek())) {
+                    name = parseIdentifier();
+                }
+                // didn't match anything
                 else {
-                    next();
-                    parseTrivia();
-                    name = createMissingNode(Identifier(NilTerminal(pos()), ""));
+                    if (speculative) {
+                        return null;
+                    }
+                    else {
+                        next();
+                        parseTrivia();
+                        name = createMissingNode(Identifier(NilTerminal(pos()), ""));
+                    }
                 }
-            }
-            
-            if (lookahead() === TokenType.LEXEME) {
-                const discardedLexemesStartPos = scanner.getIndex();
-                do {
-                    next();
-                } while (lookahead() === TokenType.LEXEME);
                 
-                // @fixme: should be a warning
-                parseErrorAtRange(discardedLexemesStartPos, scanner.getIndex(), "Names in this position will be discarded at runtime; are you missing a comma?")
+                if (lookahead() === TokenType.LEXEME) {
+                    const discardedLexemesStartPos = scanner.getIndex();
+                    do {
+                        next();
+                    } while (lookahead() === TokenType.LEXEME);
+                    
+                    // @fixme: should be a warning
+                    parseErrorAtRange(discardedLexemesStartPos, scanner.getIndex(), "Names in this position will be discarded at runtime; are you missing a comma?")
+                }
             }
 
+            // function foo((required)? ((... name) | (type(.name)* name)) (= defaultExpr)?) {  }
+            //                                                              ^^^^^^^^^^^^^
             equal = parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
             if (equal) {
                 defaultValue = parseExpression();
             }
 
             comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
-            result.push(Script.FunctionParameter(requiredTerminal, javaLikeTypename, name, equal, defaultValue, comma));
+            result.push(Script.FunctionParameter(requiredTerminal, javaLikeTypename, dotDotDot, name, equal, defaultValue, comma));
         }
 
         if (result.length > 0 && result[result.length-1].comma) {
             parseErrorAtRange(result[result.length-1].comma!.range, "Illegal trailing comma.");
         }
+
+        parseContext = savedContext;
+
         return result;
     }
 
@@ -2685,6 +2771,7 @@ export function Parser() {
         if (SpeculationHelper.lookahead(isIdentifierThenFatArrow)) {
             params = [
                 Script.FunctionParameter(
+                    null,
                     null,
                     null,
                     parseIdentifier(),
@@ -3214,7 +3301,7 @@ export function Parser() {
 
                         if (nameTerminalIfIsCall) {
                             const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
-                            const args = parseList(ParseContext.argumentList, parseArgument);
+                            const args = parseList(ParseContext.argOrParamList, parseArgument);
                             const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
                             for (let i = 0; i < args.length; i++) {
                                 if (!args[i].equals) {

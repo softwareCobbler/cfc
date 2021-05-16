@@ -72,6 +72,7 @@ export const enum TokenType {
     DBL_PIPE,
     DBL_PLUS,
     DOT,
+    DOT_DOT_DOT,
     EQUAL,
     EQUAL_RIGHT_ANGLE,
     EXCLAMATION,
@@ -184,6 +185,7 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.DBL_PIPE]:             "||",
     [TokenType.DBL_PLUS]:             "++",
     [TokenType.DOT]:                  ".",
+    [TokenType.DOT_DOT_DOT]:          "...",
     [TokenType.EQUAL]:                "=",
     [TokenType.EQUAL_RIGHT_ANGLE]:    "=>",
     [TokenType.EXCLAMATION]:          "!",
@@ -530,7 +532,9 @@ export function Scanner(source_: string | Buffer) {
             case AsciiMap.COMMA:         return consumeCurrentCharAs(TokenType.COMMA);
             case AsciiMap.COLON:         return consumeCurrentCharAs(TokenType.COLON);
             case AsciiMap.SEMICOLON:     return consumeCurrentCharAs(TokenType.SEMICOLON);
-            case AsciiMap.DOT:           return consumeCurrentCharAs(TokenType.DOT);
+            case AsciiMap.DOT:           
+                if (maybeEat(/\.\.\./iy)) return setToken(TokenType.DOT_DOT_DOT, from, getIndex());
+                else return consumeCurrentCharAs(TokenType.DOT);
             case AsciiMap.QUESTION_MARK:
                 // note we do not scan a QUESTION_MARK_COLON token here,
                 // it appears that it is not actually a token, and it is valid to have a comment between the "?" and ":"
