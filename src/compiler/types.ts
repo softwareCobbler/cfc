@@ -102,14 +102,12 @@ export function cfVoid() : cfVoid {
 
 export interface cfString extends TypeBase {
     typeKind: TypeKind.string,
-    literal?: string,
+    literal: string | null,
 }
 
 export function cfString(literal?: string) : cfString {
     const v = TypeBase<cfString>(TypeKind.string);
-    if (literal !== undefined) {
-        v.literal = literal;
-    }
+    v.literal = literal ?? null;
     return v;
 }
 
@@ -211,7 +209,7 @@ export function cfTypeCall(left: Type, args: Type[]) : cfTypeCall {
     return v;
 }
 
-interface cfCachedTypeConstructorInvocation extends TypeBase {
+export interface cfCachedTypeConstructorInvocation extends TypeBase {
     typeKind: TypeKind.cachedTypeConstructorInvocation,
     left: cfTypeConstructor,
     args: Type[],
@@ -291,6 +289,13 @@ export interface cfUnion extends TypeBase {
     typeKind: TypeKind.union,
     left: Type,
     right: Type,
+}
+
+export function cfUnion(left: Type, right: Type) {
+    const v = TypeBase<cfUnion>(TypeKind.union);
+    v.left = left;
+    v.right = right;
+    return v;
 }
 
 export interface cfNever extends TypeBase {
@@ -491,6 +496,11 @@ export function evaluateType(type: Type | null, typeParamMap = new Map<string, T
             const left = evaluateType(type.left, typeParamMap);
             const right = evaluateType(type.right, typeParamMap);
             return evaluateIntersection(left, right, typeParamMap);
+        }
+        case TypeKind.union: {
+            const left = evaluateType(type.left, typeParamMap);
+            const right = evaluateType(type.right, typeParamMap);
+            return cfUnion(left, right);
         }
         case TypeKind.struct: {
             const evaluatedStructContents = new Map<string, Type>();

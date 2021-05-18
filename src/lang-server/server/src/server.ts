@@ -23,7 +23,9 @@ import {
 	CompletionParams,
 	CompletionTriggerKind,
 	SignatureInformation,
-	ParameterInformation
+	ParameterInformation,
+	DidChangeConfigurationParams,
+	ConfigurationItem
 } from 'vscode-languageserver/node';
 
 import { SignatureHelp } from "vscode-languageserver-types"
@@ -43,11 +45,17 @@ import { tagNames } from "./tagnames";
 import { TokenType } from '../../../compiler/scanner';
 import { TypeKind } from '../../../compiler/types';
 
-const parser = Parser().setDebug(true).setParseTypes(true);
-const binder = Binder().setDebug(true);
-const checker = Checker();
 type TextDocumentUri = string;
-const parseCache = new Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, cfNode>}>();
+
+interface CflsConfig {
+	parser: ReturnType<typeof Parser>,
+	binder: ReturnType<typeof Binder>,
+	checker: ReturnType<typeof Checker>,
+	parseCache: Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, cfNode>}>
+	x_types: boolean
+}
+
+let cflsConfig! : CflsConfig;
 
 const libfile = SourceFile("nil!", CfFileType.dCfm, `
 
@@ -64,12 +72,9 @@ const libfile = SourceFile("nil!", CfFileType.dCfm, `
 `
 
 );
-parser.setSourceFile(libfile);
-parser.parse();
-
-
 function naiveGetDiagnostics(uri: TextDocumentUri, text: string, fileType: CfFileType) : readonly cfcDiagnostic[] {
 	// how to tell if we were launched in debug mode ?
+	const {parser,binder,checker, parseCache} = cflsConfig;
 
 	libfile;
 	const cfFileType = cfmOrCfc(uri);
@@ -140,11 +145,30 @@ connection.onInitialize((params: InitializeParams) => {
 	return result;
 });
 
+function resetCflsp(x_types: boolean) {
+	cflsConfig = {
+		parser: Parser().setDebug(true).setParseTypes(x_types),
+		binder: Binder().setDebug(true),
+		checker: Checker(),
+		parseCache: new Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, cfNode>}>(),
+		x_types: x_types,
+	};
+}
+
 connection.onInitialized(() => {
 	if (hasConfigurationCapability) {
 		// Register for all configuration changes.
 		connection.client.register(DidChangeConfigurationNotification.type, undefined);
+		/*connection.workspace.getConfiguration("cflsp").then((config) => {
+			resetCflsp(config.x_types ?? false);
+		})*/
+		resetCflsp(true);
 	}
+	else {
+		resetCflsp(/*x_types*/false);
+	}
+
+
 	/*
 	if (hasWorkspaceFolderCapability) {
 		connection.workspace.onDidChangeWorkspaceFolders(_event => {
@@ -167,18 +191,23 @@ let globalSettings: ExampleSettings = defaultSettings;
 // Cache the settings of all open documents
 let documentSettings: Map<string, Thenable<ExampleSettings>> = new Map();
 
-connection.onDidChangeConfiguration(change => {
+connection.onDidChangeConfiguration(async change => {
+	let x_types : boolean;
 	if (hasConfigurationCapability) {
 		// Reset all cached document settings
 		documentSettings.clear();
+		connection.workspace.getConfiguration("cflsp").then((config) => {
+			resetCflsp(config.x_types ?? false);
+			documents.all().forEach(validateTextDocument);
+		});
 	} else {
 		globalSettings = <ExampleSettings>(
 			(change.settings.languageServerExample || defaultSettings)
 		);
+		resetCflsp(/*x_types*/false);
+		// Revalidate all open text documents
+		documents.all().forEach(validateTextDocument);
 	}
-
-	// Revalidate all open text documents
-	documents.all().forEach(validateTextDocument);
 });
 
 connection.onDocumentSymbol((params: DocumentSymbolParams) => {
@@ -313,7 +342,7 @@ connection.onCompletion(
 		if (!document) return [];
 
 		const targetIndex = document.offsetAt(textDocumentPosition.position);
-		const docCache = parseCache.get(textDocumentPosition.textDocument.uri)!;
+		const docCache = cflsConfig.parseCache.get(textDocumentPosition.textDocument.uri)!;
 
 		const node = findNodeInFlatSourceMap(docCache.flatTree, docCache.nodeMap, targetIndex);
 
@@ -355,7 +384,7 @@ connection.onCompletion(
 				}
 			}
 
-			const typeinfo = checker.getCachedTermEvaluatedType(node.parent.parent);
+			const typeinfo = cflsConfig.checker.getCachedTermEvaluatedType(node.parent.parent);
 			if (typeinfo.typeKind === TypeKind.struct) {
 				const result : CompletionItem[] = [];
 				for (const [name,type] of typeinfo.members.entries()) {

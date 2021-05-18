@@ -20,12 +20,14 @@ function fromFile(fname: string) {
 
 const sourceFile = NilCfm(`
 <!---
+    <!--- the query type is included as a library definition during type checking --->
     @type Query = <T> => {
         recordCount: number,
         columnList: string,
-        filter: (required predicate: (row: T) => boolean, currentRow: number, query: Query<T>) => Query<T>,
+        filter: (required predicate: (row: T, currentRow: number, query: Query<T>) => boolean) => Query<T>,
     } & T;
-    @type MySchema = {rec_uid: number};
+
+    @type MySchema = {some_other_prop: string, rec_uid: number, filename: string };
 --->
 
 <!--- @type Query<MySchema> --->
@@ -34,7 +36,9 @@ const sourceFile = NilCfm(`
 </cfquery>
 
 <cfscript>
-    q.filter((row) => { row. });
+    x = function(abc) {
+        q.
+    }
 </cfscript>
 `);
 

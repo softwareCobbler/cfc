@@ -27,7 +27,7 @@ import {
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug, NilToken } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, getAttributeValue } from "./utils";
-import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type, TypeFlags, cfFunctionSignature, cfTypeCall, cfVoid, cfTypeConstructorParam, cfTypeConstructor, cfIntersection, cfTypeId, KLUDGE_FOR_DEV_register_type_constructor_name, TypeKind } from "./types";
+import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type, TypeFlags, cfFunctionSignature, cfTypeCall, cfVoid, cfTypeConstructorParam, cfTypeConstructor, cfIntersection, cfTypeId, KLUDGE_FOR_DEV_register_type_constructor_name, TypeKind, cfUnion } from "./types";
 
 let debugParseModule = false;
 let parseTypes = false;
@@ -1751,7 +1751,7 @@ export function Parser() {
         return result;
     }
 
-    function parseInterpolatedText(quoteDelimiter: TokenType.QUOTE_SINGLE | TokenType.QUOTE_DOUBLE) : (TextSpan | HashWrappedExpr)[] {
+    function parseStringBody(quoteDelimiter: TokenType.QUOTE_SINGLE | TokenType.QUOTE_DOUBLE, allowInterpolations: boolean) : (TextSpan | HashWrappedExpr)[] {
         // when we enter a new interpolation context, we can reset our hashWrappedExpr flag;
         // hash wrapped expressions don't nest directly, but indirectly is ok; e.g,
         // #someVal & "some-string-literal #nesting_here_is_ok#" & trying_to_nest_here_is_an_error #
@@ -1805,9 +1805,16 @@ export function Parser() {
                         continue;
                     }
                     else { // single hash, meaning this is an interpolated string element
-                        finishTextRange();
-                        result.push(parseHashWrappedExpression());
-                        continue;
+                        if (allowInterpolations) {
+                            finishTextRange();
+                            result.push(parseHashWrappedExpression());
+                            continue;
+                        }
+                        else {
+                            parseErrorAtCurrentToken("Unexpected interpolation element.");
+                            startOrContinueTextRange();
+                            next();
+                        }
                     }
                 }
                 default: {
@@ -2785,7 +2792,7 @@ export function Parser() {
         return Identifier(terminal, canonicalName);
     }
 
-    function parseStringLiteral() : Node {
+    function parseStringLiteral(allowInterpolations = true) : SimpleStringLiteral | InterpolatedStringLiteral {
         const quoteType = lookahead();
         if (quoteType !== TokenType.QUOTE_SINGLE && quoteType !== TokenType.QUOTE_DOUBLE) {
             // will a lookahead or speculate ever trigger this ... ?
@@ -2793,7 +2800,7 @@ export function Parser() {
         }
 
         const leftQuote = parseExpectedTerminal(quoteType, ParseOptions.noTrivia);
-        const stringElements = parseInterpolatedText(quoteType);
+        const stringElements = parseStringBody(quoteType, allowInterpolations);
         const rightQuote = parseExpectedTerminal(quoteType, ParseOptions.withTrivia);
 
         if (stringElements.length === 1) {
@@ -3698,88 +3705,116 @@ export function Parser() {
 
         parseTrivia(); // only necessary if we just updated scanner state? caller can maybe guarantee that the target scanner state begins on non-trivial input?
 
-        let result : Type = cfNil();
+        function localParseType() : Type {
 
-        switch (lookahead()) {
-            case TokenType.LEFT_BRACKET: {
-                parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
-                const tupleTypes = parseList(ParseContext.typeTupleOrArrayElement, parseTypeElement);
-                parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
-                result = maybeParseArrayModifier(cfTuple(tupleTypes));
-                break;
-            }
-            case TokenType.LEXEME: {
-                const lexeme = next();
-                result = lexemeToType(lexeme);
-                if (lookahead() === TokenType.LEFT_ANGLE) {
-                    result = parseTypeCall(result);
+            let result : Type = cfNil();
+
+            switch (lookahead()) {
+                case TokenType.LEFT_BRACKET: {
+                    parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
+                    const tupleTypes = parseList(ParseContext.typeTupleOrArrayElement, parseTypeElement);
+                    parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
+                    result = maybeParseArrayModifier(cfTuple(tupleTypes));
+                    break;
                 }
-
-                break;
-            }
-            case TokenType.LEFT_PAREN: {
-                parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
-                
-                if (lookahead() === TokenType.LEFT_PAREN) {
-                    return parseType();
-                }
-
-                const parenthesizedType = SpeculationHelper.speculate(() => {
+                case TokenType.LEXEME: {
                     const lexeme = next();
-                    parseTrivia();
-                    if (lookahead() === TokenType.COLON) {
-                        // this is a non-type name, used to give a name to an inline function type signature parameter,
-                        // i.e, (foo : any) => any
-                        //       ^^^^^
-                        return null;
+                    result = lexemeToType(lexeme);
+                    if (lookahead() === TokenType.LEFT_ANGLE) {
+                        result = parseTypeCall(result);
                     }
-                    else if (lexeme.text === "required") {
-                        next();
+
+                    break;
+                }
+                case TokenType.LEFT_PAREN: {
+                    parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
+                    
+                    if (lookahead() === TokenType.LEFT_PAREN) {
+                        return parseType();
+                    }
+
+                    const parenthesizedType = SpeculationHelper.speculate(() => {
+                        const lexeme = next();
                         parseTrivia();
                         if (lookahead() === TokenType.COLON) {
+                            // this is a non-type name, used to give a name to an inline function type signature parameter,
+                            // i.e, (foo : any) => any
+                            //       ^^^^^
                             return null;
                         }
+                        else if (lexeme.text === "required") {
+                            next();
+                            parseTrivia();
+                            if (lookahead() === TokenType.COLON) {
+                                return null;
+                            }
+                        }
+
+                        return lexemeToType(lexeme);
+                    })
+
+                    if (parenthesizedType) {
+                        parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+                        result = maybeParseArrayModifier(parenthesizedType);
+                        break;
                     }
-
-                    return lexemeToType(lexeme);
-                })
-
-                if (parenthesizedType) {
-                    parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
-                    result = maybeParseArrayModifier(parenthesizedType);
+                    else {
+                        const params = tryParseFunctionDefinitionParameters(/*speculative*/false, /*asDeclaration*/ true);
+                        parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+                        parseExpectedTerminal(TokenType.EQUAL_RIGHT_ANGLE, ParseOptions.withTrivia);
+                        const returnType = parseType();
+                        result = maybeParseArrayModifier(cfFunctionSignature("", params, returnType));
+                        break;
+                    }
+                }
+                case TokenType.LEFT_BRACE: {
+                    parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
+                    const kvPairs = parseList(ParseContext.typeStruct, parseTypeStructMemberElement);
+                    parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
+                    result = cfStruct(new Map<string, Type>(kvPairs));
+                    result = maybeParseArrayModifier(result);
                     break;
                 }
-                else {
-                    const params = tryParseFunctionDefinitionParameters(/*speculative*/false, /*asDeclaration*/ true);
-                    parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+                case TokenType.LEFT_ANGLE: {
+                    parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
+                    const typeParams = parseList(ParseContext.typeParamList, parseTypeParam);
+                    parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);
                     parseExpectedTerminal(TokenType.EQUAL_RIGHT_ANGLE, ParseOptions.withTrivia);
-                    const returnType = parseType();
-                    result = maybeParseArrayModifier(cfFunctionSignature("", params, returnType));
-                    break;
+                    const body = parseType();
+                    result = cfTypeConstructor(typeParams, body);
+                    return result; // don't do intersections or unions with type functions
+                }
+                case TokenType.QUOTE_SINGLE:
+                case TokenType.QUOTE_DOUBLE: {
+                    const s = parseStringLiteral(/*allowInterpolations*/false);
+                    if (s.kind === NodeType.simpleStringLiteral) {
+                        result = cfString(s.textSpan.text);
+                    }
+                    else {
+                        result = cfString(); // should never happen, parseStringLiteral(false) should always return a simpleStringLiteral
+                    }
                 }
             }
-            case TokenType.LEFT_BRACE: {
-                parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
-                const kvPairs = parseList(ParseContext.typeStruct, parseTypeStructMemberElement);
-                parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
-                result = cfStruct(new Map<string, Type>(kvPairs));
-                result = maybeParseArrayModifier(result);
-                break;
-            }
-            case TokenType.LEFT_ANGLE: {
-                parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
-                const typeParams = parseList(ParseContext.typeParamList, parseTypeParam);
-                parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);
-                parseExpectedTerminal(TokenType.EQUAL_RIGHT_ANGLE, ParseOptions.withTrivia);
-                const body = parseType();
-                result = cfTypeConstructor(typeParams, body);
-                return result; // don't do intersections or unions with type functions
-            }
+
+            return result;
         }
 
-        if (lookahead() === TokenType.AMPERSAND) {
-            next(), parseTrivia(); // eat ampersand and trivia; if we get the type system kinda working we can save this on the type node
-            result = cfIntersection(result, parseType());
+        let result = localParseType();
+
+        intersectionsAndUnions:
+        while (true) {
+            switch (lookahead()) {
+                case TokenType.AMPERSAND:
+                    next(), parseTrivia(); // eat ampersand and trivia; if we get the type system kinda working we can save this on the type node
+                    result = cfIntersection(result, localParseType());
+                    continue intersectionsAndUnions;
+                case TokenType.PIPE:
+                    next(), parseTrivia();
+                    result = cfUnion(result, localParseType());
+                    continue intersectionsAndUnions;
+                default:
+                    break intersectionsAndUnions;
+            }
         }
 
         if (savedScannerState) {
