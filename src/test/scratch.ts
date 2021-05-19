@@ -25,20 +25,21 @@ const sourceFile = NilCfm(`
         recordCount: number,
         columnList: string,
         filter: (required predicate: (row: T, currentRow: number, query: Query<T>) => boolean) => Query<T>,
+        recursive: Query<T>
     } & T;
 
-    @type MySchema = {some_other_prop: string, rec_uid: number, filename: string };
+    @type X = {foo: string}
+
+    @type MySchema = {v: string, rec_uid: number, filename: string };
 --->
 
-<!--- @type Query<MySchema> --->
+<!--- @type X --->
 <cfquery name="q">
     select * from foo where bar = baz;
 </cfquery>
 
 <cfscript>
-    x = function(abc) {
-        q.
-    }
+    q.
 </cfscript>
 `);
 

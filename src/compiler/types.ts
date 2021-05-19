@@ -17,7 +17,7 @@ export const enum TypeKind {
     intersection,
     functionSignature,
     typeConstructor,
-    typeCall,
+    typeConstructorInvocation,
     cachedTypeConstructorInvocation,
     typeFunctionParam,
     typeId,
@@ -37,7 +37,7 @@ const TypeKindUiString : Record<TypeKind, string> = {
     [TypeKind.union]:                           "union",
     [TypeKind.intersection]:                    "intersection",
     [TypeKind.functionSignature]:               "function-signature",  // (name: type, ...) => type
-    [TypeKind.typeCall]:                        "type-call",           // type<type-list, ...>
+    [TypeKind.typeConstructorInvocation]:       "type-constructor-invocation",           // typename | typename<type-list> where `typename` is shorthand for `typename<>` with 0 args
     [TypeKind.cachedTypeConstructorInvocation]: "cached-type-constructor-invocation",    // same as a type call but we can see that is cached; sort of a "type call closure" with inital args captured
     [TypeKind.typeConstructor]:                 "type-constructor",    // type<type-list, ...> => type
     [TypeKind.typeFunctionParam]:               "type-function-param", // type param in a type function
@@ -197,13 +197,13 @@ export function cfFunctionSignature(name: string, params: FunctionParameter[], r
 }
 
 export interface cfTypeCall extends TypeBase {
-    typeKind: TypeKind.typeCall,
+    typeKind: TypeKind.typeConstructorInvocation,
     left: Type,
     args: Type[]
 }
 
-export function cfTypeCall(left: Type, args: Type[]) : cfTypeCall {
-    const v = TypeBase<cfTypeCall>(TypeKind.typeCall);
+export function cfTypeConstructorInvocation(left: Type, args: Type[]) : cfTypeCall {
+    const v = TypeBase<cfTypeCall>(TypeKind.typeConstructorInvocation);
     v.left = left;
     v.args = args;
     return v;
@@ -520,7 +520,7 @@ export function evaluateType(type: Type | null, typeParamMap = new Map<string, T
             }
             const returns = evaluateType(type.returns, typeParamMap);
             return cfFunctionSignature(type.name, params, returns);
-        case TypeKind.typeCall: {
+        case TypeKind.typeConstructorInvocation: {
             const typeConstructor = KLUDGE_FOR_DEV_getTypeConstructorDefintionByName((type.left as cfTypeId).name);
             const args : Type[] = [];
             for (const arg of type.args) {

@@ -363,9 +363,9 @@ connection.onCompletion(
 			return [];
 		}
 
-		// if we got an indexed access chain, we only want to provide completions for the first dot
+		// if we got an indexed access chain
 		if (node.parent?.kind === NodeType.indexedAccessChainElement) {
-			if (node.parent?.parent?.parent?.kind === NodeType.indexedAccess) {
+			/*if (node.parent?.parent?.parent?.kind === NodeType.indexedAccess) {
 				// if so, try to get the identifier used as the root of the chain
 				// if that name is a known scope, try to find the names in that scope
 				const rootName = getTriviallyComputableString(node.parent.parent.parent.root)?.toLowerCase();
@@ -382,8 +382,10 @@ connection.onCompletion(
 						}
 					}
 				}
-			}
+			}*/
 
+			// get the type one level before the current
+			// x.y| -- we want the type of `x` for completions, not `y`
 			const typeinfo = cflsConfig.checker.getCachedTermEvaluatedType(node.parent.parent);
 			if (typeinfo.typeKind === TypeKind.struct) {
 				const result : CompletionItem[] = [];

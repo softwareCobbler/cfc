@@ -27,7 +27,7 @@ import {
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug, NilToken } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, getAttributeValue } from "./utils";
-import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type, TypeFlags, cfFunctionSignature, cfTypeCall, cfVoid, cfTypeConstructorParam, cfTypeConstructor, cfIntersection, cfTypeId, KLUDGE_FOR_DEV_register_type_constructor_name, TypeKind, cfUnion } from "./types";
+import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type, TypeFlags, cfFunctionSignature, cfTypeConstructorInvocation, cfVoid, cfTypeConstructorParam, cfTypeConstructor, cfIntersection, cfTypeId, KLUDGE_FOR_DEV_register_type_constructor_name, TypeKind, cfUnion } from "./types";
 
 let debugParseModule = false;
 let parseTypes = false;
@@ -1739,7 +1739,14 @@ export function Parser() {
                     // <cfquery name="q"> <!--- q has type `Query<Schema>` --->
                     //
                     else {
-                        result.push(parseType());
+                        const type = parseType();
+                        if (type.typeKind === TypeKind.typeId) {
+                            // convert a loose type id into a zero-arg type constructor invocation
+                            result.push(cfTypeConstructorInvocation(type, []));
+                        }
+                        else {
+                            result.push(type);
+                        }
                     }
                 }
                 else {
@@ -3655,11 +3662,11 @@ export function Parser() {
             return cfTypeConstructorParam(name.token.text, extendsToken, extendsType, comma);
         }
 
-        function parseTypeCall(left: Type) : Type {
+        function parseTypeConstructorInvocation(left: Type) : Type {
             parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
             const args = parseList(ParseContext.typeParamList, parseTypeElement);
             parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia)
-            return cfTypeCall(left, args)
+            return cfTypeConstructorInvocation(left, args)
         }
 
         function maybeParseArrayModifier(type: Type) : Type {
@@ -3718,10 +3725,9 @@ export function Parser() {
                     break;
                 }
                 case TokenType.LEXEME: {
-                    const lexeme = next();
-                    result = lexemeToType(lexeme);
+                    result = lexemeToType(next());
                     if (lookahead() === TokenType.LEFT_ANGLE) {
-                        result = parseTypeCall(result);
+                        result = parseTypeConstructorInvocation(result);
                     }
 
                     break;

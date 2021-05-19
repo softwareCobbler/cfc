@@ -268,18 +268,21 @@ export function Checker() {
                 return undefined;
         }
 
-        if (type && type.typeKind === TypeKind.typeCall) {
+        if (type && type.typeKind === TypeKind.typeConstructorInvocation) {
             const typeFunction = walkUpContainersToFindType(node, <cfTypeId>type.left);
             if (!typeFunction) {
                 // error, "cannot find typename 'foo'"
                 return undefined;
             }
             if (typeFunction.typeKind !== TypeKind.typeConstructor) {
-                // error, "type 'foo' is not generic"
+                // error, "type 'foo' is not a type constructor; this should probably be dealt with earlier during binding
                 return undefined;
             }
 
             const typeArgs : Type[] = [];
+            // we need to consider something like Foo<Bar<Baz>>, where the argument is not just a name to be found
+            // but a type constructor invocation itself
+            // right now this only supports Foo<Bar>, where Bar is type identifier referencing a 0-arg type constructor (a type "alias")
             for (const typeArg of type.args) {
                 const foundType = walkUpContainersToFindType(node, typeArg);
                 if (!foundType) {
@@ -303,7 +306,8 @@ export function Checker() {
             return cfIntersection(left, right);
         }
         else if (type.typeKind === TypeKind.struct) {
-            return type.members.get(name) || cfAny();
+            const memberType = type.members.get(name);
+            return memberType ? evaluateType(memberType) : cfAny();
         }
 
         return cfAny();
