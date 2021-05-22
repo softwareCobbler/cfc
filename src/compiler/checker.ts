@@ -1,7 +1,7 @@
-import { SourceFile, Node, NodeType, BlockType, IndexedAccess, isStaticallyKnownScopeName, Scope, StaticallyKnownScopeName, ScopeDisplay, Term, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition } from "./node";
+import { SourceFile, Node, NodeType, BlockType, IndexedAccess, isStaticallyKnownScopeName, Scope, StaticallyKnownScopeName, ScopeDisplay, Term, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes } from "./node";
 import { Scanner } from "./scanner";
 import { Diagnostic } from "./parser";
-import { cfAny, cfFunctionSignature, cfIntersection, cfNil, cfTypeId, invokeTypeConstructor, evaluateType, Type, TypeKind } from "./types";
+import { cfAny, cfFunctionSignature, cfIntersection, Type, TypeKind, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfNever, cfStruct, cfUnion } from "./types";
 
 export function Checker() {
     let sourceFile!: SourceFile;
@@ -205,7 +205,7 @@ export function Checker() {
         return undefined;
     }
 
-    function walkUpContainersToFindName(base: Node, canonicalName: string) : Term | undefined {
+    function walkUpContainersToFindSymtabEntry(base: Node, canonicalName: string) : Term | undefined {
         let node : Node | null = base;
         while (node) {
             if (node.containedScope) {
@@ -219,98 +219,6 @@ export function Checker() {
         }
 
         return undefined;
-    }
-
-    function walkUpContainersToFindType(base: Node, type: Type) : Type | undefined {
-        if (type.typeKind !== TypeKind.typeId) {
-            return type;
-        }
-
-        let node : Node | null = base;
-        const typeName = type.name;
-
-        while (node) {
-            if (node.containedScope) {
-                if (node.containedScope.typedefs) {
-                    if (node.containedScope.typedefs.has(typeName)) {
-                        return node.containedScope.typedefs.get(typeName)!;
-                    }
-                }
-                node = node.containedScope.container;
-            }
-            else {
-                node = node.parent;
-            }
-        }
-
-        return undefined;
-    }
-
-    /**
-     * given an identifier, find it's symbol table entry and retreive its typeinfo
-     */
-    function getTypeFromNearestContainingScope(node: Node) : Type | Scope | undefined {
-        let type : Type | undefined;
-        switch (node.kind) {
-            case NodeType.identifier: {
-                if (!node.canonicalName) {
-                    return undefined;
-                }
-                if (isStaticallyKnownScopeName(node.canonicalName)) {
-                    return getNearestScopeByName(node, node.canonicalName);
-                }
-                else {
-                    type = walkUpContainersToFindName(node, node.canonicalName)?.type;
-                }
-                break;
-            }
-            default:
-                return undefined;
-        }
-
-        if (type && type.typeKind === TypeKind.typeConstructorInvocation) {
-            const typeFunction = walkUpContainersToFindType(node, <cfTypeId>type.left);
-            if (!typeFunction) {
-                // error, "cannot find typename 'foo'"
-                return undefined;
-            }
-            if (typeFunction.typeKind !== TypeKind.typeConstructor) {
-                // error, "type 'foo' is not a type constructor; this should probably be dealt with earlier during binding
-                return undefined;
-            }
-
-            const typeArgs : Type[] = [];
-            // we need to consider something like Foo<Bar<Baz>>, where the argument is not just a name to be found
-            // but a type constructor invocation itself
-            // right now this only supports Foo<Bar>, where Bar is type identifier referencing a 0-arg type constructor (a type "alias")
-            for (const typeArg of type.args) {
-                const foundType = walkUpContainersToFindType(node, typeArg);
-                if (!foundType) {
-                    typeArgs.push(cfNil());
-                }
-                else {
-                    typeArgs.push(foundType);
-                }
-            }
-
-            return invokeTypeConstructor(typeFunction, typeArgs);
-        }
-
-        return type;
-    }
-
-    function getMemberType(type: Type, name: string) : Type {
-        if (type.typeKind === TypeKind.intersection) {
-            const left = getMemberType(type.left, name);
-            const right = getMemberType(type.right, name);
-            return cfIntersection(left, right);
-        }
-        else if (type.typeKind === TypeKind.struct) {
-            const memberType = type.members.get(name);
-            return memberType ? evaluateType(memberType) : cfAny();
-        }
-
-        return cfAny();
     }
 
     function isCallable(type: Type) : boolean {
@@ -362,7 +270,7 @@ export function Checker() {
         return true;
     }
 
-    function pushTypesIntoInlineFunctionDefinition(signature: cfFunctionSignature, functionDef: (FunctionDefinition | ArrowFunctionDefinition)) {
+    function pushTypesIntoInlineFunctionDefinition(context: Node, signature: cfFunctionSignature, functionDef: (FunctionDefinition | ArrowFunctionDefinition)) {
         const existingArgumentsScope = functionDef.containedScope?.arguments!;
         for (let i = 0; i < signature.params.length; i++) {
             if (i === functionDef.params.length) {
@@ -370,7 +278,7 @@ export function Checker() {
             }
             if (existingArgumentsScope.has(signature.params[i].canonicalName)) {
                 existingArgumentsScope.set(signature.params[i].canonicalName, {
-                    type: evaluateType(signature.params[i].type),
+                    type: evaluateType(context, signature.params[i].type),
                     name: signature.params[i].canonicalName,
                     final: false,
                     var: false,
@@ -408,7 +316,7 @@ export function Checker() {
                         // error
                     }
                     if (paramType.typeKind === TypeKind.functionSignature && (arg.expr.kind === NodeType.functionDefinition || arg.expr.kind === NodeType.arrowFunctionDefinition)) {
-                        pushTypesIntoInlineFunctionDefinition(paramType, arg.expr);
+                        pushTypesIntoInlineFunctionDefinition(node, paramType, arg.expr);
                         checkNode(arg.expr.body as Node /*fixme: we know this is a script function definition but can't prove it here; anyway, all function defs should have Node as a body, not Node|Node[] ?*/);
                     }
                 }
@@ -491,7 +399,7 @@ export function Checker() {
             for (let i = 0; i < node.accessElements.length; i++) {
                 const element = node.accessElements[i];
                 if (element.accessType === IndexedAccessType.dot) {
-                    type = getMemberType(type, element.property.token.text);
+                    type = getMemberType(type, node, element.property.token.text);
                     if (type.typeKind === TypeKind.any) {
                         type = cfAny(); // subsequent access elements will also be any
                         setCachedTermEvaluatedType(element, cfAny());
@@ -511,6 +419,353 @@ export function Checker() {
             // error: some kind of indexed access error
         }
     }
+
+    //
+    // type lookup
+    //
+    function walkUpContainersToFindType(context: Node, type: Type) : Type | undefined {
+        if (type.typeKind !== TypeKind.typeId) {
+            return type;
+        }
+
+        let node : Node | null = context;
+        const typeName = type.name;
+
+        while (node) {
+            if (node.containedScope) {
+                if (node.containedScope.typedefs) {
+                    if (node.containedScope.typedefs.has(typeName)) {
+                        return node.containedScope.typedefs.get(typeName)!;
+                    }
+                }
+                node = node.containedScope.container;
+            }
+            else {
+                node = node.parent;
+            }
+        }
+
+        return undefined;
+    }
+
+    /**
+     * given an identifier, find it's symbol table entry and retreive its typeinfo
+     */
+    function getTypeFromNearestContainingScope(base: Node) : Type | Scope | undefined {
+        let type : Type | undefined;
+        switch (base.kind) {
+            case NodeType.identifier: {
+                if (!base.canonicalName) {
+                    return undefined;
+                }
+                if (isStaticallyKnownScopeName(base.canonicalName)) {
+                    return getNearestScopeByName(base, base.canonicalName);
+                }
+                else {
+                    const symtabEntry = walkUpContainersToFindSymtabEntry(base, base.canonicalName);
+                    if (!symtabEntry) {
+                        return undefined;
+                    }
+                    type = symtabEntry.type;
+                }
+                break;
+            }
+            default:
+                return undefined;
+        }
+
+        if (!type) {
+            return undefined;
+        }
+        else if (!isType(type)) {
+            return type as Scope;
+        }
+        else {
+            const context = base;
+            return evaluateType(context, type);
+        }
+    }
+
+    function getMemberType(type: Type, context: Node, name: string) : Type {
+        if (type.typeKind === TypeKind.intersection) {
+            const left = getMemberType(type.left, context, name);
+            const right = getMemberType(type.right, context, name);
+            return cfIntersection(left, right);
+        }
+        else if (type.typeKind === TypeKind.struct) {
+            const memberType = type.members.get(name);
+            return memberType ? evaluateType(context, memberType) : cfAny();
+        }
+
+        return cfAny();
+    }
+
+    //
+    // type evaluation
+    //
+    const evaluateType = (function() {
+        type NodeTrie = Map<NodeId, NodeTrie> & Map<null, Type | "PENDING"> ;
+        const typeConstructorInvocationCacheTrie : NodeTrie = new Map();
+        
+        const enum TypeCache_Status { resolved, resolving, noCache };
+        type TypeCache_Resolution = TypeCache_Cached | TypeCache_NoCache;
+        interface TypeCache_Cached {
+            status: TypeCache_Status.resolved,
+            value: Type
+        }
+        interface TypeCache_NoCache {
+            status: TypeCache_Status.resolving | TypeCache_Status.noCache
+        }
+        
+        function setCachedTypeConstructorInvocation(typeFunction: cfTypeConstructor, args: Type[], val: "PENDING" | Type) : void {
+            function getChildTrieMapOrNull(thisLevel: NodeTrie, nodeId: NodeId) : NodeTrie | null {
+                const result = thisLevel.get(nodeId);
+                if (result && typeof result === "object") {
+                    return result;
+                }
+                else {
+                    return null;
+                }
+            }
+        
+            if (args.length === 0) {
+                const bottom : NodeTrie = new Map();
+                bottom.set(null, val);
+                typeConstructorInvocationCacheTrie.set(typeFunction.nodeId, bottom);
+                return;
+            }
+        
+            let workingMap = getChildTrieMapOrNull(typeConstructorInvocationCacheTrie, typeFunction.nodeId);
+        
+            for (let i = 0; i < args.length; i++) { // is args ever 0 in a type call ?
+                if (i === args.length - 1) {
+                    if (workingMap === null) {
+                        workingMap = new Map() as NodeTrie;
+                        typeConstructorInvocationCacheTrie.set(typeFunction.nodeId, workingMap);
+                    }
+                    const existingNextLevel = getChildTrieMapOrNull(workingMap, args[i].nodeId);
+                    if (existingNextLevel) {
+                        existingNextLevel.set(null, val);
+                    }
+                    else {
+                        const bottom = new Map([[null, val]]) as NodeTrie;
+                        workingMap.set(args[i].nodeId, bottom)
+                    }
+                }
+                else {
+                    if (workingMap === null) {
+                        workingMap = new Map() as NodeTrie;
+                        typeConstructorInvocationCacheTrie.set(typeFunction.nodeId, workingMap);
+                    }
+        
+                    const existingNextLevel = getChildTrieMapOrNull(workingMap, args[i].nodeId);
+                    if (existingNextLevel) {
+                        workingMap = existingNextLevel;
+                    }
+                    else {
+                        const generatedNextLevel = new Map();
+                        workingMap.set(args[i].nodeId, generatedNextLevel);
+                        workingMap = generatedNextLevel;
+                    }
+                }
+            }
+        }
+
+        function getCachedTypeConstructorInvocation(typeFunction: cfTypeConstructor, args: Type[]) : TypeCache_Resolution {
+            let trieDescender = typeConstructorInvocationCacheTrie.get(typeFunction.nodeId);
+            for (let i = 0; i < args.length; i++) {
+                if (!trieDescender) {
+                    return {status: TypeCache_Status.noCache};
+                }
+                trieDescender = trieDescender.get(args[i].nodeId);
+            }
+        
+            if (!trieDescender) {
+                return {status: TypeCache_Status.noCache}
+            }
+        
+            const cachedResult = trieDescender.get(null);
+        
+            if (!cachedResult) {
+                // this should never happen; log an error or something
+                return {status: TypeCache_Status.noCache};
+            }
+            if (cachedResult === "PENDING") {
+                return {status: TypeCache_Status.resolving};
+            }
+            else {
+                return {status: TypeCache_Status.resolved, value: cachedResult}
+            }
+        }
+
+        function evaluateType(context: Node, type: Type | null, typeParamMap: Map<string, Type> = new Map(), depth = 0) : Type {
+            return typeWorker(type);
+
+            function invokeTypeConstructor(typeFunction: cfTypeConstructor, args: Type[]) : Type {
+                depth++;
+                const result = (function() {
+                    if (typeFunction.params.length !== args.length) {
+                        // hit this once by writing @type U<T>
+                        // when only @type T<U> was valid;
+                        // need some type checking of the type system
+                        throw "args.length !== typeFunction.params.length"
+                    }
+                
+                    const cached = getCachedTypeConstructorInvocation(typeFunction, args);
+                    if (cached.status === TypeCache_Status.resolved) {
+                        return cached.value;
+                    }
+                
+                    const typeParamMap = new Map(typeFunction.capturedParams.entries());
+                    // extend constructor's captured environment with the argument list
+                    for (let i = 0; i < typeFunction.params.length; i++) {
+                        typeParamMap.set(typeFunction.params[i].name, args[i]);
+                    }
+                
+                    // say our current evaluation is for `T<U>`
+                    // set `T<U>` to "PENDING" so that we have something to check for to not recurse infinitely on something like `T<U> = {foo: T<U>}`
+                    setCachedTypeConstructorInvocation(typeFunction, args, "PENDING");
+                    const result = evaluateType(context, typeFunction.body, typeParamMap, depth+1);
+                    setCachedTypeConstructorInvocation(typeFunction, args, result);
+            
+                    if (result.typeKind === TypeKind.typeConstructor) {
+                        // if a type constructor returned a type constructor, extend the new type constructor's environment
+                        // with the parent's environment + the args to the parent's invocation
+                        // inner most names shadows outer names if there are name conflicts
+                        result.capturedParams = typeParamMap;
+                    }
+                    return result;
+                })();
+                depth--;
+                return result;
+            }
+            
+            function evaluateIntersection(left: Type, right: Type) : Type {
+                depth++;
+                const result = (function() {
+                    if (left.typeKind === TypeKind.struct && right.typeKind === TypeKind.struct) {
+                        let longest = left.members.size > right.members.size ? left.members : right.members;
+                        let shortest = longest === left.members ? right.members : left.members;
+                
+                        const remainingLongestKeys = new Set([...longest.keys()]);
+                        const result = new Map<string, Type>();
+                        for (const key of shortest.keys()) {
+                            remainingLongestKeys.delete(key);
+                            const evaluatedShortest = typeWorker(shortest.get(key)!);
+                            const evaluatedLongest = longest.has(key) ? typeWorker(longest.get(key)!) : null;
+                            if (!evaluatedLongest) {
+                                result.set(key, evaluatedShortest);
+                                continue;
+                            }
+                            const intersect = evaluateIntersection(evaluatedShortest, evaluatedLongest);
+                            if (intersect.typeKind === TypeKind.never) {
+                                return cfNever();
+                            }
+                            else {
+                                result.set(key, intersect);
+                            }
+                        }
+                
+                        for (const key of remainingLongestKeys) {
+                            result.set(key, longest.get(key)!);
+                        }
+                
+                        return cfStruct(result);
+                    }
+                    else {
+                        // only valid type operands to the "&" type operator are {}
+                        // which is not the "empty interface" but just a shorthand for "struct"
+                        return cfNever();
+                    }
+                })();
+                depth--;
+                return result;
+            }
+
+            function typeWorker(type: Type | null) : Type {
+                depth++;
+                const result = (function() {
+                    if (!type) return cfAny();
+                    
+                    switch (type.typeKind) {
+                        case TypeKind.intersection: {
+                            const left = typeWorker(type.left);
+                            const right = typeWorker(type.right,);
+                            return evaluateIntersection(left, right);
+                        }
+                        case TypeKind.union: {
+                            const left = typeWorker(type.left);
+                            const right = typeWorker(type.right);
+                            return cfUnion(left, right);
+                        }
+                        case TypeKind.struct: {
+                            const evaluatedStructContents = new Map<string, Type>();
+                            for (const key of type.members.keys()) {
+                                evaluatedStructContents.set(key, typeWorker(type.members.get(key)!));
+                            }
+                            return cfStruct(evaluatedStructContents, type.stringIndex);
+                        }
+                        case TypeKind.functionSignature:
+                            // need a more lean version of functionParameter
+                            const params : FunctionParameter[] = type.params.map(param => copyFunctionParameterForTypePurposes(param));
+                            for (let i = 0; i < type.params.length; i++) {
+                                if (!params[i].type) {
+                                    throw "no type for parameter " + i; /// can we get here? parser / binder should convert this to any before we get here...
+                                }
+                                params[i].type = typeWorker(params[i].type!);
+                            }
+                            const returns = typeWorker(type.returns);
+                            return cfFunctionSignature(type.name, params, returns);
+                        case TypeKind.typeConstructorInvocation: {
+                            const typeConstructor = typeWorker(type.left);
+                            const args : Type[] = [];
+                            for (const arg of type.args) {
+                                if (arg.typeKind === TypeKind.typeId) {
+                                    args.push(typeParamMap.get(arg.name)!);
+                                }
+                                else {
+                                    args.push(arg);
+                                }
+                            }
+                
+                            const cachedTypeCall = getCachedTypeConstructorInvocation(typeConstructor as cfTypeConstructor, args);
+                            if (cachedTypeCall.status === TypeCache_Status.resolved) {
+                                return cachedTypeCall.value;
+                            }
+                            else if (cachedTypeCall.status === TypeCache_Status.resolving) {
+                                return cfCachedTypeConstructorInvocation(typeConstructor as cfTypeConstructor, args);
+                            }
+                            else {
+                                return invokeTypeConstructor(typeConstructor as cfTypeConstructor, args);
+                            }
+                        }
+                        case TypeKind.cachedTypeConstructorInvocation: {
+                            const cachedTypeCall = getCachedTypeConstructorInvocation(type.left, type.args);
+                            if (cachedTypeCall.status === TypeCache_Status.resolved) {
+                                return cachedTypeCall.value;
+                            }
+                            else if (cachedTypeCall.status === TypeCache_Status.resolving) {
+                                return type;
+                            }
+                            else {
+                                throw "expected resolved or resolving cache result but got none";
+                            }
+                        }
+                        case TypeKind.typeId: {
+                            const result = typeParamMap.get(type.name) || walkUpContainersToFindType(context, type) || cfAny();
+                            return typeWorker(result);
+                        }
+                        default:
+                            return type;
+                    }
+                })();
+                depth--;
+                return result;
+            }
+        }
+
+        return evaluateType;
+    })();
 
     return {
         check,

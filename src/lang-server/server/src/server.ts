@@ -55,6 +55,8 @@ interface CflsConfig {
 	x_types: boolean
 }
 
+
+connection.workspace.
 let cflsConfig! : CflsConfig;
 
 const libfile = SourceFile("nil!", CfFileType.dCfm, `

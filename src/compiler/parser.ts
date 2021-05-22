@@ -27,7 +27,7 @@ import {
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug, NilToken } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, getAttributeValue } from "./utils";
-import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type, TypeFlags, cfFunctionSignature, cfTypeConstructorInvocation, cfVoid, cfTypeConstructorParam, cfTypeConstructor, cfIntersection, cfTypeId, KLUDGE_FOR_DEV_register_type_constructor_name, TypeKind, cfUnion } from "./types";
+import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type, TypeFlags, cfFunctionSignature, cfTypeConstructorInvocation, cfVoid, cfTypeConstructorParam, cfTypeConstructor, cfIntersection, cfTypeId, TypeKind, cfUnion } from "./types";
 
 let debugParseModule = false;
 let parseTypes = false;
@@ -1731,7 +1731,6 @@ export function Parser() {
                         }
                         type.name = nameIfIsTypeConstructor.token.text;
                         result.push(type);
-                        KLUDGE_FOR_DEV_register_type_constructor_name(type.name, type);
                     }
                     // a non-definition is a type-to-term assignment, it will be bound to the next non-trivia/non-type production
                     // like 
@@ -2577,12 +2576,9 @@ export function Parser() {
             case ParseContext.structLiteralBody:
             case ParseContext.argOrParamList:
             case ParseContext.typeStruct:
-                return isStartOfExpression();
             case ParseContext.typeTupleOrArrayElement:
             case ParseContext.typeParamList:
-                return lookahead() === TokenType.LEFT_BRACKET
-                || lookahead() === TokenType.LEFT_ANGLE
-                || isLexemeLikeToken(peek(), /*allowNumeric*/false)
+                return isStartOfExpression();
             case ParseContext.cfScriptTagBody:
             case ParseContext.blockStatements:
             case ParseContext.switchClause:
@@ -3726,7 +3722,7 @@ export function Parser() {
                 }
                 case TokenType.LEXEME: {
                     result = lexemeToType(next());
-                    if (lookahead() === TokenType.LEFT_ANGLE) {
+                    while (lookahead() === TokenType.LEFT_ANGLE) {
                         result = parseTypeConstructorInvocation(result);
                     }
 

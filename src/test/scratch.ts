@@ -9,7 +9,6 @@ import { Checker } from "../compiler/checker";
 
 import * as fs from "fs";
 import * as path from "path";
-import { cfTypeConstructor, evaluateType, invokeTypeConstructor, Type } from "../compiler/types";
 
 function fromFile(fname: string) {
     const absPath = path.resolve(fname);
@@ -21,11 +20,11 @@ function fromFile(fname: string) {
 const sourceFile = NilCfm(`
 <!---
     <!--- the query type is included as a library definition during type checking --->
-    @type Query = <T> => {
+    @type Query = <T> => <U> => {
         recordCount: number,
         columnList: string,
         filter: (required predicate: (row: T, currentRow: number, query: Query<T>) => boolean) => Query<T>,
-        recursive: Query<T>
+        recursive: Query<U><T>
     } & T;
 
     @type X = {foo: string}
@@ -33,7 +32,7 @@ const sourceFile = NilCfm(`
     @type MySchema = {v: string, rec_uid: number, filename: string };
 --->
 
-<!--- @type X --->
+<!--- @type Query<{x: number}><{y: string}> --->
 <cfquery name="q">
     select * from foo where bar = baz;
 </cfquery>
