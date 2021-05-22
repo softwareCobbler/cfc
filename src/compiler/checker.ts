@@ -601,6 +601,7 @@ export function Checker() {
         function evaluateType(context: Node, type: Type | null, typeParamMap: Map<string, Type> = new Map(), depth = 0) : Type {
             return typeWorker(type);
 
+            // here args[n] should already have been evaluated
             function invokeTypeConstructor(typeFunction: cfTypeConstructor, args: Type[]) : Type {
                 depth++;
                 const result = (function() {
@@ -698,10 +699,20 @@ export function Checker() {
                             const right = typeWorker(type.right);
                             return cfUnion(left, right);
                         }
-                        case TypeKind.struct: {
+                        case TypeKind.struct: { // work on cacheability of this; it is concrete just return a cached copy or something like that
                             const evaluatedStructContents = new Map<string, Type>();
+                            let concrete = true;
                             for (const key of type.members.keys()) {
-                                evaluatedStructContents.set(key, typeWorker(type.members.get(key)!));
+                                const preEvaluatedId = type.members.get(key)!.nodeId;
+                                const evaluatedType = typeWorker(type.members.get(key)!);
+                                const postEvaluatedId = evaluatedType.nodeId;
+                                if (preEvaluatedId !== postEvaluatedId) {
+                                    concrete = false;
+                                }
+                                evaluatedStructContents.set(key, evaluatedType);
+                            }
+                            if (concrete) {
+                                return type;
                             }
                             return cfStruct(evaluatedStructContents, type.stringIndex);
                         }
@@ -721,10 +732,10 @@ export function Checker() {
                             const args : Type[] = [];
                             for (const arg of type.args) {
                                 if (arg.typeKind === TypeKind.typeId) {
-                                    args.push(typeParamMap.get(arg.name)!);
+                                    args.push(typeWorker(typeParamMap.get(arg.name) || walkUpContainersToFindType(context, arg) || cfAny()));
                                 }
                                 else {
-                                    args.push(arg);
+                                    args.push(typeWorker(arg));
                                 }
                             }
                 

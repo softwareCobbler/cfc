@@ -691,20 +691,20 @@ export function Parser() {
 
                 const types = parseTypeAnnotations(/*asDeclarationFile*/ false);
                 
-                const typeConstructors = types.filter(type => type.typeKind === TypeKind.typeConstructor);
-                if (typeConstructors.length > 0) {
-                    node.typedefs = typeConstructors; // store the parsed type functions on the trivia node
+                const typedefs = types.filter(type => type.name !== undefined);
+                if (typedefs.length > 0) {
+                    node.typedefs = typedefs; // store the parsed type functions on the trivia node
                 }
 
-                const typeAssignments = types.filter(type => type.typeKind !== TypeKind.typeConstructor);
-                if (typeAssignments.length > 1) {
+                const typeAnnotations = types.filter(type => type.name === undefined);
+                if (typeAnnotations.length > 1) {
                     // we need to get the type's ranges and terminals and etc.
                     parseErrorAtRange(node.range, "Only one @type annotation is permitted per comment.");
                 }
 
                 // <whitespace><comment><whitespace><comment>
                 // only the last final comment's type annotation will be considered for the next non-trivial production
-                lastTypeAnnotation = typeAssignments.length === 1 ? typeAssignments[0] : null;
+                lastTypeAnnotation = typeAnnotations.length === 1 ? typeAnnotations[0] : null;
             }
         }
 
@@ -1723,12 +1723,13 @@ export function Parser() {
                     if (nameIfIsTypeConstructor) {
                         parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
                         let type = parseType();
+                        /*
                         // the type parser saw only a type; but from here, we know that we are defining a type constructor (giving a
                         // name to something that will eventually resolve to become a term's type)
                         // in this case, the type is already concrete; but we will say it is a 0 argument type constructor for uniformity
                         if (type.typeKind !== TypeKind.typeConstructor) {
                             type = cfTypeConstructor([], type);
-                        }
+                        }*/
                         type.name = nameIfIsTypeConstructor.token.text;
                         result.push(type);
                     }

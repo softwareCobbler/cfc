@@ -239,8 +239,6 @@ export function Binder() {
             case NodeType.new:
                 bindNew(node);
                 return;
-            case NodeType.type:
-                return;
             default:
                 ((_:never) => { throw "Non-exhaustive case or unintentional fallthrough." })(node);
         }
