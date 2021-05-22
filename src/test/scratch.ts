@@ -19,7 +19,7 @@ function fromFile(fname: string) {
 
 const sourceFile = NilCfm(`
 <!---
-    @type MyType = <T> => ((required x: T) => number) => T;
+    @type MyType = <T, U> => {base: T, invert: MyType<U, T>}
 
     <!--- the query type is included as a library definition during type checking --->
     @type Query = <T> => {
@@ -35,13 +35,13 @@ const sourceFile = NilCfm(`
     @type MySchema = {vx: string, rec_uid: number, filename: string };
 --->
 
-<!--- @type Query<MySchema> --->
+<!--- @type MyType<{LEFT: number}><{RIGHT: number}> --->
 <cfquery name="q">
     select * from foo where bar = baz;
 </cfquery>
 
 <cfscript>
-    q.otherx
+    q.
 </cfscript>
 `);
 

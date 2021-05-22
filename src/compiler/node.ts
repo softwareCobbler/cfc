@@ -12,7 +12,8 @@ export function setDebug(isDebug: boolean) {
 export const enum NodeFlags {
     none    = 0,
     error   = 0x00000001,
-    missing = 0x00000002
+    missing = 0x00000002,
+    checkerError = 0x00000004,
 }
 
 export const enum NodeType {
@@ -633,7 +634,7 @@ export const enum BinaryOpType {
     contains, does_not_contain, strict_eq, strict_neq,
     equivalent, implies
 }
-const BinaryOpTypeUiString : Record<BinaryOpType, string> = {
+export const BinaryOpTypeUiString : Record<BinaryOpType, string> = {
     [BinaryOpType.add]:              "+",
     [BinaryOpType.sub]:              "-",
     [BinaryOpType.mul]:              "*",

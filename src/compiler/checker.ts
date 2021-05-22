@@ -1,7 +1,7 @@
-import { SourceFile, Node, NodeType, BlockType, IndexedAccess, isStaticallyKnownScopeName, Scope, StaticallyKnownScopeName, ScopeDisplay, Term, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes } from "./node";
+import { SourceFile, Node, NodeType, BlockType, IndexedAccess, isStaticallyKnownScopeName, Scope, StaticallyKnownScopeName, ScopeDisplay, Term, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes, IndexedAccessChainElement, NodeFlags, BinaryOpTypeUiString } from "./node";
 import { Scanner } from "./scanner";
 import { Diagnostic } from "./parser";
-import { cfAny, cfFunctionSignature, cfIntersection, Type, TypeKind, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfNever, cfStruct, cfUnion } from "./types";
+import { cfAny, cfFunctionSignature, cfIntersection, Type, TypeKind, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfNever, cfStruct, cfUnion, cfString, cfNumber, cfBoolean } from "./types";
 
 export function Checker() {
     let sourceFile!: SourceFile;
@@ -16,6 +16,18 @@ export function Checker() {
         diagnostics = diagnostics_;
 
         checkList(sourceFile.content);
+    }
+
+    function typeErrorAtNode(node: Node, msg: string) {
+        diagnostics.push({
+            fromInclusive: node.range.fromInclusive,
+            toExclusive: node.range.toExclusive,
+            msg: msg,
+            __debug_from_line: -1,
+            __debug_from_col: -1,
+            __debug_to_line: -1,
+            __debug_to_col: -1,
+        });
     }
 
     function checkList(nodes: Node[]) {
@@ -90,11 +102,16 @@ export function Checker() {
                 }
                 return;
             case NodeType.simpleStringLiteral:
+                setCachedTermEvaluatedType(node, cfString());
                 return;
             case NodeType.interpolatedStringLiteral:
+                setCachedTermEvaluatedType(node, cfString());
                 return;
-            case NodeType.numericLiteral: // fallthrough
+            case NodeType.numericLiteral:
+                setCachedTermEvaluatedType(node, cfNumber());
+                return;
             case NodeType.booleanLiteral:
+                setCachedTermEvaluatedType(node, cfBoolean());
                 return;
             case NodeType.identifier:
                 // klude/fixme!: identifier.source can be an indexed access
@@ -110,6 +127,7 @@ export function Checker() {
                 checkIndexedAccess(node);
                 return;
             case NodeType.indexedAccessChainElement:
+                checkIndexedAccessChainElement(node);
                 return;
             case NodeType.sliceExpression:
                 return;
@@ -339,6 +357,9 @@ export function Checker() {
     }
 
     function checkBinaryOperator(node: BinaryOperator) {
+        checkNode(node.left);
+        checkNode(node.right);
+        
         switch (node.optype) {
             case BinaryOpType.assign: {
                 if (node.left.kind === NodeType.identifier) {
@@ -346,6 +367,32 @@ export function Checker() {
                     /*if (type && isType(type) && type.typeKind === TypeKind.deferred) {
                         const inferredType = inferExpressionType(node.right);
                     }*/
+                }
+            }
+            case BinaryOpType.assign_cat:
+            case BinaryOpType.contains:
+            case BinaryOpType.does_not_contain:
+            case BinaryOpType.cat: {
+                const leftType = getCachedTermEvaluatedType(node.left);
+                const rightType = getCachedTermEvaluatedType(node.right);
+                if (leftType.typeKind !== TypeKind.any && leftType.typeKind !== TypeKind.string) {
+                    typeErrorAtNode(node.left, `Left operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a string.`);
+                }
+                if (rightType.typeKind !== TypeKind.any && rightType.typeKind !== TypeKind.string) {
+                    typeErrorAtNode(node.right, `Right operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a string.`);
+                }
+                break;
+            }
+            // all other operators are (number op number)
+            default: {
+                const leftType = getCachedTermEvaluatedType(node.left);
+                const rightType = getCachedTermEvaluatedType(node.right);
+                // acf allows (bool) + (bool), but maybe we don't want to support that
+                if (leftType.typeKind !== TypeKind.any && leftType.typeKind !== TypeKind.number) {
+                    typeErrorAtNode(node.left, `Left operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a number.`);
+                }
+                if (rightType.typeKind !== TypeKind.any && rightType.typeKind !== TypeKind.number) {
+                    typeErrorAtNode(node.right, `Right operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a number.`);
                 }
             }
         }
@@ -417,6 +464,27 @@ export function Checker() {
                 setCachedTermEvaluatedType(element, cfAny());
             }
             // error: some kind of indexed access error
+        }
+
+        checkList(node.accessElements);
+    }
+
+    function checkIndexedAccessChainElement(node: IndexedAccessChainElement) {
+        if (node.parent!.flags & NodeFlags.checkerError) {
+            return;
+        }
+
+        const parentType = getCachedTermEvaluatedType(node.parent);
+        if (parentType.typeKind === TypeKind.any) {
+            return;
+        }
+
+        if (node.accessType === IndexedAccessType.dot) {
+            const name = node.property.token.text;
+            if (!(<cfStruct>parentType).members.has(name)) {
+                typeErrorAtNode(node.property, `Property '${name}' does not exist on parent type.`);
+                node.flags |= NodeFlags.checkerError;
+            }
         }
     }
 
