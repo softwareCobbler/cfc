@@ -18,30 +18,12 @@ function fromFile(fname: string) {
 //const sourceFile = fromFile("./test/mxunit/doc/build.cfm");
 
 const sourceFile = NilCfm(`
-<!---
-    @type MyType = <T, U> => {base: T, invert: MyType<U, T>}
-
-    <!--- the query type is included as a library definition during type checking --->
-    @type Query = <T> => {
-        recordCount: number,
-        columnList: string,
-        filter: (required predicate: (row: T, currentRow: number, query: Query<T>) => boolean) => Query<T>,
-        other: Query<T>,
-        recursive: Query<T>
-    } & T;
-
-    @type X = {foo: string}
-
-    @type MySchema = {vx: string, rec_uid: number, filename: string };
---->
-
-<!--- @type MyType<{LEFT: number}><{RIGHT: number}> --->
-<cfquery name="q">
-    select * from foo where bar = baz;
-</cfquery>
-
 <cfscript>
-    q.
+    function foo() {
+        // @type number
+        final var v = '42';
+        v + v;
+    }
 </cfscript>
 `);
 

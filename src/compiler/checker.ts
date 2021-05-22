@@ -1,7 +1,8 @@
-import { SourceFile, Node, NodeType, BlockType, IndexedAccess, isStaticallyKnownScopeName, Scope, StaticallyKnownScopeName, ScopeDisplay, Term, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes, IndexedAccessChainElement, NodeFlags, BinaryOpTypeUiString } from "./node";
+import { SourceFile, Node, NodeType, BlockType, IndexedAccess, isStaticallyKnownScopeName, Scope, StaticallyKnownScopeName, ScopeDisplay, Term, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes, IndexedAccessChainElement, NodeFlags, BinaryOpTypeUiString, VariableDeclaration, Identifier } from "./node";
 import { Scanner } from "./scanner";
 import { Diagnostic } from "./parser";
 import { cfAny, cfFunctionSignature, cfIntersection, Type, TypeKind, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfNever, cfStruct, cfUnion, cfString, cfNumber, cfBoolean } from "./types";
+import { getTriviallyComputableString } from "./utils";
 
 export function Checker() {
     let sourceFile!: SourceFile;
@@ -70,6 +71,7 @@ export function Checker() {
             case NodeType.conditional:
                 return;
             case NodeType.variableDeclaration:
+                checkVariableDeclaration(node);
                 return;
             case NodeType.statement:
                 switch (node.subType) {
@@ -121,7 +123,7 @@ export function Checker() {
                 // otherwise, transform it into an indexed-access expression
                 // and if during "dotted-path" parsing, if we see that it became
                 // a.b.c[1], or similar, transform it into an indexed-access
-                checkNode(node.source);
+                checkIdentifier(node);
                 return;
             case NodeType.indexedAccess:
                 checkIndexedAccess(node);
@@ -135,6 +137,7 @@ export function Checker() {
                 return;
             case NodeType.functionDefinition: // fallthrough
             case NodeType.arrowFunctionDefinition:
+                checkFunctionDefinition(node);
                 return;
             case NodeType.dottedPath:
                 return;
@@ -359,7 +362,7 @@ export function Checker() {
     function checkBinaryOperator(node: BinaryOperator) {
         checkNode(node.left);
         checkNode(node.right);
-        
+
         switch (node.optype) {
             case BinaryOpType.assign: {
                 if (node.left.kind === NodeType.identifier) {
@@ -368,6 +371,7 @@ export function Checker() {
                         const inferredType = inferExpressionType(node.right);
                     }*/
                 }
+                break;
             }
             case BinaryOpType.assign_cat:
             case BinaryOpType.contains:
@@ -394,6 +398,29 @@ export function Checker() {
                 if (rightType.typeKind !== TypeKind.any && rightType.typeKind !== TypeKind.number) {
                     typeErrorAtNode(node.right, `Right operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a number.`);
                 }
+            }
+        }
+    }
+
+    function checkVariableDeclaration(node: VariableDeclaration) : void {
+        // check for re-defined finals in current scope...or maybe during binding phase
+        if (node.expr.kind === NodeType.binaryOperator) {
+            //checkNode(node.expr.left)
+            checkNode(node.expr.right);
+
+            const name = getTriviallyComputableString(node.expr.left);
+            if (!name) return;
+            let type : Type;
+            if (node.typeAnnotation) {
+                type = evaluateType(node, node.typeAnnotation);
+            }
+            else {
+                type = cfAny();
+            }
+
+            const rhsType = getCachedTermEvaluatedType(node.expr.right);
+            if (!isAssignable(rhsType, type)) {
+                typeErrorAtNode(node.expr.left, "Leftside type is not assignable to rightside type.");
             }
         }
     }
@@ -430,6 +457,16 @@ export function Checker() {
             || type.typeKind === TypeKind.array
             || (type.typeKind === TypeKind.intersection && (isStructOrArray(type.left) || isStructOrArray(type.right)))
             || (type.typeKind === TypeKind.union && isStructOrArray(type.left) && isStructOrArray(type.right));
+    }
+
+    function checkIdentifier(node: Identifier) {
+        const name = getTriviallyComputableString(node);
+        if (name !== undefined) {
+            const type = walkUpContainersToFindSymtabEntry(node, name)?.type;
+            if (type) {
+                setCachedTermEvaluatedType(node, type);
+            }
+        }
     }
 
     function checkIndexedAccess(node: IndexedAccess) {
@@ -486,6 +523,14 @@ export function Checker() {
                 node.flags |= NodeFlags.checkerError;
             }
         }
+    }
+
+    function checkFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {
+        if (node.kind === NodeType.functionDefinition && node.fromTag) {
+            checkList(node.body);
+            return;
+        }
+        checkNode(node.body);
     }
 
     //
@@ -671,6 +716,10 @@ export function Checker() {
 
             // here args[n] should already have been evaluated
             function invokeTypeConstructor(typeFunction: cfTypeConstructor, args: Type[]) : Type {
+                if (args.findIndex(type => type.typeKind === TypeKind.never) !== -1) {
+                    return cfNever();
+                }
+
                 depth++;
                 const result = (function() {
                     if (typeFunction.params.length !== args.length) {
@@ -710,6 +759,10 @@ export function Checker() {
             }
             
             function evaluateIntersection(left: Type, right: Type) : Type {
+                if (left.typeKind === TypeKind.never || right.typeKind === TypeKind.never) {
+                    return cfNever();
+                }
+
                 depth++;
                 const result = (function() {
                     if (left.typeKind === TypeKind.struct && right.typeKind === TypeKind.struct) {
@@ -797,6 +850,9 @@ export function Checker() {
                             return cfFunctionSignature(type.name, params, returns);
                         case TypeKind.typeConstructorInvocation: {
                             const typeConstructor = typeWorker(type.left);
+                            if (typeConstructor.typeKind === TypeKind.never) {
+                                return typeConstructor;
+                            }
                             const args : Type[] = [];
                             for (const arg of type.args) {
                                 if (arg.typeKind === TypeKind.typeId) {
@@ -831,7 +887,9 @@ export function Checker() {
                             }
                         }
                         case TypeKind.typeId: {
-                            const result = typeParamMap.get(type.name) || walkUpContainersToFindType(context, type) || cfAny();
+                            // @fixme: should error if we can't find it; and return never ?
+                            const result = typeParamMap.get(type.name) || walkUpContainersToFindType(context, type) || null;
+                            if (!result) return cfNever();
                             return typeWorker(result);
                         }
                         default:

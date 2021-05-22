@@ -334,6 +334,7 @@ export function Binder() {
         }
     }
 
+    // fixme: the following is not true, in the case of `for (var x in y)`
     // all declarations should be of the s-expr form (decl (binary-op<assignment>))
     // that is, VariableDeclarations just wrap assignment nodes (which are themselves just binary operators with '=' as the operator)
     function bindDeclaration(node: VariableDeclaration) {
@@ -390,7 +391,7 @@ export function Binder() {
             if (currentContainer.containedScope.local) {
                 (<Map<string, Term>>currentContainer.containedScope.local).set(
                     identifierBaseName, {
-                        type: cfAny(),
+                        type: node.typeAnnotation || cfAny(),
                         name: identifierBaseName,
                         final: !!node.finalModifier,
                         var: !!node.varModifier,

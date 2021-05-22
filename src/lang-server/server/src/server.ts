@@ -61,15 +61,27 @@ let cflsConfig! : CflsConfig;
 const libfile = SourceFile("nil!", CfFileType.dCfm, `
 
 @declare function queryFilter(
-    required callback /*: (required row: number, currentRow: number, query: query<any>) => void*/,
-    parallel /*: {v: number, u: string}[]*/ = 42,
-    maxThreadCount /*: number*/) /*: query<any>*/;
+    required callback : (required row: number, currentRow: number, query: query<any>) => void,
+    parallel : boolean,
+    maxThreadCount : number) => query<any>;
 
 @type Query = <T> => {
 	recordCount: number,
 	columnList: string,
 	filter: (required predicate: (row: T) => boolean, currentRow: number, query: Query<T>) => Query<T>,
 } & T;
+
+
+@type Monad = <T> => {
+	map:  <A,B>(tas: T<A>, f: (a: A) => B) => T<B>,
+	lift: <A>  (a: A) => T<A>,
+	join: <A>  (tta: T<T<A>>) => T<A>,
+}
+
+@type List = <T> => T[];
+
+@type ListMonad = Monad<List>;
+
 `
 
 );

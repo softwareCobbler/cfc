@@ -1852,6 +1852,7 @@ export function Parser() {
     }
 
     function parseAssignmentOrLower() : Node {
+        const savedLastTypeAnnotation = lastTypeAnnotation;
         function isAssignmentOperator() : boolean {
             switch (lookahead()) {
                 case TokenType.EQUAL:
@@ -1932,7 +1933,13 @@ export function Parser() {
             // `final local[dynamic_key]` is illegal
             // `final user_struct.foo = 42` is always illegal
             // `final no_struct` is illegal
-            return VariableDeclaration(finalModifier, varModifier, assignmentExpr);
+
+            const declaration = VariableDeclaration(finalModifier, varModifier, assignmentExpr);
+            if (savedLastTypeAnnotation) {
+                declaration.typeAnnotation = savedLastTypeAnnotation;
+                lastTypeAnnotation = null;
+            }
+            return declaration;
         }
         else {
             return assignmentExpr;
