@@ -1,4 +1,4 @@
-import { SourceFile, Node, NodeType, BlockType, IndexedAccess, isStaticallyKnownScopeName, StaticallyKnownScopeName, ScopeDisplay, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes, IndexedAccessChainElement, NodeFlags, BinaryOpTypeUiString, VariableDeclaration, Identifier } from "./node";
+import { SourceFile, Node, NodeType, BlockType, IndexedAccess, StaticallyKnownScopeName, ScopeDisplay, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes, IndexedAccessChainElement, NodeFlags, BinaryOpTypeUiString, VariableDeclaration, Identifier } from "./node";
 import { Scanner } from "./scanner";
 import { Diagnostic } from "./parser";
 import { cfAny, cfFunctionSignature, cfIntersection, Type, TypeKind, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfNever, cfStruct, cfUnion, cfString, cfNumber, cfBoolean } from "./types";
@@ -177,7 +177,7 @@ export function Checker() {
                 ((_:never) => { throw "Non-exhaustive case or unintentional fallthrough." })(node);
         }
     }
-
+/*
     function getNearestScopeByName(node: Node, scopeName: StaticallyKnownScopeName) : cfStruct | undefined {
         while (true) {
             // scope on this node contains the target scope
@@ -197,7 +197,7 @@ export function Checker() {
                 return undefined;
             }
         }
-    }
+    }*/
 
     //https://helpx.adobe.com/coldfusion/developing-applications/the-cfml-programming-language/using-coldfusion-variables/about-scopes.html
     const scopeLookupOrder : readonly StaticallyKnownScopeName[] = [
@@ -304,9 +304,13 @@ export function Checker() {
         if (type) {
             if (isCallable(type)) {
                 if (type.typeKind === TypeKind.any) {
+                    setCachedTermEvaluatedType(node, type);
                     return;
                 }
+
                 unsafeAssertTypeKind<cfFunctionSignature>(type);
+                setCachedTermEvaluatedType(node, type.returns);
+
                 //const requiredParams = type.params.filter(param => param.required === true);
                 const namedArgCount = node.args.filter(arg => !!arg.equals).length;
                 if (namedArgCount !== node.args.length && namedArgCount !== 0) {
@@ -437,7 +441,15 @@ export function Checker() {
     }
 
     function setCachedTermEvaluatedType(node: Node, type: Type) {
-        termEvaluatedTypeCache.set(node.nodeId, type);
+        if (type.typeKind === TypeKind.typeConstructor
+            || type.typeKind === TypeKind.typeConstructorInvocation
+            || type.typeKind === TypeKind.cachedTypeConstructorInvocation) {
+            typeErrorAtNode(node, "Type is not concrete.");
+            termEvaluatedTypeCache.set(node.nodeId, cfAny());
+        }
+        else {
+            termEvaluatedTypeCache.set(node.nodeId, type);
+        }
     }
 
     function isStructOrArray(type: Type) : boolean {
@@ -452,13 +464,15 @@ export function Checker() {
         if (name !== undefined) {
             const type = walkUpContainersToFindSymtabEntry(node, name);
             if (type) {
-                setCachedTermEvaluatedType(node, type);
+                setCachedTermEvaluatedType(node, evaluateType(node, type));
             }
         }
     }
 
     function checkIndexedAccess(node: IndexedAccess) {
-        let type = getTypeFromNearestContainingScope(node.root);
+        checkNode(node.root);
+
+        let type = getCachedTermEvaluatedType(node.root);
         if (!type || type.typeKind === TypeKind.any) {
             return;
         }
@@ -552,7 +566,7 @@ export function Checker() {
     /**
      * given an identifier, find it's symbol table entry and retreive its typeinfo
      */
-    function getTypeFromNearestContainingScope(base: Node) : Type | undefined {
+    /*function getTypeFromNearestContainingScope(base: Node) : Type | undefined {
         let type : Type | undefined;
         switch (base.kind) {
             case NodeType.identifier: {
@@ -581,7 +595,7 @@ export function Checker() {
             const context = base;
             return evaluateType(context, type);
         }
-    }
+    }*/
 
     function getMemberType(type: Type, context: Node, name: string) : Type {
         if (type.typeKind === TypeKind.intersection) {
