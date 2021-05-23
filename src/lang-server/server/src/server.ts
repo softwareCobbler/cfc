@@ -402,7 +402,7 @@ connection.onCompletion(
 			const typeinfo = cflsConfig.checker.getCachedTermEvaluatedType(node.parent.parent);
 			if (typeinfo.typeKind === TypeKind.struct) {
 				const result : CompletionItem[] = [];
-				for (const [name,type] of typeinfo.members.entries()) {
+				for (const [name,type] of typeinfo.membersMap.entries()) {
 					result.push({
 						label: name,
 						kind: type.typeKind === TypeKind.functionSignature
@@ -503,7 +503,7 @@ connection.onCompletion(
 			const result : [StaticallyKnownScopeName, string][] = [];
 			for (const scopeName of targetKeys) {
 				if (scopeDisplay.hasOwnProperty(scopeName)) {
-					const varNames = [...(<cfStruct>scopeDisplay[scopeName]!).members.keys()];
+					const varNames = [...(<cfStruct>scopeDisplay[scopeName]!).membersMap.keys()];
 					result.push(...varNames.map((varName) : [StaticallyKnownScopeName, string] => [scopeName, varName]));
 				}
 			}

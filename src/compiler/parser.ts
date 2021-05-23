@@ -25,9 +25,9 @@ import {
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression } from "./node";
-import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug, NilToken } from "./scanner";
+import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, getAttributeValue } from "./utils";
-import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type, TypeFlags, cfFunctionSignature, cfTypeConstructorInvocation, cfVoid, cfTypeConstructorParam, cfTypeConstructor, cfIntersection, cfTypeId, TypeKind, cfUnion } from "./types";
+import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type, TypeFlags, cfFunctionSignature, cfTypeConstructorInvocation, cfVoid, cfTypeConstructorParam, cfTypeConstructor, cfIntersection, cfTypeId, TypeKind, cfUnion, cfStructMember, SyntheticType } from "./types";
 
 let debugParseModule = false;
 let parseTypes = false;
@@ -291,8 +291,11 @@ export function Parser() {
         primeLookahead();
     }
 
-    function scanLexemeLikeStructKey() {
+    function scanLexemeLikeStructKey() : Token | null {
         const result = scanner.scanLexemeLikeStructKey();
+        if (result && !isInSomeContext(ParseContext.trivia)) {
+            lastNonTriviaToken = result;
+        }
         primeLookahead();
         return result;
     }
@@ -564,6 +567,7 @@ export function Parser() {
         if (parseTypes) {
             parseTypeAnnotationsFromPreParsedTrivia(result);
         }
+
         return result;
     }
 
@@ -656,12 +660,14 @@ export function Parser() {
                 break;
             }
 
+            // parse types if necessary; in script mode we do this here;
+            // in tag mode the tagComment parser handles it
             if (parseTypes) {
                 parseTypeAnnotationsFromPreParsedTrivia(result);
             }
         }
 
-        parseContext = savedContext;
+        parseContext = savedContext; // clear trivia context; parsing types inside comments is not considered trivia
 
         return result;
     }
@@ -1894,7 +1900,7 @@ export function Parser() {
                     return VariableDeclaration(finalModifier, varModifier, root);
                 }
             }
-            
+
             return root;
         }
 
@@ -2249,8 +2255,9 @@ export function Parser() {
             case TokenType.QUOTE_SINGLE:
                 return parseStringLiteral();
             case TokenType.KW_TRUE:
+                return BooleanLiteral(parseExpectedTerminal(lookahead(), ParseOptions.withTrivia), true);
             case TokenType.KW_FALSE:
-                return BooleanLiteral(parseExpectedTerminal(lookahead(), ParseOptions.withTrivia));
+                return BooleanLiteral(parseExpectedTerminal(lookahead(), ParseOptions.withTrivia), false);
             case TokenType.LEFT_BRACE:
                 return parseCallExpressionOrLowerRest(
                     parseStructLiteral());
@@ -3367,6 +3374,9 @@ export function Parser() {
 
     function parseErrorBasedOnContext(context: ParseContext) {
         switch (context) {
+            case ParseContext.typeStruct:
+                parseErrorAtCurrentToken("Type-level struct member definition expected.");
+                return;
             case ParseContext.cfScriptTagBody:
             case ParseContext.blockStatements:
                 parseErrorAtRange(pos(), pos(), "Declaration or statement expected.");
@@ -3627,23 +3637,23 @@ export function Parser() {
         function lexemeToType(lexeme: Token) {
             switch (lexeme.text) {
                 case "number":
-                    return cfNumber();
+                    return cfNumber(Terminal(lexeme));
                 case "string":
-                    return cfString();
+                    return cfString(Terminal(lexeme));
                 case "any":
-                    return cfAny();
+                    return cfAny(Terminal(lexeme));
                 case "nil":
                     return cfNil();
                 case "boolean":
-                    return cfBoolean();
+                    return cfBoolean(Terminal(lexeme));
                 case "true":
-                    return cfBoolean(true);
+                    return cfBoolean(BooleanLiteral(Terminal(lexeme), true));
                 case "false":
-                    return cfBoolean(false);
+                    return cfBoolean(BooleanLiteral(Terminal(lexeme), false));
                 case "void":
-                    return cfVoid();
+                    return cfVoid(Terminal(lexeme));
                 default:
-                    return cfTypeId(lexeme.text);
+                    return cfTypeId(Terminal(lexeme));
             }
         }
 
@@ -3692,12 +3702,16 @@ export function Parser() {
             return type;
         }
 
-        function parseTypeStructMemberElement() {
-            const name = scanLexemeLikeStructKey() || NilToken(-1);
-            parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
+        function parseTypeStructMemberElement() : cfStructMember {
+            const key = scanLexemeLikeStructKey();
+            if (!key) {
+                parseErrorAtCurrentToken("Expected a struct key.");
+            }
+            const name = key ? Terminal(key) : NilTerminal(pos());
+            const colon = parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
             const type = parseType();
-            parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
-            return [name.text, type] as const;
+            const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+            return cfStructMember(name, colon, type, comma);
         }
 
         let savedScannerState : ScannerState | null = null;
@@ -3774,10 +3788,10 @@ export function Parser() {
                     }
                 }
                 case TokenType.LEFT_BRACE: {
-                    parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
+                    const leftBrace = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
                     const kvPairs = parseList(ParseContext.typeStruct, parseTypeStructMemberElement);
-                    parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
-                    result = cfStruct(new Map<string, Type>(kvPairs));
+                    const rightBrace = parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
+                    result = cfStruct(leftBrace, kvPairs, rightBrace);
                     result = maybeParseArrayModifier(result);
                     break;
                 }
@@ -3794,10 +3808,10 @@ export function Parser() {
                 case TokenType.QUOTE_DOUBLE: {
                     const s = parseStringLiteral(/*allowInterpolations*/false);
                     if (s.kind === NodeType.simpleStringLiteral) {
-                        result = cfString(s.textSpan.text);
+                        result = cfString(s);
                     }
                     else {
-                        result = cfString(); // should never happen, parseStringLiteral(false) should always return a simpleStringLiteral
+                        result = SyntheticType.string; // should never happen, parseStringLiteral(false) should always return a simpleStringLiteral
                     }
                 }
             }

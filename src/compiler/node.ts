@@ -1177,11 +1177,13 @@ export function NumericLiteral(literal: Terminal) : NumericLiteral {
 export interface BooleanLiteral extends NodeBase {
     kind: NodeType.booleanLiteral;
     literal: Terminal;
+    booleanValue: boolean;
 }
 
-export function BooleanLiteral(literal: Terminal) {
+export function BooleanLiteral(literal: Terminal, value: boolean) {
     const v = NodeBase<BooleanLiteral>(NodeType.booleanLiteral, literal.range);
     v.literal = literal;
+    v.booleanValue = value;
     return v;
 }
 

@@ -2,54 +2,54 @@ import { ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument
 import { getTriviallyComputableString, visit, getAttributeValue } from "./utils";
 import { Diagnostic } from "./parser";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
-import { cfAny, cfFunctionSignature, cfString, cfStruct, Type } from "./types";
+import { cfFunctionSignature, cfStruct, SyntheticType, Type } from "./types";
 
 const staticCgiScope : cfStruct = (function () {
     // https://helpx.adobe.com/coldfusion/cfml-reference/reserved-words-and-variables/cgi-environment-cgi-scope-variables.html
     const staticStruct = new Map([
-        ["auth_password",        cfString()],
-        ["auth_type",            cfString()],
-        ["auth_user",            cfString()],
-        ["cert_cookie",          cfString()],
-        ["cert_flags",           cfString()],
-        ["cert_issuer",          cfString()],
-        ["cert_keysize",         cfString()],
-        ["cert_secretkeysize",   cfString()],
-        ["cert_serialnumber",    cfString()],
-        ["cert_server_issuer",   cfString()],
-        ["cert_server_subject",  cfString()],
-        ["cert_subject",         cfString()],
-        ["cf_template_path",     cfString()],
-        ["content_length",       cfString()],
-        ["content_type",         cfString()],
-        ["context_path",         cfString()],
-        ["gateway_interface",    cfString()],
-        ["https",                cfString()],
-        ["https_keysize",        cfString()],
-        ["https_secretkeysize",  cfString()],
-        ["https_server_issuer",  cfString()],
-        ["https_server_subject", cfString()],
-        ["http_accept",          cfString()],
-        ["http_accept_encoding", cfString()],
-        ["http_accept_language", cfString()],
-        ["http_connection",      cfString()],
-        ["http_cookie",          cfString()],
-        ["http_host",            cfString()],
-        ["http_referer",         cfString()],
-        ["http_user_agent",      cfString()],
-        ["query_string",         cfString()],
-        ["remote_addr",          cfString()],
-        ["remote_host",          cfString()],
-        ["remote_user",          cfString()],
-        ["request_method",       cfString()],
-        ["script_name",          cfString()],
-        ["server_name",          cfString()],
-        ["server_port",          cfString()],
-        ["server_port_secure",   cfString()],
-        ["server_protocol",      cfString()],
-        ["server_software",      cfString()],
+        ["auth_password",        SyntheticType.string],
+        ["auth_type",            SyntheticType.string],
+        ["auth_user",            SyntheticType.string],
+        ["cert_cookie",          SyntheticType.string],
+        ["cert_flags",           SyntheticType.string],
+        ["cert_issuer",          SyntheticType.string],
+        ["cert_keysize",         SyntheticType.string],
+        ["cert_secretkeysize",   SyntheticType.string],
+        ["cert_serialnumber",    SyntheticType.string],
+        ["cert_server_issuer",   SyntheticType.string],
+        ["cert_server_subject",  SyntheticType.string],
+        ["cert_subject",         SyntheticType.string],
+        ["cf_template_path",     SyntheticType.string],
+        ["content_length",       SyntheticType.string],
+        ["content_type",         SyntheticType.string],
+        ["context_path",         SyntheticType.string],
+        ["gateway_interface",    SyntheticType.string],
+        ["https",                SyntheticType.string],
+        ["https_keysize",        SyntheticType.string],
+        ["https_secretkeysize",  SyntheticType.string],
+        ["https_server_issuer",  SyntheticType.string],
+        ["https_server_subject", SyntheticType.string],
+        ["http_accept",          SyntheticType.string],
+        ["http_accept_encoding", SyntheticType.string],
+        ["http_accept_language", SyntheticType.string],
+        ["http_connection",      SyntheticType.string],
+        ["http_cookie",          SyntheticType.string],
+        ["http_host",            SyntheticType.string],
+        ["http_referer",         SyntheticType.string],
+        ["http_user_agent",      SyntheticType.string],
+        ["query_string",         SyntheticType.string],
+        ["remote_addr",          SyntheticType.string],
+        ["remote_host",          SyntheticType.string],
+        ["remote_user",          SyntheticType.string],
+        ["request_method",       SyntheticType.string],
+        ["script_name",          SyntheticType.string],
+        ["server_name",          SyntheticType.string],
+        ["server_port",          SyntheticType.string],
+        ["server_port_secure",   SyntheticType.string],
+        ["server_protocol",      SyntheticType.string],
+        ["server_software",      SyntheticType.string],
     ]);
-    return cfStruct(staticStruct);
+    return SyntheticType.struct(staticStruct);
 })();
 
 export function Binder() {
@@ -70,13 +70,13 @@ export function Binder() {
             container: null,
             typedefs: new Map<string, Type>(),
             cgi: staticCgiScope,
-            variables: cfStruct(),
-            url: cfStruct(),
-            form: cfStruct(),
+            variables: SyntheticType.struct(),
+            url: SyntheticType.struct(),
+            form: SyntheticType.struct(),
         };
 
         if (sourceFile.cfFileType === CfFileType.cfc) {
-            RootNode.containedScope.this = cfStruct();
+            RootNode.containedScope.this = SyntheticType.struct();
         }
 
         currentContainer = RootNode;
@@ -376,8 +376,8 @@ export function Binder() {
 
         if (node.finalModifier || node.varModifier) {
             if (currentContainer.containedScope.local) {
-                currentContainer.containedScope.local.members.set(
-                    identifierBaseName, node.typeAnnotation || cfAny());
+                currentContainer.containedScope.local.membersMap.set(
+                    identifierBaseName, node.typeAnnotation || SyntheticType.any);
             }
             else {
                 // there is no local scope, so we must be at top-level scope
@@ -390,7 +390,7 @@ export function Binder() {
                 // e.g, 
                 // function foo(bar) { var bar = 42; }
                 // is an error: "bar is already defined in argument scope"
-                if (enclosingFunction.containedScope.arguments.members.has(identifierBaseName)) {
+                if (enclosingFunction.containedScope.arguments.membersMap.has(identifierBaseName)) {
                     errorAtRange(mergeRanges(node.finalModifier, node.varModifier, node.expr), `'${identifierBaseName}' is already defined in argument scope.`);
                 }
             }
@@ -546,7 +546,7 @@ export function Binder() {
             }
         }
 
-        targetScope.members.set(targetName, tag.typeAnnotation);
+        targetScope.membersMap.set(targetName, tag.typeAnnotation);
     }
 
     function bindSimpleStringLiteral(node: SimpleStringLiteral) {
@@ -647,10 +647,10 @@ export function Binder() {
      * we just want to know that some name is available in this scope
      */
     function weakBindIdentifierToScope(name: string, scope: cfStruct) : void {
-        if (scope.members.has(name)) {
+        if (scope.membersMap.has(name)) {
             return;
         }
-        scope.members.set(name, cfAny());
+        scope.membersMap.set(name, SyntheticType.any);
     }
 
     function bindAssignment(node: BinaryOperator) {
@@ -714,10 +714,10 @@ export function Binder() {
                 if (currentContainer.containedScope.local) {
                     targetScope = currentContainer.containedScope.local;
                 }
-                if (targetScope.members.has(targetBaseName)) {
+                if (targetScope.membersMap.has(targetBaseName)) {
                         return;
                 }
-                targetScope.members.set(targetBaseName, cfAny());
+                targetScope.membersMap.set(targetBaseName, SyntheticType.any);
             }
         }
     }
@@ -726,8 +726,8 @@ export function Binder() {
         node.containedScope = {
             container: currentContainer,
             typedefs: new Map(),
-            local: cfStruct(),
-            arguments: cfStruct(),
+            local: SyntheticType.struct(),
+            arguments: SyntheticType.struct(),
         };
 
         currentContainer = node as NodeWithScope;
@@ -738,7 +738,7 @@ export function Binder() {
             // this is a non-arrow function definition
             // tag functions and named script functions like `function foo() {}` are hoisted
             if (node.canonicalName) {
-                RootNode.containedScope.variables!.members.set(node.canonicalName, cfFunctionSignature(node.canonicalName, node.params, cfAny()));
+                RootNode.containedScope.variables!.membersMap.set(node.canonicalName, cfFunctionSignature(node.canonicalName, node.params, SyntheticType.any));
             }
         }
 

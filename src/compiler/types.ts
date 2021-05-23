@@ -1,4 +1,4 @@
-import { FunctionParameter, NodeBase, NodeType, Terminal } from "./node";
+import { BooleanLiteral, FunctionParameter, NilTerminal, NodeBase, NodeType, NumericLiteral, SimpleStringLiteral, Terminal } from "./node";
 
 let debugTypeModule = true;
 
@@ -21,7 +21,6 @@ export const enum TypeKind {
     cachedTypeConstructorInvocation,
     typeFunctionParam,
     typeId,
-    deferred,
 }
 
 const TypeKindUiString : Record<TypeKind, string> = {
@@ -43,7 +42,6 @@ const TypeKindUiString : Record<TypeKind, string> = {
     [TypeKind.typeFunctionParam]:               "type-function-param", // type param in a type function
     [TypeKind.typeId]:                          "type-id",             // name of non-builtin type, e.g, "T"
     [TypeKind.never]:                           "never",
-    [TypeKind.deferred]:                        "deferred",
 }
 
 export const enum TypeFlags {
@@ -52,11 +50,10 @@ export const enum TypeFlags {
     const    = 1 << 2
 }
 
-if (TypeFlags.optional) {};
-
 export interface TypeBase extends NodeBase {
     kind: NodeType.type,
     typeKind: TypeKind,
+    synthetic: boolean,
     typeFlags: TypeFlags,
 
     name?: string,
@@ -66,6 +63,7 @@ export interface TypeBase extends NodeBase {
 export function TypeBase<T extends Type>(typeKind: T["typeKind"]) : T {
     const result = NodeBase<Type>(NodeType.type);
     result.typeKind = typeKind;
+    result.synthetic = false;
     result.typeFlags = TypeFlags.none;
 
     if (debugTypeModule) {
@@ -78,7 +76,7 @@ export function TypeBase<T extends Type>(typeKind: T["typeKind"]) : T {
 export type Type =
     | cfAny | cfVoid | cfString | cfNumber | cfBoolean | cfNil | cfArray
     | cfUnion | cfIntersection
-    | cfTypeId | cfNever | cfDeferred
+    | cfTypeId | cfNever
     | cfTuple | cfStruct | cfFunctionSignature
     | cfTypeConstructorInvocation | cfCachedTypeConstructorInvocation | cfTypeConstructor | cfTypeConstructorParam;
 
@@ -87,54 +85,59 @@ export interface cfAny extends TypeBase {
     terminal: Terminal
 }
 
-export function cfAny() : cfAny {
+export function cfAny(terminal: Terminal) : cfAny {
     const v = TypeBase<cfAny>(TypeKind.any);
+    v.terminal = terminal;
     return v;
 }
 
 export interface cfVoid extends TypeBase {
-    typeKind: TypeKind.void;
+    typeKind: TypeKind.void
+    terminal: Terminal,
 }
 
-export function cfVoid() : cfVoid {
+export function cfVoid(terminal: Terminal) : cfVoid {
     const v = TypeBase<cfVoid>(TypeKind.void);
+    v.terminal = terminal;
     return v;
 }
 
 export interface cfString extends TypeBase {
     typeKind: TypeKind.string,
-    literal: string | null,
+    terminal: Terminal | SimpleStringLiteral,
+    literal: string | null
 }
 
-export function cfString(literal?: string) : cfString {
+export function cfString(terminal: Terminal | SimpleStringLiteral) : cfString {
     const v = TypeBase<cfString>(TypeKind.string);
-    v.literal = literal ?? null;
+    v.terminal = terminal;
+    v.literal = terminal.kind === NodeType.simpleStringLiteral ? terminal.textSpan.text : null;
     return v;
 }
 
 export interface cfNumber extends TypeBase {
     typeKind: TypeKind.number,
-    literal?: number,
+    terminal: Terminal | NumericLiteral,
+    literal: number | null,
 }
 
-export function cfNumber(literal?: number) : cfNumber {
+export function cfNumber(terminal: Terminal | NumericLiteral) : cfNumber {
     const v = TypeBase<cfNumber>(TypeKind.number);
-    if (literal !== undefined) {
-        v.literal = literal;
-    }
+    v.terminal = terminal;
+    v.literal = terminal.kind === NodeType.numericLiteral ? parseFloat(terminal.literal.token.text) : null;
     return v;
 }
 
 export interface cfBoolean extends TypeBase {
     typeKind: TypeKind.boolean,
-    literal?: boolean
+    terminal: Terminal | BooleanLiteral,
+    literal: boolean | null,
 }
 
-export function cfBoolean(literal?: boolean) : cfBoolean {
+export function cfBoolean(terminal: Terminal | BooleanLiteral) : cfBoolean {
     const v = TypeBase<cfBoolean>(TypeKind.boolean);
-    if (literal !== undefined) {
-        v.literal = literal;
-    }
+    v.terminal = terminal;
+    v.literal = terminal.kind === NodeType.booleanLiteral ? terminal.booleanValue : null;
     return v;
 }
 
@@ -171,15 +174,34 @@ export function cfTuple(T: Type[]) : cfTuple {
 
 export interface cfStruct extends TypeBase {
     typeKind: TypeKind.struct,
-    stringIndex: boolean,
-    members: Map<string, Type>,
+    leftBrace: Terminal,
+    members: cfStructMember[],
+    rightBrace: Terminal,
+
+    membersMap: Map<string, Type>,
 }
 
-export function cfStruct(T: Map<string, Type> = new Map(), stringIndex = false) : cfStruct {
+export function cfStruct(leftBrace: Terminal, members: cfStructMember[], rightBrace: Terminal) : cfStruct {
+    const computedMembers = new Map<string, Type>();
+    for (const member of members) {
+        computedMembers.set(member.propertyName.token.text, member.type);
+    }
     const v = TypeBase<cfStruct>(TypeKind.struct);
-    v.members = T;
-    v.stringIndex = stringIndex;
+    v.leftBrace = leftBrace;
+    v.membersMap = computedMembers;
+    v.rightBrace = rightBrace;
     return v;
+}
+
+export interface cfStructMember {
+    propertyName: Terminal,
+    colon: Terminal,
+    type: Type,
+    comma: Terminal | null,
+}
+
+export function cfStructMember(propertyName: Terminal, colon: Terminal, type: Type, comma: Terminal | null) : cfStructMember {
+    return {propertyName, colon, type, comma};
 }
 
 export interface cfFunctionSignature extends TypeBase {
@@ -258,12 +280,15 @@ export function cfTypeConstructorParam(name: string, extendsToken: Terminal | nu
 
 export interface cfTypeId extends TypeBase {
     typeKind: TypeKind.typeId,
+    terminal: Terminal,
     name: string,
 }
 
-export function cfTypeId(name: string) : cfTypeId {
+export function cfTypeId(terminal: Terminal) : cfTypeId {
     const v = TypeBase<cfTypeId>(TypeKind.typeId);
-    v.name = name;
+    v.range = terminal.range;
+    v.terminal = terminal;
+    v.name = terminal.token.text;
     return v;
 }
 
@@ -304,11 +329,40 @@ export function cfNever() : cfNever {
     return v;
 }
 
-export interface cfDeferred extends TypeBase {
-    typeKind: TypeKind.deferred,
-}
+export const SyntheticType = (function() {
+    const nilTerminal = NilTerminal(-1);
 
-export function cfDeferred() {
-    const v = TypeBase<cfDeferred>(TypeKind.deferred);
-    return v;
-}
+    const any = cfAny(nilTerminal);
+    any.synthetic = true;
+
+    const void_ = cfVoid(nilTerminal);
+    void_.synthetic = true;
+
+    const string = cfString(nilTerminal);
+    string.synthetic = true;
+
+    const number = cfNumber(nilTerminal);
+    number.synthetic = true;
+
+    const boolean = cfBoolean(nilTerminal);
+    boolean.synthetic = true;
+
+    const struct = (membersMap: Map<string, Type> = new Map()) => {
+        const v = cfStruct(nilTerminal, [], nilTerminal);
+        v.synthetic = true;
+        v.membersMap = membersMap;
+        return v;
+    }
+
+    const never = cfNever();
+
+    return {
+        any,
+        void_,
+        string,
+        number,
+        boolean,
+        struct,
+        never
+    }
+})();

@@ -1,7 +1,7 @@
 import { SourceFile, Node, NodeType, BlockType, IndexedAccess, StaticallyKnownScopeName, ScopeDisplay, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes, IndexedAccessChainElement, NodeFlags, BinaryOpTypeUiString, VariableDeclaration, Identifier } from "./node";
 import { Scanner } from "./scanner";
 import { Diagnostic } from "./parser";
-import { cfAny, cfFunctionSignature, cfIntersection, Type, TypeKind, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfNever, cfStruct, cfUnion, cfString, cfNumber, cfBoolean } from "./types";
+import { cfFunctionSignature, cfIntersection, Type, TypeKind, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfNever, cfStruct, cfUnion, SyntheticType } from "./types";
 import { getTriviallyComputableString } from "./utils";
 
 export function Checker() {
@@ -104,16 +104,16 @@ export function Checker() {
                 }
                 return;
             case NodeType.simpleStringLiteral:
-                setCachedTermEvaluatedType(node, cfString());
+                setCachedTermEvaluatedType(node, SyntheticType.string);
                 return;
             case NodeType.interpolatedStringLiteral:
-                setCachedTermEvaluatedType(node, cfString());
+                setCachedTermEvaluatedType(node, SyntheticType.string);
                 return;
             case NodeType.numericLiteral:
-                setCachedTermEvaluatedType(node, cfNumber());
+                setCachedTermEvaluatedType(node, SyntheticType.number);
                 return;
             case NodeType.booleanLiteral:
-                setCachedTermEvaluatedType(node, cfBoolean());
+                setCachedTermEvaluatedType(node, SyntheticType.boolean);
                 return;
             case NodeType.identifier:
                 // klude/fixme!: identifier.source can be an indexed access
@@ -217,7 +217,7 @@ export function Checker() {
     function getContainerVariable(scope: ScopeDisplay, canonicalName: string) : Type | undefined {
         for (const scopeName of scopeLookupOrder) {
             if (scope.hasOwnProperty(scopeName)) {
-                const entry = scope[scopeName]!.members.get(canonicalName);
+                const entry = scope[scopeName]!.membersMap.get(canonicalName);
                 if (entry) {
                     return entry;
                 }
@@ -265,15 +265,15 @@ export function Checker() {
             return false;
         }
         if (assignThis.typeKind === TypeKind.struct && to.typeKind === TypeKind.struct) {
-            if (assignThis.members.size < to.members.size) {
+            if (assignThis.membersMap.size < to.membersMap.size) {
                 return false;
             }
 
-            for (const key of to.members.keys()) {
-                if (!assignThis.members.has(key)) {
+            for (const key of to.membersMap.keys()) {
+                if (!assignThis.membersMap.has(key)) {
                     return false;
                 }
-                if (!isAssignable(assignThis.members.get(key)!, to.members.get(key)!)) {
+                if (!isAssignable(assignThis.membersMap.get(key)!, to.membersMap.get(key)!)) {
                     return false;
                 }
             }
@@ -291,8 +291,8 @@ export function Checker() {
             if (i === functionDef.params.length) {
                 break;
             }
-            if (existingArgumentsScope.members.has(signature.params[i].canonicalName)) {
-                existingArgumentsScope.members.set(signature.params[i].canonicalName, evaluateType(context, signature.params[i].type));
+            if (existingArgumentsScope.membersMap.has(signature.params[i].canonicalName)) {
+                existingArgumentsScope.membersMap.set(signature.params[i].canonicalName, evaluateType(context, signature.params[i].type));
             }
         }
     }
@@ -407,7 +407,7 @@ export function Checker() {
                 type = evaluateType(node, node.typeAnnotation);
             }
             else {
-                type = cfAny();
+                type = SyntheticType.any;
             }
 
             const rhsType = getCachedTermEvaluatedType(node.expr.right);
@@ -423,7 +423,7 @@ export function Checker() {
 
     function getCachedTermEvaluatedType(node: Node | null) {
         if (!node) {
-            return cfAny();
+            return SyntheticType.any;
         }
 
         let targetId = node.nodeId;
@@ -436,7 +436,7 @@ export function Checker() {
             return termEvaluatedTypeCache.get(targetId)!;
         }
         else {
-            return cfAny();
+            return SyntheticType.any;
         }
     }
 
@@ -445,7 +445,7 @@ export function Checker() {
             || type.typeKind === TypeKind.typeConstructorInvocation
             || type.typeKind === TypeKind.cachedTypeConstructorInvocation) {
             typeErrorAtNode(node, "Type is not concrete.");
-            termEvaluatedTypeCache.set(node.nodeId, cfAny());
+            termEvaluatedTypeCache.set(node.nodeId, SyntheticType.any);
         }
         else {
             termEvaluatedTypeCache.set(node.nodeId, type);
@@ -487,8 +487,8 @@ export function Checker() {
                 if (element.accessType === IndexedAccessType.dot) {
                     type = getMemberType(type, node, element.property.token.text);
                     if (type.typeKind === TypeKind.any) {
-                        type = cfAny(); // subsequent access elements will also be any
-                        setCachedTermEvaluatedType(element, cfAny());
+                        type = SyntheticType.any; // subsequent access elements will also be any
+                        setCachedTermEvaluatedType(element, SyntheticType.any);
                     }
                     else {
                         setCachedTermEvaluatedType(element, type);
@@ -498,9 +498,9 @@ export function Checker() {
             setCachedTermEvaluatedType(node, type);
         }
         else {
-            setCachedTermEvaluatedType(node.root, cfAny());
+            setCachedTermEvaluatedType(node.root, SyntheticType.any);
             for (const element of node.accessElements) {
-                setCachedTermEvaluatedType(element, cfAny());
+                setCachedTermEvaluatedType(element, SyntheticType.any);
             }
             // error: some kind of indexed access error
         }
@@ -520,7 +520,7 @@ export function Checker() {
 
         if (node.accessType === IndexedAccessType.dot) {
             const name = node.property.token.text;
-            if (!(<cfStruct>parentType).members.has(name)) {
+            if (!(<cfStruct>parentType).membersMap.has(name)) {
                 typeErrorAtNode(node.property, `Property '${name}' does not exist on parent type.`);
                 node.flags |= NodeFlags.checkerError;
             }
@@ -560,6 +560,9 @@ export function Checker() {
             }
         }
 
+        if (!type.synthetic) {
+            typeErrorAtNode(type, `Cannot find name '${type.name}'.`);
+        }
         return undefined;
     }
 
@@ -604,11 +607,11 @@ export function Checker() {
             return cfIntersection(left, right);
         }
         else if (type.typeKind === TypeKind.struct) {
-            const memberType = type.members.get(name);
-            return memberType ? evaluateType(context, memberType) : cfAny();
+            const memberType = type.membersMap.get(name);
+            return memberType ? evaluateType(context, memberType) : SyntheticType.any;
         }
 
-        return cfAny();
+        return SyntheticType.any;
     }
 
     //
@@ -764,8 +767,8 @@ export function Checker() {
                 depth++;
                 const result = (function() {
                     if (left.typeKind === TypeKind.struct && right.typeKind === TypeKind.struct) {
-                        let longest = left.members.size > right.members.size ? left.members : right.members;
-                        let shortest = longest === left.members ? right.members : left.members;
+                        let longest = left.membersMap.size > right.membersMap.size ? left.membersMap : right.membersMap;
+                        let shortest = longest === left.membersMap ? right.membersMap : left.membersMap;
                 
                         const remainingLongestKeys = new Set([...longest.keys()]);
                         const result = new Map<string, Type>();
@@ -790,7 +793,7 @@ export function Checker() {
                             result.set(key, longest.get(key)!);
                         }
                 
-                        return cfStruct(result);
+                        return SyntheticType.struct(result);
                     }
                     else {
                         // only valid type operands to the "&" type operator are {}
@@ -805,7 +808,7 @@ export function Checker() {
             function typeWorker(type: Type | null) : Type {
                 depth++;
                 const result = (function() {
-                    if (!type) return cfAny();
+                    if (!type) return SyntheticType.any;
                     
                     switch (type.typeKind) {
                         case TypeKind.intersection: {
@@ -821,9 +824,9 @@ export function Checker() {
                         case TypeKind.struct: { // work on cacheability of this; it is concrete just return a cached copy or something like that
                             const evaluatedStructContents = new Map<string, Type>();
                             let concrete = true;
-                            for (const key of type.members.keys()) {
-                                const preEvaluatedId = type.members.get(key)!.nodeId;
-                                const evaluatedType = typeWorker(type.members.get(key)!);
+                            for (const key of type.membersMap.keys()) {
+                                const preEvaluatedId = type.membersMap.get(key)!.nodeId;
+                                const evaluatedType = typeWorker(type.membersMap.get(key)!);
                                 const postEvaluatedId = evaluatedType.nodeId;
                                 if (preEvaluatedId !== postEvaluatedId) {
                                     concrete = false;
@@ -833,7 +836,7 @@ export function Checker() {
                             if (concrete) {
                                 return type;
                             }
-                            return cfStruct(evaluatedStructContents, type.stringIndex);
+                            return SyntheticType.struct(evaluatedStructContents);
                         }
                         case TypeKind.functionSignature:
                             // need a more lean version of functionParameter
@@ -851,10 +854,22 @@ export function Checker() {
                             if (typeConstructor.typeKind === TypeKind.never) {
                                 return typeConstructor;
                             }
+
+                            unsafeAssertTypeKind<cfTypeConstructor>(typeConstructor);
+
+                            if (type.args.length === 0) {
+                                typeErrorAtNode(type.left, `Type argument list cannot be empty.`);
+                                return SyntheticType.never;
+                            }
+                            if (typeConstructor.params.length != type.args.length) {
+                                typeErrorAtNode(type.left, `Type requires ${typeConstructor.params.length} arguments.`);
+                                return SyntheticType.never;
+                            }
+
                             const args : Type[] = [];
                             for (const arg of type.args) {
                                 if (arg.typeKind === TypeKind.typeId) {
-                                    args.push(typeWorker(typeParamMap.get(arg.name) || walkUpContainersToFindType(context, arg) || cfAny()));
+                                    args.push(typeWorker(typeParamMap.get(arg.name) || walkUpContainersToFindType(context, arg) || SyntheticType.any));
                                 }
                                 else {
                                     args.push(typeWorker(arg));
