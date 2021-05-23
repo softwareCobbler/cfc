@@ -37,13 +37,13 @@ import {
 import * as fs from "fs";
 import * as path from "path";
 
-import { NodeId, SourceFile, Parser, Binder, Node as cfNode, binarySearch, CfFileType, Diagnostic as cfcDiagnostic, cfmOrCfc, flattenTree, getScopeContainedNames, NodeSourceMap, isExpressionContext, getTriviallyComputableString, Checker } from "compiler";
+import { NodeId, SourceFile, Parser, Binder, Node as cfNode, binarySearch, CfFileType, Diagnostic as cfcDiagnostic, cfmOrCfc, flattenTree, NodeSourceMap, isExpressionContext, getTriviallyComputableString, Checker } from "compiler";
 import { CfTag, isStaticallyKnownScopeName, NodeType, ScopeDisplay, StaticallyKnownScopeName } from '../../../compiler/node';
 import { findNodeInFlatSourceMap, getNearestEnclosingScope, isCfScriptTagBlock } from '../../../compiler/utils';
 
 import { tagNames } from "./tagnames";
 import { TokenType } from '../../../compiler/scanner';
-import { TypeKind } from '../../../compiler/types';
+import { cfStruct, TypeKind } from '../../../compiler/types';
 
 type TextDocumentUri = string;
 
@@ -450,14 +450,15 @@ connection.onCompletion(
 				}
 			}
 
+			// fixme
 			const allVisibleNames = (function x(node: cfNode | null) {
-				const result = new Map<string, number>();
+				const result = new Map<string, [StaticallyKnownScopeName, number]>();
 				let scopeDistance = 0; // keep track of "how far away" some name is, in terms of parent scopes; we can then offer closer names first
 				while (node) {
 					if (node.containedScope) {
-						const names = getAllNamesOfScopeDisplay(node.containedScope, "variables", "local", "arguments");
-						for (const name of names ){
-							result.set(name, scopeDistance);
+						const names = getAllNamesOfScopeDisplay(node.containedScope, "local", "arguments", "this", "variables");
+						for (const [scopeName, varName] of names){
+							result.set(varName, [scopeName, scopeDistance]);
 						}
 						scopeDistance++;
 					}
@@ -467,9 +468,9 @@ connection.onCompletion(
 			})(node);
 
 			const result : CompletionItem[] = [];
-			for (const [key, scopeDistance] of allVisibleNames) { 
+			for (const [varName, [x, scopeDistance]] of allVisibleNames) { 
 				result.push({
-					label: key,
+					label: varName,
 					kind: CompletionItemKind.Field,
 					// sort the first two scopes to the top of the list; the rest get lexically sorted as one agglomerated scope
 					sortText: (scopeDistance === 0 ? 'a' : scopeDistance === 1 ? 'b' : 'c') + scopeDistance
@@ -498,13 +499,15 @@ connection.onCompletion(
 			return null;
 		}
 
-		function getAllNamesOfScopeDisplay(scopeDisplay : ScopeDisplay, ...keys: StaticallyKnownScopeName[]) : string[] {
-			const result : string[] = [];
-			const targetKeys = keys.length > 0 ? keys : Object.keys(scopeDisplay) as (keyof ScopeDisplay)[];
-			for (const key of targetKeys) {
-				if (key === "container" || key === "typedefs" || !(key in scopeDisplay)) continue;
-				result.push(...getScopeContainedNames(scopeDisplay[key]!));
+		function getAllNamesOfScopeDisplay(scopeDisplay : ScopeDisplay, ...targetKeys: StaticallyKnownScopeName[]) : [StaticallyKnownScopeName, string][] {
+			const result : [StaticallyKnownScopeName, string][] = [];
+			for (const scopeName of targetKeys) {
+				if (scopeDisplay.hasOwnProperty(scopeName)) {
+					const varNames = [...(<cfStruct>scopeDisplay[scopeName]!).members.keys()];
+					result.push(...varNames.map((varName) : [StaticallyKnownScopeName, string] => [scopeName, varName]));
+				}
 			}
+
 			return result;
 		}
 

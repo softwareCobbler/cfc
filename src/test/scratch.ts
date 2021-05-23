@@ -15,14 +15,18 @@ function fromFile(fname: string) {
     return SourceFile(absPath, cfmOrCfc(fname)!, fs.readFileSync(absPath));
 }
 
-//const sourceFile = fromFile("./test/mxunit/doc/build.cfm");
+//const sourceFile = fromFile("./test/mxunit/framework/javaloader/JavaLoader.cfc");
 
 const sourceFile = NilCfm(`
 <cfscript>
-    function foo() {
-        // @type number
-        final var v = '42';
-        v + v;
+     foo = function (o1, o2) {
+        // @type string
+        var x = '42';
+        x & x;
+
+        bar = function(x1, x2) {
+            cgi.
+        }
     }
 </cfscript>
 `);

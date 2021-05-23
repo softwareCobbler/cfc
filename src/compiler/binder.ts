@@ -1,74 +1,59 @@
-import { NodeWithScope, Term, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, Scope, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression } from "./node";
+import { ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue } from "./utils";
 import { Diagnostic } from "./parser";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
-import { cfAny, cfFunctionSignature, Type } from "./types";
+import { cfAny, cfFunctionSignature, cfString, cfStruct, Type } from "./types";
 
-export function getScopeContainedNames(scope: Scope) : string[] {
-    return [...scope.keys()];
-}
-
-const staticCgiScope : Scope = (function () {
-    const result = new Map<string, Term>();
+const staticCgiScope : cfStruct = (function () {
     // https://helpx.adobe.com/coldfusion/cfml-reference/reserved-words-and-variables/cgi-environment-cgi-scope-variables.html
-    const staticNames = [
-        "auth_password",
-        "auth_type",
-        "auth_user",
-        "cert_cookie",
-        "cert_flags",
-        "cert_issuer",
-        "cert_keysize",
-        "cert_secretkeysize",
-        "cert_serialnumber",
-        "cert_server_issuer",
-        "cert_server_subject",
-        "cert_subject",
-        "cf_template_path",
-        "content_length",
-        "content_type",
-        "context_path",
-        "gateway_interface",
-        "https",
-        "https_keysize",
-        "https_secretkeysize",
-        "https_server_issuer",
-        "https_server_subject",
-        "http_accept",
-        "http_accept_encoding",
-        "http_accept_language",
-        "http_connection",
-        "http_cookie",
-        "http_host",
-        "http_referer",
-        "http_user_agent",
-        "query_string",
-        "remote_addr",
-        "remote_host",
-        "remote_user",
-        "request_method",
-        "script_name",
-        "server_name",
-        "server_port",
-        "server_port_secure",
-        "server_protocol",
-        "server_software",
-    ];
-    for (const name of staticNames) {
-        result.set(
-            name, {
-                type: cfAny(),
-                name: name,
-                final: false,
-                var: false,
-                target: undefined,
-            })
-    }
-    return result;
+    const staticStruct = new Map([
+        ["auth_password",        cfString()],
+        ["auth_type",            cfString()],
+        ["auth_user",            cfString()],
+        ["cert_cookie",          cfString()],
+        ["cert_flags",           cfString()],
+        ["cert_issuer",          cfString()],
+        ["cert_keysize",         cfString()],
+        ["cert_secretkeysize",   cfString()],
+        ["cert_serialnumber",    cfString()],
+        ["cert_server_issuer",   cfString()],
+        ["cert_server_subject",  cfString()],
+        ["cert_subject",         cfString()],
+        ["cf_template_path",     cfString()],
+        ["content_length",       cfString()],
+        ["content_type",         cfString()],
+        ["context_path",         cfString()],
+        ["gateway_interface",    cfString()],
+        ["https",                cfString()],
+        ["https_keysize",        cfString()],
+        ["https_secretkeysize",  cfString()],
+        ["https_server_issuer",  cfString()],
+        ["https_server_subject", cfString()],
+        ["http_accept",          cfString()],
+        ["http_accept_encoding", cfString()],
+        ["http_accept_language", cfString()],
+        ["http_connection",      cfString()],
+        ["http_cookie",          cfString()],
+        ["http_host",            cfString()],
+        ["http_referer",         cfString()],
+        ["http_user_agent",      cfString()],
+        ["query_string",         cfString()],
+        ["remote_addr",          cfString()],
+        ["remote_host",          cfString()],
+        ["remote_user",          cfString()],
+        ["request_method",       cfString()],
+        ["script_name",          cfString()],
+        ["server_name",          cfString()],
+        ["server_port",          cfString()],
+        ["server_port_secure",   cfString()],
+        ["server_protocol",      cfString()],
+        ["server_software",      cfString()],
+    ]);
+    return cfStruct(staticStruct);
 })();
 
 export function Binder() {
-    let RootNode : NodeWithScope;
+    let RootNode : NodeWithScope<SourceFile>;
     let currentContainer : NodeWithScope;
     let scanner : Scanner;
     let diagnostics: Diagnostic[];
@@ -85,13 +70,13 @@ export function Binder() {
             container: null,
             typedefs: new Map<string, Type>(),
             cgi: staticCgiScope,
-            variables: new Map(),
-            url: new Map(),
-            form: new Map(),
+            variables: cfStruct(),
+            url: cfStruct(),
+            form: cfStruct(),
         };
 
         if (sourceFile.cfFileType === CfFileType.cfc) {
-            RootNode.containedScope.this = new Map();
+            RootNode.containedScope.this = cfStruct();
         }
 
         currentContainer = RootNode;
@@ -355,6 +340,7 @@ export function Binder() {
 
         if (isStaticallyKnownScopeName(identifierBaseName)) {
             if (node.varModifier) {
+                // we might have to consider our current container, like are we after a <cffile> tag? Does that matter?
                 errorAtRange(mergeRanges(node.finalModifier, node.varModifier, (<BinaryOperator>node.expr).left), "Variable declaration shadows built-in scope `" + identifierBaseName + "`");
             }
 
@@ -371,7 +357,8 @@ export function Binder() {
                 else if (element?.accessType === IndexedAccessType.bracket) {
                     accessName = getTriviallyComputableString((element.expr));
                 }
-
+                accessName;
+/*
                 if (accessName) {
                     RootNode.containedScope[identifierBaseName]!.set(
                         accessName, {
@@ -381,7 +368,7 @@ export function Binder() {
                             var: false,
                             target: (<BinaryOperator>node.expr).right
                         });
-                }
+                }*/
             }
 
             return;
@@ -389,14 +376,8 @@ export function Binder() {
 
         if (node.finalModifier || node.varModifier) {
             if (currentContainer.containedScope.local) {
-                (<Map<string, Term>>currentContainer.containedScope.local).set(
-                    identifierBaseName, {
-                        type: node.typeAnnotation || cfAny(),
-                        name: identifierBaseName,
-                        final: !!node.finalModifier,
-                        var: !!node.varModifier,
-                        target: node.expr ?? undefined
-                    });
+                currentContainer.containedScope.local.members.set(
+                    identifierBaseName, node.typeAnnotation || cfAny());
             }
             else {
                 // there is no local scope, so we must be at top-level scope
@@ -409,7 +390,7 @@ export function Binder() {
                 // e.g, 
                 // function foo(bar) { var bar = 42; }
                 // is an error: "bar is already defined in argument scope"
-                if (enclosingFunction.containedScope.arguments.has(identifierBaseName)) {
+                if (enclosingFunction.containedScope.arguments.members.has(identifierBaseName)) {
                     errorAtRange(mergeRanges(node.finalModifier, node.varModifier, node.expr), `'${identifierBaseName}' is already defined in argument scope.`);
                 }
             }
@@ -543,7 +524,7 @@ export function Binder() {
             return;
         }
 
-        let targetScope : Scope = RootNode.containedScope.variables!;
+        let targetScope : cfStruct = RootNode.containedScope.variables!;
         let targetName = name.length === 1 ? name[0] : name[1];
 
         if (name.length === 2) {
@@ -565,13 +546,7 @@ export function Binder() {
             }
         }
 
-        targetScope.set(targetName, {
-            type: tag.typeAnnotation,
-            name: targetName,
-            final: false,
-            var: false,
-            target: getAttributeValue(tag.attrs, "name") ?? undefined,
-        });
+        targetScope.members.set(targetName, tag.typeAnnotation);
     }
 
     function bindSimpleStringLiteral(node: SimpleStringLiteral) {
@@ -671,17 +646,11 @@ export function Binder() {
      * `x = y`, where x has never been seen before
      * we just want to know that some name is available in this scope
      */
-    function weakBindIdentifierToScope(name: string, scope: Scope) : void {
-        if (scope.has(name)) {
+    function weakBindIdentifierToScope(name: string, scope: cfStruct) : void {
+        if (scope.members.has(name)) {
             return;
         }
-        scope.set(name, {
-            type: cfAny(),
-            name: name,
-            final: false,
-            var: false,
-            target: undefined
-        })
+        scope.members.set(name, cfAny());
     }
 
     function bindAssignment(node: BinaryOperator) {
@@ -745,16 +714,10 @@ export function Binder() {
                 if (currentContainer.containedScope.local) {
                     targetScope = currentContainer.containedScope.local;
                 }
-                if (targetScope.has(targetBaseName)) {
+                if (targetScope.members.has(targetBaseName)) {
                         return;
                 }
-                targetScope.set(targetBaseName, {
-                    type: cfAny(),
-                    name: targetBaseName,
-                    final: false,
-                    var: false,
-                    target: node.right,
-                });
+                targetScope.members.set(targetBaseName, cfAny());
             }
         }
     }
@@ -763,8 +726,8 @@ export function Binder() {
         node.containedScope = {
             container: currentContainer,
             typedefs: new Map(),
-            local: new Map(),
-            arguments: new Map()
+            local: cfStruct(),
+            arguments: cfStruct(),
         };
 
         currentContainer = node as NodeWithScope;
@@ -775,14 +738,7 @@ export function Binder() {
             // this is a non-arrow function definition
             // tag functions and named script functions like `function foo() {}` are hoisted
             if (node.canonicalName) {
-                RootNode.containedScope.variables!.set(
-                    node.canonicalName, {
-                        type: cfFunctionSignature(node.canonicalName, node.params, cfAny()),
-                        name: node.canonicalName,
-                        final: false,
-                        var: false,
-                        target: undefined
-                    });
+                RootNode.containedScope.variables!.members.set(node.canonicalName, cfFunctionSignature(node.canonicalName, node.params, cfAny()));
             }
         }
 

@@ -1889,17 +1889,13 @@ export function Parser() {
                 // a["b"]["c"] = 0 declares and inits a = {b: {c: 0}};
                 // a["b"].c = 0 is an error ("a" is not defined)
                 
-                const identifier = root.kind === NodeType.identifier ? root : Identifier(root, getTriviallyComputableString(root));
+                //const identifier = root;//root.kind === NodeType.identifier ? root : Identifier(root, getTriviallyComputableString(root));
                 if (isInSomeContext(ParseContext.for)) {
-                    return VariableDeclaration(finalModifier, varModifier, identifier);
-                }
-                else {
-                    return identifier;
+                    return VariableDeclaration(finalModifier, varModifier, root);
                 }
             }
-            else {
-                return root;
-            }
+            
+            return root;
         }
 
         if (varModifier) {

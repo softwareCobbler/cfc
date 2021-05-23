@@ -1,6 +1,6 @@
 import { SourceRange, TokenType, Token, NilToken, TokenTypeUiString, CfFileType } from "./scanner";
 import { getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString } from "./utils";
-import { Type as Type } from "./types";
+import { cfStruct, Type as Type } from "./types";
 
 let debug = false;
 let nextNodeId : NodeId = 0;
@@ -141,74 +141,45 @@ export interface Term {
     target: Node | undefined,
 }
 
-export type Scope = Map<string, Term>;
-
-// fixme: scopes should just be structs registered on containers
-export interface ScopeDisplay {
+export type ScopeDisplay = {
     container: Node | null,
     typedefs: Map<string, Type>,
-    
-    variables?: Scope,
-    this?: Scope,
+} & {[name in StaticallyKnownScopeName]?: cfStruct}
 
-    arguments?: Scope,
-    local?: Scope,
+const staticallyKnownScopeName = [
+    "application",
+    "arguments",
+    "attributes",
+    "caller",
+    "cgi",
+    "client",
+    "cookie",
+    "file",
+    "form",
+    "local",
+    "query",
+    "request",
+    "server",
+    "session",
+    "this",
+    "thisTag",
+    "thread",
+    "threadLocal",
+    "url",
+    "variables"
+] as const;
 
-    url?: Scope,
-    form?: Scope,
-    cgi?: Scope,
-    server?: Scope,
+export type StaticallyKnownScopeName = (typeof staticallyKnownScopeName)[number];
 
-    /*
-    application
-    arguments
-    attributes
-    caller
-    cgi
-    client
-    cookie
-
-    form
-    local
-    request
-    server
-    session
-    this
-    thisTag
-    thread
-    threadLocal
-    url
-    */
-}
-
-export type StaticallyKnownScopeName = keyof Omit<ScopeDisplay, "container" | "typedefs">;
-
-export interface RootScope {
-    url: Scope,
-    form: Scope,
-    cgi: Scope,
-    server: Scope
-}
-
-export function isStaticallyKnownScopeName(name: string) : name is StaticallyKnownScopeName {
-    switch (name) {
-        case "variables":
-        case "this":
-        case "arguments":
-        case "local":
-        case "url":
-        case "form":
-        case "cgi":
-        case "server":
-            return true;
-        default:
-            return false;
-    }
-}
+export const isStaticallyKnownScopeName = (() => {
+    const scopeNames = new Set<string>(staticallyKnownScopeName);
+    return (name: string) : name is StaticallyKnownScopeName => scopeNames.has(name);
+})();
 
 export type NodeId = number;
 export type TypeId = number;
 export type IdentifierId = number;
+export type NodeWithScope<N extends Node = Node, T extends (StaticallyKnownScopeName | never) = never> = N & {containedScope: ScopeDisplay & {[k in T]: cfStruct}};
 
 export interface NodeBase {
     kind: NodeType,
@@ -229,10 +200,6 @@ export interface NodeBase {
 
     __debug_type?: string;
 }
-
-export type NodeWithScope<
-    T extends Node = Node,
-    U extends keyof ScopeDisplay | never = never> = T & {containedScope: Pick<{[k in keyof ScopeDisplay]-?: ScopeDisplay[k]}, U | "container" | "typedefs">};
 
 export function NodeBase<T extends NodeBase>(type: T["kind"], range: SourceRange = SourceRange.Nil()) : T {
     const result : Partial<T> = {};
