@@ -15,38 +15,32 @@ function fromFile(fname: string) {
     return SourceFile(absPath, cfmOrCfc(fname)!, fs.readFileSync(absPath));
 }
 
-//const sourceFile = fromFile("./test/mxunit/framework/javaloader/JavaLoader.cfc");
+const libPath = path.resolve("./src/lang-server/server/src/runtimelib/lib.cf2018.d.cfm");
+const stdLib = SourceFile(libPath , CfFileType.dCfm, fs.readFileSync(libPath));
 
-const sourceFile = NilCfm(`
-<cfscript>
-     foo = function (o1, o2) {
-        // @type string
-        var x = '42';
-        x & x;
 
-        bar = function(x1, x2) {
-            cgi.
-        }
-    }
-</cfscript>
-`);
+const sourceFile = fromFile("./test/mxunit/tests/samples/MyOtherComponentTest.cfc");
+
+/*const sourceFile = NilCfm(`
+`);*/
 
 const parser = Parser().setDebug(true).setParseTypes(true);
 const binder = Binder().setDebug(true);
 const checker = Checker();
-parser.setSourceFile(sourceFile);
 
+parser.setSourceFile(stdLib);
+parser.parse();
+binder.bind(stdLib, parser.getScanner(), parser.getDiagnostics());
+checker.check(stdLib, parser.getScanner(), parser.getDiagnostics());
+
+sourceFile.libRefs.push(stdLib);
+
+parser.setSourceFile(sourceFile);
 parser.parse();
 binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
 checker.check(sourceFile, parser.getScanner(), parser.getDiagnostics());
 
-const flatProgram = flattenTree(sourceFile);
-
 const diagnostics = parser.getDiagnostics();
-
-//evaluateTypeCall(sourceFile.content[0] as cfTypeFunctionDefinition, [sourceFile.content[1]] as Type[]);
-//evaluateTypeCall(sourceFile.content[0] as cfTypeFunctionDefinition, [sourceFile.content[1]] as Type[]);
-
 console.log("got ", diagnostics.length + " diagnostics");
 for (const diag of parser.getDiagnostics()) {
     console.log(diag);

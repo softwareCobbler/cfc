@@ -2,27 +2,8 @@
 
 A parser to see what kind of live diagnostics can reasonably be had for ColdFusion2018+. It helps me in my day-to-day in a very minimal way, mostly by pointing out illegal trailing commas in function calls and struct literals.
 
-Primitive type support with is hidden behind the boolean configuration option `x_types`. It supports generic and self-referential type definitions, and type assignments in comments, primarily for autocomplete purposes rather than typechecking purposes (all cart no horse).
+There is a REAAAAAAAALLY primitive support for flow analysis, hidden behind the boolean configuration option `x_types`. This is difficult with the dynamic nature of CF, since files can generally safely assume (based on the developer's understanding of the actual execution environment) that names are available. So in addition to checking for syntax errors, there is now a go at checking for use-before-definition errors. This will probably lead to many false positives, especially since it doesn't link in parent components via `extends` clauses, and doesn't investigate `<cfinclude>s`. Anyway, 
 
-```
-<!---
-    <!--- the 'Query' type is included as a library type if x_types is on, this is just exposition. --->
-    @type QueryFilterPredicate = <T> => (required: row: T, index: number, query: Query<T>) => boolean;
-    @type Query = <T> => {
-        recordCount: number,
-        columnList: string,
-        filter: (required predicate: QueryFilterPredicate<T>) => Query<T>
-    }
-
-    @type MySchema = {colname1: string, colname2: string, colname3: string}
---->
-
-<!--- @type Query<MySchema> --->
-<cfquery name="q"> <!--- 'q' is assigned type Query<MySchema> --->
-    ...
-</cfquery>
-<!--- autocomplete can be a bit smarter now --->
-```
 
 I really recommend [KamasamaK's current plugin](https://github.com/KamasamaK/vscode-cfml) as the current best CF plugin; this is intended to work on top of that (note there is ZERO affiliation between this plugin and the KamasamaK one) as the other provides nice completions and syntax highlighting. This one just squiggle-underlines syntactic errors.
 

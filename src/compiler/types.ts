@@ -1,4 +1,4 @@
-import { BooleanLiteral, FunctionParameter, NilTerminal, NodeBase, NodeType, NumericLiteral, SimpleStringLiteral, Terminal } from "./node";
+import { BooleanLiteral, FunctionParameter, mergeRanges, NilTerminal, NodeBase, NodeType, NumericLiteral, SimpleStringLiteral, Terminal } from "./node";
 
 let debugTypeModule = true;
 
@@ -177,19 +177,18 @@ export interface cfStruct extends TypeBase {
     leftBrace: Terminal,
     members: cfStructMember[],
     rightBrace: Terminal,
-
     membersMap: Map<string, Type>,
+    caselessMembersMap: Map<string, Type>,
 }
 
-export function cfStruct(leftBrace: Terminal, members: cfStructMember[], rightBrace: Terminal) : cfStruct {
-    const computedMembers = new Map<string, Type>();
-    for (const member of members) {
-        computedMembers.set(member.propertyName.token.text, member.type);
-    }
+export function cfStruct(leftBrace: Terminal, members: cfStructMember[], membersMap: Map<string, Type>, caselessMembersMap: Map<string, Type>, rightBrace: Terminal) : cfStruct {
     const v = TypeBase<cfStruct>(TypeKind.struct);
     v.leftBrace = leftBrace;
-    v.membersMap = computedMembers;
+    v.members = members;
     v.rightBrace = rightBrace;
+
+    v.membersMap = membersMap;
+    v.caselessMembersMap = caselessMembersMap;
     return v;
 }
 
@@ -198,10 +197,11 @@ export interface cfStructMember {
     colon: Terminal,
     type: Type,
     comma: Terminal | null,
+    attributes: TypeAttribute[],
 }
 
-export function cfStructMember(propertyName: Terminal, colon: Terminal, type: Type, comma: Terminal | null) : cfStructMember {
-    return {propertyName, colon, type, comma};
+export function cfStructMember(propertyName: Terminal, colon: Terminal, type: Type, comma: Terminal | null, attributes: TypeAttribute[]) : cfStructMember {
+    return {propertyName, colon, type, comma, attributes};
 }
 
 export interface cfFunctionSignature extends TypeBase {
@@ -329,6 +329,31 @@ export function cfNever() : cfNever {
     return v;
 }
 
+export interface TypeAttribute extends NodeBase {
+    type: NodeType.typeAttribute,
+    hash: Terminal,
+    exclamation: Terminal,
+    leftBracket: Terminal,
+    name: Terminal,
+    rightBracket: Terminal,
+}
+
+export function TypeAttribute(
+    hash: Terminal,
+    exclamation: Terminal,
+    leftBracket: Terminal,
+    name: Terminal,
+    rightBracket: Terminal,
+) : TypeAttribute {
+    const v = NodeBase<TypeAttribute>(NodeType.typeAttribute, mergeRanges(hash, rightBracket));
+    v.hash = hash;
+    v.exclamation = exclamation;
+    v.leftBracket = leftBracket;
+    v.name = name;
+    v.rightBracket = rightBracket;
+    return v;
+}
+
 export const SyntheticType = (function() {
     const nilTerminal = NilTerminal(-1);
 
@@ -347,10 +372,9 @@ export const SyntheticType = (function() {
     const boolean = cfBoolean(nilTerminal);
     boolean.synthetic = true;
 
-    const struct = (membersMap: Map<string, Type> = new Map()) => {
-        const v = cfStruct(nilTerminal, [], nilTerminal);
+    const struct = (membersMap: Map<string, Type> = new Map(), caselessMembersMap: Map<string, Type> = new Map()) => {
+        const v = cfStruct(nilTerminal, [], membersMap, caselessMembersMap, nilTerminal);
         v.synthetic = true;
-        v.membersMap = membersMap;
         return v;
     }
 

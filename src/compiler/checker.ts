@@ -1,4 +1,4 @@
-import { SourceFile, Node, NodeType, BlockType, IndexedAccess, StaticallyKnownScopeName, ScopeDisplay, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes, IndexedAccessChainElement, NodeFlags, BinaryOpTypeUiString, VariableDeclaration, Identifier } from "./node";
+import { SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes, IndexedAccessChainElement, NodeFlags, BinaryOpTypeUiString, VariableDeclaration, Identifier, FlowId, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName } from "./node";
 import { Scanner } from "./scanner";
 import { Diagnostic } from "./parser";
 import { cfFunctionSignature, cfIntersection, Type, TypeKind, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfNever, cfStruct, cfUnion, SyntheticType } from "./types";
@@ -9,26 +9,38 @@ export function Checker() {
     let scanner!: Scanner;
     scanner;
     let diagnostics!: Diagnostic[];
-    diagnostics;
+    let stdLib : cfStruct | undefined = undefined;
+    let rootScope: ScopeDisplay;
 
     function check(sourceFile_: SourceFile, scanner_: Scanner, diagnostics_: Diagnostic[]) {
         sourceFile = sourceFile_;
         scanner = scanner_;
         diagnostics = diagnostics_;
 
+        stdLib = findStdLib(sourceFile);
+
+        rootScope = sourceFile.containedScope!;
+
         checkList(sourceFile.content);
+        runDeferredFrames();
     }
 
     function typeErrorAtNode(node: Node, msg: string) {
-        diagnostics.push({
+        const freshDiagnostic : Diagnostic = {
             fromInclusive: node.range.fromInclusive,
             toExclusive: node.range.toExclusive,
             msg: msg,
-            __debug_from_line: -1,
-            __debug_from_col: -1,
-            __debug_to_line: -1,
-            __debug_to_col: -1,
-        });
+        }
+
+        const debugFrom = scanner.getAnnotatedChar(freshDiagnostic.fromInclusive);
+        const debugTo = scanner.getAnnotatedChar(freshDiagnostic.toExclusive);
+        // bump 0-offsetted info to editor-centric 1-offset
+        freshDiagnostic.__debug_from_line = debugFrom.line+1;
+        freshDiagnostic.__debug_from_col = debugFrom.col+1;
+        freshDiagnostic.__debug_to_line = debugTo.line+1;
+        freshDiagnostic.__debug_to_col = debugTo.col+1;
+
+        diagnostics.push(freshDiagnostic);
     }
 
     function checkList(nodes: Node[]) {
@@ -214,24 +226,41 @@ export function Checker() {
         "client"
     ];
 
-    function getContainerVariable(scope: ScopeDisplay, canonicalName: string) : Type | undefined {
+    interface ScopeDisplayMemberResolution {
+        scopeName: StaticallyKnownScopeName,
+        type: Type
+    }
+    function getScopeDisplayMember(scope: ScopeDisplay, canonicalName: string) : ScopeDisplayMemberResolution | undefined {
         for (const scopeName of scopeLookupOrder) {
             if (scope.hasOwnProperty(scopeName)) {
-                const entry = scope[scopeName]!.membersMap.get(canonicalName);
+                const entry = scope[scopeName]!.membersMap.get(canonicalName) || scope[scopeName]!.caselessMembersMap.get(canonicalName);
                 if (entry) {
-                    return entry;
+                    return {scopeName: scopeName, type: entry};
                 }
             }
         }
         return undefined;
     }
 
-    function walkUpContainersToFindSymtabEntry(base: Node, canonicalName: string) : Type | undefined {
+    function walkUpScopesToFindIdentifier(base: Node, canonicalName: string) : ScopeDisplayMemberResolution | undefined {
         let node : Node | null = base;
         while (node) {
             if (node.containedScope) {
-                const varEntry = getContainerVariable(node.containedScope, canonicalName);
+                const varEntry = getScopeDisplayMember(node.containedScope, canonicalName);
                 if (varEntry) { return varEntry; }
+
+                if (node.kind === NodeType.sourceFile) {
+                    // if we got to root and didn't find it, see if we can find it in stdlib (if stdlib was available)
+                    if (stdLib) {
+                        const type = lookupTypeStructMember(stdLib, canonicalName);
+                        if (type) {
+                            const scopeName = "variables";
+                            return {scopeName, type};
+                        }
+                    }
+                    return undefined;
+                }
+
                 else { node = node.containedScope.container; }
             }
             else {
@@ -240,6 +269,110 @@ export function Checker() {
         }
 
         return undefined;
+    }
+
+    function findStdLib(sourceFile: SourceFile) : cfStruct | undefined {
+        for (const libFile of sourceFile.libRefs) {
+            for (const typedef of libFile.content) {
+                if (typedef.kind === NodeType.type && typedef.typeKind === TypeKind.struct && typedef.name === "std") {
+                    return typedef;
+                }
+            }
+        }
+        return undefined;
+    }
+
+    /**
+     * lookup a name in a typestruct; cased takes precedence over uncased
+     * @param struct 
+     * @param name 
+     */
+    function lookupTypeStructMember(struct: cfStruct, name: string) {
+        return struct.membersMap.get(name) ?? struct.caselessMembersMap.get(name);
+    }
+
+    function getTypeAtFlow(base: Node, name: string, deferOnFunctionContainer = true) : Type | "defer" | undefined {
+        const gen = worker();
+        const capturedFrame = currentFrame;
+        capturedFrame.push(gen);
+        return gen.next().value;
+
+        function* worker() : Generator<"defer", Type | undefined, never> {
+        let node: Node | null = base;
+        let flow: Flow | null = null;
+        while (node) {
+            if (node.flow) {
+                flow = node.flow;
+                break;
+            }
+            else {
+                node = node.parent;
+            }
+        }
+
+        if (!flow) { // we'll be defensive, but we should always get a Flow (a "root flow") from SourceFile
+            return undefined;
+        }
+
+        let closestContainer : Node | null = null;
+
+        while (flow) {
+            const type = getCachedEvaluatedTypeOfIdentifierAtFlow(flow, name);
+            // we got a type at this flow
+            if (type) {
+                capturedFrame.pop();
+                return type;
+            }
+            else if (flow.node?.containedScope) {
+                if (!closestContainer) closestContainer = flow.node;
+
+                const scopeMember = getScopeDisplayMember(flow.node.containedScope, name);
+                if (scopeMember) {
+                    // no type at this flow, but the name is defined on this scope;
+                    // stop walking upwards, because the current flow's node is the top-most container for this name,
+                    // even if there is a predecessor flow
+                    capturedFrame.pop();
+
+                    if (scopeMember.type.typeKind === TypeKind.functionSignature) { // a function definition is always defined
+                        return scopeMember.type;
+                    }
+
+                    if (flow.node === closestContainer) {
+                        return undefined; // it's defined on the closest containing scope, but hasn't been assigned yet
+                    }
+                    else {
+                        return scopeMember.type; // it's defined in an outer scope
+                    }
+                }
+                if (deferOnFunctionContainer && flow.node.kind === NodeType.functionDefinition) {
+                    // we hit a containing function, and have not yet figured out the type
+                    // check the rest of the grand-parent's body 
+                    // but before we defer, check all parent containers to see if they even contain this name
+                    if (walkUpScopesToFindIdentifier(flow.node, name)) {
+                        yield "defer";
+                        return rerunAssertingNoDefer(getTypeAtFlow, flow.predecessor[0].node!, name, /*deferOnFunctionContainer*/ false);
+                    }
+                    else {
+                        capturedFrame.pop();
+                        return undefined;
+                    }
+                }
+            }
+
+            // if we got to root and didn't find it, see if we can find it in stdlib (if stdlib was available)
+            if (flow.node?.kind === NodeType.sourceFile) {
+                capturedFrame.pop();
+                if (stdLib) return lookupTypeStructMember(stdLib, name);
+            }
+
+            // default case: move to predecessor flow, if one exists
+            // todo: support multiple predecessors for if/else
+            flow = flow.predecessor[0];
+        }
+
+        capturedFrame.pop();
+        return undefined;
+        }
     }
 
     function isCallable(type: Type) : boolean {
@@ -351,47 +484,107 @@ export function Checker() {
         }
     }
 
-    function checkBinaryOperator(node: BinaryOperator) {
-        checkNode(node.left);
-        checkNode(node.right);
+    type Deferrable<T> = (...args: any[]) => "defer" | T;
 
-        switch (node.optype) {
-            case BinaryOpType.assign: {
-                if (node.left.kind === NodeType.identifier) {
-                    //const type = getTypeFromNearestContainingScope(node.left);
-                    /*if (type && isType(type) && type.typeKind === TypeKind.deferred) {
-                        const inferredType = inferExpressionType(node.right);
-                    }*/
+    function rerunAssertingNoDefer<T, F extends Deferrable<T>>(f: F, ...args: Parameters<F>) : Exclude<T, "defer"> {
+        const result = f(...args);
+        if (result === "defer") throw "unexpected defer";
+        return result as Exclude<T, "defer">;
+    }
+
+    function checkBinaryOperator(node: BinaryOperator) {
+        const capturedFrame = currentFrame;
+        const gen = worker();
+        capturedFrame.push(gen);
+        return gen.next();
+
+        function* worker() : Generator<"defer", void, never> {
+            checkNode(node.left);
+            checkNode(node.right);
+
+            switch (node.optype) {
+                case BinaryOpType.assign: {
+                    // an assignment, even fv-unqualified, will always be bound to a scope
+                    // `x = y` is effectively `variables.x = y`
+                    if (node.left.kind === NodeType.identifier && node.left.canonicalName) {
+                        let lhsType = getTypeAtFlow(node.left, node.left.canonicalName);
+                        if (lhsType === "defer") {
+                            yield "defer";
+                            lhsType = rerunAssertingNoDefer(getTypeAtFlow, node.left, node.left.canonicalName);
+                        }
+                        /*if (lhsType === "defer") {
+                            yield "defer";
+                            lhsType = g_lhsType.next().value;
+                            if (lhsType === "defer") throw "unexpected defer";
+                        }*/
+                        const rhsType = getCachedTermEvaluatedType(node.right);
+                        if (!lhsType) {
+                            // there is no type at the current flow; so, this is the first assignment for this var in this scope
+                            if (node.typeAnnotation) {
+                                const evaluatedTypeAnnotation = evaluateType(node, node.typeAnnotation);
+                                if (!isAssignable(rhsType, node.typeAnnotation)) {
+                                    typeErrorAtNode(node.right, "RHS is not assignable to LHS.");
+                                }
+                                setCachedEvaluatedTypeOfIdentifierAtFlow(node.left.flow!, node.left.canonicalName, evaluatedTypeAnnotation);
+                            }
+                            else {
+                                setCachedEvaluatedTypeOfIdentifierAtFlow(node.left.flow!, node.left.canonicalName, SyntheticType.any);
+                            }
+                        }
+                        else {
+                            if (node.typeAnnotation) {
+                                typeErrorAtNode(node, "Type annotations can only be bound to an identifier's first assignment.");
+                            }
+                            if (!isAssignable(rhsType, lhsType)) {
+                                typeErrorAtNode(node.right, "RHS is not assignable to LHS.");
+                            }
+                        }
+                    }
+
+                    break;
                 }
-                break;
+                case BinaryOpType.assign_cat:
+                case BinaryOpType.contains:
+                case BinaryOpType.does_not_contain:
+                case BinaryOpType.cat: {
+                    const leftType = getCachedTermEvaluatedType(node.left);
+                    const rightType = getCachedTermEvaluatedType(node.right);
+                    if (leftType.typeKind !== TypeKind.any && leftType.typeKind !== TypeKind.string) {
+                        typeErrorAtNode(node.left, `Left operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a string.`);
+                    }
+                    if (rightType.typeKind !== TypeKind.any && rightType.typeKind !== TypeKind.string) {
+                        typeErrorAtNode(node.right, `Right operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a string.`);
+                    }
+                    break;
+                }
+                // all other operators are (number op number)
+                default: {
+                    const leftType = getCachedTermEvaluatedType(node.left);
+                    const rightType = getCachedTermEvaluatedType(node.right);
+                    // acf allows (bool) + (bool), but maybe we don't want to support that
+                    if (leftType.typeKind !== TypeKind.any && leftType.typeKind !== TypeKind.number) {
+                        typeErrorAtNode(node.left, `Left operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a number.`);
+                    }
+                    if (rightType.typeKind !== TypeKind.any && rightType.typeKind !== TypeKind.number) {
+                        typeErrorAtNode(node.right, `Right operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a number.`);
+                    }
+                }
             }
-            case BinaryOpType.assign_cat:
-            case BinaryOpType.contains:
-            case BinaryOpType.does_not_contain:
-            case BinaryOpType.cat: {
-                const leftType = getCachedTermEvaluatedType(node.left);
-                const rightType = getCachedTermEvaluatedType(node.right);
-                if (leftType.typeKind !== TypeKind.any && leftType.typeKind !== TypeKind.string) {
-                    typeErrorAtNode(node.left, `Left operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a string.`);
-                }
-                if (rightType.typeKind !== TypeKind.any && rightType.typeKind !== TypeKind.string) {
-                    typeErrorAtNode(node.right, `Right operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a string.`);
-                }
-                break;
-            }
-            // all other operators are (number op number)
-            default: {
-                const leftType = getCachedTermEvaluatedType(node.left);
-                const rightType = getCachedTermEvaluatedType(node.right);
-                // acf allows (bool) + (bool), but maybe we don't want to support that
-                if (leftType.typeKind !== TypeKind.any && leftType.typeKind !== TypeKind.number) {
-                    typeErrorAtNode(node.left, `Left operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a number.`);
-                }
-                if (rightType.typeKind !== TypeKind.any && rightType.typeKind !== TypeKind.number) {
-                    typeErrorAtNode(node.right, `Right operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a number.`);
-                }
-            }
+
+            capturedFrame.pop();
         }
+    }
+
+    const evaluatedTypeMap = new Map<FlowId, Map<string, Type>>();
+    function setCachedEvaluatedTypeOfIdentifierAtFlow(flow: Flow, name: string, type: Type) : void {
+        if (!evaluatedTypeMap.has(flow.flowId)) {
+            evaluatedTypeMap.set(flow.flowId, new Map());
+        }
+        evaluatedTypeMap.get(flow.flowId)!.set(name, type);
+    }
+
+    function getCachedEvaluatedTypeOfIdentifierAtFlow(flow: Flow, name: string) : Type | undefined {
+        return evaluatedTypeMap.get(flow.flowId)?.get(name);
     }
 
     function checkVariableDeclaration(node: VariableDeclaration) : void {
@@ -402,17 +595,26 @@ export function Checker() {
 
             const name = getTriviallyComputableString(node.expr.left);
             if (!name) return;
-            let type : Type;
+            let evaluatedType : Type;
             if (node.typeAnnotation) {
-                type = evaluateType(node, node.typeAnnotation);
+                evaluatedType = evaluateType(node, node.typeAnnotation);
             }
             else {
-                type = SyntheticType.any;
+                evaluatedType = SyntheticType.any;
             }
 
             const rhsType = getCachedTermEvaluatedType(node.expr.right);
-            if (!isAssignable(rhsType, type)) {
+            if (!isAssignable(rhsType, evaluatedType)) {
                 typeErrorAtNode(node.expr.left, "Leftside type is not assignable to rightside type.");
+                evaluatedType = SyntheticType.any;
+            }
+            else /* is assignable */ {
+                if (!node.typeAnnotation) {
+                    evaluatedType = rhsType;
+                }
+            }
+            if (node.expr.left.kind === NodeType.identifier && node.expr.left.canonicalName !== undefined && node.expr.left.flow?.successor) {
+                setCachedEvaluatedTypeOfIdentifierAtFlow(node.expr.left.flow, node.expr.left.canonicalName, evaluatedType);
             }
         }
     }
@@ -459,12 +661,78 @@ export function Checker() {
             || (type.typeKind === TypeKind.union && isStructOrArray(type.left) && isStructOrArray(type.right));
     }
 
+    function findAncestor(node: Node, predicate: (node: Node | null) => true | false | "bail") : Node | undefined {
+        let current : Node | null = node;
+        while (current) {
+            const result = predicate(current);
+            if (result === true) {
+                return current;
+            }
+            else if (result === false) {
+                current = current.parent;
+            }
+            else if (result === "bail") {
+                break;
+            }
+        }
+        return undefined;
+    }
+
+    function getContainingFunction(node: Node) {
+        return findAncestor(node, (node) => node?.kind === NodeType.functionDefinition);
+    }
+
     function checkIdentifier(node: Identifier) {
-        const name = getTriviallyComputableString(node);
-        if (name !== undefined) {
-            const type = walkUpContainersToFindSymtabEntry(node, name);
-            if (type) {
-                setCachedTermEvaluatedType(node, evaluateType(node, type));
+        const gen = worker();
+        //frameRoots.push(node.nodeId);
+        const capturedFrame = currentFrame;
+        capturedFrame.push(gen);
+        return gen.next().value;
+
+        function* worker() : Generator<"defer", void, never> {
+            // if we're on the lefthand side of a non-fv qualified assignment, we're done
+            // an fv-qualified assignment is handled by checkVariableDeclaration
+            // assignment should alter the type of the variable for this flow in checkBinaryOperator
+            if (node.parent?.kind === NodeType.binaryOperator && node.parent.optype === BinaryOpType.assign && node === node.parent.left) {
+                capturedFrame.pop();
+                return;
+            }
+
+            const name = node.canonicalName;
+            if (name !== undefined) {
+                if (isStaticallyKnownScopeName(name)) {
+                    if (name === "local" || name === "arguments") {
+                        const containingFunction = getContainingFunction(node);
+                        if (containingFunction) setCachedTermEvaluatedType(node, containingFunction.containedScope![name]!);
+                    }
+                    else {
+                        setCachedTermEvaluatedType(node, rootScope[name] ?? SyntheticType.any);
+                    }
+                    return;
+                }
+
+                let type = getTypeAtFlow(node, name);
+                if (type === "defer") {
+                    yield "defer";
+                    type = rerunAssertingNoDefer(getTypeAtFlow, node, name, /*deferOnFunctionContainer*/ false);
+                }
+
+                if (type) {
+                    setCachedTermEvaluatedType(node, evaluateType(node, type));
+                    capturedFrame.pop();
+                    return;
+                }
+
+                const symbolTableEntry = walkUpScopesToFindIdentifier(node, name); // it's possible we did this already in getTypeAtFlow, can we reuse the value instead of doing it again
+                if (symbolTableEntry) {
+                    // there is a symbol table entry, but we could not find a type on the flow graph
+                    // this is a use-before-defintion
+                    // be nice to say "local" scope or "variables" scope or etc.
+                    typeErrorAtNode(node, `Identifier '${name}' is in '${symbolTableEntry.scopeName}' scope, but is used before being assigned.`);
+                }
+                else {
+                    typeErrorAtNode(node, `Cannot find name '${name}'.`);
+                }
             }
         }
     }
@@ -521,18 +789,54 @@ export function Checker() {
         if (node.accessType === IndexedAccessType.dot) {
             const name = node.property.token.text;
             if (!(<cfStruct>parentType).membersMap.has(name)) {
-                typeErrorAtNode(node.property, `Property '${name}' does not exist on parent type.`);
+                // need a flag like "checked struct accesses"
+                //typeErrorAtNode(node.property, `Property '${name}' does not exist on parent type.`);
                 node.flags |= NodeFlags.checkerError;
             }
         }
     }
 
+    const frames : any[] = [];
+    let currentFrame = frames;
+    //const frameRoots : NodeId[] = [];
+    function runDeferredFrames() {
+        runFrameWorker(frames);
+        function runFrameWorker(frame: any | any[]) {
+            if (Array.isArray(frame)) {
+                for (let i = frame.length-1; i >= 0; i--) {
+                    runFrameWorker(frame[i]);
+                }
+            }
+            else {
+                frame.next();
+            }
+        }
+    }
+
     function checkFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {
+        for (const param of node.params) {
+            setCachedEvaluatedTypeOfIdentifierAtFlow(node.flow!, param.canonicalName, param.type || SyntheticType.any);
+        }
+
+        const savedFrame = currentFrame;
+        const thisFrame : any[] = [];
+        currentFrame.push(thisFrame);
+        currentFrame = thisFrame;
+        //frameRoots.push(node.nodeId);
+
         if (node.kind === NodeType.functionDefinition && node.fromTag) {
             checkList(node.body);
-            return;
         }
-        checkNode(node.body);
+        else {
+            checkNode(node.body);
+        }
+
+        if (thisFrame.length === 0) {
+            currentFrame.pop();
+            //frameRoots.pop();
+        }
+
+        currentFrame = savedFrame;
     }
 
     //
@@ -553,10 +857,26 @@ export function Checker() {
                         return node.containedScope.typedefs.get(typeName)!;
                     }
                 }
-                node = node.containedScope.container;
+                if (node.kind === NodeType.sourceFile) {
+                    break;
+                }
+                else {
+                    node = node.containedScope.container;
+                }
             }
             else {
                 node = node.parent;
+            }
+        }
+
+        if (node) { // should always be true (we hit the top, SourceFile, and broke out of the above loop)
+            // find the `std` type in the libfiles, which we're just assuming will be either present or not, and if so, it is the only libfile
+            for (const libFile of node.libRefs) {
+                for (const typedef of libFile.content) {
+                    if (typedef.kind === NodeType.type && typedef.typeKind === TypeKind.struct && typedef.name === "std") {
+                        return typedef.membersMap.get(type.name);
+                    }
+                }
             }
         }
 
@@ -565,40 +885,6 @@ export function Checker() {
         }
         return undefined;
     }
-
-    /**
-     * given an identifier, find it's symbol table entry and retreive its typeinfo
-     */
-    /*function getTypeFromNearestContainingScope(base: Node) : Type | undefined {
-        let type : Type | undefined;
-        switch (base.kind) {
-            case NodeType.identifier: {
-                if (!base.canonicalName) {
-                    return undefined;
-                }
-                if (isStaticallyKnownScopeName(base.canonicalName)) {
-                    return getNearestScopeByName(base, base.canonicalName);
-                }
-                else {
-                    type = walkUpContainersToFindSymtabEntry(base, base.canonicalName);
-                    if (!type) {
-                        return undefined;
-                    }
-                }
-                break;
-            }
-            default:
-                return undefined;
-        }
-
-        if (!type) {
-            return undefined;
-        }
-        else {
-            const context = base;
-            return evaluateType(context, type);
-        }
-    }*/
 
     function getMemberType(type: Type, context: Node, name: string) : Type {
         if (type.typeKind === TypeKind.intersection) {

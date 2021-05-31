@@ -27,7 +27,7 @@ export const enum NodeType {
     dottedPath, switch, switchCase, do, while, ternary, for, structLiteral, arrayLiteral,
     structLiteralInitializerMember, arrayLiteralInitializerMember, try, catch, finally,
     breakStatement, continueStatement, returnStatement, importStatement,
-    new, type
+    new, type, typeAttribute,
 }
 
 const NodeTypeUiString : Record<NodeType, string> = {
@@ -78,6 +78,7 @@ const NodeTypeUiString : Record<NodeType, string> = {
     [NodeType.importStatement]: "import",
     [NodeType.new]: "new",
     [NodeType.type]: "type",
+    [NodeType.typeAttribute]: "type-attribute",
 };
 
 export type Node =
@@ -142,7 +143,7 @@ export interface Term {
 }
 
 export type ScopeDisplay = {
-    container: Node | null,
+    container: Node | null, // rename to parentContainer
     typedefs: Map<string, Type>,
 } & {[name in StaticallyKnownScopeName]?: cfStruct}
 
@@ -178,8 +179,24 @@ export const isStaticallyKnownScopeName = (() => {
 
 export type NodeId = number;
 export type TypeId = number;
+export type FlowId = number;
 export type IdentifierId = number;
 export type NodeWithScope<N extends Node = Node, T extends (StaticallyKnownScopeName | never) = never> = N & {containedScope: ScopeDisplay & {[k in T]: cfStruct}};
+
+export const enum FlowType {
+    default,
+    assignment
+}
+
+export interface Flow {
+    flowId: FlowId,
+    flowType: FlowType,
+    predecessor: Flow[],
+    successor: Flow | null,
+    node: Node | null // this effectively be null while a FlowNode is waiting on a node to attach to; but by the time we get to the checker it will have been populated or the entire flownode discarded
+}
+
+export type ReachableFlow = Flow & {node: Node};
 
 export interface NodeBase {
     kind: NodeType,
@@ -197,6 +214,7 @@ export interface NodeBase {
     flags: NodeFlags,
 
     containedScope?: ScopeDisplay,
+    flow: Flow | null,
 
     __debug_type?: string;
 }
@@ -213,6 +231,7 @@ export function NodeBase<T extends NodeBase>(type: T["kind"], range: SourceRange
         endTag: null,
     }
     result.flags = NodeFlags.none;
+    result.flow = null;
 
     if (debug) {
         result.__debug_type = NodeTypeUiString[type];
@@ -262,6 +281,7 @@ export interface SourceFile extends NodeBase {
     cfFileType: CfFileType,
     source: string | Buffer,
     content: Node[]
+    libRefs: SourceFile[],
 }
 
 export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: string | Buffer) : SourceFile {
@@ -270,6 +290,7 @@ export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: 
     sourceFile.cfFileType = cfFileType;
     sourceFile.source = sourceText;
     sourceFile.content = [];
+    sourceFile.libRefs = [];
     return sourceFile;
 }
 
@@ -299,6 +320,16 @@ export function Terminal(token: Token, trivia: Node[] = []) : Terminal {
 }
 
 export const NilTerminal = (pos: number) => Terminal(NilToken(pos));
+
+export const freshFlow = (function() {
+    let flowId = 0;
+    return (predecessor: Flow | Flow[], flowType: FlowType, node: Node | null = null) : Flow => ({
+        flowId: flowId++,
+        flowType: flowType,
+        predecessor: Array.isArray(predecessor) ? predecessor : [predecessor],
+        successor: null,
+        node});
+})();
 
 export const enum CommentType { tag, scriptSingleLine, scriptMultiLine };
 export interface Comment extends NodeBase {
@@ -1190,7 +1221,7 @@ export function BooleanLiteral(literal: Terminal, value: boolean) {
 export interface Identifier extends NodeBase {
     kind: NodeType.identifier;
     source: Node; // can be e.g, `var x = 42`, `var 'x' = 42`, `var #x# = 42`; <cfargument name="#'interpolated_string_but_constant'#">`
-    canonicalName: string | undefined;
+    canonicalName: string | undefined; // undefined at least in the case of something like var '#foo#' = bar;
 }
 
 export function Identifier(identifier: Node, name: string | undefined) {

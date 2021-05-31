@@ -51,51 +51,28 @@ interface CflsConfig {
 	parser: ReturnType<typeof Parser>,
 	binder: ReturnType<typeof Binder>,
 	checker: ReturnType<typeof Checker>,
-	parseCache: Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, cfNode>}>
+	parseCache: Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, cfNode>}>,
+	lib: SourceFile | null,
 	x_types: boolean
 }
 
 
 let cflsConfig! : CflsConfig;
 
-const libfile = SourceFile("nil!", CfFileType.dCfm, `
-
-@declare function queryFilter(
-    required callback : (required row: number, currentRow: number, query: query<any>) => void,
-    parallel : boolean,
-    maxThreadCount : number) => query<any>;
-
-@type Query = <T> => {
-	recordCount: number,
-	columnList: string,
-	filter: (required predicate: (row: T) => boolean, currentRow: number, query: Query<T>) => Query<T>,
-} & T;
-
-
-@type Monad = <T> => {
-	map:  <A,B>(tas: T<A>, f: (a: A) => B) => T<B>,
-	lift: <A>  (a: A) => T<A>,
-	join: <A>  (tta: T<T<A>>) => T<A>,
-}
-
-@type List = <T> => T[];
-
-@type ListMonad = Monad<List>;
-
-`
-
-);
 function naiveGetDiagnostics(uri: TextDocumentUri, text: string, fileType: CfFileType) : readonly cfcDiagnostic[] {
 	// how to tell if we were launched in debug mode ?
 	const {parser,binder,checker, parseCache} = cflsConfig;
 
-	libfile;
 	const cfFileType = cfmOrCfc(uri);
 	if (!cfFileType) {
 		return [];
 	}
 
 	const sourceFile = SourceFile(uri, cfFileType, text);
+	if (cflsConfig.lib) {
+		sourceFile.libRefs.push(cflsConfig.lib);
+	}
+
     parser.setSourceFile(sourceFile);
 
     parser.parse(fileType);
@@ -144,7 +121,7 @@ connection.onInitialize((params: InitializeParams) => {
 			textDocumentSync: TextDocumentSyncKind.Incremental,
 			// Tell the client that this server supports code completion.
 			completionProvider: {triggerCharacters: ["."]},
-			signatureHelpProvider: {triggerCharacters: ["("]},
+			//signatureHelpProvider: {triggerCharacters: ["("]},
 		}
 	};
 	/*
@@ -164,6 +141,7 @@ function resetCflsp(x_types: boolean) {
 		binder: Binder().setDebug(true),
 		checker: Checker(),
 		parseCache: new Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, cfNode>}>(),
+		lib: null,
 		x_types: x_types,
 	};
 }
@@ -402,7 +380,7 @@ connection.onCompletion(
 			const typeinfo = cflsConfig.checker.getCachedTermEvaluatedType(node.parent.parent);
 			if (typeinfo.typeKind === TypeKind.struct) {
 				const result : CompletionItem[] = [];
-				for (const [name,type] of typeinfo.membersMap.entries()) {
+				for (const [name,type] of [...typeinfo.membersMap.entries(), ...typeinfo.caselessMembersMap.entries()]) {
 					result.push({
 						label: name,
 						kind: type.typeKind === TypeKind.functionSignature
@@ -515,7 +493,7 @@ connection.onCompletion(
 	}
 );
 
-connection.onSignatureHelp((params) : SignatureHelp => {
+/*connection.onSignatureHelp((params) : SignatureHelp => {
 	params;
 	const x : ParameterInformation[] = [];
 	x.push(ParameterInformation.create("someparam1", "1111 where does type info go"));
@@ -526,7 +504,15 @@ connection.onSignatureHelp((params) : SignatureHelp => {
 		activeSignature: null,
 		activeParameter: 0 // 0 indexed
 	}
-})
+})*/
+
+connection.onNotification("cflsp/load-lib", (libAbsPath: string) => {
+	const path = libAbsPath;
+	const sourceFile = SourceFile(path, CfFileType.dCfm, fs.readFileSync(path));
+	cflsConfig.parser.setSourceFile(sourceFile).parse();
+	cflsConfig.binder.bind(sourceFile, cflsConfig.parser.getScanner(), cflsConfig.parser.getDiagnostics());
+	cflsConfig.lib = sourceFile;
+});
 
 // This handler resolves additional information for the item selected in
 // the completion list.

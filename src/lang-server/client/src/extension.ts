@@ -16,6 +16,8 @@ import {
 let client: LanguageClient;
 
 export function activate(context: ExtensionContext) {
+	const libAbsPath = "c:/Users/anon/dev/cfc/src/lang-server/server/src/runtimelib/lib.cf2018.d.cfm"//context.asAbsolutePath("./out/lib.cf2018.d.cfm");
+	
 	// The server is implemented in node
 	let serverModule = context.asAbsolutePath("./out/server.js"); 
 	
@@ -44,7 +46,8 @@ export function activate(context: ExtensionContext) {
 		synchronize: {
 			// Notify the server about file changes to '.clientrc files contained in the workspace
 			fileEvents: workspace.createFileSystemWatcher('**/.clientrc')
-		}
+		},
+		initializationOptions: "some-data-init-here",
 	};
 
 	// Create the language client and start the client.
@@ -57,6 +60,10 @@ export function activate(context: ExtensionContext) {
 
 	// Start the client. This will also launch the server
 	client.start();
+	client.onReady().then(() => {
+		client.sendNotification("cflsp/load-lib", libAbsPath);
+	})
+	
 }
 
 export function deactivate(): Thenable<void> | undefined {

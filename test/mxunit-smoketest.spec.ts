@@ -1,7 +1,7 @@
 import * as assert from "assert";
 import * as fs from "fs";
 import * as path from "path";
-import { Parser, Binder, cfmOrCfc, SourceFile, flattenTree } from "../out/compiler";
+import { Parser, Binder, cfmOrCfc, SourceFile, flattenTree, Checker, CfFileType } from "../out/compiler";
 
 const expectedDiagnosticCountByFile : Record<string, number> = {
     "./mxunit/mxunit-TestCase-Template.cfc": 0,
@@ -243,7 +243,7 @@ const expectedDiagnosticCountByFile : Record<string, number> = {
     "./mxunit/tests/samples/MyComponent.cfc": 0,
     "./mxunit/tests/samples/MyComponentTest.cfc": 0,
     "./mxunit/tests/samples/MyOtherComponentTest.cfc": 0,
-    "./mxunit/tests/utils/TestBubbleSort.cfc": 0,
+    "./mxunit/tests/utils/TestBubbleSort.cfc": 1, // cannot find name assertequals - this is in the parent component
     "./mxunit/utils/BubbleSort.cfc": 0,
 };
 
@@ -251,6 +251,12 @@ const expectedDiagnosticCountByFile : Record<string, number> = {
 describe("MX-Unit smoke test", () => {
     const parser = Parser().setDebug(true);
     const binder = Binder().setDebug(true);
+    const checker = Checker();
+
+    const libPath = path.resolve("./src/lang-server/server/src/runtimelib/lib.cf2018.d.cfm");
+    const stdLib = SourceFile(libPath , CfFileType.dCfm, fs.readFileSync(libPath));
+    parser.setSourceFile(stdLib).parse();
+    binder.bind(stdLib, parser.getScanner(), parser.getDiagnostics());
     
     for (const fileBaseName of Object.keys(expectedDiagnosticCountByFile)) {
         const expectedDiagnosticCount = expectedDiagnosticCountByFile[fileBaseName];
@@ -259,11 +265,13 @@ describe("MX-Unit smoke test", () => {
             const absPath = path.resolve(__dirname, fileBaseName);
             const textBuffer = fs.readFileSync(absPath);
             const sourceFile = SourceFile(absPath, cfmOrCfc(absPath)!, textBuffer);
+            sourceFile.libRefs.push(stdLib);
             parser.setSourceFile(sourceFile).parse();
             const diagnostics = parser.getDiagnostics();
 
             flattenTree(sourceFile);
             binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
+            checker.check(sourceFile, parser.getScanner(), parser.getDiagnostics());
             
             assert.strictEqual(diagnostics.length, expectedDiagnosticCount, `${fileBaseName} parsed with exactly ${expectedDiagnosticCount} emitted diagnostics`);
         });

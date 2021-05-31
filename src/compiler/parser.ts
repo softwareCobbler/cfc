@@ -27,7 +27,7 @@ import {
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, getAttributeValue } from "./utils";
-import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type, TypeFlags, cfFunctionSignature, cfTypeConstructorInvocation, cfVoid, cfTypeConstructorParam, cfTypeConstructor, cfIntersection, cfTypeId, TypeKind, cfUnion, cfStructMember, SyntheticType } from "./types";
+import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type, TypeFlags, cfFunctionSignature, cfTypeConstructorInvocation, cfVoid, cfTypeConstructorParam, cfTypeConstructor, cfIntersection, cfTypeId, TypeKind, cfUnion, cfStructMember, SyntheticType, TypeAttribute } from "./types";
 
 let debugParseModule = false;
 let parseTypes = false;
@@ -167,12 +167,14 @@ export function Parser() {
             const saveTokenizerState = getScannerState();
             const diagnosticsLimit = diagnostics.length;
             const savedLastNonTriviaToken = lastNonTriviaToken;
+            const savedLastTypeAnnotation = lastTypeAnnotation;
 
             const result = lookaheadWorker();
 
             diagnostics.splice(diagnosticsLimit); // drop any diagnostics that were added
             restoreScannerState(saveTokenizerState);
             lastNonTriviaToken = savedLastNonTriviaToken;
+            lastTypeAnnotation = savedLastTypeAnnotation;
             return result;
         }
         //
@@ -186,6 +188,7 @@ export function Parser() {
             const savedGlobalDiagnosticEmitter = globalDiagnosticEmitter;
             const diagnosticsLimit = diagnostics.length;
             const savedLastNonTriviaToken = lastNonTriviaToken;
+            const savedLastTypeAnnotation = lastTypeAnnotation;
 
             const result = speculationWorker(...args as [...Args]);
 
@@ -197,6 +200,7 @@ export function Parser() {
                 globalDiagnosticEmitter = savedGlobalDiagnosticEmitter;
                 diagnostics.splice(diagnosticsLimit); // drop any diagnostics that were added
                 lastNonTriviaToken = savedLastNonTriviaToken;
+                lastTypeAnnotation = savedLastTypeAnnotation;
                 return null;
             }
         }
@@ -1139,7 +1143,7 @@ export function Parser() {
                 // after we match to the </cfif> we reduce to a single Tag.Conditional node
                 //
                 const rootConsequent = treeifyTags(...reductionInstructions.cfif);
-                const rootConsequentAsBlock = Block(null, rootConsequent, null);
+                const rootConsequentAsBlock = FromTag.looseStatementsBlock(rootConsequent);
 
                 let elseIfs : [CfTag.ScriptLike, Block][] = [];
                 let else_ : Conditional | null = null;
@@ -1148,14 +1152,14 @@ export function Parser() {
                     const elseIfTag = parseOptionalTag(CfTag.Which.start, "elseif") as CfTag.ScriptLike;
                     if (elseIfTag) {
                         const consequent = treeifyTags(...reductionInstructions.cfelseif);
-                        const consequentAsBlock = Block(null, consequent, null);
+                        const consequentAsBlock = FromTag.looseStatementsBlock(consequent);
                         elseIfs.push([elseIfTag, consequentAsBlock]);
                         continue;
                     }
                     const elseTag = parseOptionalTag(CfTag.Which.start, "else") as CfTag.Common;
                     if (elseTag) {
                         const consequent = treeifyTags(...reductionInstructions.cfelse);
-                        const consequentAsBlock = Block(null, consequent, null);
+                        const consequentAsBlock = FromTag.looseStatementsBlock(consequent);
                         else_ = Tag.Else(elseTag, consequentAsBlock);
                     }
                     break;
@@ -1944,6 +1948,10 @@ export function Parser() {
             return declaration;
         }
         else {
+            if (savedLastTypeAnnotation) {
+                assignmentExpr.typeAnnotation = savedLastTypeAnnotation;
+                lastTypeAnnotation = null;
+            }
             return assignmentExpr;
         }
     }
@@ -3702,16 +3710,42 @@ export function Parser() {
             return type;
         }
 
+        function parseTypeAttribute() : TypeAttribute {
+            const hash         = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
+            const exclamation  = parseExpectedTerminal(TokenType.EXCLAMATION, ParseOptions.withTrivia);
+            const leftBracket  = parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
+            const name         = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
+            const rightBracket = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
+            return TypeAttribute(hash, exclamation, leftBracket, name, rightBracket);
+        }
+
         function parseTypeStructMemberElement() : cfStructMember {
+            // @fixme!: lexemeLikeStructKey accepts `a.b` but we don't want the dots
             const key = scanLexemeLikeStructKey();
             if (!key) {
                 parseErrorAtCurrentToken("Expected a struct key.");
             }
-            const name = key ? Terminal(key) : NilTerminal(pos());
+
+            let name : Terminal;
+            if (key) {
+                name = Terminal(key, parseTrivia());
+            }
+            else {
+                name = NilTerminal(pos());
+                parseTrivia();
+            }
+
+            const attrs : TypeAttribute[] = [];
+            if (lookahead() === TokenType.HASH) {
+                while (lookahead() !== TokenType.EOF && lookahead() === TokenType.HASH) {
+                    attrs.push(parseTypeAttribute());
+                }
+            }
+
             const colon = parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
             const type = parseType();
             const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
-            return cfStructMember(name, colon, type, comma);
+            return cfStructMember(name, colon, type, comma, attrs);
         }
 
         let savedScannerState : ScannerState | null = null;
@@ -3791,8 +3825,33 @@ export function Parser() {
                     const leftBrace = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
                     const kvPairs = parseList(ParseContext.typeStruct, parseTypeStructMemberElement);
                     const rightBrace = parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
-                    result = cfStruct(leftBrace, kvPairs, rightBrace);
+
+                    const computedMembers = new Map<string, Type>();
+                    const caselessMembers = new Map<string, Type>();
+                    for (const member of kvPairs) {
+                        let noCase = false;
+                        for (const attr of member.attributes) {
+                            if (attr.name.token.text === "noCase") {
+                                noCase = true;
+                            }
+                            else {
+                                parseErrorAtRange(attr.range, "Unsupported attribute.");
+                            }
+                        }
+                        
+                        if (noCase) {
+                            // "caseless" members get set to all lowercase, generally to support later comparisons with "canonicalized"
+                            // cf case-insensitive identifiers
+                            caselessMembers.set(member.propertyName.token.text.toLowerCase(), member.type);
+                        }
+                        else {
+                            computedMembers.set(member.propertyName.token.text, member.type);
+                        }
+                    }
+
+                    result = cfStruct(leftBrace, kvPairs, computedMembers, caselessMembers, rightBrace);
                     result = maybeParseArrayModifier(result);
+
                     break;
                 }
                 case TokenType.LEFT_ANGLE: {
