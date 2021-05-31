@@ -14,9 +14,10 @@ import {
 } from 'vscode-languageclient/node';
 
 let client: LanguageClient;
+let libAbsPath : string | null = null;
 
 export function activate(context: ExtensionContext) {
-	const libAbsPath = "c:/Users/anon/dev/cfc/src/lang-server/server/src/runtimelib/lib.cf2018.d.cfm"//context.asAbsolutePath("./out/lib.cf2018.d.cfm");
+	libAbsPath = context.asAbsolutePath("./out/lib.cf2018.d.cfm");
 	
 	// The server is implemented in node
 	let serverModule = context.asAbsolutePath("./out/server.js"); 
@@ -58,13 +59,18 @@ export function activate(context: ExtensionContext) {
 		clientOptions
 	);
 
+	
 	// Start the client. This will also launch the server
 	client.start();
-	client.onReady().then(() => {
-		client.sendNotification("cflsp/load-lib", libAbsPath);
-	})
-	
+
+	client.onReady().then(() =>
+		client.onNotification("cflsp/libpath", () => {
+			client.sendNotification("cflsp/libpath", libAbsPath);
+		})
+	);
 }
+
+
 
 export function deactivate(): Thenable<void> | undefined {
 	if (!client) {

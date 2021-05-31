@@ -3,7 +3,7 @@
 	"description": "ColdFusion syntax error checker",
 	"author": "David Rogers",
 	"license": "MIT",
-	"version": "1.0.15",
+	"version": "1.0.17",
 	"publisher": "DavidRogers",
 	"categories": [],
 	"repository": {
@@ -20,7 +20,7 @@
 		"onLanguage:cfml"
 	],
 	"main": "./out/cflsp.js",
-	"files": ["out/foo.txt"],
+	"files": ["out/lib.cf2018.d.cfm"],
 	"contributes": {
 		"languages": [
 			{
@@ -39,7 +39,7 @@
 					"scope": "resource",
 					"type": "boolean",
 					"default": false,
-					"description": "experimental types"
+					"description": "experimental types / flow analysis"
 				}
 			}
 		}

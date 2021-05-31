@@ -1,4 +1,4 @@
-import { SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes, IndexedAccessChainElement, NodeFlags, BinaryOpTypeUiString, VariableDeclaration, Identifier, FlowId, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName } from "./node";
+import { SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes, IndexedAccessChainElement, NodeFlags, BinaryOpTypeUiString, VariableDeclaration, Identifier, FlowId, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType } from "./node";
 import { Scanner } from "./scanner";
 import { Diagnostic } from "./parser";
 import { cfFunctionSignature, cfIntersection, Type, TypeKind, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfNever, cfStruct, cfUnion, SyntheticType } from "./types";
@@ -164,6 +164,7 @@ export function Checker() {
             case NodeType.ternary:
                 return;
             case NodeType.for:
+                checkFor(node);
                 return;
             case NodeType.structLiteral:
                 return;
@@ -884,6 +885,13 @@ export function Checker() {
             typeErrorAtNode(type, `Cannot find name '${type.name}'.`);
         }
         return undefined;
+    }
+
+    function checkFor(node: For) {
+        if (node.subType === ForSubType.forIn) {
+            checkNode(node.forIn!.expr);
+        }
+        checkNode(node.body);
     }
 
     function getMemberType(type: Type, context: Node, name: string) : Type {

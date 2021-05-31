@@ -59,7 +59,7 @@ interface CflsConfig {
 
 let cflsConfig! : CflsConfig;
 
-function naiveGetDiagnostics(uri: TextDocumentUri, text: string, fileType: CfFileType) : readonly cfcDiagnostic[] {
+function naiveGetDiagnostics(uri: TextDocumentUri, text: string, fileType: CfFileType) : cfcDiagnostic[] {
 	// how to tell if we were launched in debug mode ?
 	const {parser,binder,checker, parseCache} = cflsConfig;
 
@@ -77,7 +77,10 @@ function naiveGetDiagnostics(uri: TextDocumentUri, text: string, fileType: CfFil
 
     parser.parse(fileType);
 	binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
-	checker.check(sourceFile, parser.getScanner(), parser.getDiagnostics());
+	
+	if (cflsConfig.x_types) {
+		checker.check(sourceFile, parser.getScanner(), parser.getDiagnostics());
+	}
 	
 	parseCache.set(uri, {
 		parsedSourceFile: sourceFile,
@@ -124,6 +127,10 @@ connection.onInitialize((params: InitializeParams) => {
 			//signatureHelpProvider: {triggerCharacters: ["("]},
 		}
 	};
+
+	if (params.initializationOptions?.libpath) {
+		
+	}
 	/*
 	if (hasWorkspaceFolderCapability) {
 		result.capabilities.workspace = {
@@ -146,6 +153,21 @@ function resetCflsp(x_types: boolean) {
 	};
 }
 
+function reemitDiagnostics() {
+	for (const uri of cflsConfig.parseCache.keys()) {
+		const textDocument = documents.get(uri);
+		const text = textDocument?.getText();
+		const fileType = cfmOrCfc(uri);
+
+		if (text && fileType) {
+			connection.sendDiagnostics({
+				uri: uri,
+				diagnostics: cfcDiagnosticsToLspDiagnostics(textDocument!, naiveGetDiagnostics(uri, text, fileType))
+			});
+		}
+	}
+}
+
 connection.onInitialized(() => {
 	if (hasConfigurationCapability) {
 		// Register for all configuration changes.
@@ -159,6 +181,7 @@ connection.onInitialized(() => {
 		resetCflsp(/*x_types*/false);
 	}
 
+	connection.sendNotification("cflsp/libpath");
 
 	/*
 	if (hasWorkspaceFolderCapability) {
@@ -202,6 +225,8 @@ connection.onDidChangeConfiguration(async change => {
 });
 
 connection.onDocumentSymbol((params: DocumentSymbolParams) => {
+	return [];
+	/*
 	params.textDocument.uri;
 	const textDocument = documents.get(params.textDocument.uri);
 
@@ -219,7 +244,7 @@ connection.onDocumentSymbol((params: DocumentSymbolParams) => {
 			}
 		}];
 
-	return v;
+	return v;*/
 });
 
 function getDocumentSettings(resource: string): Thenable<ExampleSettings> {
@@ -252,24 +277,7 @@ documents.onDidChangeContent(change => {
 const cfmPattern = /cfml?$/i;
 const cfcPattern = /cfc$/i;
 
-async function validateTextDocument(textDocument: TextDocument): Promise<void> {
-	// In this simple example we get the settings for every validate run.
-	//let settings = await getDocumentSettings(textDocument.uri);
-	
-	let cfDiagnostics : readonly cfcDiagnostic[];
-
-	if (cfmPattern.test(textDocument.uri)) {
-		cfDiagnostics = naiveGetDiagnostics(textDocument.uri, textDocument.getText(), CfFileType.cfm);
-	}
-	else if (cfcPattern.test(textDocument.uri)) {
-		cfDiagnostics = naiveGetDiagnostics(textDocument.uri, textDocument.getText(), CfFileType.cfc);
-	}
-	else {
-		// didn't match a cf file type, send an empty diagnostics list and we're done
-		connection.sendDiagnostics({ uri: textDocument.uri, diagnostics: [] });
-		return;
-	}
-
+function cfcDiagnosticsToLspDiagnostics(textDocument: TextDocument, cfDiagnostics: cfcDiagnostic[]) {
 	let diagnostics: Diagnostic[] = [];
 
 	for (const diagnostic of cfDiagnostics) {
@@ -283,38 +291,29 @@ async function validateTextDocument(textDocument: TextDocument): Promise<void> {
 			source: "cfls"
 		});
 	}
-	/*
-	while ((m = pattern.exec(text)) && problems < settings.maxNumberOfProblems) {
-		problems++;
-		let diagnostic: Diagnostic = {
-			severity: DiagnosticSeverity.Warning,
-			range: {
-				start: textDocument.positionAt(m.index),
-				end: textDocument.positionAt(m.index + m[0].length)
-			},
-			message: `${m[0]} is all uppercase.`,
-			source: 'ex'
-		};
-		if (hasDiagnosticRelatedInformationCapability) {
-			diagnostic.relatedInformation = [
-				{
-					location: {
-						uri: textDocument.uri,
-						range: Object.assign({}, diagnostic.range)
-					},
-					message: 'Spelling matters'
-				},
-				{
-					location: {
-						uri: textDocument.uri,
-						range: Object.assign({}, diagnostic.range)
-					},
-					message: 'Particularly for names'
-				}
-			];
-		}
-		diagnostics.push(diagnostic);
-	}*/
+
+	return diagnostics;
+}
+
+async function validateTextDocument(textDocument: TextDocument): Promise<void> {
+	// In this simple example we get the settings for every validate run.
+	//let settings = await getDocumentSettings(textDocument.uri);
+	
+	let cfDiagnostics : cfcDiagnostic[];
+
+	if (cfmPattern.test(textDocument.uri)) {
+		cfDiagnostics = naiveGetDiagnostics(textDocument.uri, textDocument.getText(), CfFileType.cfm);
+	}
+	else if (cfcPattern.test(textDocument.uri)) {
+		cfDiagnostics = naiveGetDiagnostics(textDocument.uri, textDocument.getText(), CfFileType.cfc);
+	}
+	else {
+		// didn't match a cf file type, send an empty diagnostics list and we're done
+		connection.sendDiagnostics({ uri: textDocument.uri, diagnostics: [] });
+		return;
+	}
+
+	const diagnostics = cfcDiagnosticsToLspDiagnostics(textDocument, cfDiagnostics);
 
 	// Send the computed diagnostics to VSCode.
 	connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
@@ -506,12 +505,14 @@ connection.onCompletion(
 	}
 })*/
 
-connection.onNotification("cflsp/load-lib", (libAbsPath: string) => {
+connection.onNotification("cflsp/libpath", (libAbsPath: string) => {
+	if (!libAbsPath) return;
 	const path = libAbsPath;
 	const sourceFile = SourceFile(path, CfFileType.dCfm, fs.readFileSync(path));
 	cflsConfig.parser.setSourceFile(sourceFile).parse();
 	cflsConfig.binder.bind(sourceFile, cflsConfig.parser.getScanner(), cflsConfig.parser.getDiagnostics());
 	cflsConfig.lib = sourceFile;
+	reemitDiagnostics();
 });
 
 // This handler resolves additional information for the item selected in

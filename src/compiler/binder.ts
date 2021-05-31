@@ -942,8 +942,10 @@ export function Binder() {
 
     function bindFor(node: For) {
         if (node.subType === ForSubType.forIn) {
+            extendCurrentFlowToNode(node.forIn!.init);
             bindNode(node.forIn!.init, node);
             bindNode(node.forIn!.inToken, node);
+            extendCurrentFlowToNode(node.forIn!.expr);
             bindNode(node.forIn!.expr, node);
             bindNode(node.body, node);
             return;
