@@ -480,7 +480,10 @@ connection.onCompletion(
 			const result : [StaticallyKnownScopeName, string][] = [];
 			for (const scopeName of targetKeys) {
 				if (scopeDisplay.hasOwnProperty(scopeName)) {
-					const varNames = [...(<cfStruct>scopeDisplay[scopeName]!).membersMap.keys()];
+					const varNames = [
+						...(<cfStruct>scopeDisplay[scopeName]!).membersMap.keys(),
+						...(<cfStruct>scopeDisplay[scopeName]!).caselessMembersMap.keys()
+					];
 					result.push(...varNames.map((varName) : [StaticallyKnownScopeName, string] => [scopeName, varName]));
 				}
 			}
