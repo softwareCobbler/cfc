@@ -1,8 +1,8 @@
-import { SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes, IndexedAccessChainElement, NodeFlags, BinaryOpTypeUiString, VariableDeclaration, Identifier, FlowId, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType } from "./node";
+import { SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes, IndexedAccessChainElement, NodeFlags, BinaryOpTypeUiString, VariableDeclaration, Identifier, FlowId, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype } from "./node";
 import { Scanner } from "./scanner";
 import { Diagnostic } from "./parser";
 import { cfFunctionSignature, cfIntersection, Type, TypeKind, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfNever, cfStruct, cfUnion, SyntheticType } from "./types";
-import { getTriviallyComputableString } from "./utils";
+import { getAttributeValue, getTriviallyComputableString } from "./utils";
 
 export function Checker() {
     let sourceFile!: SourceFile;
@@ -66,6 +66,7 @@ export function Checker() {
             case NodeType.hashWrappedExpr: // fallthrough
             case NodeType.parenthetical:   // fallthrough
             case NodeType.tagAttribute:
+                checkNode(node.expr);
                 return;
             case NodeType.tag:
                 return;
@@ -76,11 +77,13 @@ export function Checker() {
                 checkCallArgument(node);
                 return;
             case NodeType.unaryOperator:
+                checkUnaryOperator(node);
                 return;
             case NodeType.binaryOperator:
                 checkBinaryOperator(node);
                 return;
             case NodeType.conditional:
+                checkConditional(node);
                 return;
             case NodeType.variableDeclaration:
                 checkVariableDeclaration(node);
@@ -93,6 +96,7 @@ export function Checker() {
                 }
                 return;
             case NodeType.returnStatement:
+                checkNode(node.expr);
                 return;
             case NodeType.breakStatement:
                 return;
@@ -119,6 +123,7 @@ export function Checker() {
                 setCachedTermEvaluatedType(node, SyntheticType.string);
                 return;
             case NodeType.interpolatedStringLiteral:
+                checkList(node.elements);
                 setCachedTermEvaluatedType(node, SyntheticType.string);
                 return;
             case NodeType.numericLiteral:
@@ -144,8 +149,12 @@ export function Checker() {
                 checkIndexedAccessChainElement(node);
                 return;
             case NodeType.sliceExpression:
+                if (node.from) checkNode(node.from);
+                if (node.to) checkNode(node.to);
+                if (node.stride) checkNode(node.stride);
                 return;
             case NodeType.functionParameter:
+                if (!node.fromTag && node.defaultValue) checkNode(node.defaultValue);
                 return;
             case NodeType.functionDefinition: // fallthrough
             case NodeType.arrowFunctionDefinition:
@@ -154,35 +163,48 @@ export function Checker() {
             case NodeType.dottedPath:
                 return;
             case NodeType.switch:
+                checkSwitch(node);
                 return;
             case NodeType.switchCase:
+                checkSwitchCase(node);
                 return;
             case NodeType.do:
+                checkDo(node);
                 return;
             case NodeType.while:
+                checkWhile(node);
                 return;
             case NodeType.ternary:
+                checkTernary(node);
                 return;
             case NodeType.for:
                 checkFor(node);
                 return;
             case NodeType.structLiteral:
+                checkStructLiteral(node);
                 return;
             case NodeType.structLiteralInitializerMember:
+                checkStructLiteralInitializerMember(node);
                 return;
             case NodeType.arrayLiteral:
+                checkArrayLiteral(node);
                 return;
             case NodeType.arrayLiteralInitializerMember:
+                checkArrayLiteralInitializerMember(node);
                 return;
             case NodeType.try:
+                checkTry(node);
                 return;
             case NodeType.catch:
+                checkCatch(node);
                 return;
             case NodeType.finally:
+                checkFinally(node);
                 return;
             case NodeType.importStatement:
                 return;
             case NodeType.new:
+                checkNew(node);
                 return;
             case NodeType.type:
                 return;
@@ -231,6 +253,11 @@ export function Checker() {
         scopeName: StaticallyKnownScopeName,
         type: Type
     }
+
+    interface SymbolResolution extends ScopeDisplayMemberResolution {
+        container: Node
+    }
+
     function getScopeDisplayMember(scope: ScopeDisplay, canonicalName: string) : ScopeDisplayMemberResolution | undefined {
         for (const scopeName of scopeLookupOrder) {
             if (scope.hasOwnProperty(scopeName)) {
@@ -243,12 +270,15 @@ export function Checker() {
         return undefined;
     }
 
-    function walkUpScopesToFindIdentifier(base: Node, canonicalName: string) : ScopeDisplayMemberResolution | undefined {
+    function walkUpScopesToFindIdentifier(base: Node, canonicalName: string) : SymbolResolution | undefined {
         let node : Node | null = base;
         while (node) {
             if (node.containedScope) {
                 const varEntry = getScopeDisplayMember(node.containedScope, canonicalName);
-                if (varEntry) { return varEntry; }
+                if (varEntry) {
+                    (varEntry as SymbolResolution).container = node;
+                    return varEntry as SymbolResolution;
+                }
 
                 if (node.kind === NodeType.sourceFile) {
                     // if we got to root and didn't find it, see if we can find it in stdlib (if stdlib was available)
@@ -256,13 +286,15 @@ export function Checker() {
                         const type = lookupTypeStructMember(stdLib, canonicalName);
                         if (type) {
                             const scopeName = "variables";
-                            return {scopeName, type};
+                            return {scopeName, type, container: node};
                         }
                     }
                     return undefined;
                 }
 
-                else { node = node.containedScope.container; }
+                else {
+                    node = node.containedScope.container;
+                }
             }
             else {
                 node = node.parent;
@@ -292,13 +324,7 @@ export function Checker() {
         return struct.membersMap.get(name) ?? struct.caselessMembersMap.get(name);
     }
 
-    function getTypeAtFlow(base: Node, name: string, deferOnFunctionContainer = true) : Type | "defer" | undefined {
-        const gen = worker();
-        const capturedFrame = currentFrame;
-        capturedFrame.push(gen);
-        return gen.next().value;
-
-        function* worker() : Generator<"defer", Type | undefined, never> {
+    function getTypeAtFlow(base: Node, name: string, deferOnFunctionContainer = true) {
         let node: Node | null = base;
         let flow: Flow | null = null;
         while (node) {
@@ -321,7 +347,6 @@ export function Checker() {
             const type = getCachedEvaluatedTypeOfIdentifierAtFlow(flow, name);
             // we got a type at this flow
             if (type) {
-                capturedFrame.pop();
                 return type;
             }
             else if (flow.node?.containedScope) {
@@ -332,7 +357,6 @@ export function Checker() {
                     // no type at this flow, but the name is defined on this scope;
                     // stop walking upwards, because the current flow's node is the top-most container for this name,
                     // even if there is a predecessor flow
-                    capturedFrame.pop();
 
                     if (scopeMember.type.typeKind === TypeKind.functionSignature) { // a function definition is always defined
                         return scopeMember.type;
@@ -350,11 +374,6 @@ export function Checker() {
                     // check the rest of the grand-parent's body 
                     // but before we defer, check all parent containers to see if they even contain this name
                     if (walkUpScopesToFindIdentifier(flow.node, name)) {
-                        yield "defer";
-                        return rerunAssertingNoDefer(getTypeAtFlow, flow.predecessor[0].node!, name, /*deferOnFunctionContainer*/ false);
-                    }
-                    else {
-                        capturedFrame.pop();
                         return undefined;
                     }
                 }
@@ -362,7 +381,6 @@ export function Checker() {
 
             // if we got to root and didn't find it, see if we can find it in stdlib (if stdlib was available)
             if (flow.node?.kind === NodeType.sourceFile) {
-                capturedFrame.pop();
                 if (stdLib) return lookupTypeStructMember(stdLib, name);
             }
 
@@ -371,9 +389,7 @@ export function Checker() {
             flow = flow.predecessor[0];
         }
 
-        capturedFrame.pop();
         return undefined;
-        }
     }
 
     function isCallable(type: Type) : boolean {
@@ -436,13 +452,12 @@ export function Checker() {
         checkList(node.args);
         const type = getCachedTermEvaluatedType(node.left);
         if (type) {
+            if (type.typeKind === TypeKind.any) {
+                setCachedTermEvaluatedType(node, type);
+                return;
+            }
             if (isCallable(type)) {
-                if (type.typeKind === TypeKind.any) {
-                    setCachedTermEvaluatedType(node, type);
-                    return;
-                }
-
-                unsafeAssertTypeKind<cfFunctionSignature>(type);
+                unsafeAssertTypeKind<cfFunctionSignature>(type); // could be a `new` expression though?
                 setCachedTermEvaluatedType(node, type.returns);
 
                 //const requiredParams = type.params.filter(param => param.required === true);
@@ -472,107 +487,105 @@ export function Checker() {
                 // error
             }
         }
-        
-
     }
 
     function checkCallArgument(node: CallArgument) {
-        switch (node.expr.kind) {
-            case NodeType.indexedAccess: {
-                const x = getCachedTermEvaluatedType(node.expr.root);
-                x;
+        // should probably do this all in one go inside checkArgList or something
+        checkNode(node.expr);
+    }
+
+    function checkUnaryOperator(node: UnaryOperator) {
+        checkNode(node.expr);
+        const type = getCachedTermEvaluatedType(node.expr);
+        if (type.typeKind !== TypeKind.any && type.typeKind !== TypeKind.number) {
+            typeErrorAtNode(node.expr, "Unary operator requires a numeric operand.");
+        }
+    }
+
+    function checkBinaryOperator(node: BinaryOperator) {
+        checkNode(node.left);
+        checkNode(node.right);
+
+        switch (node.optype) {
+            case BinaryOpType.assign: {
+                // an assignment, even fv-unqualified, will always be bound to a scope
+                // `x = y` is effectively `variables.x = y`
+                if (node.left.kind === NodeType.identifier && node.left.canonicalName) {
+                    const lhsType = getTypeAtFlow(node.left, node.left.canonicalName);
+                    /*if (lhsType === "defer") {
+                        yield "defer";
+                        lhsType = g_lhsType.next().value;
+                        if (lhsType === "defer") throw "unexpected defer";
+                    }*/
+                    const rhsType = getCachedTermEvaluatedType(node.right);
+                    if (!lhsType) {
+                        // there is no type at the current flow; so, this is the first assignment for this var in this scope
+                        if (node.typeAnnotation) {
+                            const evaluatedTypeAnnotation = evaluateType(node, node.typeAnnotation);
+                            if (!isAssignable(rhsType, node.typeAnnotation)) {
+                                typeErrorAtNode(node.right, "RHS is not assignable to LHS.");
+                            }
+                            setCachedEvaluatedTypeOfIdentifierAtFlow(node.left.flow!, node.left.canonicalName, evaluatedTypeAnnotation);
+                        }
+                        else {
+                            setCachedEvaluatedTypeOfIdentifierAtFlow(node.left.flow!, node.left.canonicalName, SyntheticType.any);
+                        }
+                    }
+                    else {
+                        if (node.typeAnnotation) {
+                            typeErrorAtNode(node, "Type annotations can only be bound to an identifier's first assignment.");
+                        }
+                        if (!isAssignable(rhsType, lhsType)) {
+                            typeErrorAtNode(node.right, "RHS is not assignable to LHS.");
+                        }
+                    }
+                }
+
+                break;
+            }
+            case BinaryOpType.assign_cat:
+            case BinaryOpType.contains:
+            case BinaryOpType.does_not_contain:
+            case BinaryOpType.cat: {
+                const leftType = getCachedTermEvaluatedType(node.left);
+                const rightType = getCachedTermEvaluatedType(node.right);
+                if (leftType.typeKind !== TypeKind.any && leftType.typeKind !== TypeKind.string) {
+                    typeErrorAtNode(node.left, `Left operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a string.`);
+                }
+                if (rightType.typeKind !== TypeKind.any && rightType.typeKind !== TypeKind.string) {
+                    typeErrorAtNode(node.right, `Right operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a string.`);
+                }
+                break;
+            }
+            case BinaryOpType.eq:
+            case BinaryOpType.neq:
+            case BinaryOpType.equivalent:
+            case BinaryOpType.implies: {
+                break;
+            }
+            default: { // all other operators are (number op number)
+                const leftType = getCachedTermEvaluatedType(node.left);
+                const rightType = getCachedTermEvaluatedType(node.right);
+                // acf allows (bool) + (bool), but maybe we don't want to support that
+                if (leftType.typeKind !== TypeKind.any && leftType.typeKind !== TypeKind.number) {
+                    typeErrorAtNode(node.left, `Left operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a number.`);
+                }
+                if (rightType.typeKind !== TypeKind.any && rightType.typeKind !== TypeKind.number) {
+                    typeErrorAtNode(node.right, `Right operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a number.`);
+                }
             }
         }
     }
 
-    type Deferrable<T> = (...args: any[]) => "defer" | T;
-
-    function rerunAssertingNoDefer<T, F extends Deferrable<T>>(f: F, ...args: Parameters<F>) : Exclude<T, "defer"> {
-        const result = f(...args);
-        if (result === "defer") throw "unexpected defer";
-        return result as Exclude<T, "defer">;
-    }
-
-    function checkBinaryOperator(node: BinaryOperator) {
-        const capturedFrame = currentFrame;
-        const gen = worker();
-        capturedFrame.push(gen);
-        return gen.next();
-
-        function* worker() : Generator<"defer", void, never> {
-            checkNode(node.left);
-            checkNode(node.right);
-
-            switch (node.optype) {
-                case BinaryOpType.assign: {
-                    // an assignment, even fv-unqualified, will always be bound to a scope
-                    // `x = y` is effectively `variables.x = y`
-                    if (node.left.kind === NodeType.identifier && node.left.canonicalName) {
-                        let lhsType = getTypeAtFlow(node.left, node.left.canonicalName);
-                        if (lhsType === "defer") {
-                            yield "defer";
-                            lhsType = rerunAssertingNoDefer(getTypeAtFlow, node.left, node.left.canonicalName);
-                        }
-                        /*if (lhsType === "defer") {
-                            yield "defer";
-                            lhsType = g_lhsType.next().value;
-                            if (lhsType === "defer") throw "unexpected defer";
-                        }*/
-                        const rhsType = getCachedTermEvaluatedType(node.right);
-                        if (!lhsType) {
-                            // there is no type at the current flow; so, this is the first assignment for this var in this scope
-                            if (node.typeAnnotation) {
-                                const evaluatedTypeAnnotation = evaluateType(node, node.typeAnnotation);
-                                if (!isAssignable(rhsType, node.typeAnnotation)) {
-                                    typeErrorAtNode(node.right, "RHS is not assignable to LHS.");
-                                }
-                                setCachedEvaluatedTypeOfIdentifierAtFlow(node.left.flow!, node.left.canonicalName, evaluatedTypeAnnotation);
-                            }
-                            else {
-                                setCachedEvaluatedTypeOfIdentifierAtFlow(node.left.flow!, node.left.canonicalName, SyntheticType.any);
-                            }
-                        }
-                        else {
-                            if (node.typeAnnotation) {
-                                typeErrorAtNode(node, "Type annotations can only be bound to an identifier's first assignment.");
-                            }
-                            if (!isAssignable(rhsType, lhsType)) {
-                                typeErrorAtNode(node.right, "RHS is not assignable to LHS.");
-                            }
-                        }
-                    }
-
-                    break;
-                }
-                case BinaryOpType.assign_cat:
-                case BinaryOpType.contains:
-                case BinaryOpType.does_not_contain:
-                case BinaryOpType.cat: {
-                    const leftType = getCachedTermEvaluatedType(node.left);
-                    const rightType = getCachedTermEvaluatedType(node.right);
-                    if (leftType.typeKind !== TypeKind.any && leftType.typeKind !== TypeKind.string) {
-                        typeErrorAtNode(node.left, `Left operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a string.`);
-                    }
-                    if (rightType.typeKind !== TypeKind.any && rightType.typeKind !== TypeKind.string) {
-                        typeErrorAtNode(node.right, `Right operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a string.`);
-                    }
-                    break;
-                }
-                // all other operators are (number op number)
-                default: {
-                    const leftType = getCachedTermEvaluatedType(node.left);
-                    const rightType = getCachedTermEvaluatedType(node.right);
-                    // acf allows (bool) + (bool), but maybe we don't want to support that
-                    if (leftType.typeKind !== TypeKind.any && leftType.typeKind !== TypeKind.number) {
-                        typeErrorAtNode(node.left, `Left operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a number.`);
-                    }
-                    if (rightType.typeKind !== TypeKind.any && rightType.typeKind !== TypeKind.number) {
-                        typeErrorAtNode(node.right, `Right operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a number.`);
-                    }
-                }
-            }
-
-            capturedFrame.pop();
+    function checkConditional(node: Conditional) {
+        if (node.subType === ConditionalSubtype.if || node.subType === ConditionalSubtype.elseif) {
+            if (node.fromTag) checkNode((node.tagOrigin.startTag as CfTag.ScriptLike).expr);
+            else checkNode(node.expr);
+            checkNode(node.consequent);
+            checkNode(node.alternative);
+        }
+        else {
+            checkNode(node.consequent);
         }
     }
 
@@ -679,62 +692,62 @@ export function Checker() {
         return undefined;
     }
 
-    function getContainingFunction(node: Node) {
+    function getContainingFunction(node: Node) : Node | undefined {
         return findAncestor(node, (node) => node?.kind === NodeType.functionDefinition);
     }
 
-    function checkIdentifier(node: Identifier) {
-        const gen = worker();
-        //frameRoots.push(node.nodeId);
-        const capturedFrame = currentFrame;
-        capturedFrame.push(gen);
-        return gen.next().value;
+    function getContainer(node: Node) {
+        return findAncestor(node, (node) => !!node?.containedScope);
+    }
 
-        function* worker() : Generator<"defer", void, never> {
-            // if we're on the lefthand side of a non-fv qualified assignment, we're done
-            // an fv-qualified assignment is handled by checkVariableDeclaration
-            // assignment should alter the type of the variable for this flow in checkBinaryOperator
-            if (node.parent?.kind === NodeType.binaryOperator && node.parent.optype === BinaryOpType.assign && node === node.parent.left) {
-                capturedFrame.pop();
+    function checkIdentifier(node: Identifier) {
+        // if we're on the lefthand side of a non-fv qualified assignment, we're done
+        // an fv-qualified assignment is handled by checkVariableDeclaration
+        // assignment should alter the type of the variable for this flow in checkBinaryOperator
+        if (node.parent?.kind === NodeType.binaryOperator && node.parent.optype === BinaryOpType.assign && node === node.parent.left) {
+            return;
+        }
+
+        const name = node.canonicalName;
+
+        if (name !== undefined) {
+            const useContainer = getContainer(node);
+            const containingFunction = getContainingFunction(node);
+
+            if (isStaticallyKnownScopeName(name)) {
+                if (name === "local" || name === "arguments") {
+                    if (containingFunction) setCachedTermEvaluatedType(node, containingFunction.containedScope![name]!);
+                }
+                else {
+                    setCachedTermEvaluatedType(node, rootScope[name] ?? SyntheticType.any);
+                }
                 return;
             }
 
-            const name = node.canonicalName;
-            if (name !== undefined) {
-                if (isStaticallyKnownScopeName(name)) {
-                    if (name === "local" || name === "arguments") {
-                        const containingFunction = getContainingFunction(node);
-                        if (containingFunction) setCachedTermEvaluatedType(node, containingFunction.containedScope![name]!);
-                    }
-                    else {
-                        setCachedTermEvaluatedType(node, rootScope[name] ?? SyntheticType.any);
-                    }
-                    return;
-                }
+            let type = getTypeAtFlow(node, name);
 
-                let type = getTypeAtFlow(node, name);
-                if (type === "defer") {
-                    yield "defer";
-                    type = rerunAssertingNoDefer(getTypeAtFlow, node, name, /*deferOnFunctionContainer*/ false);
-                }
+            if (type) {
+                setCachedTermEvaluatedType(node, evaluateType(node, type));
+                return;
+            }
 
-                if (type) {
-                    setCachedTermEvaluatedType(node, evaluateType(node, type));
-                    capturedFrame.pop();
-                    return;
-                }
-
-                const symbolTableEntry = walkUpScopesToFindIdentifier(node, name); // it's possible we did this already in getTypeAtFlow, can we reuse the value instead of doing it again
-                if (symbolTableEntry) {
+            const symbolTableEntry = walkUpScopesToFindIdentifier(node, name);
+            if (symbolTableEntry) {
+                if (useContainer === symbolTableEntry.container) {
                     // there is a symbol table entry, but we could not find a type on the flow graph
-                    // this is a use-before-defintion
-                    // be nice to say "local" scope or "variables" scope or etc.
-                    typeErrorAtNode(node, `Identifier '${name}' is in '${symbolTableEntry.scopeName}' scope, but is used before being assigned.`);
+                    // if we're toplevel 
+                    typeErrorAtNode(node, `Identifier '${name}' is used before its declaration.`);
+                    setCachedTermEvaluatedType(node, SyntheticType.any);
+                    return;
                 }
                 else {
-                    typeErrorAtNode(node, `Cannot find name '${name}'.`);
+                    // identifer is declared in some outer scope, we have to assume it is ok
+                    setCachedTermEvaluatedType(node, symbolTableEntry.type);
+                    return;
                 }
             }
+
+            typeErrorAtNode(node, `Cannot find name '${name}'.`);
         }
     }
 
@@ -840,6 +853,52 @@ export function Checker() {
         currentFrame = savedFrame;
     }
 
+    function checkSwitch(node: Switch) {
+        if (node.fromTag) {
+            checkNode(getAttributeValue((node.tagOrigin.startTag as CfTag.Common).attrs, "expression") ?? null)
+        }
+        else {
+            checkNode(node.expr);
+        }
+        for (const case_ of node.cases) {
+            checkNode(case_);
+        }
+    }
+
+    function checkSwitchCase(node: SwitchCase) {
+        if (node.fromTag) {
+            if (node.tagOrigin.startTag?.canonicalName === "cfcase") {
+                const attr = getAttributeValue((node.tagOrigin.startTag as CfTag.Common).attrs, "value") ?? null;
+                // pre-cf2021 it has to be a string or numeric literal
+                checkNode(attr);
+            }
+            checkList(node.body);
+            return;
+        }
+
+        if (node.caseType === SwitchCaseType.case) {
+            // pre cf-2021 it has to be a string or numeric literal
+            checkNode(node.expr);
+        }
+        checkList(node.body);
+    }
+
+    function checkDo(node: Do) {
+        checkNode(node.body);
+        checkNode(node.expr);
+    }
+
+    function checkWhile(node: While) {
+        checkNode(node.expr);
+        checkNode(node.body);
+    }
+
+    function checkTernary(node: Ternary) {
+        checkNode(node.expr);
+        checkNode(node.ifTrue);
+        checkNode(node.ifFalse);
+    }
+
     //
     // type lookup
     //
@@ -892,6 +951,56 @@ export function Checker() {
             checkNode(node.forIn!.expr);
         }
         checkNode(node.body);
+    }
+
+    function checkStructLiteral(node: StructLiteral) {
+        // got `[:]`, there is nothing to check
+        if (node.emptyOrderedStructColon) {
+            return;
+        }
+        checkList(node.members);
+    }
+
+    function checkStructLiteralInitializerMember(node: StructLiteralInitializerMember) {
+        if (node.subType === StructLiteralInitializerMemberSubtype.keyed) {
+            checkNode(node.key);
+            checkNode(node.expr);
+        }
+        else /* spread */ {
+            checkNode(node.expr);
+        }
+    }
+
+    function checkArrayLiteral(node: ArrayLiteral) {
+        checkList(node.members);
+    }
+
+    function checkArrayLiteralInitializerMember(node: ArrayLiteralInitializerMember) {
+        checkNode(node.expr);
+    }
+
+    function checkTry(node: Try) {
+        checkList(node.body);
+        checkList(node.catchBlocks);
+        checkNode(node.finallyBlock);
+    }
+
+    function checkCatch(node: Catch) {
+        if (node.fromTag) {
+            // find exception binding via attributes?
+            checkList(node.body);
+            return;
+        }
+        // put node.exceptionBinding into flow, maybe do that in binder
+        checkList(node.body)
+    }
+
+    function checkFinally(node: Finally) {
+        checkList(node.body);
+    }
+
+    function checkNew(node: New) {
+        checkNode(node.callExpr);
     }
 
     function getMemberType(type: Type, context: Node, name: string) : Type {

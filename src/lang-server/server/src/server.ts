@@ -353,6 +353,8 @@ connection.onCompletion(
 			return [];
 		}
 
+		if (node.parent?.kind)
+
 		// if we got an indexed access chain
 		if (node.parent?.kind === NodeType.indexedAccessChainElement) {
 			/*if (node.parent?.parent?.parent?.kind === NodeType.indexedAccess) {

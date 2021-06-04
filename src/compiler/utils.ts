@@ -222,8 +222,9 @@ export function castCfStringAsCfBoolean(stringText: string) : boolean | undefine
  *      null if not found
  */
 export function getAttributeValue(attrs: TagAttribute[], name: string) : Node | undefined | null {
+    const name_ = name.toLowerCase();
     for (const attr of attrs) {
-        if (attr.lcName === name) {
+        if (attr.lcName === name_) {
             return attr.expr
                 ? attr.expr
                 : undefined;

@@ -185,7 +185,8 @@ export type NodeWithScope<N extends Node = Node, T extends (StaticallyKnownScope
 
 export const enum FlowType {
     default,
-    assignment
+    assignment,
+    postReturn
 }
 
 export interface Flow {

@@ -1,4 +1,4 @@
-import { ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, Script, Tag } from "./node";
+import { ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, Script, Tag, ConditionalSubtype } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue } from "./utils";
 import { Diagnostic } from "./parser";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
@@ -390,16 +390,31 @@ export function Binder() {
     }
 
     function bindConditional(node: Conditional) {
-        if (node.fromTag) {
-            bindNode(node.tagOrigin.startTag, node);
+        if (node.subType === ConditionalSubtype.if || node.subType === ConditionalSubtype.elseif) {
+            let expr : Node;
+            if (node.fromTag) {
+                expr = (node.tagOrigin.startTag as CfTag.ScriptLike).expr!;
+            }
+            else {
+                expr = node.expr!;
+            }
+
+            const savedFlow = currentFlow;
+            extendCurrentFlowToNode(expr);
+            bindNode(expr, node);
+            extendCurrentFlowToNode(node.consequent);
             bindNode(node.consequent, node);
-            bindNode(node.alternative, node);
-            bindNode(node.tagOrigin.endTag, node);
+            if (node.alternative) {
+                currentFlow = savedFlow;
+                extendCurrentFlowToNode(node.alternative);
+                bindNode(node.alternative, node);
+            }
+            currentFlow = savedFlow;
         }
         else {
-            bindNode(node.expr, node);
+            const savedFlow = currentFlow;
             bindNode(node.consequent, node);
-            bindNode(node.alternative, node);
+            currentFlow = savedFlow;
         }
     }
 
@@ -528,10 +543,14 @@ export function Binder() {
 
     function bindReturnStatement(node: ReturnStatement) {
         if (node.tagOrigin.startTag) {
-            bindNode(node.tagOrigin.startTag, node);
+            const expr = (node.tagOrigin.startTag as CfTag.ScriptLike).expr!;
+            extendCurrentFlowToNode(expr);
+            bindNode(expr, node);
             return;
         }
+        extendCurrentFlowToNode(node);
         bindNode(node.expr, node);
+        currentFlow = freshFlow([], FlowType.postReturn);
     }
 
     function bindBreakStatement(node: BreakStatement) {
@@ -613,6 +632,7 @@ export function Binder() {
         let name : string[] | undefined = undefined;
 
         switch (tag.canonicalName) {
+            case "directory":
             case "param":
             case "query": {
                 name = getReturnValueIdentifier("name");
