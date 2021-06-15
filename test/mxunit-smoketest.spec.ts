@@ -73,7 +73,7 @@ const expectedDiagnosticCountByFile : Record<string, number> = {
     "./mxunit/PluginDemoTests/ExpectedExceptionTest.cfc": 0,
     "./mxunit/PluginDemoTests/FiveSecondTest.cfc": 0,
     "./mxunit/PluginDemoTests/HodgePodgeTest.cfc": 0,
-    "./mxunit/PluginDemoTests/InvalidMarkupTest.cfc": 2,
+    "./mxunit/PluginDemoTests/InvalidMarkupTest.cfc": 1,
     "./mxunit/PluginDemoTests/PrivateMethodTest.cfc": 0,
     "./mxunit/PluginDemoTests/run.cfm": 0,
     "./mxunit/PluginDemoTests/SingleFailureTest.cfc": 0,

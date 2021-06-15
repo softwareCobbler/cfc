@@ -14,13 +14,13 @@ function fromFile(fname: string) {
     return SourceFile(absPath, cfmOrCfc(fname)!, fs.readFileSync(absPath));
 }
 
-//const sourceFile = fromFile("./test/mxunit/doc/build.cfm");
+const sourceFile = fromFile("./test/mxunit/PluginDemoTests/InvalidMarkupTest.cfc");
 
-const sourceFile = NilCfm(`
+/*const sourceFile = NilCfm(`
 <cfscript>
-    first.x()[3][4]().z; // some random expression chain
+    x(a,b,,)
 </cfscript>
-`);
+`);*/
 
 const parser = Parser().setDebug(true);
 parser.setSourceFile(sourceFile);

@@ -143,7 +143,7 @@ export function Parser() {
     let lastNonTriviaToken : Token;
     let diagnostics : Diagnostic[] = [];
     
-    let globalDiagnosticEmitter : (() => void) | null = null; // @fixme: find a way to not need this
+    let parseErrorMsg : string | null = null;
 
     const SpeculationHelper = (function() {
         //
@@ -169,7 +169,7 @@ export function Parser() {
             F extends (...args: any) => any,
             Args extends Parameters<F> = Parameters<F>>(speculationWorker: F, ...args: Args) : ReturnType<F> | null {
             const saveTokenizerState = getScannerState();
-            const savedGlobalDiagnosticEmitter = globalDiagnosticEmitter;
+            const savedParseErrorMsg = parseErrorMsg;
             const diagnosticsLimit = diagnostics.length;
             const savedLastNonTriviaToken = lastNonTriviaToken;
 
@@ -180,7 +180,7 @@ export function Parser() {
             }
             else {
                 restoreScannerState(saveTokenizerState);
-                globalDiagnosticEmitter = savedGlobalDiagnosticEmitter;
+                parseErrorMsg = savedParseErrorMsg;
                 diagnostics.splice(diagnosticsLimit); // drop any diagnostics that were added
                 lastNonTriviaToken = savedLastNonTriviaToken;
                 return null;
@@ -259,12 +259,14 @@ export function Parser() {
 
     function scanTagName() {
         const result = scanner.scanTagName();
+        if (result && !isInSomeContext(ParseContext.trivia)) lastNonTriviaToken = result;
         primeLookahead();
         return result;
     }
 
     function scanTagAttributeName() {
         const result = scanner.scanTagAttributeName();
+        if (result && !isInSomeContext(ParseContext.trivia)) lastNonTriviaToken = result;
         primeLookahead();
         return result;
     }
@@ -276,6 +278,7 @@ export function Parser() {
 
     function scanLexemeLikeStructKey() {
         const result = scanner.scanLexemeLikeStructKey();
+        if (result && !isInSomeContext(ParseContext.trivia)) lastNonTriviaToken = result;
         primeLookahead();
         return result;
     }
@@ -286,6 +289,7 @@ export function Parser() {
 
     function scanIdentifier() : Token | null {
         const result = scanner.scanIdentifier();
+        if (result && !isInSomeContext(ParseContext.trivia)) lastNonTriviaToken = result;
         primeLookahead();
         return result;
     }
@@ -352,6 +356,10 @@ export function Parser() {
         const savedContext = parseContext;
         parseContext |= (1 << newContext);
         return savedContext;
+    }
+
+    function parseErrorAtPos(pos: number, msg: string) {
+        parseErrorAtRange(pos, pos+1, msg);
     }
 
     function parseErrorAtRange(range: SourceRange, msg: string) : void;
@@ -437,29 +445,14 @@ export function Parser() {
         }
     }
 
-    function parseExpectedTerminal(type: TokenType, parseOptions: ParseOptions, localDiagnosticEmitter?: (() => void) | string) : Terminal {
+    function parseExpectedTerminal(type: TokenType, parseOptions: ParseOptions, errorMsg?: string) : Terminal {
         const maybeTerminal = parseOptionalTerminal(type, parseOptions);
         if (maybeTerminal) {
             return maybeTerminal;
         }
         else {
-            if (localDiagnosticEmitter) {
-                if (typeof localDiagnosticEmitter === "string") {
-                    parseErrorAtCurrentToken(localDiagnosticEmitter);
-                }
-                else {
-                    localDiagnosticEmitter();
-                }
-            }
-            else if (globalDiagnosticEmitter) {
-                globalDiagnosticEmitter();
-            }
-            else {
-                parseErrorAtRange(
-                    lastNonTriviaToken.range.toExclusive,
-                    lastNonTriviaToken.range.toExclusive + 1,
-                    "Expected '" + TokenTypeUiString[type] + "'");
-            }
+            const actualError = errorMsg ?? "Expected '" + TokenTypeUiString[type] + "'";
+            parseErrorAtPos(lastNonTriviaToken.range.toExclusive, actualError);
 
             const pos = scanner.currentToken().range.fromInclusive;
             const emptyRange = new SourceRange(pos, pos);
@@ -488,8 +481,7 @@ export function Parser() {
                 parseErrorAtRange(labelLike.range, errorMsg);
             }
             else {
-                if (globalDiagnosticEmitter) globalDiagnosticEmitter();
-                else parseErrorAtRange(labelLike.range, "Expected a lexeme-like token here.");
+                parseErrorAtRange(labelLike.range, "Expected a lexeme-like token here.");
             }
             
             if (consumeOnFailure) {
@@ -553,7 +545,7 @@ export function Parser() {
     function parseScriptMultiLineComment() : Comment {
         const startToken = parseExpectedTerminal(TokenType.FORWARD_SLASH_STAR, ParseOptions.noTrivia);
         scanToNextToken([TokenType.STAR_FORWARD_SLASH]);
-        const endToken = parseExpectedTerminal(TokenType.STAR_FORWARD_SLASH, ParseOptions.noTrivia, () => parseErrorAtRange(startToken.range.fromInclusive, startToken.range.fromInclusive + 2, "Unterminated multiline script comment."));
+        const endToken = parseExpectedTerminal(TokenType.STAR_FORWARD_SLASH, ParseOptions.noTrivia, "Unterminated multiline script comment.");
         return Comment(CommentType.scriptMultiLine, new SourceRange(startToken.range.fromInclusive, endToken.range.toExclusive));
     }
 
@@ -1756,9 +1748,8 @@ export function Parser() {
     }
 
     function parseExpression(descendIntoOr = true) : Node { // todo: does this get the AND and OR precedences correct?
-        const saveDiagnosticEmitter = globalDiagnosticEmitter;
-        const currentPos = scanner.getIndex();
-        globalDiagnosticEmitter = () => parseErrorAtRange(currentPos, scanner.getIndex(), "Expression expected.");
+        const savedParseErrorMsg = parseErrorMsg;
+        parseErrorMsg = "Expected an expression.";
 
         let root = parseComparisonExpressionOrLower();
 
@@ -1816,7 +1807,7 @@ export function Parser() {
             break;
         }
 
-        globalDiagnosticEmitter = saveDiagnosticEmitter;
+        parseErrorMsg = savedParseErrorMsg;
         return root;
     }
 
@@ -2034,7 +2025,7 @@ export function Parser() {
         const rightHash = parseExpectedTerminal(
             TokenType.HASH,
             isInSomeContext(ParseContext.interpolatedText) ? ParseOptions.noTrivia : ParseOptions.withTrivia, // if inside interpolated text, the 'trivia' outside the right-hash should be interpreted as raw text
-            () => parseErrorAtRange(leftHash.range.fromInclusive, getIndex(), "Unterminated hash-wrapped expression."));
+            "Unterminated hash-wrapped expression.");
 
         parseContext = savedContext;
         return HashWrappedExpr(leftHash, expr, rightHash);
@@ -2570,8 +2561,7 @@ export function Parser() {
         let canonicalName : string;
 
         if (!isIdentifier()) {
-            if (globalDiagnosticEmitter) globalDiagnosticEmitter();
-            else parseErrorAtCurrentToken("Expected an identifier.");
+            parseErrorAtPos(lastNonTriviaToken.range.toExclusive, parseErrorMsg ?? "Expected an identifier.");
 
             terminal = NilTerminal(pos());
             canonicalName = "";
@@ -3112,9 +3102,16 @@ export function Parser() {
 
     function parseErrorBasedOnContext(context: ParseContext) {
         switch (context) {
+            case ParseContext.argOrParamList:
+                parseErrorAtPos(lastNonTriviaToken.range.toExclusive, "Expression expected.");
+                return;
+            case ParseContext.structLiteralBody:
+                parseErrorAtPos(pos(), "Struct literal key expected.");
+                return;
             case ParseContext.cfScriptTagBody:
             case ParseContext.blockStatements:
                 parseErrorAtRange(pos(), pos(), "Declaration or statement expected.");
+                return;
         }
     }
 
