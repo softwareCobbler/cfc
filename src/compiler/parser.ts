@@ -1791,13 +1791,13 @@ export function Parser() {
                         }
 
                         const syntheticOp = Terminal(Token(TokenType.QUESTION_MARK_COLON, "?:", questionMark.range.fromInclusive, colon.range.toExclusive), colon.trivia);
-                        const right = parseExpression();
+                        const right = parseAnonymousFunctionDefinitionOrExpression();
                         root = BinaryOperator(root, syntheticOp, right);
                     }
                     else {
-                        const ternaryTrue = parseExpression();
+                        const ternaryTrue = parseAnonymousFunctionDefinitionOrExpression();
                         const colon = parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
-                        const ternaryFalse = parseExpression();
+                        const ternaryFalse = parseAnonymousFunctionDefinitionOrExpression();
                         root = Ternary(root, questionMark, ternaryTrue, colon, ternaryFalse);
                     }
                     continue;
