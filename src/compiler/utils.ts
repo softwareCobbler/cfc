@@ -523,19 +523,19 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
             if (node.subType === ForSubType.forIn) {
                 return visitor(node.forToken)
                     || visitor(node.leftParen)
-                    || visitor(node.forIn!.init)
-                    || visitor(node.forIn!.inToken)
-                    || visitor(node.forIn!.expr)
+                    || visitor(node.init)
+                    || visitor(node.inToken)
+                    || visitor(node.expr)
                     || visitor(node.rightParen)
                     || visitor(node.body);
             }
             return visitor(node.forToken)
                 || visitor(node.leftParen)
-                || visitor(node.for!.initExpr)
-                || visitor(node.for!.semi1)
-                || visitor(node.for!.conditionExpr)
-                || visitor(node.for!.semi2)
-                || visitor(node.for!.incrementExpr)
+                || visitor(node.initExpr)
+                || visitor(node.semi1)
+                || visitor(node.conditionExpr)
+                || visitor(node.semi2)
+                || visitor(node.incrementExpr)
                 || visitor(node.rightParen)
                 || visitor(node.body);
         case NodeType.structLiteral:

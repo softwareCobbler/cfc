@@ -941,19 +941,19 @@ export function Binder() {
 
     function bindFor(node: For) {
         if (node.subType === ForSubType.forIn) {
-            extendCurrentFlowToNode(node.forIn!.init);
-            bindNode(node.forIn!.init, node);
-            bindNode(node.forIn!.inToken, node);
-            extendCurrentFlowToNode(node.forIn!.expr);
-            bindNode(node.forIn!.expr, node);
+            extendCurrentFlowToNode(node.init);
+            bindNode(node.init, node);
+            bindNode(node.inToken, node);
+            extendCurrentFlowToNode(node.expr);
+            bindNode(node.expr, node);
             bindNode(node.body, node);
             return;
         }
-        bindNode(node.for!.initExpr, node);
-        bindNode(node.for!.semi1, node);
-        bindNode(node.for!.conditionExpr, node);
-        bindNode(node.for!.semi2, node);
-        bindNode(node.for!.incrementExpr, node);
+        bindNode(node.initExpr, node);
+        bindNode(node.semi1, node);
+        bindNode(node.conditionExpr, node);
+        bindNode(node.semi2, node);
+        bindNode(node.incrementExpr, node);
         bindNode(node.body, node);
     }
 

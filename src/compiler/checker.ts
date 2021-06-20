@@ -952,7 +952,7 @@ export function Checker() {
 
     function checkFor(node: For) {
         if (node.subType === ForSubType.forIn) {
-            checkNode(node.forIn!.expr);
+            checkNode(node.expr);
         }
         checkNode(node.body);
     }

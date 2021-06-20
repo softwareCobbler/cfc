@@ -1782,25 +1782,31 @@ export function Ternary(
 }
 
 export const enum ForSubType { for, forIn}
-export interface For extends NodeBase {
+export type For = ForExpr | ForIn;
+
+interface ForBase extends NodeBase {
     kind: NodeType.for;
     subType: ForSubType;
     forToken: Terminal;
     leftParen: Terminal;
-    for?: {
-        initExpr: Node | null;
-        semi1: Terminal;
-        conditionExpr: Node | null;
-        semi2: Terminal;
-        incrementExpr: Node | null;
-    }
-    forIn?: {
-        init: Node;
-        inToken: Terminal;
-        expr: Node;
-    }
     rightParen: Terminal;
     body: Node;
+}
+
+export interface ForExpr extends ForBase {
+    subType: ForSubType.for,
+    initExpr: Node | null;
+    semi1: Terminal;
+    conditionExpr: Node | null;
+    semi2: Terminal;
+    incrementExpr: Node | null;
+}
+
+export interface ForIn extends ForBase {
+    subType: ForSubType.forIn,
+    init: Node,
+    inToken: Terminal,
+    expr: Node,
 }
 
 export namespace For {
@@ -1813,18 +1819,16 @@ export namespace For {
         semi2: Terminal,
         incrementExpr: Node | null,
         rightParen: Terminal,
-        body: Node) : For {
-        const v = NodeBase<For>(NodeType.for, mergeRanges(forToken, body));
+        body: Node) : ForExpr {
+        const v = NodeBase<ForExpr>(NodeType.for, mergeRanges(forToken, body));
         v.subType = ForSubType.for;
         v.forToken = forToken;
         v.leftParen = leftParen;
-        v.for = {
-            initExpr,
-            semi1,
-            conditionExpr,
-            semi2,
-            incrementExpr,
-        }
+        v.initExpr = initExpr;
+        v.semi1 = semi1;
+        v.conditionExpr = conditionExpr;
+        v.semi2 = semi2;
+        v.incrementExpr = incrementExpr;
         v.rightParen = rightParen;
         v.body = body;
         return v;
@@ -1836,16 +1840,14 @@ export namespace For {
         inToken: Terminal,
         expr: Node,
         rightParen: Terminal,
-        body: Node) : For {
-        const v = NodeBase<For>(NodeType.for, mergeRanges(forToken, body));
+        body: Node) : ForIn {
+        const v = NodeBase<ForIn>(NodeType.for, mergeRanges(forToken, body));
         v.subType = ForSubType.forIn;
         v.forToken = forToken;
         v.leftParen = leftParen;
-        v.forIn = {
-            init,
-            inToken,
-            expr,
-        }
+        v.init = init;
+        v.inToken = inToken;
+        v.expr = expr;
         v.rightParen = rightParen;
         v.body = body;
         return v;
