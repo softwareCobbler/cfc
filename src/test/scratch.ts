@@ -18,24 +18,25 @@ function fromFile(fname: string) {
 const libPath = path.resolve("./src/lang-server/server/src/runtimelib/lib.cf2018.d.cfm");
 const stdLib = SourceFile(libPath , CfFileType.dCfm, fs.readFileSync(libPath));
 
-//const sourceFile = fromFile("./test/mxunit/tests/samples/MyOtherComponentTest.cfc");
 
-const sourceFile = NilCfm(`
+const sourceFile = fromFile("./test/mxunit/runner/HttpAntRunner.cfc");
+
+/*const sourceFile = NilCfm(`
 <cfset x = 4>
 <cfif v(x)>
 </cfif>
-`);
+`);*/
 
 const parser = Parser().setDebug(true).setParseTypes(true);
 const binder = Binder().setDebug(true);
 const checker = Checker();
 
-parser.setSourceFile(stdLib);
+/*parser.setSourceFile(stdLib);
 parser.parse();
 binder.bind(stdLib, parser.getScanner(), parser.getDiagnostics());
 checker.check(stdLib, parser.getScanner(), parser.getDiagnostics());
 
-sourceFile.libRefs.push(stdLib);
+sourceFile.libRefs.push(stdLib);*/
 
 parser.setSourceFile(sourceFile);
 parser.parse();

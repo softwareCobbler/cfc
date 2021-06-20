@@ -1,7 +1,6 @@
-import { ArrayLiteralInitializerMemberSubtype, BlockType, CfTag, ForSubType, IndexedAccessType, Node, NodeId, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, TagAttribute, UnaryOperatorPos } from "./node";
+import { ArrayLiteralInitializerMemberSubtype, BlockType, CfTag, ForSubType, IndexedAccessType, Node, NodeId, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
 import { NodeType } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
-import { cfStruct } from "./types";
 
 const enum TagFact {
     ALLOW_VOID		= 0x00000001, // tag can be void, e.g., <cfhttp> can be loose, or have a body like <cfhttp><cfhttpparam></cfhttp>
@@ -798,7 +797,7 @@ export function isCfScriptTagBlock(node: Node | null) : boolean {
     return false;
 }
 
-export function getNearestEnclosingScope(node: Node, scopeName: StaticallyKnownScopeName) : cfStruct | undefined {
+export function getNearestEnclosingScope(node: Node, scopeName: StaticallyKnownScopeName) : SymTab | undefined {
     while (true) {
         // scope on this node contains the target scope
         if (node.containedScope?.[scopeName]) {

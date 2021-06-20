@@ -20,6 +20,7 @@ export function Checker() {
         stdLib = findStdLib(sourceFile);
 
         rootScope = sourceFile.containedScope!;
+        rootScope; // "unused"
 
         checkList(sourceFile.content);
         runDeferredFrames();
@@ -261,9 +262,9 @@ export function Checker() {
     function getScopeDisplayMember(scope: ScopeDisplay, canonicalName: string) : ScopeDisplayMemberResolution | undefined {
         for (const scopeName of scopeLookupOrder) {
             if (scope.hasOwnProperty(scopeName)) {
-                const entry = scope[scopeName]!.membersMap.get(canonicalName) || scope[scopeName]!.caselessMembersMap.get(canonicalName);
+                const entry = scope[scopeName]!.get(canonicalName);
                 if (entry) {
-                    return {scopeName: scopeName, type: entry};
+                    return {scopeName: scopeName, type: entry.userType || entry.inferredType || SyntheticType.any};
                 }
             }
         }
@@ -441,8 +442,8 @@ export function Checker() {
             if (i === functionDef.params.length) {
                 break;
             }
-            if (existingArgumentsScope.membersMap.has(signature.params[i].canonicalName)) {
-                existingArgumentsScope.membersMap.set(signature.params[i].canonicalName, evaluateType(context, signature.params[i].type));
+            if (existingArgumentsScope.has(signature.params[i].canonicalName)) {
+                existingArgumentsScope.get(signature.params[i].canonicalName)!.inferredType = evaluateType(context, signature.params[i].type);
             }
         }
     }
@@ -695,6 +696,7 @@ export function Checker() {
     function getContainingFunction(node: Node) : Node | undefined {
         return findAncestor(node, (node) => node?.kind === NodeType.functionDefinition);
     }
+    getContainingFunction;
 
     function getContainer(node: Node) {
         return findAncestor(node, (node) => !!node?.containedScope);
@@ -712,14 +714,16 @@ export function Checker() {
 
         if (name !== undefined) {
             const useContainer = getContainer(node);
-            const containingFunction = getContainingFunction(node);
+            //const containingFunction = getContainingFunction(node);
 
             if (isStaticallyKnownScopeName(name)) {
                 if (name === "local" || name === "arguments") {
-                    if (containingFunction) setCachedTermEvaluatedType(node, containingFunction.containedScope![name]!);
+                    // @fixme
+                    //if (containingFunction) setCachedTermEvaluatedType(node, containingFunction.containedScope![name]!);
                 }
                 else {
-                    setCachedTermEvaluatedType(node, rootScope[name] ?? SyntheticType.any);
+                    // @fixme
+                    //setCachedTermEvaluatedType(node, rootScope[name] ?? SyntheticType.any);
                 }
                 return;
             }

@@ -1,6 +1,6 @@
 import { SourceRange, TokenType, Token, NilToken, TokenTypeUiString, CfFileType } from "./scanner";
 import { getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString } from "./utils";
-import { cfStruct, Type as Type } from "./types";
+import { Type as Type } from "./types";
 
 let debug = false;
 let nextNodeId : NodeId = 0;
@@ -142,10 +142,20 @@ export interface Term {
     target: Node | undefined,
 }
 
+export interface SymTabEntry {
+    uiName: string,
+    canonicalName: string,
+    firstBinding: Node | null,
+    userType: Type | null,
+    inferredType: Type | null,
+}
+
+export type SymTab = Map<string, SymTabEntry>;
+
 export type ScopeDisplay = {
     container: Node | null, // rename to parentContainer
     typedefs: Map<string, Type>,
-} & {[name in StaticallyKnownScopeName]?: cfStruct}
+} & {[name in StaticallyKnownScopeName]?: Map<string, SymTabEntry>}
 
 const staticallyKnownScopeName = [
     "application",
@@ -181,7 +191,7 @@ export type NodeId = number;
 export type TypeId = number;
 export type FlowId = number;
 export type IdentifierId = number;
-export type NodeWithScope<N extends Node = Node, T extends (StaticallyKnownScopeName | never) = never> = N & {containedScope: ScopeDisplay & {[k in T]: cfStruct}};
+export type NodeWithScope<N extends Node = Node, T extends (StaticallyKnownScopeName | never) = never> = N & {containedScope: ScopeDisplay & {[k in T]: SymTab}};
 
 export const enum FlowType {
     default,
