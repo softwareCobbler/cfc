@@ -148,6 +148,7 @@ export interface SymTabEntry {
     firstBinding: Node | null,
     userType: Type | null,
     inferredType: Type | null,
+    type: Type,
 }
 
 export type SymTab = Map<string, SymTabEntry>;
@@ -225,6 +226,9 @@ export interface NodeBase {
     flags: NodeFlags,
 
     containedScope?: ScopeDisplay,
+    links?: {
+        symTabEntry?: SymTabEntry
+    }
     flow: Flow | null,
 
     __debug_type?: string;

@@ -3864,7 +3864,7 @@ export function Parser() {
                         result = cfString(s);
                     }
                     else {
-                        result = SyntheticType.string; // should never happen, parseStringLiteral(false) should always return a simpleStringLiteral
+                        result = SyntheticType.string(); // should never happen, parseStringLiteral(false) should always return a simpleStringLiteral
                     }
                 }
             }

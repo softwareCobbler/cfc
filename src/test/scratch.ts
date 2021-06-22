@@ -19,13 +19,16 @@ const libPath = path.resolve("./src/lang-server/server/src/runtimelib/lib.cf2018
 const stdLib = SourceFile(libPath , CfFileType.dCfm, fs.readFileSync(libPath));
 
 
-const sourceFile = fromFile("./test/mxunit/runner/HttpAntRunner.cfc");
+//const sourceFile = fromFile("./test/mxunit/runner/HttpAntRunner.cfc");
 
-/*const sourceFile = NilCfm(`
-<cfset x = 4>
-<cfif v(x)>
-</cfif>
-`);*/
+const sourceFile = NilCfm(`
+<cfscript>
+    function foo() {
+        final var y = 42;
+        y;
+    }
+</cfscript>
+`);
 
 const parser = Parser().setDebug(true).setParseTypes(true);
 const binder = Binder().setDebug(true);

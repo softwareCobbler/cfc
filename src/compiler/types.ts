@@ -45,10 +45,24 @@ const TypeKindUiString : Record<TypeKind, string> = {
 }
 
 export const enum TypeFlags {
-    none     = 0,
-    optional = 1 << 1,
-    const    = 1 << 2
+    none = 0,
+    any                = 1 << 1, 
+    final              = 1 << 2, 
+    containsUndefined  = 1 << 3, 
+    optional           = 1 << 4,
+    synthetic          = 1 << 5,
+    END                = 1 << 6,
 }
+
+const TypeFlagsUiString : Record<TypeFlags, string> = {
+    [TypeFlags.none]: "none",
+    [TypeFlags.any]: "any",
+    [TypeFlags.final]: "final",
+    [TypeFlags.containsUndefined]: "undefined",
+    [TypeFlags.optional]: "optional",
+    [TypeFlags.synthetic]: "synthetic",
+    [TypeFlags.END]: "<<end>>"
+};
 
 export interface TypeBase extends NodeBase {
     kind: NodeType.type,
@@ -68,6 +82,19 @@ export function TypeBase<T extends Type>(typeKind: T["typeKind"]) : T {
 
     if (debugTypeModule) {
         result.__debug_kind = TypeKindUiString[typeKind];
+        Object.defineProperty(
+            result,
+            "__debug_typeFlags", {
+            get(this: TypeBase) {
+                const result : string[] = [];
+                for (let i = 1; (1 << i) < TypeFlags.END; i++) {
+                    if (this.typeFlags & (1 << i)) {
+                        result.push(TypeFlagsUiString[(1 << i) as TypeFlags]);
+                    }
+                }
+                return result.join(", ");
+            }
+        });
     }
 
     return result as T;
@@ -311,6 +338,7 @@ export interface cfUnion extends TypeBase {
     typeKind: TypeKind.union,
     left: Type,
     right: Type,
+    flat?: Type[]
 }
 
 export function cfUnion(left: Type, right: Type) {
@@ -357,20 +385,41 @@ export function TypeAttribute(
 export const SyntheticType = (function() {
     const nilTerminal = NilTerminal(-1);
 
-    const any = cfAny(nilTerminal);
-    any.synthetic = true;
+    const any = () => {
+        const any = cfAny(nilTerminal);
+        any.synthetic = true;
+        return any;
+    }
 
-    const void_ = cfVoid(nilTerminal);
-    void_.synthetic = true;
+    const void_ = () => {
+        const void_ = cfVoid(nilTerminal);
+        void_.synthetic = true;
+        return void_;
+    }
 
-    const string = cfString(nilTerminal);
-    string.synthetic = true;
+    const string = () => {
+        const string = cfString(nilTerminal);
+        string.synthetic = true;
+        return string;
+    }
 
-    const number = cfNumber(nilTerminal);
-    number.synthetic = true;
+    const number = () => {
+        const number = cfNumber(nilTerminal);
+        number.synthetic = true;
+        return number;
+    }
 
-    const boolean = cfBoolean(nilTerminal);
-    boolean.synthetic = true;
+    const boolean = () => {
+        const boolean = cfBoolean(nilTerminal);
+        boolean.synthetic = true;
+        return boolean;
+    }
+
+    const nil = () => {
+        const nil = cfNil();
+        nil.synthetic = true;
+        return nil;
+    }
 
     const struct = (membersMap: Map<string, Type> = new Map(), caselessMembersMap: Map<string, Type> = new Map()) => {
         const v = cfStruct(nilTerminal, [], membersMap, caselessMembersMap, nilTerminal);
@@ -378,7 +427,7 @@ export const SyntheticType = (function() {
         return v;
     }
 
-    const never = cfNever();
+    const never = () => cfNever();
 
     return {
         any,
@@ -387,6 +436,7 @@ export const SyntheticType = (function() {
         number,
         boolean,
         struct,
-        never
+        never,
+        nil
     }
 })();

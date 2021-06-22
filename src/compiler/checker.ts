@@ -1,8 +1,8 @@
-import { SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes, IndexedAccessChainElement, NodeFlags, BinaryOpTypeUiString, VariableDeclaration, Identifier, FlowId, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype } from "./node";
+import { SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes, IndexedAccessChainElement, NodeFlags, BinaryOpTypeUiString, VariableDeclaration, Identifier, FlowId, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry } from "./node";
 import { Scanner } from "./scanner";
 import { Diagnostic } from "./parser";
-import { cfFunctionSignature, cfIntersection, Type, TypeKind, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfNever, cfStruct, cfUnion, SyntheticType } from "./types";
-import { getAttributeValue, getTriviallyComputableString } from "./utils";
+import { cfFunctionSignature, cfIntersection, Type, TypeKind, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfNever, cfStruct, cfUnion, SyntheticType, TypeFlags } from "./types";
+import { findAncestor, getAttributeValue, getNodeLinks, getTriviallyComputableString } from "./utils";
 
 export function Checker() {
     let sourceFile!: SourceFile;
@@ -121,17 +121,17 @@ export function Checker() {
                 }
                 return;
             case NodeType.simpleStringLiteral:
-                setCachedTermEvaluatedType(node, SyntheticType.string);
+                setCachedTermEvaluatedType(node, SyntheticType.string());
                 return;
             case NodeType.interpolatedStringLiteral:
                 checkList(node.elements);
-                setCachedTermEvaluatedType(node, SyntheticType.string);
+                setCachedTermEvaluatedType(node, SyntheticType.string());
                 return;
             case NodeType.numericLiteral:
-                setCachedTermEvaluatedType(node, SyntheticType.number);
+                setCachedTermEvaluatedType(node, SyntheticType.number());
                 return;
             case NodeType.booleanLiteral:
-                setCachedTermEvaluatedType(node, SyntheticType.boolean);
+                setCachedTermEvaluatedType(node, SyntheticType.boolean());
                 return;
             case NodeType.identifier:
                 // klude/fixme!: identifier.source can be an indexed access
@@ -250,28 +250,28 @@ export function Checker() {
         "client"
     ];
 
-    interface ScopeDisplayMemberResolution {
+    interface SymTabResolution {
         scopeName: StaticallyKnownScopeName,
-        type: Type
+        symTabEntry: SymTabEntry
     }
 
-    interface SymbolResolution extends ScopeDisplayMemberResolution {
+    interface SymbolResolution extends SymTabResolution {
         container: Node
     }
 
-    function getScopeDisplayMember(scope: ScopeDisplay, canonicalName: string) : ScopeDisplayMemberResolution | undefined {
+    function getScopeDisplayMember(scope: ScopeDisplay, canonicalName: string) : SymTabResolution | undefined {
         for (const scopeName of scopeLookupOrder) {
             if (scope.hasOwnProperty(scopeName)) {
                 const entry = scope[scopeName]!.get(canonicalName);
                 if (entry) {
-                    return {scopeName: scopeName, type: entry.userType || entry.inferredType || SyntheticType.any};
+                    return {scopeName: scopeName, symTabEntry: entry};
                 }
             }
         }
         return undefined;
     }
 
-    function walkUpScopesToFindIdentifier(base: Node, canonicalName: string) : SymbolResolution | undefined {
+    function walkupScopesToResolveSymbol(base: Node, canonicalName: string) : SymbolResolution | undefined {
         let node : Node | null = base;
         while (node) {
             if (node.containedScope) {
@@ -282,12 +282,12 @@ export function Checker() {
                 }
 
                 if (node.kind === NodeType.sourceFile) {
-                    // if we got to root and didn't find it, see if we can find it in stdlib (if stdlib was available)
                     if (stdLib) {
                         const type = lookupTypeStructMember(stdLib, canonicalName);
                         if (type) {
-                            const scopeName = "variables";
-                            return {scopeName, type, container: node};
+                            //const scopeName = "variables";
+                            //return {scopeName, symTabEntry: type, container: node};
+                            return undefined;
                         }
                     }
                     return undefined;
@@ -325,7 +325,7 @@ export function Checker() {
         return struct.membersMap.get(name) ?? struct.caselessMembersMap.get(name);
     }
 
-    function getTypeAtFlow(base: Node, name: string, deferOnFunctionContainer = true) {
+    function getTypeAtFlow(base: Node, canonicalName: string) : Type | undefined {
         let node: Node | null = base;
         let flow: Flow | null = null;
         while (node) {
@@ -342,39 +342,52 @@ export function Checker() {
             return undefined;
         }
 
-        let closestContainer : Node | null = null;
+        const usageContainer : Node = findAncestor(base, (node) => node?.kind === NodeType.functionDefinition || node?.kind === NodeType.sourceFile)!;
+        const usageContainerSymbol = getScopeDisplayMember(usageContainer.containedScope!, canonicalName);
+        // if the usage container does not contain a symbol table entry for this name, then it is an "outer" variable, defined in some outer scope
+        // walk up until we find it, and use it's non-flow based type
+        if (!usageContainerSymbol) {
+            let node : Node | null = usageContainer.containedScope!.container; 
+            while (node) {
+                const symbol = getScopeDisplayMember(node.containedScope!, canonicalName);
+                if (symbol) return symbol.symTabEntry.type;
+                node = node.containedScope!.container;
+            }
+            return undefined;
+        }
 
-        while (flow) {
-            const type = getCachedEvaluatedTypeOfIdentifierAtFlow(flow, name);
+        return work(flow);
+
+        function work(flow: Flow) : Type | undefined {
+            const type = getCachedEvaluatedTypeOfIdentifierAtFlow(flow, canonicalName);
+
             // we got a type at this flow
             if (type) {
                 return type;
             }
             else if (flow.node?.containedScope) {
-                if (!closestContainer) closestContainer = flow.node;
-
-                const scopeMember = getScopeDisplayMember(flow.node.containedScope, name);
+                const scopeMember = getScopeDisplayMember(flow.node.containedScope, canonicalName);
                 if (scopeMember) {
                     // no type at this flow, but the name is defined on this scope;
                     // stop walking upwards, because the current flow's node is the top-most container for this name,
                     // even if there is a predecessor flow
 
-                    if (scopeMember.type.typeKind === TypeKind.functionSignature) { // a function definition is always defined
-                        return scopeMember.type;
+                    if (scopeMember.symTabEntry.type.typeKind === TypeKind.functionSignature) { // a function definition is always defined
+                        return scopeMember.symTabEntry.type;
                     }
 
-                    if (flow.node === closestContainer) {
+                    if (flow.node === usageContainer) {
                         return undefined; // it's defined on the closest containing scope, but hasn't been assigned yet
                     }
                     else {
-                        return scopeMember.type; // it's defined in an outer scope
+                        return scopeMember.symTabEntry.type; // it's defined in an outer scope
                     }
                 }
-                if (deferOnFunctionContainer && flow.node.kind === NodeType.functionDefinition) {
+                if (flow.node.kind === NodeType.functionDefinition) {
                     // we hit a containing function, and have not yet figured out the type
                     // check the rest of the grand-parent's body 
                     // but before we defer, check all parent containers to see if they even contain this name
-                    if (walkUpScopesToFindIdentifier(flow.node, name)) {
+                    if (walkupScopesToResolveSymbol(flow.node, canonicalName)) {
                         return undefined;
                     }
                 }
@@ -382,15 +395,63 @@ export function Checker() {
 
             // if we got to root and didn't find it, see if we can find it in stdlib (if stdlib was available)
             if (flow.node?.kind === NodeType.sourceFile) {
-                if (stdLib) return lookupTypeStructMember(stdLib, name);
+                if (stdLib) return lookupTypeStructMember(stdLib, canonicalName);
             }
 
-            // default case: move to predecessor flow, if one exists
-            // todo: support multiple predecessors for if/else
-            flow = flow.predecessor[0];
+            if (flow.predecessor.length === 1) {
+                return work(flow.predecessor[0]);
+            }
+            else {
+                const flowTypes : (Type | undefined)[] = [];
+                for (let i = 0; i < flow.predecessor.length; i++) {
+                    flowTypes.push(work(flow.predecessor[i]));
+                }
+                return unionify(flowTypes);
+            }
+        }
+    }
+
+    // needs to merge 2+ unions, dedup, etc.
+    function unionify(types: (Type|undefined)[]) : Type {
+        if (types.length === 1) {
+            return types[0] === undefined
+                ? SyntheticType.nil()
+                : types[0];
         }
 
-        return undefined;
+        function final(type: Type | undefined) : 0 | 1 {
+            return type
+                ? ((type.typeFlags & TypeFlags.final) ? 1 : 0)
+                : 0;
+        }
+
+        let finalCount = 0;
+        let total = 0; total;
+        let containsUndefined = false;
+
+        let result = cfUnion(types[0] || SyntheticType.nil(), types[1] || SyntheticType.nil());
+        finalCount = final(types[0]) + final(types[1]);
+        total = 2;
+        containsUndefined = !types[0]
+            || !types[1]
+            || !!(types[0].typeFlags & TypeFlags.containsUndefined)
+            || !!(types[1].typeFlags & TypeFlags.containsUndefined);
+
+        for (const type of types) {
+            result = cfUnion(result, type || SyntheticType.nil());
+            finalCount += final(type);
+            total += 1;
+            containsUndefined = containsUndefined || !type || !!(type.flags & TypeFlags.containsUndefined);
+        }
+
+        if (finalCount > 0) {
+            result.typeFlags |= TypeFlags.final;
+        }
+        if (containsUndefined) {
+            result.typeFlags |= TypeFlags.containsUndefined;
+        }
+
+        return result;
     }
 
     function isCallable(type: Type) : boolean {
@@ -513,11 +574,6 @@ export function Checker() {
                 // `x = y` is effectively `variables.x = y`
                 if (node.left.kind === NodeType.identifier && node.left.canonicalName) {
                     const lhsType = getTypeAtFlow(node.left, node.left.canonicalName);
-                    /*if (lhsType === "defer") {
-                        yield "defer";
-                        lhsType = g_lhsType.next().value;
-                        if (lhsType === "defer") throw "unexpected defer";
-                    }*/
                     const rhsType = getCachedTermEvaluatedType(node.right);
                     if (!lhsType) {
                         // there is no type at the current flow; so, this is the first assignment for this var in this scope
@@ -529,7 +585,7 @@ export function Checker() {
                             setCachedEvaluatedTypeOfIdentifierAtFlow(node.left.flow!, node.left.canonicalName, evaluatedTypeAnnotation);
                         }
                         else {
-                            setCachedEvaluatedTypeOfIdentifierAtFlow(node.left.flow!, node.left.canonicalName, SyntheticType.any);
+                            setCachedEvaluatedTypeOfIdentifierAtFlow(node.left.flow!, node.left.canonicalName, SyntheticType.any());
                         }
                     }
                     else {
@@ -603,8 +659,15 @@ export function Checker() {
     }
 
     function checkVariableDeclaration(node: VariableDeclaration) : void {
+        if (node.parent?.kind === NodeType.for && node.parent.subType === ForSubType.forIn && node.parent.init === node) {
+            const symTabEntry = getNodeLinks(node).symTabEntry;
+            if (!symTabEntry) throw "no symtab entry for node";
+            setCachedEvaluatedTypeOfIdentifierAtFlow(node.flow!, symTabEntry.canonicalName, evaluateType(node, symTabEntry.type));
+            return;
+        }
+
         // check for re-defined finals in current scope...or maybe during binding phase
-        if (node.expr.kind === NodeType.binaryOperator) {
+        else if (node.expr.kind === NodeType.binaryOperator) {
             //checkNode(node.expr.left)
             checkNode(node.expr.right);
 
@@ -615,21 +678,32 @@ export function Checker() {
                 evaluatedType = evaluateType(node, node.typeAnnotation);
             }
             else {
-                evaluatedType = SyntheticType.any;
+                evaluatedType = SyntheticType.any();
             }
 
             const rhsType = getCachedTermEvaluatedType(node.expr.right);
             if (!isAssignable(rhsType, evaluatedType)) {
                 typeErrorAtNode(node.expr.left, "Leftside type is not assignable to rightside type.");
-                evaluatedType = SyntheticType.any;
+                evaluatedType = SyntheticType.any();
             }
             else /* is assignable */ {
                 if (!node.typeAnnotation) {
                     evaluatedType = rhsType;
                 }
             }
-            if (node.expr.left.kind === NodeType.identifier && node.expr.left.canonicalName !== undefined && node.expr.left.flow?.successor) {
-                setCachedEvaluatedTypeOfIdentifierAtFlow(node.expr.left.flow, node.expr.left.canonicalName, evaluatedType);
+            if (node.finalModifier) {
+                evaluatedType.typeFlags |= TypeFlags.final;
+            }
+
+            const flowType = getTypeAtFlow(node, name.toLowerCase());
+
+            if (flowType && !!(flowType.typeFlags & TypeFlags.final)) {
+                typeErrorAtNode(node, `Cannot rebind identifier '${name}', which was declared final.`);
+                return;
+            }
+
+            if (node.expr.left.kind === NodeType.identifier && node.expr.left.canonicalName !== undefined) {
+                setCachedEvaluatedTypeOfIdentifierAtFlow(node.expr.left.flow!, node.expr.left.canonicalName, evaluatedType);
             }
         }
     }
@@ -638,9 +712,9 @@ export function Checker() {
     // is this a singleton or what
     const termEvaluatedTypeCache = new Map<NodeId, Type>();
 
-    function getCachedTermEvaluatedType(node: Node | null) {
+    function getCachedTermEvaluatedType(node: Node | null) : Type {
         if (!node) {
-            return SyntheticType.any;
+            return SyntheticType.any();
         }
 
         let targetId = node.nodeId;
@@ -653,7 +727,7 @@ export function Checker() {
             return termEvaluatedTypeCache.get(targetId)!;
         }
         else {
-            return SyntheticType.any;
+            return SyntheticType.any();
         }
     }
 
@@ -662,7 +736,7 @@ export function Checker() {
             || type.typeKind === TypeKind.typeConstructorInvocation
             || type.typeKind === TypeKind.cachedTypeConstructorInvocation) {
             typeErrorAtNode(node, "Type is not concrete.");
-            termEvaluatedTypeCache.set(node.nodeId, SyntheticType.any);
+            termEvaluatedTypeCache.set(node.nodeId, SyntheticType.any());
         }
         else {
             termEvaluatedTypeCache.set(node.nodeId, type);
@@ -675,28 +749,6 @@ export function Checker() {
             || (type.typeKind === TypeKind.intersection && (isStructOrArray(type.left) || isStructOrArray(type.right)))
             || (type.typeKind === TypeKind.union && isStructOrArray(type.left) && isStructOrArray(type.right));
     }
-
-    function findAncestor(node: Node, predicate: (node: Node | null) => true | false | "bail") : Node | undefined {
-        let current : Node | null = node;
-        while (current) {
-            const result = predicate(current);
-            if (result === true) {
-                return current;
-            }
-            else if (result === false) {
-                current = current.parent;
-            }
-            else if (result === "bail") {
-                break;
-            }
-        }
-        return undefined;
-    }
-
-    function getContainingFunction(node: Node) : Node | undefined {
-        return findAncestor(node, (node) => node?.kind === NodeType.functionDefinition);
-    }
-    getContainingFunction;
 
     function getContainer(node: Node) {
         return findAncestor(node, (node) => !!node?.containedScope);
@@ -731,22 +783,28 @@ export function Checker() {
             let type = getTypeAtFlow(node, name);
 
             if (type) {
-                setCachedTermEvaluatedType(node, evaluateType(node, type));
+                if (type.typeFlags & TypeFlags.containsUndefined) {
+                    typeErrorAtNode(node, `'${name}' is possibly undefined.`);
+                }
+
+                const evaluatedType = evaluateType(node, type);
+                setCachedEvaluatedTypeOfIdentifierAtFlow(node.flow!, name, evaluatedType);
+                setCachedTermEvaluatedType(node, evaluatedType);
                 return;
             }
 
-            const symbolTableEntry = walkUpScopesToFindIdentifier(node, name);
-            if (symbolTableEntry) {
-                if (useContainer === symbolTableEntry.container) {
+            const resolvedSymbol = walkupScopesToResolveSymbol(node, name);
+            if (resolvedSymbol) {
+                if (useContainer === resolvedSymbol.container) {
                     // there is a symbol table entry, but we could not find a type on the flow graph
                     // if we're toplevel 
                     typeErrorAtNode(node, `Identifier '${name}' is used before its declaration.`);
-                    setCachedTermEvaluatedType(node, SyntheticType.any);
+                    setCachedTermEvaluatedType(node, SyntheticType.any());
                     return;
                 }
                 else {
                     // identifer is declared in some outer scope, we have to assume it is ok
-                    setCachedTermEvaluatedType(node, symbolTableEntry.type);
+                    setCachedTermEvaluatedType(node, resolvedSymbol.symTabEntry.type);
                     return;
                 }
             }
@@ -773,8 +831,8 @@ export function Checker() {
                 if (element.accessType === IndexedAccessType.dot) {
                     type = getMemberType(type, node, element.property.token.text);
                     if (type.typeKind === TypeKind.any) {
-                        type = SyntheticType.any; // subsequent access elements will also be any
-                        setCachedTermEvaluatedType(element, SyntheticType.any);
+                        type = SyntheticType.any(); // subsequent access elements will also be any
+                        setCachedTermEvaluatedType(element, SyntheticType.any());
                     }
                     else {
                         setCachedTermEvaluatedType(element, type);
@@ -784,9 +842,9 @@ export function Checker() {
             setCachedTermEvaluatedType(node, type);
         }
         else {
-            setCachedTermEvaluatedType(node.root, SyntheticType.any);
+            setCachedTermEvaluatedType(node.root, SyntheticType.any());
             for (const element of node.accessElements) {
-                setCachedTermEvaluatedType(element, SyntheticType.any);
+                setCachedTermEvaluatedType(element, SyntheticType.any());
             }
             // error: some kind of indexed access error
         }
@@ -833,7 +891,7 @@ export function Checker() {
 
     function checkFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {
         for (const param of node.params) {
-            setCachedEvaluatedTypeOfIdentifierAtFlow(node.flow!, param.canonicalName, param.type || SyntheticType.any);
+            setCachedEvaluatedTypeOfIdentifierAtFlow(node.flow!, param.canonicalName, param.type || SyntheticType.any());
         }
 
         const savedFrame = currentFrame;
@@ -952,6 +1010,7 @@ export function Checker() {
 
     function checkFor(node: For) {
         if (node.subType === ForSubType.forIn) {
+            checkNode(node.init);
             checkNode(node.expr);
         }
         checkNode(node.body);
@@ -1015,10 +1074,10 @@ export function Checker() {
         }
         else if (type.typeKind === TypeKind.struct) {
             const memberType = type.membersMap.get(name);
-            return memberType ? evaluateType(context, memberType) : SyntheticType.any;
+            return memberType ? evaluateType(context, memberType) : SyntheticType.any();
         }
 
-        return SyntheticType.any;
+        return SyntheticType.any();
     }
 
     //
@@ -1214,8 +1273,8 @@ export function Checker() {
 
             function typeWorker(type: Type | null) : Type {
                 depth++;
-                const result = (function() {
-                    if (!type) return SyntheticType.any;
+                const result = (function() : Type {
+                    if (!type) return SyntheticType.any();
                     
                     switch (type.typeKind) {
                         case TypeKind.intersection: {
@@ -1266,17 +1325,17 @@ export function Checker() {
 
                             if (type.args.length === 0) {
                                 typeErrorAtNode(type.left, `Type argument list cannot be empty.`);
-                                return SyntheticType.never;
+                                return SyntheticType.never();
                             }
                             if (typeConstructor.params.length != type.args.length) {
                                 typeErrorAtNode(type.left, `Type requires ${typeConstructor.params.length} arguments.`);
-                                return SyntheticType.never;
+                                return SyntheticType.never();
                             }
 
                             const args : Type[] = [];
                             for (const arg of type.args) {
                                 if (arg.typeKind === TypeKind.typeId) {
-                                    args.push(typeWorker(typeParamMap.get(arg.name) || walkUpContainersToFindType(context, arg) || SyntheticType.any));
+                                    args.push(typeWorker(typeParamMap.get(arg.name) || walkUpContainersToFindType(context, arg) || SyntheticType.any()));
                                 }
                                 else {
                                     args.push(typeWorker(arg));

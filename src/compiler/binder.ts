@@ -1,5 +1,5 @@
 import { SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, Script, Tag, ConditionalSubtype, SymTab } from "./node";
-import { getTriviallyComputableString, visit, getAttributeValue } from "./utils";
+import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, getNodeLinks } from "./utils";
 import { Diagnostic } from "./parser";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { cfFunctionSignature, SyntheticType, Type } from "./types";
@@ -342,6 +342,8 @@ export function Binder() {
     }
 
     function bindConditional(node: Conditional) {
+        const baseFlow = currentFlow;
+
         if (node.subType === ConditionalSubtype.if || node.subType === ConditionalSubtype.elseif) {
             let expr : Node;
             if (node.fromTag) {
@@ -351,40 +353,66 @@ export function Binder() {
                 expr = node.expr!;
             }
 
-            const savedFlow = currentFlow;
             extendCurrentFlowToNode(expr);
             bindNode(expr, node);
-            extendCurrentFlowToNode(node.consequent);
-            bindNode(node.consequent, node);
-            if (node.alternative) {
-                currentFlow = savedFlow;
-                extendCurrentFlowToNode(node.alternative);
-                bindNode(node.alternative, node);
-            }
-            currentFlow = savedFlow;
         }
-        else {
-            const savedFlow = currentFlow;
-            bindNode(node.consequent, node);
-            currentFlow = savedFlow;
+            
+        extendCurrentFlowToNode(node.consequent);
+        bindNode(node.consequent, node);
+        const trueFlow = currentFlow;
+
+        if (node.alternative) {
+            currentFlow = baseFlow;
+            extendCurrentFlowToNode(node.alternative);
+            bindNode(node.alternative, node);
+            const falseFlow = currentFlow;
+            currentFlow = freshFlow([trueFlow, falseFlow], FlowType.default);
+        }
+        else if (node.subType !== ConditionalSubtype.else) {
+            const falseFlow = freshFlow(baseFlow, FlowType.default);
+            currentFlow = freshFlow([trueFlow, falseFlow], FlowType.default);
         }
     }
 
-    function addSymbolToTable(symTab: SymTab, uiName: string, firstBinding: Node, userType: Type | null, inferredType: Type | null) : void {
+    function addSymbolToTable(symTab: SymTab, uiName: string, firstBinding: Node, userType: Type | null, inferredType: Type | null) : SymTabEntry {
         const canonicalName = uiName.toLowerCase();
-        symTab.set(uiName, {
+        const symTabEntry : SymTabEntry = {
             uiName,
             canonicalName,
             firstBinding,
             userType,
-            inferredType
-        });
+            inferredType,
+            type: userType || inferredType || SyntheticType.any(),
+        };
+        symTab.set(uiName, symTabEntry);
+        return symTabEntry;
     }
 
-    // fixme: the following is not true, in the case of `for (var x in y)`
-    // all declarations should be of the s-expr form (decl (binary-op<assignment>))
-    // that is, VariableDeclarations just wrap assignment nodes (which are themselves just binary operators with '=' as the operator)
+    function bindForInInit(node: VariableDeclaration) : void {
+        let targetScope = RootNode.containedScope.variables!;
+        if (node.varModifier) {
+            const containingFunction = getContainingFunction(node);
+            if (!containingFunction) {
+                errorAtRange(node.expr.range, "Local variables may not be declared at top-level scope.");
+                return;
+            }
+            targetScope = containingFunction.containedScope?.arguments!;
+        }
+
+        const name = getTriviallyComputableString(node.expr);
+        if (!name || /\./.test(name)) return;
+
+        getNodeLinks(node).symTabEntry = addSymbolToTable(targetScope, name, node, null, SyntheticType.any());
+    }
+
     function bindVariableDeclaration(node: VariableDeclaration) {
+        if (!node.flow) extendCurrentFlowToNode(node); // for-in declarations will already have flows
+        
+        if (node.parent?.kind === NodeType.for && node.parent.subType === ForSubType.forIn && node.parent.init === node) {
+            bindForInInit(node);
+            return;
+        }
+
         if (node.expr.kind === NodeType.binaryOperator) {
             bindAssignmentFlow(node.expr.left, node.expr.right);
             bindNode(node.expr.left, node);
@@ -446,22 +474,9 @@ export function Binder() {
             return;
         }
 
-        
-
         if (node.finalModifier || node.varModifier) {
             if (currentContainer.containedScope.local) {
-                const canonicalName = identifierBaseName.toLowerCase();
-                if (node.finalModifier && currentContainer.containedScope.local.has(canonicalName)) {
-                    const firstBinding = currentContainer.containedScope.local.get(canonicalName)!.firstBinding;
-                    if ((node.expr.kind === NodeType.binaryOperator) &&
-                        (firstBinding?.kind === NodeType.variableDeclaration && firstBinding.expr.kind === NodeType.binaryOperator)) {
-                        errorAtRange(node.expr.left.range, `Multiple declarations for final qualified identifier '${identifierBaseName}'.`);
-                        errorAtRange(firstBinding.expr.left.range, `Multiple declarations for final qualified identifier '${identifierBaseName}'.`);
-                    }
-                }
-                else {
-                    addSymbolToTable(currentContainer.containedScope.local!, identifierBaseName, node, node.typeAnnotation, SyntheticType.any);
-                }
+                addSymbolToTable(currentContainer.containedScope.local!, identifierBaseName, node, node.typeAnnotation, SyntheticType.any());
             }
             else {
                 // there is no local scope, so we must be at top-level scope
@@ -630,6 +645,40 @@ export function Binder() {
                 name = getReturnValueIdentifier("result");
                 break;
             }
+            case "loop": {
+                const enum TagLoopKind { condition, query, struct, array, ranged };
+
+                function determineTagLoopKind(tag: CfTag.Common) : TagLoopKind | undefined {
+                    // <cfloop condition="expr">
+                    if (getAttributeValue(tag.attrs, "condition")) return TagLoopKind.condition;
+                    // <cfloop query=#q#>
+                    if (getAttributeValue(tag.attrs, "query")) return TagLoopKind.query;
+                    // <cfloop collection=#c# item="keyname">
+                    if (getAttributeValue(tag.attrs, "collection")) return TagLoopKind.struct;
+                    // <cfloop array=#a# item="elementname">
+                    if (getAttributeValue(tag.attrs, "array")) return TagLoopKind.array;
+                    // <cfloop from=#1# to=#n# index="indexname">
+                    if (getAttributeValue(tag.attrs, "from")) return TagLoopKind.ranged;
+                    return undefined;
+                }
+
+                switch (determineTagLoopKind(tag)) {
+                    case TagLoopKind.condition:
+                    case TagLoopKind.query: {
+                        return;
+                    }
+                    case TagLoopKind.struct:
+                    case TagLoopKind.array: {
+                        name = getReturnValueIdentifier("item");
+                        break;
+                    }
+                    case TagLoopKind.ranged: {
+                        name = getReturnValueIdentifier("index");
+                        break;
+                    }
+                    default: return;
+                }
+            }
         }
 
         if (!name || name.length > 2) {
@@ -793,16 +842,16 @@ export function Binder() {
 
                 if (targetBaseName === "local") {
                     if (currentContainer.containedScope.local) {
-                        addSymbolToTable(currentContainer.containedScope.local, firstAccessAsString, node, null, SyntheticType.any);
+                        addSymbolToTable(currentContainer.containedScope.local, firstAccessAsString, node, null, SyntheticType.any());
                     }
                     else {
                         // assigning to `local.x` in a non-local scope just binds the name `local` to the root variables scope
-                        addSymbolToTable(RootNode.containedScope.variables!, "local", node, null, SyntheticType.any);
+                        addSymbolToTable(RootNode.containedScope.variables!, "local", node, null, SyntheticType.any());
                     }
                 }
                 else {
                     if (targetBaseName in RootNode.containedScope) {
-                        addSymbolToTable(RootNode.containedScope[targetBaseName]!, firstAccessAsString, node, null, SyntheticType.any);
+                        addSymbolToTable(RootNode.containedScope[targetBaseName]!, firstAccessAsString, node, null, SyntheticType.any());
                     }
                 }
             }
@@ -824,7 +873,7 @@ export function Binder() {
                     return;
                 }
 
-                addSymbolToTable(targetScope, targetBaseName, node, null, SyntheticType.any);
+                addSymbolToTable(targetScope, targetBaseName, node, null, SyntheticType.any());
             }
         }
     }
@@ -858,8 +907,8 @@ export function Binder() {
                 node,
                 cfFunctionSignature(
                     node.canonicalName,
-                    (<any[]>node.params).map((param: Script.FunctionParameter | Tag.FunctionParameter) => ({...param, type: SyntheticType.any})),
-                    SyntheticType.any),
+                    (<any[]>node.params).map((param: Script.FunctionParameter | Tag.FunctionParameter) => ({...param, type: SyntheticType.any()})),
+                    SyntheticType.any()),
                 null);
         }
 
@@ -871,7 +920,7 @@ export function Binder() {
         };
 
         for (const param of node.params) {
-            addSymbolToTable(node.containedScope.arguments!, param.canonicalName, param, null, SyntheticType.any);
+            addSymbolToTable(node.containedScope.arguments!, param.canonicalName, param, null, SyntheticType.any());
         }
 
         const detachedFlow = newFlowGraphRootedAt(node);
@@ -941,10 +990,13 @@ export function Binder() {
 
     function bindFor(node: For) {
         if (node.subType === ForSubType.forIn) {
+            extendCurrentFlowToNode(node.expr);
             extendCurrentFlowToNode(node.init);
+            extendCurrentFlowToNode(node.body);
+
             bindNode(node.init, node);
             bindNode(node.inToken, node);
-            extendCurrentFlowToNode(node.expr);
+
             bindNode(node.expr, node);
             bindNode(node.body, node);
             return;

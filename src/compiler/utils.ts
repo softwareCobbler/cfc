@@ -860,3 +860,28 @@ export class BiMap<K,V> {
         return [...this.#reverse.keys()];
     }
 }
+
+export function findAncestor(node: Node, predicate: (node: Node | null) => true | false | "bail") : Node | undefined {
+    let current : Node | null = node;
+    while (current) {
+        const result = predicate(current);
+        if (result === true) {
+            return current;
+        }
+        else if (result === false) {
+            current = current.parent;
+        }
+        else if (result === "bail") {
+            break;
+        }
+    }
+    return undefined;
+}
+
+export function getContainingFunction(node: Node) : Node | undefined {
+    return findAncestor(node, (node) => node?.kind === NodeType.functionDefinition);
+}
+
+export function getNodeLinks(node: Node) {
+    return node.links ?? (node.links = {});
+}
