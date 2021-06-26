@@ -27,7 +27,7 @@ import {
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, getAttributeValue } from "./utils";
-import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type, TypeFlags, cfFunctionSignature, cfTypeConstructorInvocation, cfVoid, cfTypeConstructorParam, cfTypeConstructor, cfIntersection, cfTypeId, TypeKind, cfUnion, cfStructMember, SyntheticType, TypeAttribute } from "./types";
+import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type, TypeFlags, cfFunctionSignature, cfTypeConstructorInvocation, cfVoid, cfTypeConstructorParam, cfTypeConstructor, cfIntersection, cfTypeId, cfUnion, cfStructMember, SyntheticType, TypeAttribute } from "./types";
 
 let debugParseModule = false;
 let parseTypes = false;
@@ -1209,7 +1209,9 @@ export function Parser() {
                         parseErrorAtRange(node.range, "<cfargument> tags should precede any other tags within a <cffunction> body.");
                     }
                 }
-                return Tag.FunctionDefinition(startTag, params, looseTagsToStatements(body), endTag);
+                const result = Tag.FunctionDefinition(startTag, params, looseTagsToStatements(body), endTag);
+                if (startTag.typeAnnotation) result.typeAnnotation = startTag.typeAnnotation;
+                return result;
             }
 
             function treeifyTagTry(startTag: CfTag.Common, body: Node[], endTag: CfTag.Common) {
@@ -1739,13 +1741,7 @@ export function Parser() {
                     //
                     else {
                         const type = parseType();
-                        if (type.typeKind === TypeKind.typeId) {
-                            // convert a loose type id into a zero-arg type constructor invocation
-                            result.push(cfTypeConstructorInvocation(type, []));
-                        }
-                        else {
-                            result.push(type);
-                        }
+                        result.push(type);
                     }
                 }
                 else {
@@ -3233,12 +3229,10 @@ export function Parser() {
         params        = tryParseFunctionDefinitionParameters(/*speculative*/ false, asDeclaration);
         
         if (asDeclaration) {
-            rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.noTrivia);
-            const triviaAndType = parseScriptTriviaWithPossibleTypeAnnotation();
-            if (triviaAndType.type) {
-                returnTypeAnnotation = triviaAndType.type;
-            }
-            rightParen.trivia = triviaAndType.trivia;
+            rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+            /*discarded*/ parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
+            returnTypeAnnotation = parseType();
+
             attrs = [];
             body = Block(null, [], null);
             body.range = new SourceRange(pos(), pos());
@@ -3752,6 +3746,23 @@ export function Parser() {
             })
         }
 
+        function startsType() {
+            switch (lookahead()) {
+                case TokenType.LEFT_BRACKET:
+                case TokenType.LEFT_PAREN:
+                case TokenType.LEFT_BRACE:
+                case TokenType.LEXEME:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        if (!startsType()) {
+            parseErrorAtPos(pos(), "Expected a type expression.");
+            return cfNil(new SourceRange(pos(), pos()));
+        }
+
         parseTrivia(); // only necessary if we just updated scanner state? caller can maybe guarantee that the target scanner state begins on non-trivial input?
 
         function localParseType() : Type {
@@ -3796,6 +3807,10 @@ export function Parser() {
                             if (lookahead() === TokenType.COLON) {
                                 return null;
                             }
+                        }
+                        else if (lexeme.type === TokenType.RIGHT_PAREN && peek().type === TokenType.EQUAL_RIGHT_ANGLE) {
+                            // got something like `() => `
+                            return null;
                         }
 
                         return lexemeToType(lexeme);

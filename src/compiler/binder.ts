@@ -2,7 +2,7 @@ import { SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType,
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, getNodeLinks } from "./utils";
 import { Diagnostic } from "./parser";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
-import { cfFunctionSignature, SyntheticType, Type } from "./types";
+import { cfFunctionSignature, SyntheticType, Type, TypeKind } from "./types";
 
 export function Binder() {
     let RootNode : NodeWithScope<SourceFile>;
@@ -16,11 +16,17 @@ export function Binder() {
     let nodeMap = new Map<NodeId, Node>();
 
     function bind(sourceFile: SourceFile, scanner_: Scanner, diagnostics_: Diagnostic[]) {
+        if (sourceFile.cfFileType === CfFileType.dCfm) {
+            bindDeclarationFile(sourceFile);
+            return;
+        }
+
         nodeMap = new Map<NodeId, Node>();
         scanner = scanner_;
         diagnostics = diagnostics_;
 
         RootNode = sourceFile as NodeWithScope<SourceFile>;
+
         RootNode.containedScope = {
             container: null,
             typedefs: new Map<string, Type>(),
@@ -520,6 +526,7 @@ export function Binder() {
 
                 return;
             case StatementType.fromTag:
+                maybeBindTagResult(node.tagOrigin.startTag);
                 if (node.tagOrigin.startTag) extendCurrentFlowToNode(node.tagOrigin.startTag);
                 bindNode(node.tagOrigin.startTag, node);
                 break;
@@ -616,7 +623,7 @@ export function Binder() {
             return;
         }
 
-        function getReturnValueIdentifier(attrName: string) {
+        function getReturnValueIdentifier(attrName: string) : string[] | undefined {
             const string = getTriviallyComputableString(getAttributeValue((<CfTag.Common>tag).attrs, attrName));
             if (string !== undefined && STUB_RELOCATEME_isValidIdentifier(string)) {
                return string.split(".");
@@ -624,25 +631,21 @@ export function Binder() {
             return undefined;
         }
 
-        if (!tag.typeAnnotation) {
-            return;
-        }
-
-        let name : string[] | undefined = undefined;
+        let attrName : string | undefined = undefined;
 
         switch (tag.canonicalName) {
             case "directory":
             case "param":
             case "query": {
-                name = getReturnValueIdentifier("name");
+                attrName = "name";
                 break;
             }
             case "savecontent": {
-                name = getReturnValueIdentifier("variable");
+                attrName = "variable";
                 break;
             }
             case "http": {
-                name = getReturnValueIdentifier("result");
+                attrName = "result";
                 break;
             }
             case "loop": {
@@ -669,17 +672,21 @@ export function Binder() {
                     }
                     case TagLoopKind.struct:
                     case TagLoopKind.array: {
-                        name = getReturnValueIdentifier("item");
+                        attrName = "item";
                         break;
                     }
                     case TagLoopKind.ranged: {
-                        name = getReturnValueIdentifier("index");
+                        attrName = "index";
                         break;
                     }
                     default: return;
                 }
             }
         }
+
+        if (!attrName) return;
+
+        const name = getReturnValueIdentifier(attrName);
 
         if (!name || name.length > 2) {
             return;
@@ -695,6 +702,10 @@ export function Binder() {
                         targetScope = currentContainer.containedScope.local;
                     }
                     else {
+                        const attrVal = getAttributeValue((<CfTag.Common>tag).attrs, attrName);
+                        // this is not really an error; it will simply write into `local.foo` in the global context
+                        // but perhaps is a code smell to be warned about
+                        if (attrVal) errorAtRange(attrVal.range, `Tag binds result name '${name[1]}' to a local scope in a non-local context.`);
                         return;
                     }
                 }
@@ -1097,6 +1108,31 @@ export function Binder() {
         }
 
         diagnostics.push(freshDiagnostic);
+    }
+
+    function bindDeclarationFile(sourceFile: SourceFile) {
+        sourceFile.containedScope = {
+            container: null,
+            typedefs: new Map<string, Type>(),
+        };
+
+        for (const node of sourceFile.content) {
+            switch (node.kind) {
+                case NodeType.type: {
+                    switch (node.typeKind) {
+                        case TypeKind.functionSignature: {
+                            sourceFile.containedScope.typedefs.set(node.name.toLowerCase(), node);
+                            break;
+                        }
+                    }
+                    break;
+                }
+                default: {
+                    errorAtRange(node.range, "Illegal non-declaration in declaration file.");
+                    continue;
+                }
+            }
+        }
     }
 
     function errorAtRange(range: SourceRange, msg: string) : void {

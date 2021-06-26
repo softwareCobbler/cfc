@@ -1,761 +1,771 @@
-@type std = {
-    abs #![noCase]: (required number: any) => any,
-    acos #![noCase]: (required number: any) => any,
-    addSOAPRequestHeader #![noCase]: (required webservice: any, required namespace: any, required name: any, required value: any, mustUnderstand: any) => any,
-    addSOAPResponseHeader #![noCase]: (required namespace: any, required name: any, required value: any, mustUnderstand: any) => any,
-    ajaxLink #![noCase]: (required url: any) => any,
-    ajaxOnLoad #![noCase]: (required functionName: any) => any,
-    applicationStartTime #![noCase]: () => any,
-    applicationStop #![noCase]: () => any,
-    array #![noCase]: (values: any) => any,
-    arrayAppend #![noCase]: (required array: any, required value: any, merge: any) => any,
-    arrayAvg #![noCase]: (required array: any) => any,
-    arrayClear #![noCase]: (required array: any) => any,
-    arrayContains #![noCase]: (required array: any, required value: any, substringMatch: any) => any,
-    arrayContainsNoCase #![noCase]: (required array: any, required value: any) => any,
-    arrayDelete #![noCase]: (required array: any, required value: any, scope: any) => any,
-    arrayDeleteAt #![noCase]: (required array: any, required index: any) => any,
-    arrayDeleteNoCase #![noCase]: (required array: any, required value: any) => any,
-    arrayEach #![noCase]: (required array: any, required callback: any, parallel: any, maxThreads: any) => any,
-    arrayEvery #![noCase]: (required array: any, required closure: any, parallel: any, maxThreads: any) => any,
-    arrayFilter #![noCase]: (required array: any, required callback: any, parallel: any, maxThreads: any) => any,
-    arrayFind #![noCase]: (required array: any, required value: any) => any,
-    arrayFindAll #![noCase]: (required array: any, value or callback: any) => any,
-    arrayFindAllNoCase #![noCase]: (required array: any, required value or callback: any) => any,
-    arrayFindNoCase #![noCase]: (required array: any, required value or callback: any) => any,
-    arrayFirst #![noCase]: (required array: any) => any,
-    arrayGetMetadata #![noCase]: (required array: any) => any,
-    arrayIndexExists #![noCase]: (required array: any, required index: any) => any,
-    arrayInsertAt #![noCase]: (required array: any, required position: any, required value: any) => any,
-    arrayIsDefined #![noCase]: (required array: any, required index: any) => any,
-    arrayIsEmpty #![noCase]: (required array: any) => any,
-    arrayLast #![noCase]: (required array: any) => any,
-    arrayLen #![noCase]: (required array: any) => any,
-    arrayMap #![noCase]: (required array: any, required callback: any, parallel: any, maxThreads: any) => any,
-    arrayMax #![noCase]: (required array: any) => any,
-    arrayMedian #![noCase]: (required array: any) => any,
-    arrayMerge #![noCase]: (required array1: any, required array2: any, leaveIndex: any) => any,
-    arrayMid #![noCase]: (required array: any, required start: any, count: any) => any,
-    arrayMin #![noCase]: (required array: any) => any,
-    arrayNew #![noCase]: (required dimension: any, isSynchronized: any) => any,
-    arrayPrepend #![noCase]: (required array: any, required value: any) => any,
-    arrayReduce #![noCase]: (required array: any, required callback: any, initialValue: any) => any,
-    arrayResize #![noCase]: (required array: any, required size: any) => any,
-    arrayReverse #![noCase]: (required array: any) => any,
-    arraySet #![noCase]: (required array: any, required start: any, required end: any, required value: any) => any,
-    arraySetMetadata #![noCase]: (required array: any, required metadata: any) => any,
-    arrayShift #![noCase]: (required array: any) => any,
-    arraySlice #![noCase]: (required array: any, required offset: any, length: any) => any,
-    arraySome #![noCase]: (required array: any, required callback: any, parallel: any, maxThreads: any) => any,
-    arraySort #![noCase]: (required array: any, required sortType: any, sortOrder: any, callback: any) => any,
-    arraySplice #![noCase]: (required array: any, required index: any, elementCountForRemoval: any, replacements: any) => any,
-    arraySum #![noCase]: (required array: any, ignoreEmpty: any) => any,
-    arraySwap #![noCase]: (required array: any, required position1: any, required position2: any) => any,
-    arrayToList #![noCase]: (required array: any, delimiter: any) => any,
-    arrayToStruct #![noCase]: (required array: any) => any,
-    asc #![noCase]: (required string: any) => any,
-    asin #![noCase]: (required number: any) => any,
-    atn #![noCase]: (required number: any) => any,
-    beat #![noCase]: (time: any) => any,
-    binaryDecode #![noCase]: (required string: any, required encoding: any) => any,
-    binaryEncode #![noCase]: (required binaryData: any, required encoding: any) => any,
-    bitAnd #![noCase]: (required number1: any, required number2: any) => any,
-    bitMaskClear #![noCase]: (required number: any, required start: any, required length: any) => any,
-    bitMaskRead #![noCase]: (required number: any, required start: any, required length: any) => any,
-    bitMaskSet #![noCase]: (required number: any, required mask: any, required start: any, required length: any) => any,
-    bitNot #![noCase]: (required number: any) => any,
-    bitOr #![noCase]: (required number1: any, required number2: any) => any,
-    bitShln #![noCase]: (required number: any, required count: any) => any,
-    bitShrn #![noCase]: (required number: any, required count: any) => any,
-    bitXor #![noCase]: (required number1: any, required number2: any) => any,
-    booleanFormat #![noCase]: (required value: any) => any,
-    bundleInfo #![noCase]: (required obj: any) => any,
-    cacheClear #![noCase]: (filterOrTags: any, cacheName: any) => any,
-    cacheCount #![noCase]: (cacheName: any) => any,
-    cacheDelete #![noCase]: (required id: any, throwOnError: any, cacheName: any) => any,
-    cacheGet #![noCase]: (required id: any, region: any, cacheName: any, throwWhenNotExist: any) => any,
-    cacheGetAll #![noCase]: (filter: any, cacheName: any) => any,
-    cacheGetAllIds #![noCase]: () => any,
-    cacheGetDefaultCacheName #![noCase]: (required type: any) => any,
-    cacheGetEngineProperties #![noCase]: () => any,
-    cacheGetMetadata #![noCase]: (required id: any, objectType: any, region: any) => any,
-    cacheGetProperties #![noCase]: (region: any) => any,
-    cacheGetSession #![noCase]: (required objectType: any, isKey: any) => any,
-    cacheIdExists #![noCase]: (required id: any, region: any) => any,
-    cacheKeyExists #![noCase]: (required key: any, cacheName: any) => any,
-    cachePut #![noCase]: (required id: any, required value: any, timespan: any, idleTime: any, region: any, throwOnError: any) => any,
-    cacheRegionExists #![noCase]: (required region: any, password : any) => any,
-    cacheRegionNew #![noCase]: (required region: any, properties: any, throwOnError: any, password : any) => any,
-    cacheRegionRemove #![noCase]: (required region: any, password : any) => any,
-    cacheRemove #![noCase]: (required id: any, throwOnError: any, region: any, exact: any) => any,
-    cacheRemoveAll #![noCase]: (region: any) => any,
-    cacheSetProperties #![noCase]: (required properties: any, region: any) => any,
-    callStackDump #![noCase]: (output: any) => any,
-    callStackGet #![noCase]: () => any,
-    canonicalize #![noCase]: (required input: any, required restrictMultiple: any, required restrictMixed: any, throwOnError: any) => any,
-    ceiling #![noCase]: (required number: any) => any,
-    cfusion_Decrypt #![noCase]: (required string: any, required key: any) => any,
-    cfusion_Encrypt #![noCase]: (required string: any, required key: any) => any,
-    charsetDecode #![noCase]: (required string: any, required encoding: any) => any,
-    charsetEncode #![noCase]: (required binaryData: any, required encoding: any) => any,
-    chr #![noCase]: (required number: any) => any,
-    cJustify #![noCase]: (required string: any, required length: any) => any,
-    collectionEach #![noCase]: (required collection: any, required closure: any) => any,
-    collectionEvery #![noCase]: (required collection: any, required closure: any, parallel: any, maxThreads: any) => any,
-    collectionFilter #![noCase]: (required collection: any, required filter: any, parallel: any, maxThreads: any) => any,
-    collectionMap #![noCase]: (required collection: any, required closure: any, parallel: any, maxThreads: any) => any,
-    collectionReduce #![noCase]: (required collection: any, required closure: any, initalValue: any) => any,
-    collectionSome #![noCase]: (required collection: any, required closure: any, parallel: any, maxThreads: any) => any,
-    compare #![noCase]: (required string1: any, required string2: any) => any,
-    compareNoCase #![noCase]: (required string1: any, required string2: any) => any,
-    componentCacheClear #![noCase]: () => any,
-    componentCacheList #![noCase]: () => any,
-    componentInfo #![noCase]: (required component: any) => any,
-    compress #![noCase]: (required format: any, required source: any, required target: any, includeBaseFolder: any, mode: any) => any,
-    contractPath #![noCase]: (required path_absolute: any, placeholder: any) => any,
-    cos #![noCase]: (required number: any) => any,
-    createDate #![noCase]: (required year: any, required month: any, required day: any) => any,
-    createDateTime #![noCase]: (required year: any, required month: any, required day: any, required hour: any, required minute: any, required second: any, millisecond: any, timezone: any) => any,
-    createDynamicProxy #![noCase]: (required cfc: any, required interfaces: any) => any,
-    createGUID #![noCase]: () => any,
-    createObject #![noCase]: (required type: any, required className: any, required context: any, required locale: any, required servername: any, required component_name: any, required urltowsdl: any, portname: any, bundleName: any, bundleVersion: any) => any,
-    createODBCDate #![noCase]: (required date: any) => any,
-    createODBCDateTime #![noCase]: (required date: any) => any,
-    createODBCTime #![noCase]: (required date: any) => any,
-    createTime #![noCase]: (required hour: any, required minute: any, required second: any, millisecond: any, timezone: any) => any,
-    createTimespan #![noCase]: (required days: any, required hours: any, required minutes: any, required seconds: any) => any,
-    createUniqueID #![noCase]: () => any,
-    createUUID #![noCase]: () => any,
-    csrfGenerateToken #![noCase]: (key: any, forceNew: any) => any,
-    csrfVerifyToken #![noCase]: (required token: any, key: any) => any,
-    ctCacheClear #![noCase]: () => any,
-    ctCacheList #![noCase]: () => any,
-    datasourceFlushMetacache #![noCase]: (datasourceName: any) => any,
-    dateAdd #![noCase]: (required datepart: any, required number: any, required date: any) => any,
-    dateCompare #![noCase]: (required date1: any, required date2: any, datePart: any) => any,
-    dateConvert #![noCase]: (required conversionType: any, required date: any) => any,
-    dateDiff #![noCase]: (required datepart: any, required date1: any, required date2: any) => any,
-    dateFormat #![noCase]: (required date: any, mask: any) => any,
-    datePart #![noCase]: (required datepart: any, required date: any, timezone: any) => any,
-    dateTimeFormat #![noCase]: (required date: any, mask: any, timezone: any) => any,
-    day #![noCase]: (required date: any) => any,
-    dayOfWeek #![noCase]: (required date: any, calendar: any) => any,
-    dayOfWeekAsString #![noCase]: (required dayOfWeek: any, locale: any) => any,
-    dayOfWeekShortAsString #![noCase]: (required day_of_week: any, locale: any) => any,
-    dayOfYear #![noCase]: (required date: any) => any,
-    daysInMonth #![noCase]: (required date: any) => any,
-    daysInYear #![noCase]: (required date: any) => any,
-    de #![noCase]: (required String: any) => any,
-    decimalFormat #![noCase]: (required number: any) => any,
-    decodeForHTML #![noCase]: (required string: any) => any,
-    decodeFromURL #![noCase]: (required string: any) => any,
-    decrementValue #![noCase]: (required number: any) => any,
-    decrypt #![noCase]: (required string: any, required key: any, algorithm: any, encoding: any, iv: any, salt: any, iterations: any) => any,
-    decryptBinary #![noCase]: (required binaryData: any, required key: any, algorithm: any, encoding: any, iv: any, salt: any, iterations: any) => any,
-    deleteClientVariable #![noCase]: (required name: any) => any,
-    deserialize #![noCase]: (required string: any, required type: any, required useCustomSerializer: any) => any,
-    deserializeJSON #![noCase]: (required json: any, strictMapping: any, useCustomSerializer: any) => any,
-    deserializeXML #![noCase]: (required string: any, required useCustomSerializer: any) => any,
-    directoryCopy #![noCase]: (required source: any, required destination: any, recurse: any, filter: any, createPath: any) => any,
-    directoryCreate #![noCase]: (required path: any, createPath: any, ignoreExists: any) => any,
-    directoryDelete #![noCase]: (required path: any, recurse: any) => any,
-    directoryExists #![noCase]: (required path: any, allowRealPath : any) => any,
-    directoryList #![noCase]: (required path: any, recurse: any, listInfo: any, filter: any, sort: any, type: any) => any,
-    directoryRename #![noCase]: (required oldPath: any, required newPath: any, createPath: any) => any,
-    dollarFormat #![noCase]: (required number: any) => any,
-    dotnetToCFType #![noCase]: (required variableName: any) => any,
-    duplicate #![noCase]: (required object: any, deepcopy: any) => any,
-    each #![noCase]: (required collection: any, required closure: any, parallel: any, maxThreads: any) => any,
-    echo #![noCase]: (required string: any) => any,
-    empty #![noCase]: (required variable: any) => any,
-    encodeFor #![noCase]: (required type: any, required value: any) => any,
-    encodeForCSS #![noCase]: (required string: any, canonicalize: any) => any,
-    encodeForDN #![noCase]: (required string: any, canonicalize: any) => any,
-    encodeForHTML #![noCase]: (required string: any, canonicalize: any) => any,
-    encodeForHTMLAttribute #![noCase]: (required string: any, canonicalize: any) => any,
-    encodeForJavaScript #![noCase]: (required string: any, canonicalize: any, canonicalize: any) => any,
-    encodeForLDAP #![noCase]: (required string: any, canonicalize: any) => any,
-    encodeForURL #![noCase]: (required string: any, canonicalize: any) => any,
-    encodeForXML #![noCase]: (required string: any, canonicalize: any) => any,
-    encodeForXMLAttribute #![noCase]: (required string: any, canonicalize: any) => any,
-    encodeForXPath #![noCase]: (required string: any, canonicalize: any) => any,
-    encrypt #![noCase]: (required string: any, required key: any, algorithm: any, encoding: any, iv: any, salt: any, iterations: any) => any,
-    encryptBinary #![noCase]: (required binaryData: any, required key: any, algorithm: any, iv: any, salt: any, iterations: any) => any,
-    entityDelete #![noCase]: (required entity: any) => any,
-    entityLoad #![noCase]: (required entityName: any, id: any, Filter: any, unique: any, Order: any, options: any) => any,
-    entityLoadByExample #![noCase]: (required sampleEntity: any, unique: any, matchCriteria: any) => any,
-    entityLoadByPK #![noCase]: (required entity: any, required id: any, unique: any) => any,
-    entityMerge #![noCase]: (required entity: any) => any,
-    entityNameArray #![noCase]: () => any,
-    entityNameList #![noCase]: (delimiter: any) => any,
-    entityNew #![noCase]: (required entityName: any, properties: any, ignoreExtras: any) => any,
-    entityReload #![noCase]: (required entity: any) => any,
-    entitySave #![noCase]: (required entity: any, forceInsert: any) => any,
-    entityToQuery #![noCase]: (required entity: any, name: any) => any,
-    esapiDecode #![noCase]: (required decodeFrom: any, required string: any) => any,
-    esapiEncode #![noCase]: (required encodeFor: any, required string: any) => any,
-    evaluate #![noCase]: (required expression: any) => any,
-    exp #![noCase]: (required number: any) => any,
-    expandPath #![noCase]: (required path: any) => any,
-    extract #![noCase]: (required format: any, required source: any, required target: any) => any,
-    fileAppend #![noCase]: (required file: any, required data: any, charset: any, addNewLine: any) => any,
-    fileClose #![noCase]: (required file: any) => any,
-    fileCopy #![noCase]: (required source: any, required destination: any) => any,
-    fileDelete #![noCase]: (required filePath: any) => any,
-    fileExists #![noCase]: (required filePath: any) => any,
-    fileGetMimeType #![noCase]: (required file: any, strict: any) => any,
-    fileIsEOF #![noCase]: (required file: any) => any,
-    fileMove #![noCase]: (required source: any, required destination: any) => any,
-    fileOpen #![noCase]: (required filePath: any, mode: any, charset: any, seekable: any) => any,
-    fileRead #![noCase]: (required filePath: any, charset: any, bufferSize: any) => any,
-    fileReadBinary #![noCase]: (required filePath: any) => any,
-    fileReadLine #![noCase]: (required file: any) => any,
-    fileSeek #![noCase]: (required file: any, required position: any) => any,
-    fileSetAccessMode #![noCase]: (required filePath: any, required mode: any) => any,
-    fileSetAttribute #![noCase]: (required filePath: any, required attribute: any) => any,
-    fileSetLastModified #![noCase]: (required filePath: any, required date: any) => any,
-    fileSkipBytes #![noCase]: (required file: any, required skipCount: any) => any,
-    fileUpload #![noCase]: (required destination: any, fileField: any, mimeType: any, onConflict: any, strict: any) => any,
-    fileUploadAll #![noCase]: (required destination: any, mimeType: any, onConflict: any, strict: any, continueOnError: any, errorVariable: any, allowedExtensions: any) => any,
-    fileWrite #![noCase]: (required filePath: any, required data: any, charset: any) => any,
-    fileWriteLine #![noCase]: (required file: any, required data: any) => any,
-    find #![noCase]: (required substring: any, required string: any, start: any) => any,
-    findNoCase #![noCase]: (required substring: any, required string: any, start: any) => any,
-    findOneOf #![noCase]: (required set: any, required string: any, start: any) => any,
-    firstDayOfMonth #![noCase]: (required date: any) => any,
-    fix #![noCase]: (required number: any) => any,
-    floor #![noCase]: (required number: any) => any,
-    formatBaseN #![noCase]: (required number: any, required radix: any) => any,
-    generatePBKDFKey #![noCase]: (required algorithm: any, required passphrase: any, required salt: any, required iterations: any, required keySize: any) => any,
-    generateSecretKey #![noCase]: (algorithm: any, keysize: any) => any,
-    getApplicationMetadata #![noCase]: () => any,
-    getApplicationSettings #![noCase]: (required suppressFunction: any) => any,
-    getAuthUser #![noCase]: () => any,
-    getBaseTagData #![noCase]: (required tagname: any, level: any) => any,
-    getBaseTagList #![noCase]: (caller: any) => any,
-    getBaseTemplatePath #![noCase]: () => any,
-    getBuiltinFunction #![noCase]: (required name: any) => any,
-    getCanonicalPath #![noCase]: (required path: any) => any,
-    getClassPath #![noCase]: () => any,
-    getClientVariablesList #![noCase]: () => any,
-    getComponentMetadata #![noCase]: (required path: any) => any,
-    getContextRoot #![noCase]: () => any,
-    getCpuUsage #![noCase]: (interval: any) => any,
-    getCurrentContext #![noCase]: () => any,
-    getCurrentTemplatePath #![noCase]: () => any,
-    getDirectoryFromPath #![noCase]: (required path: any) => any,
-    getEncoding #![noCase]: (required scope_name: any) => any,
-    getException #![noCase]: (required javaobject: any) => any,
-    getFileFromPath #![noCase]: (required path: any) => any,
-    getFileInfo #![noCase]: (required path: any) => any,
-    getFreeSpace #![noCase]: (required path: any) => any,
-    getFunctionCalledName #![noCase]: () => any,
-    getFunctionData #![noCase]: (required functionName: any, dialect: any) => any,
-    getFunctionKeywords #![noCase]: () => any,
-    getFunctionList #![noCase]: () => any,
-    getGatewayHelper #![noCase]: (required gatewayID: any) => any,
-    getHTTPRequestData #![noCase]: (required includeBody: any) => any,
-    getHTTPTimeString #![noCase]: (DateTime: any) => any,
-    getK2ServerDocCount #![noCase]: () => any,
-    getK2ServerDocCountLimit #![noCase]: () => any,
-    getLocale #![noCase]: () => any,
-    getLocaleCountry #![noCase]: () => any,
-    getLocaleDisplayName #![noCase]: () => any,
-    getLocaleInfo #![noCase]: (locale: any, dspLocale: any) => any,
-    getLocaleLanguage #![noCase]: () => any,
-    getLocalhostIP #![noCase]: () => any,
-    getLuceeID #![noCase]: () => any,
-    getMemoryUsage #![noCase]: (type: any) => any,
-    getMetadata #![noCase]: (required Object: any) => any,
-    getMetricData #![noCase]: (required mode: any) => any,
-    getNumericDate #![noCase]: (required arg1: any) => any,
-    getPageContext #![noCase]: () => any,
-    getPrinterInfo #![noCase]: (printer: any) => any,
-    getPrinterList #![noCase]: (delimiter: any) => any,
-    getProfileSections #![noCase]: (required inifile: any) => any,
-    getProfileString #![noCase]: (required inipath: any, required section: any, required entry: any) => any,
-    getReadableImageFormats #![noCase]: () => any,
-    getSafeHTML #![noCase]: (required inputString: any, required PolicyFile: any, required throwOnError: any) => any,
-    getSOAPRequest #![noCase]: (webservice: any) => any,
-    getSOAPRequestHeader #![noCase]: (required namespace: any, required name: any, asXML: any) => any,
-    getSOAPResponse #![noCase]: (required webservice: any) => any,
-    getSOAPResponseHeader #![noCase]: (required webservice: any, required namespace: any, required name: any, asXML: any) => any,
-    getSystemFreeMemory #![noCase]: () => any,
-    getSystemTotalMemory #![noCase]: (region: any) => any,
-    getTagData #![noCase]: (required nameSpaceWithSeperator: any, required tagName: any, dialect: any) => any,
-    getTagList #![noCase]: () => any,
-    getTempDirectory #![noCase]: () => any,
-    getTempFile #![noCase]: (required dir: any, required prefix: any) => any,
-    getTemplatePath #![noCase]: () => any,
-    getTickCount #![noCase]: () => any,
-    getTimezone #![noCase]: () => any,
-    getTimezoneInfo #![noCase]: (required timezone: any, required locale: any) => any,
-    getToken #![noCase]: (required String: any, required index: any, delimiters: any) => any,
-    getTotalSpace #![noCase]: (required path: any) => any,
-    getUserRoles #![noCase]: () => any,
-    getVariable #![noCase]: (required name: any) => any,
-    getVFSMetadata #![noCase]: (required fileSystemType: any) => any,
-    getWriteableImageFormats #![noCase]: () => any,
-    hash #![noCase]: (required string: any, algorithm: any, encoding: any, additionalIterations: any) => any,
-    hash40 #![noCase]: (required input: any, algorithm: any, encoding: any, numIterations: any) => any,
-    hmac #![noCase]: (required message: any, required key: any, algorithm: any, encoding: any) => any,
-    hour #![noCase]: (required date: any) => any,
-    htmlCodeFormat #![noCase]: (required string: any, version: any) => any,
-    htmlEditFormat #![noCase]: (required string: any, version: any) => any,
-    htmlParse #![noCase]: (required html: any, caseSensitive: any) => any,
-    iIf #![noCase]: (required condition: any, required expression1: any, required expression2: any) => any,
-    imageAddBorder #![noCase]: (required name: any, required thickness: any, color: any, bordertype: any) => any,
-    imageBlur #![noCase]: (required name: any, blurradius: any) => any,
-    imageClearRect #![noCase]: (required name: any, required x: any, required y: any, required width: any, required height: any) => any,
-    imageCopy #![noCase]: (required name: any, required x: any, required y: any, required width: any, required height: any, dx: any, dy: any) => any,
-    imageCreateCaptcha #![noCase]: (required height: any, required width: any, required text: any, difficulty: any, font: any, fontsize: any) => any,
-    imageCrop #![noCase]: (required name: any, required x: any, required y: any, required width: any, required height: any) => any,
-    imageDrawArc #![noCase]: (required name: any, required x: any, required y: any, required width: any, required height: any, required startAngle: any, required archAngle: any, filled: any) => any,
-    imageDrawBeveledRect #![noCase]: (required name: any, required x: any, required y: any, required width: any, required height: any, required raised: any, filled: any) => any,
-    imageDrawCubicCurve #![noCase]: (required name: any, required ctrlx1: any, required ctrly1: any, required ctrlx2: any, required ctrly2: any, required x1: any, required y1: any, required x2: any, required y2: any) => any,
-    imageDrawImage #![noCase]: (required name: any, required image: any, required x: any, required y: any) => any,
-    imageDrawLine #![noCase]: (required name: any, required x1: any, required y1: any, required x2: any, required y2: any) => any,
-    imageDrawLines #![noCase]: (required name: any, required xcords: any, required ycords: any, isPolygon: any, filled: any) => any,
-    imageDrawOval #![noCase]: (required name: any, required x: any, required y: any, required width: any, required height: any, filled: any) => any,
-    imageDrawPoint #![noCase]: (required name: any, required x: any, required y: any) => any,
-    imageDrawQuadraticCurve #![noCase]: (required name: any, required x1: any, required y1: any, required ctrlx1: any, required ctrly1: any, required x2: any, required y2: any) => any,
-    imageDrawRect #![noCase]: (required name: any, required x: any, required y: any, required width: any, required height: any, filled: any) => any,
-    imageDrawRoundRect #![noCase]: (required name: any, required x: any, required y: any, required width: any, required height: any, required arcwidth: any, required archeight: any, filled: any) => any,
-    imageDrawText #![noCase]: (required name: any, required str: any, required x: any, required y: any, attributecollection: any) => any,
-    imageFilter #![noCase]: (required name: any, required filtername: any, parameters: any) => any,
-    imageFilterColorMap #![noCase]: (required type: any, lineColor1: any, lineColor2: any) => any,
-    imageFilterCurves #![noCase]: () => any,
-    imageFilterKernel #![noCase]: (required width: any, required height: any, required data: any) => any,
-    imageFilterWarpGrid #![noCase]: (required rows: any, required cols: any, required width: any, required height: any) => any,
-    imageFlip #![noCase]: (required name: any, required transpose: any) => any,
-    imageFonts #![noCase]: () => any,
-    imageFormats #![noCase]: () => any,
-    imageGetBlob #![noCase]: (required source: any) => any,
-    imageGetBufferedImage #![noCase]: (required name: any) => any,
-    imageGetExifMetaData #![noCase]: (required name: any) => any,
-    imageGetEXIFTag #![noCase]: (required name: any, required tagName: any) => any,
-    imageGetHeight #![noCase]: (required name: any) => any,
-    imageGetIPTCMetaData #![noCase]: (required name: any) => any,
-    imageGetIPTCtag #![noCase]: (required name: any, required tagName: any) => any,
-    imageGetMetadata #![noCase]: (required name: any) => any,
-    imageGetWidth #![noCase]: (required name: any) => any,
-    imageGrayScale #![noCase]: (required name: any) => any,
-    imageInfo #![noCase]: (required name: any) => any,
-    imageMakeColorTransparent #![noCase]: (required img: any, required color: any) => any,
-    imageMakeTranslucent #![noCase]: (required img: any, required percentage: any) => any,
-    imageNegative #![noCase]: (required name: any) => any,
-    imageNew #![noCase]: (source: any, width: any, height: any, imagetype: any, canvascolor: any) => any,
-    imageOverlay #![noCase]: (required source1: any, required source2: any, rule: any, alpha: any) => any,
-    imagePaste #![noCase]: (required image1: any, required image2: any, required x: any, required y: any) => any,
-    imageRead #![noCase]: (required path: any) => any,
-    imageReadBase64 #![noCase]: (required string: any) => any,
-    imageResize #![noCase]: (required name: any, required width: any, required height: any, interpolation: any, blurfactor: any) => any,
-    imageRotate #![noCase]: (required name: any, required angle: any, x: any, y: any, interpolation: any) => any,
-    imageRotateDrawingAxis #![noCase]: (required name: any, required angle: any, x: any, y: any) => any,
-    imageScaleTofit #![noCase]: (required name: any, required fitWidth: any, required fitHeight: any, interpolation: any, blurfactor: any) => any,
-    imageSetAntialiasing #![noCase]: (required name: any, antialias: any) => any,
-    imageSetBackgroundColor #![noCase]: (required name: any, required color: any) => any,
-    imageSetDrawingAlpha #![noCase]: (required name: any, required alpha: any) => any,
-    imageSetDrawingColor #![noCase]: (required name: any, required color: any) => any,
-    imageSetDrawingStroke #![noCase]: (required name: any, attributecollection: any) => any,
-    imageSetDrawingTransparency #![noCase]: (required name: any, required percent: any) => any,
-    imageSharpen #![noCase]: (required name: any, gain: any) => any,
-    imageShear #![noCase]: (required name: any, required shear: any, direction: any, interpolation: any) => any,
-    imageShearDrawingAxis #![noCase]: (required name: any, required shrx: any, required shry: any) => any,
-    imageTranslate #![noCase]: (required name: any, required xTrans: any, required yTrans: any, interpolation: any) => any,
-    imageTranslateDrawingAxis #![noCase]: (required name: any, required x: any, required y: any) => any,
-    imageWrite #![noCase]: (required name: any, destination: any, quality: any, overwrite: any) => any,
-    imageWriteBase64 #![noCase]: (required name: any, required destination: any, required format: any, inHTMLFormat: any, overwrite: any) => any,
-    imageXORDrawingMode #![noCase]: (required name: any, required c1: any) => any,
-    incrementValue #![noCase]: (required number: any) => any,
-    inputBaseN #![noCase]: (required String: any, required radix: any) => any,
-    insert #![noCase]: (required substring: any, required String: any, required position: any) => any,
-    int #![noCase]: (required number: any) => any,
-    invalidateOauthAccesstoken #![noCase]: (required token: any, required type: any) => any,
-    invoke #![noCase]: (required instance: any, required methodname: any, arguments: any) => any,
-    isArray #![noCase]: (required value: any, number: any) => any,
-    isBinary #![noCase]: (required value: any) => any,
-    isBoolean #![noCase]: (required value: any) => any,
-    isClosure #![noCase]: (required object: any) => any,
-    isCustomFunction #![noCase]: (required Object: any) => any,
-    isDate #![noCase]: (required Object: any) => any,
-    isDDX #![noCase]: (required path: any) => any,
-    isDebugMode #![noCase]: () => any,
-    isDefined #![noCase]: (required variable_name: any) => any,
-    isEmpty #![noCase]: (required value: any) => any,
-    isFileObject #![noCase]: (required object: any) => any,
-    isImage #![noCase]: (required name: any) => any,
-    isImageFile #![noCase]: (required path: any) => any,
-    isInstanceOf #![noCase]: (required object: any, required typename: any) => any,
-    isIPInRange #![noCase]: (required ips: any, required ip: any) => any,
-    isIPV6 #![noCase]: (required IP: any) => any,
-    isJSON #![noCase]: (required var: any) => any,
-    isK2ServerABroker #![noCase]: () => any,
-    isK2ServerDocCountExceeded #![noCase]: () => any,
-    isK2ServerOnline #![noCase]: () => any,
-    isLeapYear #![noCase]: (required year: any) => any,
-    isLocalhost #![noCase]: (required ipaddress: any) => any,
-    isNotMap #![noCase]: (required obj: any) => any,
-    isNull #![noCase]: (required object: any) => any,
-    isNumeric #![noCase]: (required String: any) => any,
-    isNumericDate #![noCase]: (required number: any) => any,
-    isObject #![noCase]: (required value: any) => any,
-    isPDFArchive #![noCase]: (required path: any, required standard: any) => any,
-    isPDFFile #![noCase]: (required path: any) => any,
-    isPDFObject #![noCase]: (required value: any) => any,
-    isQuery #![noCase]: (required value: any) => any,
-    isSafeHTML #![noCase]: (required inputString: any, PolicyFile: any) => any,
-    isSimpleValue #![noCase]: (required value: any) => any,
-    isSOAPRequest #![noCase]: () => any,
-    isSpreadsheetFile #![noCase]: (required file: any) => any,
-    isSpreadsheetObject #![noCase]: (required object: any) => any,
-    isStruct #![noCase]: (required variable: any) => any,
-    isUserInAnyRole #![noCase]: (required roleList: any) => any,
-    isUserInRole #![noCase]: (required role_name: any) => any,
-    isUserLoggedIn #![noCase]: () => any,
-    isValid #![noCase]: (required type: any, required value: any, required min: any, required max: any, required pattern: any) => any,
-    isValidOauthAccesstoken #![noCase]: (required token: any, required type: any) => any,
-    isVideoFile #![noCase]: (required path: any) => any,
-    isWDDX #![noCase]: (required value: any) => any,
-    isXML #![noCase]: (required value: any) => any,
-    isXMLAttribute #![noCase]: (required value: any) => any,
-    isXMLDoc #![noCase]: (required value: any) => any,
-    isXMLElem #![noCase]: (required value: any) => any,
-    isXMLNode #![noCase]: (required value: any) => any,
-    isXMLRoot #![noCase]: (required value: any) => any,
-    isZipFile #![noCase]: (required path: any) => any,
-    javacast #![noCase]: (required type: any, required variable: any) => any,
-    jsStringFormat #![noCase]: (required String: any) => any,
-    lCase #![noCase]: (required String: any) => any,
-    left #![noCase]: (required String: any, required count: any) => any,
-    len #![noCase]: (required Object: any) => any,
-    listAppend #![noCase]: (required list: any, required value: any, delimiters: any, includeEmptyFields: any) => any,
-    listAvg #![noCase]: (required list: any, delimiters: any, multiCharacterDelimiter: any) => any,
-    listChangeDelims #![noCase]: (required list: any, required new_delimiter: any, delimiters: any, includeEmptyValues: any) => any,
-    listCompact #![noCase]: (required list: any, delimiters: any, multiCharacterDelimiter: any) => any,
-    listContains #![noCase]: (required list: any, required substring: any, delimiters: any) => any,
-    listContainsNoCase #![noCase]: (required list: any, required substring: any, delimiters: any) => any,
-    listDeleteAt #![noCase]: (required list: any, required position: any, delimiters: any) => any,
-    listEach #![noCase]: (required str: any, required function: any, required delim: any, includeEmptyFields: any) => any,
-    listEvery #![noCase]: (required list: any, required closure: any, delimiter: any, includeEmptyFields: any, multiCharacterDelimiter: any, parallel: any, maxThreads: any) => any,
-    listFilter #![noCase]: (required list: any, required function: any) => any,
-    listFind #![noCase]: (required list: any, required value: any, delimiters: any, includeEmptyValues: any) => any,
-    listFindNoCase #![noCase]: (required list: any, required value: any, delimiters: any, includeEmptyValues: any) => any,
-    listFirst #![noCase]: (required list: any, delimiters: any) => any,
-    listGetAt #![noCase]: (required list: any, required position: any, delimiters: any, includeEmptyValues: any) => any,
-    listIndexExists #![noCase]: (required list: any, required index: any, delimiter: any, includeEmptyFields: any) => any,
-    listInsertAt #![noCase]: (required list: any, required position: any, required value: any, delimiters: any) => any,
-    listItemTrim #![noCase]: (required list: any, delimiters: any, includeEmptyFields: any) => any,
-    listLast #![noCase]: (required list: any, delimiters: any, includeEmptyValues: any) => any,
-    listLen #![noCase]: (required list: any, delimiters: any, includeEmptyValues: any) => any,
-    listMap #![noCase]: (required list: any, required function: any, intialValue: any, delimiter: any, includeEmptyFields: any) => any,
-    listPrepend #![noCase]: (required list: any, required value: any, delimiters: any, includeEmptyFields: any) => any,
-    listQualify #![noCase]: (required list: any, required qualifier: any, delimiters: any, elements: any, includeEmptyFields: any) => any,
-    listReduce #![noCase]: (required list: any, required function: any, required intialValue: any, required delimiter: any, required includeEmptyFields: any) => any,
-    listRemoveDuplicates #![noCase]: (required list: any, delimiter: any, ignoreCase: any) => any,
-    listRest #![noCase]: (required list: any, delimiters: any) => any,
-    listSetAt #![noCase]: (required list: any, required position: any, required value: any, delimiters: any) => any,
-    listSome #![noCase]: (required list: any, required closure: any, delimiter: any, includeEmptyFields: any, multiCharacterDelimiter: any, parallel: any, maxThreads: any) => any,
-    listSort #![noCase]: (required list: any, required sort_type: any, sort_order: any, delimiters: any) => any,
-    listToArray #![noCase]: (required list: any, delimiters: any, includeEmptyFields: any, multiCharacterDelimiter: any) => any,
-    listTrim #![noCase]: (required list: any, delimiters: any) => any,
-    listValueCount #![noCase]: (required list: any, required value: any, delimiters: any) => any,
-    listValueCountNoCase #![noCase]: (required list: any, required value: any, delimiters: any) => any,
-    lJustify #![noCase]: (required String: any, required length: any) => any,
-    location #![noCase]: (required url: any, addtoken: any, statuscode: any) => any,
-    log #![noCase]: (required number: any) => any,
-    log10 #![noCase]: (required number: any) => any,
-    lsCurrencyFormat #![noCase]: (required number: any, type: any) => any,
-    lsDateFormat #![noCase]: (required date: any, mask: any, locale: any) => any,
-    lsDateTimeFormat #![noCase]: (required date: any, mask: any, locale: any, timeZone: any) => any,
-    lsDayOfWeek #![noCase]: (required date: any, locale: any, timezone: any) => any,
-    lsEuroCurrencyFormat #![noCase]: (required currency: any, required type: any) => any,
-    lsIsCurrency #![noCase]: (required String: any) => any,
-    lsIsDate #![noCase]: (required String: any) => any,
-    lsIsNumeric #![noCase]: (required String: any) => any,
-    lsNumberFormat #![noCase]: (required number: any, mask: any) => any,
-    lsParseCurrency #![noCase]: (required String: any) => any,
-    lsParseDateTime #![noCase]: (required dt_string: any) => any,
-    lsParseEuroCurrency #![noCase]: (required currency_string: any) => any,
-    lsParseNumber #![noCase]: (required String: any, locale: any) => any,
-    lsTimeFormat #![noCase]: (required time: any, mask: any) => any,
-    lsWeek #![noCase]: (required date: any, locale: any, timezone: any) => any,
-    lTrim #![noCase]: (required String: any) => any,
-    manifestRead #![noCase]: (required path: any) => any,
-    max #![noCase]: (required number1: any, required number2: any) => any,
-    metaphone #![noCase]: (required str: any) => any,
-    mid #![noCase]: (required String: any, required start: any, required count: any) => any,
-    millisecond #![noCase]: (required date: any, timezone: any) => any,
-    min #![noCase]: (required number1: any, required number2: any) => any,
-    minute #![noCase]: (required date: any) => any,
-    month #![noCase]: (required date: any) => any,
-    monthAsString #![noCase]: (required month_number: any) => any,
-    monthShortAsString #![noCase]: (required monthnumber: any) => any,
-    newLine #![noCase]: () => any,
-    now #![noCase]: () => any,
-    nowServer #![noCase]: () => any,
-    nullValue #![noCase]: () => any,
-    numberFormat #![noCase]: (required number: any, mask: any) => any,
-    objectEquals #![noCase]: (required Param1: any, required Param2: any) => any,
-    objectLoad #![noCase]: (required binaryObject: any, required filepath: any) => any,
-    objectSave #![noCase]: (required object: any, file: any) => any,
-    onApplicationEnd #![noCase]: (required ApplicationScope: any) => any,
-    onApplicationStart #![noCase]: () => any,
-    onError #![noCase]: (required exception: any, required eventName: any) => any,
-    onMissingMethod #![noCase]: (required missingMethodName: any, required missingMethodArguments: any) => any,
-    onMissingTemplate #![noCase]: (required targetPage: any) => any,
-    onRequest #![noCase]: (required targetPage: any) => any,
-    onRequestEnd #![noCase]: (required targetPage: any) => any,
-    onRequestStart #![noCase]: (required targetPage: any) => any,
-    onServerStart #![noCase]: () => any,
-    onSessionEnd #![noCase]: (required sessionScope: any, required applicationScope: any) => any,
-    onSessionStart #![noCase]: () => any,
-    ormClearSession #![noCase]: (datasource: any) => any,
-    ormCloseAllSessions #![noCase]: (required region: any) => any,
-    ormCloseSession #![noCase]: (datasource: any) => any,
-    ormEvictCollection #![noCase]: (required componentName: any, required relationName: any, id: any) => any,
-    ormEvictEntity #![noCase]: (required componentName: any, id: any) => any,
-    ormEvictQueries #![noCase]: (cacheName: any) => any,
-    ormExecuteQuery #![noCase]: (required hql: any, params: any, unique: any, queryoptions: any) => any,
-    ormFlush #![noCase]: (datasource: any) => any,
-    ormFlushAll #![noCase]: (required region: any) => any,
-    ormGetSession #![noCase]: () => any,
-    ormGetSessionFactory #![noCase]: () => any,
-    ormIndex #![noCase]: () => any,
-    ormIndexPurge #![noCase]: (required region: any) => any,
-    ormReload #![noCase]: () => any,
-    ormSearch #![noCase]: (required query_text: any, required entityName: any, required fields: any, required optionMap: any) => any,
-    ormSearchOffline #![noCase]: (required query_text: any, required entityName: any, required fields_to_be_selected: any, required fields: any, optionMap: any, extra options: any) => any,
-    pagePoolClear #![noCase]: () => any,
-    pagePoolList #![noCase]: () => any,
-    paragraphFormat #![noCase]: (required String: any) => any,
-    parameterExists #![noCase]: (required parameter: any) => any,
-    parseDateTime #![noCase]: (required dt_string: any, pop_conversion: any) => any,
-    parseNumber #![noCase]: (required number: any, radix: any) => any,
-    pi #![noCase]: () => any,
-    precisionEvaluate #![noCase]: (required expressions: any) => any,
-    preserveSingleQuotes #![noCase]: (required variable: any) => any,
-    quarter #![noCase]: (required date: any) => any,
-    query #![noCase]: () => any,
-    queryAddColumn #![noCase]: (required query: any, required column_name: any, datatype: any, required array_name: any) => any,
-    queryAddRow #![noCase]: (required query: any, number/row(s): any) => any,
-    queryAppend #![noCase]: (required query1: any, required query2: any) => any,
-    queryClear #![noCase]: () => any,
-    queryColumnArray #![noCase]: (required query: any) => any,
-    queryColumnCount #![noCase]: (required query: any) => any,
-    queryColumnData #![noCase]: (required query: any, required columnName: any, closure: any) => any,
-    queryColumnExists #![noCase]: (required query: any, required column: any) => any,
-    queryColumnList #![noCase]: (required query: any, delimiter: any) => any,
-    queryConvertForGrid #![noCase]: (required query: any, required page: any, required pageSize: any) => any,
-    queryCurrentRow #![noCase]: (required query: any) => any,
-    queryDeleteColumn #![noCase]: (required query: any, required column: any) => any,
-    queryDeleteRow #![noCase]: (required query: any, row: any) => any,
-    queryEach #![noCase]: (required query: any, required callback: any, parallel: any, maxThreads: any) => any,
-    queryEvery #![noCase]: (required query: any, required closure: any, parallel: any, maxThreads: any) => any,
-    queryExecute #![noCase]: (required sql: any, params: any, options: any) => any,
-    queryFilter #![noCase]: (required query: any, required callback: any, parallel: any, maxThreads: any) => any,
-    queryGetCell #![noCase]: (required query: any, required column_name: any, row_number: any) => any,
-    queryGetResult #![noCase]: (required query: any) => any,
-    queryGetRow #![noCase]: (required query: any, required rowNumber: any) => any,
-    queryKeyExists #![noCase]: (required query: any, required key: any) => any,
-    queryMap #![noCase]: (required query: any, required callback: any, parallel: any, maxThreads: any) => any,
-    queryNew #![noCase]: (required columnList: any, columnTypeList: any, rowData: any) => any,
-    queryPrepend #![noCase]: (required query1: any, required query2: any) => any,
-    queryRecordCount #![noCase]: (required query: any) => any,
-    queryReduce #![noCase]: (required query: any, required callback: any, initialValue: any) => any,
-    queryReverse #![noCase]: (required query: any) => any,
-    queryRowData #![noCase]: (required query: any, required rowNumber: any) => any,
-    querySetCell #![noCase]: (required query: any, required column: any, required value: any, row: any) => any,
-    querySlice #![noCase]: (required query: any, required offset: any, length: any) => any,
-    querySome #![noCase]: (required query: any, required callback: any, parallel: any, maxThreads: any) => any,
-    querySort #![noCase]: (required query: any, required sortFunction: any, direction: any) => any,
-    quotedValueList #![noCase]: (required column: any, delimiter: any) => any,
-    rand #![noCase]: (algorithm: any) => any,
-    randomize #![noCase]: (required number: any, algorithm: any) => any,
-    randRange #![noCase]: (required number1: any, required number2: any, algorithm: any) => any,
-    reEscape #![noCase]: (required string: any) => any,
-    reFind #![noCase]: (required reg_expression: any, required string: any, start: any, returnsubexpressions: any, scope: any) => any,
-    reFindNoCase #![noCase]: (required reg_expression: any, required string: any, start: any, returnsubexpressions: any, scope: any) => any,
-    releaseCOMObject #![noCase]: (required objectName: any) => any,
-    reMatch #![noCase]: (required reg_expression: any, required string: any) => any,
-    reMatchNoCase #![noCase]: (required reg_expression: any, required string: any) => any,
-    removeCachedQuery #![noCase]: (required SQL: any, required datasource: any, params: any, region: any) => any,
-    removeChars #![noCase]: (required String: any, required start: any, required count: any) => any,
-    render #![noCase]: (required CFML: any, dialect: any) => any,
-    repeatString #![noCase]: (required String: any, required count: any) => any,
-    replace #![noCase]: (required String: any, required substring1: any, required substring2: any, scope: any) => any,
-    replaceList #![noCase]: (required String: any, required list1: any, required list2: any, delimiter: any, delimiterList1: any, delimiterList2: any, includeEmptyFields: any) => any,
-    replaceListNoCase #![noCase]: (required String: any, required list1: any, required list2: any, delimiter: any, delimiterList1: any, delimiterList2: any, includeEmptyFields: any) => any,
-    replaceNoCase #![noCase]: (required String: any, required substring1: any, required substring2: any, scope: any) => any,
-    reReplace #![noCase]: (required string: any, required regex: any, required substring: any, scope: any) => any,
-    reReplaceNoCase #![noCase]: (required String: any, required reg_expression: any, required substring: any, scope: any) => any,
-    restDeleteApplication #![noCase]: (required dirPath: any) => any,
-    restInitApplication #![noCase]: (required dirPath: any, required serviceMapping: any, default: any, required password: any) => any,
-    restSetResponse #![noCase]: (required response: any) => any,
-    reverse #![noCase]: (required String: any) => any,
-    right #![noCase]: (required String: any, required count: any) => any,
-    rJustify #![noCase]: (required String: any, required length: any) => any,
-    round #![noCase]: (required number: any) => any,
-    rTrim #![noCase]: (required String: any) => any,
-    runAsync #![noCase]: (callback: any, timeout: any) => any,
-    second #![noCase]: (required date: any) => any,
-    sendGatewayMessage #![noCase]: (required gatewayID: any, required data: any) => any,
-    serialize #![noCase]: (required objToBeSerialized: any, required type: any, required useCustomSerializer: any) => any,
-    serializeJSON #![noCase]: (required var: any, serializeQueryByColumns: any, useSecureJSONPrefix: any, useCustomSerializer: any) => any,
-    serializeXML #![noCase]: (required objToBeSerialized: any, required useCustomSerializer: any) => any,
-    sessionGetMetadata #![noCase]: (required region: any) => any,
-    sessionInvalidate #![noCase]: () => any,
-    sessionRotate #![noCase]: () => any,
-    sessionstartTime #![noCase]: () => any,
-    setEncoding #![noCase]: (required scope_name: any, required charset: any) => any,
-    setLocale #![noCase]: (required new_locale: any) => any,
-    setProfileString #![noCase]: (required inipath: any, required section: any, required entry: any, required value: any) => any,
-    setTimezone #![noCase]: (required timezone: any) => any,
-    setVariable #![noCase]: (required name: any, required value: any) => any,
-    sgn #![noCase]: (required number: any) => any,
-    sin #![noCase]: (required number: any) => any,
-    sizeOf #![noCase]: (required obj: any, complex: any) => any,
-    sleep #![noCase]: (required duration: any) => any,
-    soundEx #![noCase]: (required str: any) => any,
-    spanExcluding #![noCase]: (required String: any, required set: any) => any,
-    spanIncluding #![noCase]: (required String: any, required set: any) => any,
-    spreadsheetAddAutoFilter #![noCase]: (required spreadsheetObj: any, required autofilter: any) => any,
-    spreadsheetAddColumn #![noCase]: (required spreadsheetObj: any, required data: any, required startrow: any, required startcolumn: any, required insert: any, insert: any) => any,
-    spreadsheetAddFreezePane #![noCase]: (required spreadsheetObj: any, required freezeColumn: any, required freezeRow: any, hideColumn: any, hideRow: any) => any,
-    spreadsheetAddimage #![noCase]: (required spreadsheetObj: any, required imagefilepath: any, required anchor: any) => any,
-    spreadsheetAddInfo #![noCase]: (required spreadsheetObj: any, required info: any) => any,
-    spreadsheetAddPagebreaks #![noCase]: (required SpreadsheetObj: any, required rowbreaks: any, required colbreaks: any) => any,
-    spreadsheetAddRow #![noCase]: (required spreadsheetObj: any, required data: any, row: any, column: any, insert: any, datatype: any) => any,
-    spreadsheetAddRows #![noCase]: (required spreadsheetObj: any, required data: any, row: any, column: any, insert: any, datatype: any, includeColumnNames: any) => any,
-    spreadsheetAddSplitPane #![noCase]: (required spreadsheetObj: any, required x: any, required y: any, required splitColumn: any, required splitRow: any, position: any) => any,
-    spreadsheetCreateSheet #![noCase]: (required spreadsheetObj: any, required name: any) => any,
-    spreadsheetDeleteColumn #![noCase]: (required spreadsheetObj: any, required column: any) => any,
-    spreadsheetDeleteColumns #![noCase]: (required spreadsheetObj: any, required range: any) => any,
-    spreadsheetDeleteRow #![noCase]: (required spreadsheetObj: any, required row: any) => any,
-    spreadsheetDeleteRows #![noCase]: (required spreadsheetObj: any, required range: any) => any,
-    spreadsheetFormatCell #![noCase]: (required spreadsheetObj: any, required format: any, required row: any, required column: any) => any,
-    spreadsheetFormatCellRange #![noCase]: (required spreadsheetObj: any, required format: any, required startRow: any, required startColumn: any, required endRow: any, required endColumn: any) => any,
-    spreadsheetFormatColumn #![noCase]: (required spreadsheetObj: any, required format: any, required column: any) => any,
-    spreadsheetFormatColumns #![noCase]: (required spreadsheetObj: any, required format: any, required columns: any) => any,
-    spreadsheetFormatRow #![noCase]: (required spreadsheetObj: any, required format: any, required row: any) => any,
-    spreadsheetFormatRows #![noCase]: (required spreadsheetObj: any, required format: any, required rows: any) => any,
-    spreadsheetGetCellComment #![noCase]: (required author: any, column: any, comment: any, row: any) => any,
-    spreadsheetGetCellFormula #![noCase]: (required spreadsheetObj: any, required row: any, required column: any) => any,
-    spreadsheetGetCellValue #![noCase]: (required spreadsheetObj: any, required row: any, required column: any) => any,
-    spreadsheetGetColumnCount #![noCase]: (required spreadsheetObj: any, sheet: any) => any,
-    spreadsheetInfo #![noCase]: (required spreadsheetObj: any) => any,
-    spreadsheetMergeCells #![noCase]: (required spreadsheetObj: any, required startrow: any, required endrow: any, required startcolumn: any, required endcolumn: any) => any,
-    spreadsheetNew #![noCase]: (sheetname: any, xmlFormat: any) => any,
-    spreadsheetRead #![noCase]: (required fileName: any, required spreadsheetObj: any) => any,
-    spreadsheetReadBinary #![noCase]: (required spreadsheetObj: any) => any,
-    spreadsheetRemoveSheet #![noCase]: (required spreadsheetObj: any, required sheetname: any) => any,
-    spreadsheetSetActiveSheet #![noCase]: (required spreadsheetObj: any, name: any) => any,
-    spreadsheetSetActiveSheetNumber #![noCase]: (required spreadsheetObj: any, number: any) => any,
-    spreadsheetSetCellComment #![noCase]: (required spreadsheetObj: any, required comment: any, required row: any, required column: any) => any,
-    spreadsheetSetCellFormula #![noCase]: (required spreadsheetObj: any, required formula: any, required row: any, required column: any) => any,
-    spreadsheetSetCellValue #![noCase]: (required spreadsheetObj: any, required value: any, required row: any, required column: any) => any,
-    spreadsheetSetColumnWidth #![noCase]: (required spreadsheetObj: any, required columnNumber: any, required width: any) => any,
-    spreadsheetSetFooter #![noCase]: (required spreadsheetObj: any, required leftFooter: any, required centerFooter: any, required rightFooter: any) => any,
-    spreadsheetSetHeader #![noCase]: (required spreadsheetObj: any, required leftHeader: any, required centerHeader: any, required rightHeader: any) => any,
-    spreadsheetSetRowHeight #![noCase]: (required spreadsheetObj: any, required rowNumber: any, required height: any) => any,
-    spreadsheetShiftColumns #![noCase]: (required spreadsheetObj: any, required start: any, end: any, start: any) => any,
-    spreadsheetShiftRows #![noCase]: (required spreadsheetObj: any, required start: any, required end: any, rows: any) => any,
-    spreadsheetwrite #![noCase]: (required spreadsheetObj: any, required fileName: any, password: any, overwrite: any) => any,
-    sqr #![noCase]: (required number: any) => any,
-    sslCertificateInstall #![noCase]: (required host: any, port: any) => any,
-    sslCertificateList #![noCase]: (required host: any, port: any) => any,
-    storeAddACL #![noCase]: (required url: any, required ACLObject: any) => any,
-    storeGetACL #![noCase]: (required ulr: any, required ACLObject: any) => any,
-    storeGetMetadata #![noCase]: (required url: any) => any,
-    storeSetACL #![noCase]: (required url: any, required ACLObject: any) => any,
-    storeSetMetadata #![noCase]: (required url: any, required region: any) => any,
-    stringLen #![noCase]: (required string: any) => any,
-    stripCR #![noCase]: (required String: any) => any,
-    structAppend #![noCase]: (required destStruct: any, required sourceStruct: any, overwriteFlag: any) => any,
-    structClear #![noCase]: (required structure: any) => any,
-    structCopy #![noCase]: (required structure: any) => any,
-    structCount #![noCase]: (required structure: any) => any,
-    structDelete #![noCase]: (required structure: any, required key: any, indicateNotExisting: any) => any,
-    structEach #![noCase]: (required struct: any, required callback: any, parallel: any, maxThreads: any) => any,
-    structEquals #![noCase]: (required struct1: any, required struct2: any) => any,
-    structEvery #![noCase]: (required struct: any, required closure: any, parallel: any, maxThreads: any) => any,
-    structFilter #![noCase]: (required struct: any, required callback: any, parallel: any, maxThreads: any) => any,
-    structFind #![noCase]: (required structure: any, required key: any, defaultValue: any) => any,
-    structFindKey #![noCase]: (required top: any, required value: any, required scope: any) => any,
-    structFindValue #![noCase]: (required top: any, required value: any, scope: any) => any,
-    structGet #![noCase]: (required path: any) => any,
-    structGetMetadata #![noCase]: (required struct: any) => any,
-    structInsert #![noCase]: (required structure: any, required key: any, required value: any, allowoverwrite: any) => any,
-    structIsEmpty #![noCase]: (required structure: any) => any,
-    structIsOrdered #![noCase]: (required struct: any) => any,
-    structKeyArray #![noCase]: (required structure: any) => any,
-    structKeyExists #![noCase]: (required structure: any, required key: any) => any,
-    structKeyList #![noCase]: (required structure: any, delimiter: any) => any,
-    structKeyTranslate #![noCase]: (required structure: any, deepTranslation: any, leaveOriginalKey: any) => any,
-    structListNew #![noCase]: (required maxsize: any) => any,
-    structMap #![noCase]: (required struct: any, required callback: any, parallel: any, maxThreads: any) => any,
-    structNew #![noCase]: (structType: any) => any,
-    structReduce #![noCase]: (required struct: any, required callback: any, required initialVal: any) => any,
-    structSetMetadata #![noCase]: (required inputStruct: any, required metaStruct: any) => any,
-    structSome #![noCase]: (required struct: any, required callback: any, parallel: any, maxThreads: any) => any,
-    structSort #![noCase]: (required base: any, sorttype: any, sortorder: any, pathtosubelement: any, localeSensitive: any, callback: any) => any,
-    structToSorted #![noCase]: (required structure: any, callback: any, sorttype: any, sortorder: any, localeSensitive: any) => any,
-    structUpdate #![noCase]: (required structure: any, required key: any, required value: any) => any,
-    structValueArray #![noCase]: (required structure: any) => any,
-    systemCacheClear #![noCase]: (cacheName: any) => any,
-    systemOutput #![noCase]: (required obj: any, addNewLine: any, doErrorStream: any) => any,
-    tan #![noCase]: (required number: any) => any,
-    threadJoin #![noCase]: (threadName: any, timeout: any) => any,
-    threadTerminate #![noCase]: (required threadname: any) => any,
-    throw #![noCase]: (message: any, type: any, detail: any, errorcode: any, extendedinfo: any, object: any) => any,
-    timeFormat #![noCase]: (required time: any, mask: any) => any,
-    toBase64 #![noCase]: (required string_or_object: any, encoding: any) => any,
-    toBinary #![noCase]: (required base64_or_object: any) => any,
-    toNumeric #![noCase]: (required value: any, radix: any) => any,
-    toScript #![noCase]: (required cfvar: any, required javascriptvar: any, outputformat: any, asformat: any) => any,
-    toString #![noCase]: (required any_value: any, encoding: any) => any,
-    trace #![noCase]: (var: any, text: any, type: any, category: any, inline: any, abort: any) => any,
-    transactionCommit #![noCase]: () => any,
-    transactionRollback #![noCase]: (savepoint: any) => any,
-    transactionSetSavepoint #![noCase]: (required savepoint: any) => any,
-    trim #![noCase]: (required String: any) => any,
-    trueFalseFormat #![noCase]: (required value: any) => any,
-    uCase #![noCase]: (required String: any) => any,
-    ucFirst #![noCase]: (required string: any, doAll: any, doLowerIfAllUppercase: any) => any,
-    unserializeJava #![noCase]: (required string: any) => any,
-    urlDecode #![noCase]: (required urlencodedstring: any, charset: any) => any,
-    urlEncode #![noCase]: (required string: any, charset: any, force: any) => any,
-    urlEncodedFormat #![noCase]: (required String: any, charset: any) => any,
-    urlSessionFormat #![noCase]: (required requesturl: any) => any,
-    val #![noCase]: (required String: any) => any,
-    valueArray #![noCase]: (required query: any, required column: any) => any,
-    valueList #![noCase]: (required column: any, delimiter: any) => any,
-    verifyClient #![noCase]: () => any,
-    webserviceNew #![noCase]: (required url: any, arguments: any) => any,
-    week #![noCase]: (required date: any) => any,
-    wrap #![noCase]: (required String: any, required limit: any, strip: any) => any,
-    writeBody #![noCase]: () => any,
-    writeDump #![noCase]: (required var: any, output: any, format: any, abort: any, label: any, metainfo: any, top: any, show: any, hide: any, keys: any, expand: any, showUDfs: any) => any,
-    writeLog #![noCase]: (required text: any, type: any, application: any, file: any, log: any) => any,
-    writeOutput #![noCase]: (required string: any, encodeFor: any) => any,
-    wsGetAllChannels #![noCase]: (channelName: any) => any,
-    wsGetSubscribers #![noCase]: (required channel: any) => any,
-    wsPublish #![noCase]: (required channel: any, required message: any, filterCriteria: any) => any,
-    wsSendMessage #![noCase]: (required message: any) => any,
-    xmlChildPos #![noCase]: (required elem: any, required childname: any, required n: any) => any,
-    xmlElemNew #![noCase]: (required xmlobj: any, namespace: any, required childname: any) => any,
-    xmlFormat #![noCase]: (required String: any, escapeChars: any) => any,
-    xmlGetNodeType #![noCase]: (required xmlNode: any) => any,
-    xmlNew #![noCase]: (casesensitive: any) => any,
-    xmlParse #![noCase]: (required xmlString: any, caseSensitive: any, validator: any) => any,
-    xmlSearch #![noCase]: (required xmlNode: any, required xpath: any, params: any) => any,
-    xmlTransform #![noCase]: (required xml: any, required xsl: any, parameters: any) => any,
-    xmlValidate #![noCase]: (required xmlDoc: any, validator: any) => any,
-    year #![noCase]: (required date: any) => any,
-    yesNoFormat #![noCase]: (required value: any) => any
-}
+@declare function abs(required number: any) : any;
+@declare function acos(required number: any) : any;
+@declare function addSOAPRequestHeader(required webservice: any, required namespace: any, required name: any, required value: any, mustUnderstand: any) : any;
+@declare function addSOAPResponseHeader(required namespace: any, required name: any, required value: any, mustUnderstand: any) : any;
+@declare function ajaxLink(required url: any) : any;
+@declare function ajaxOnLoad(required functionName: any) : any;
+@declare function applicationStartTime() : any;
+@declare function applicationStop() : any;
+@declare function array(values: any) : any;
+@declare function arrayAppend(required array: any, required value: any, merge: any) : any;
+@declare function arrayAvg(required array: any) : any;
+@declare function arrayClear(required array: any) : any;
+@declare function arrayContains(required array: any, required value: any, substringMatch: any) : any;
+@declare function arrayContainsNoCase(required array: any, required value: any) : any;
+@declare function arrayDelete(required array: any, required value: any, scope: any) : any;
+@declare function arrayDeleteAt(required array: any, required index: any) : any;
+@declare function arrayDeleteNoCase(required array: any, required value: any) : any;
+@declare function arrayEach(required array: any, required callback: any, parallel: any, maxThreads: any) : any;
+@declare function arrayEvery(required array: any, required closure: any, parallel: any, maxThreads: any) : any;
+@declare function arrayFilter(required array: any, required callback: any, parallel: any, maxThreads: any) : any;
+@declare function arrayFind(required array: any, required value: any) : any;
+@declare function arrayFindAll(required array: any, valueOrCallback: any) : any;
+@declare function arrayFindAllNoCase(required array: any, required valueOrCallback: any) : any;
+@declare function arrayFindNoCase(required array: any, required valueOrCallback: any) : any;
+@declare function arrayFirst(required array: any) : any;
+@declare function arrayGetMetadata(required array: any) : any;
+@declare function arrayIndexExists(required array: any, required index: any) : any;
+@declare function arrayInsertAt(required array: any, required position: any, required value: any) : any;
+@declare function arrayIsDefined(required array: any, required index: any) : any;
+@declare function arrayIsEmpty(required array: any) : any;
+@declare function arrayLast(required array: any) : any;
+@declare function arrayLen(required array: any) : any;
+@declare function arrayMap(required array: any, required callback: any, parallel: any, maxThreads: any) : any;
+@declare function arrayMax(required array: any) : any;
+@declare function arrayMedian(required array: any) : any;
+@declare function arrayMerge(required array1: any, required array2: any, leaveIndex: any) : any;
+@declare function arrayMid(required array: any, required start: any, count: any) : any;
+@declare function arrayMin(required array: any) : any;
+@declare function arrayNew(required dimension: any, isSynchronized: any) : any;
+@declare function arrayPrepend(required array: any, required value: any) : any;
+@declare function arrayReduce(required array: any, required callback: any, initialValue: any) : any;
+@declare function arrayResize(required array: any, required size: any) : any;
+@declare function arrayReverse(required array: any) : any;
+@declare function arraySet(required array: any, required start: any, required end: any, required value: any) : any;
+@declare function arraySetMetadata(required array: any, required metadata: any) : any;
+@declare function arrayShift(required array: any) : any;
+@declare function arraySlice(required array: any, required offset: any, length: any) : any;
+@declare function arraySome(required array: any, required callback: any, parallel: any, maxThreads: any) : any;
+@declare function arraySort(required array: any, required sortType: any, sortOrder: any, callback: any) : any;
+@declare function arraySplice(required array: any, required index: any, elementCountForRemoval: any, replacements: any) : any;
+@declare function arraySum(required array: any, ignoreEmpty: any) : any;
+@declare function arraySwap(required array: any, required position1: any, required position2: any) : any;
+@declare function arrayToList(required array: any, delimiter: any) : any;
+@declare function arrayToStruct(required array: any) : any;
+@declare function asc(required string: any) : any;
+@declare function asin(required number: any) : any;
+@declare function atn(required number: any) : any;
+@declare function beat(time: any) : any;
+@declare function binaryDecode(required string: any, required encoding: any) : any;
+@declare function binaryEncode(required binaryData: any, required encoding: any) : any;
+@declare function bitAnd(required number1: any, required number2: any) : any;
+@declare function bitMaskClear(required number: any, required start: any, required length: any) : any;
+@declare function bitMaskRead(required number: any, required start: any, required length: any) : any;
+@declare function bitMaskSet(required number: any, required mask: any, required start: any, required length: any) : any;
+@declare function bitNot(required number: any) : any;
+@declare function bitOr(required number1: any, required number2: any) : any;
+@declare function bitShln(required number: any, required count: any) : any;
+@declare function bitShrn(required number: any, required count: any) : any;
+@declare function bitXor(required number1: any, required number2: any) : any;
+@declare function booleanFormat(required value: any) : any;
+@declare function bundleInfo(required obj: any) : any;
+@declare function cacheClear(filterOrTags: any, cacheName: any) : any;
+@declare function cacheCount(cacheName: any) : any;
+@declare function cacheDelete(required id: any, throwOnError: any, cacheName: any) : any;
+@declare function cacheGet(required id: any, region: any, cacheName: any, throwWhenNotExist: any) : any;
+@declare function cacheGetAll(filter: any, cacheName: any) : any;
+@declare function cacheGetAllIds() : any;
+@declare function cacheGetDefaultCacheName(required type: any) : any;
+@declare function cacheGetEngineProperties() : any;
+@declare function cacheGetMetadata(required id: any, objectType: any, region: any) : any;
+@declare function cacheGetProperties(region: any) : any;
+@declare function cacheGetSession(required objectType: any, isKey: any) : any;
+@declare function cacheIdExists(required id: any, region: any) : any;
+@declare function cacheKeyExists(required key: any, cacheName: any) : any;
+@declare function cachePut(required id: any, required value: any, timespan: any, idleTime: any, region: any, throwOnError: any) : any;
+@declare function cacheRegionExists(required region: any, password : any) : any;
+@declare function cacheRegionNew(required region: any, properties: any, throwOnError: any, password : any) : any;
+@declare function cacheRegionRemove(required region: any, password : any) : any;
+@declare function cacheRemove(required id: any, throwOnError: any, region: any, exact: any) : any;
+@declare function cacheRemoveAll(region: any) : any;
+@declare function cacheSetProperties(required properties: any, region: any) : any;
+@declare function callStackDump(output: any) : any;
+@declare function callStackGet() : any;
+@declare function canonicalize(required input: any, required restrictMultiple: any, required restrictMixed: any, throwOnError: any) : any;
+@declare function ceiling(required number: any) : any;
+@declare function cfusion_Decrypt(required string: any, required key: any) : any;
+@declare function cfusion_Encrypt(required string: any, required key: any) : any;
+@declare function charsetDecode(required string: any, required encoding: any) : any;
+@declare function charsetEncode(required binaryData: any, required encoding: any) : any;
+@declare function chr(required number: any) : any;
+@declare function cJustify(required string: any, required length: any) : any;
+@declare function collectionEach(required collection: any, required closure: any) : any;
+@declare function collectionEvery(required collection: any, required closure: any, parallel: any, maxThreads: any) : any;
+@declare function collectionFilter(required collection: any, required filter: any, parallel: any, maxThreads: any) : any;
+@declare function collectionMap(required collection: any, required closure: any, parallel: any, maxThreads: any) : any;
+@declare function collectionReduce(required collection: any, required closure: any, initalValue: any) : any;
+@declare function collectionSome(required collection: any, required closure: any, parallel: any, maxThreads: any) : any;
+@declare function compare(required string1: any, required string2: any) : any;
+@declare function compareNoCase(required string1: any, required string2: any) : any;
+@declare function componentCacheClear() : any;
+@declare function componentCacheList() : any;
+@declare function componentInfo(required component: any) : any;
+@declare function compress(required format: any, required source: any, required target: any, includeBaseFolder: any, mode: any) : any;
+@declare function contractPath(required path_absolute: any, placeholder: any) : any;
+@declare function cos(required number: any) : any;
+@declare function createDate(required year: any, required month: any, required day: any) : any;
+@declare function createDateTime(required year: any, required month: any, required day: any, required hour: any, required minute: any, required second: any, millisecond: any, timezone: any) : any;
+@declare function createDynamicProxy(required cfc: any, required interfaces: any) : any;
+@declare function createGUID() : any;
 
-@type cgi = {
+@declare function createObject(
+    type: any,
+    className: any,
+    context: any,
+    locale: any,
+    servername: any,
+    component_name: any,
+    urltowsdl: any,
+    portname: any,
+    bundleName: any,
+    bundleVersion: any) : any;
+
+@declare function createODBCDate(required date: any) : any;
+@declare function createODBCDateTime(required date: any) : any;
+@declare function createODBCTime(required date: any) : any;
+@declare function createTime(required hour: any, required minute: any, required second: any, millisecond: any, timezone: any) : any;
+@declare function createTimespan(required days: any, required hours: any, required minutes: any, required seconds: any) : any;
+@declare function createUniqueID() : any;
+@declare function createUUID() : any;
+@declare function csrfGenerateToken(key: any, forceNew: any) : any;
+@declare function csrfVerifyToken(required token: any, key: any) : any;
+@declare function ctCacheClear() : any;
+@declare function ctCacheList() : any;
+@declare function datasourceFlushMetacache(datasourceName: any) : any;
+@declare function dateAdd(required datepart: any, required number: any, required date: any) : any;
+@declare function dateCompare(required date1: any, required date2: any, datePart: any) : any;
+@declare function dateConvert(required conversionType: any, required date: any) : any;
+@declare function dateDiff(required datepart: any, required date1: any, required date2: any) : any;
+@declare function dateFormat(required date: any, mask: any) : any;
+@declare function datePart(required datepart: any, required date: any, timezone: any) : any;
+@declare function dateTimeFormat(required date: any, mask: any, timezone: any) : any;
+@declare function day(required date: any) : any;
+@declare function dayOfWeek(required date: any, calendar: any) : any;
+@declare function dayOfWeekAsString(required dayOfWeek: any, locale: any) : any;
+@declare function dayOfWeekShortAsString(required day_of_week: any, locale: any) : any;
+@declare function dayOfYear(required date: any) : any;
+@declare function daysInMonth(required date: any) : any;
+@declare function daysInYear(required date: any) : any;
+@declare function de(required String: any) : any;
+@declare function decimalFormat(required number: any) : any;
+@declare function decodeForHTML(required string: any) : any;
+@declare function decodeFromURL(required string: any) : any;
+@declare function decrementValue(required number: any) : any;
+@declare function decrypt(required string: any, required key: any, algorithm: any, encoding: any, iv: any, salt: any, iterations: any) : any;
+@declare function decryptBinary(required binaryData: any, required key: any, algorithm: any, encoding: any, iv: any, salt: any, iterations: any) : any;
+@declare function deleteClientVariable(required name: any) : any;
+@declare function deserialize(required string: any, required type: any, required useCustomSerializer: any) : any;
+@declare function deserializeJSON(required json: any, strictMapping: any, useCustomSerializer: any) : any;
+@declare function deserializeXML(required string: any, required useCustomSerializer: any) : any;
+@declare function directoryCopy(required source: any, required destination: any, recurse: any, filter: any, createPath: any) : any;
+@declare function directoryCreate(required path: any, createPath: any, ignoreExists: any) : any;
+@declare function directoryDelete(required path: any, recurse: any) : any;
+@declare function directoryExists(required path: any, allowRealPath : any) : any;
+@declare function directoryList(required path: any, recurse: any, listInfo: any, filter: any, sort: any, type: any) : any;
+@declare function directoryRename(required oldPath: any, required newPath: any, createPath: any) : any;
+@declare function dollarFormat(required number: any) : any;
+@declare function dotnetToCFType(required variableName: any) : any;
+@declare function duplicate(required object: any, deepcopy: any) : any;
+@declare function each(required collection: any, required closure: any, parallel: any, maxThreads: any) : any;
+@declare function echo(required string: any) : any;
+@declare function empty(required variable: any) : any;
+@declare function encodeFor(required type: any, required value: any) : any;
+@declare function encodeForCSS(required string: any, canonicalize: any) : any;
+@declare function encodeForDN(required string: any, canonicalize: any) : any;
+@declare function encodeForHTML(required string: any, canonicalize: any) : any;
+@declare function encodeForHTMLAttribute(required string: any, canonicalize: any) : any;
+@declare function encodeForJavaScript(required string: any, canonicalize: any, canonicalize: any) : any;
+@declare function encodeForLDAP(required string: any, canonicalize: any) : any;
+@declare function encodeForURL(required string: any, canonicalize: any) : any;
+@declare function encodeForXML(required string: any, canonicalize: any) : any;
+@declare function encodeForXMLAttribute(required string: any, canonicalize: any) : any;
+@declare function encodeForXPath(required string: any, canonicalize: any) : any;
+@declare function encrypt(required string: any, required key: any, algorithm: any, encoding: any, iv: any, salt: any, iterations: any) : any;
+@declare function encryptBinary(required binaryData: any, required key: any, algorithm: any, iv: any, salt: any, iterations: any) : any;
+@declare function entityDelete(required entity: any) : any;
+@declare function entityLoad(required entityName: any, id: any, Filter: any, unique: any, Order: any, options: any) : any;
+@declare function entityLoadByExample(required sampleEntity: any, unique: any, matchCriteria: any) : any;
+@declare function entityLoadByPK(required entity: any, required id: any, unique: any) : any;
+@declare function entityMerge(required entity: any) : any;
+@declare function entityNameArray() : any;
+@declare function entityNameList(delimiter: any) : any;
+@declare function entityNew(required entityName: any, properties: any, ignoreExtras: any) : any;
+@declare function entityReload(required entity: any) : any;
+@declare function entitySave(required entity: any, forceInsert: any) : any;
+@declare function entityToQuery(required entity: any, name: any) : any;
+@declare function esapiDecode(required decodeFrom: any, required string: any) : any;
+@declare function esapiEncode(required encodeFor: any, required string: any) : any;
+@declare function evaluate(required expression: any) : any;
+@declare function exp(required number: any) : any;
+@declare function expandPath(required path: any) : any;
+@declare function extract(required format: any, required source: any, required target: any) : any;
+@declare function fileAppend(required file: any, required data: any, charset: any, addNewLine: any) : any;
+@declare function fileClose(required file: any) : any;
+@declare function fileCopy(required source: any, required destination: any) : any;
+@declare function fileDelete(required filePath: any) : any;
+@declare function fileExists(required filePath: any) : any;
+@declare function fileGetMimeType(required file: any, strict: any) : any;
+@declare function fileIsEOF(required file: any) : any;
+@declare function fileMove(required source: any, required destination: any) : any;
+@declare function fileOpen(required filePath: any, mode: any, charset: any, seekable: any) : any;
+@declare function fileRead(required filePath: any, charset: any, bufferSize: any) : any;
+@declare function fileReadBinary(required filePath: any) : any;
+@declare function fileReadLine(required file: any) : any;
+@declare function fileSeek(required file: any, required position: any) : any;
+@declare function fileSetAccessMode(required filePath: any, required mode: any) : any;
+@declare function fileSetAttribute(required filePath: any, required attribute: any) : any;
+@declare function fileSetLastModified(required filePath: any, required date: any) : any;
+@declare function fileSkipBytes(required file: any, required skipCount: any) : any;
+@declare function fileUpload(required destination: any, fileField: any, mimeType: any, onConflict: any, strict: any) : any;
+@declare function fileUploadAll(required destination: any, mimeType: any, onConflict: any, strict: any, continueOnError: any, errorVariable: any, allowedExtensions: any) : any;
+@declare function fileWrite(required filePath: any, required data: any, charset: any) : any;
+@declare function fileWriteLine(required file: any, required data: any) : any;
+@declare function find(required substring: any, required string: any, start: any) : any;
+@declare function findNoCase(required substring: any, required string: any, start: any) : any;
+@declare function findOneOf(required set: any, required string: any, start: any) : any;
+@declare function firstDayOfMonth(required date: any) : any;
+@declare function fix(required number: any) : any;
+@declare function floor(required number: any) : any;
+@declare function formatBaseN(required number: any, required radix: any) : any;
+@declare function generatePBKDFKey(required algorithm: any, required passphrase: any, required salt: any, required iterations: any, required keySize: any) : any;
+@declare function generateSecretKey(algorithm: any, keysize: any) : any;
+@declare function getApplicationMetadata() : any;
+@declare function getApplicationSettings(required suppressFunction: any) : any;
+@declare function getAuthUser() : any;
+@declare function getBaseTagData(required tagname: any, level: any) : any;
+@declare function getBaseTagList(caller: any) : any;
+@declare function getBaseTemplatePath() : any;
+@declare function getBuiltinFunction(required name: any) : any;
+@declare function getCanonicalPath(required path: any) : any;
+@declare function getClassPath() : any;
+@declare function getClientVariablesList() : any;
+@declare function getComponentMetadata(required path: any) : any;
+@declare function getContextRoot() : any;
+@declare function getCpuUsage(interval: any) : any;
+@declare function getCurrentContext() : any;
+@declare function getCurrentTemplatePath() : any;
+@declare function getDirectoryFromPath(required path: any) : any;
+@declare function getEncoding(required scope_name: any) : any;
+@declare function getException(required javaobject: any) : any;
+@declare function getFileFromPath(required path: any) : any;
+@declare function getFileInfo(required path: any) : any;
+@declare function getFreeSpace(required path: any) : any;
+@declare function getFunctionCalledName() : any;
+@declare function getFunctionData(required functionName: any, dialect: any) : any;
+@declare function getFunctionKeywords() : any;
+@declare function getFunctionList() : any;
+@declare function getGatewayHelper(required gatewayID: any) : any;
+@declare function getHTTPRequestData(required includeBody: any) : any;
+@declare function getHTTPTimeString(DateTime: any) : any;
+@declare function getK2ServerDocCount() : any;
+@declare function getK2ServerDocCountLimit() : any;
+@declare function getLocale() : any;
+@declare function getLocaleCountry() : any;
+@declare function getLocaleDisplayName() : any;
+@declare function getLocaleInfo(locale: any, dspLocale: any) : any;
+@declare function getLocaleLanguage() : any;
+@declare function getLocalhostIP() : any;
+@declare function getLuceeID() : any;
+@declare function getMemoryUsage(type: any) : any;
+@declare function getMetadata(required Object: any) : any;
+@declare function getMetricData(required mode: any) : any;
+@declare function getNumericDate(required arg1: any) : any;
+@declare function getPageContext() : any;
+@declare function getPrinterInfo(printer: any) : any;
+@declare function getPrinterList(delimiter: any) : any;
+@declare function getProfileSections(required inifile: any) : any;
+@declare function getProfileString(required inipath: any, required section: any, required entry: any) : any;
+@declare function getReadableImageFormats() : any;
+@declare function getSafeHTML(required inputString: any, required PolicyFile: any, required throwOnError: any) : any;
+@declare function getSOAPRequest(webservice: any) : any;
+@declare function getSOAPRequestHeader(required namespace: any, required name: any, asXML: any) : any;
+@declare function getSOAPResponse(required webservice: any) : any;
+@declare function getSOAPResponseHeader(required webservice: any, required namespace: any, required name: any, asXML: any) : any;
+@declare function getSystemFreeMemory() : any;
+@declare function getSystemTotalMemory(region: any) : any;
+@declare function getTagData(required nameSpaceWithSeperator: any, required tagName: any, dialect: any) : any;
+@declare function getTagList() : any;
+@declare function getTempDirectory() : any;
+@declare function getTempFile(required dir: any, required prefix: any) : any;
+@declare function getTemplatePath() : any;
+@declare function getTickCount() : any;
+@declare function getTimezone() : any;
+@declare function getTimezoneInfo(required timezone: any, required locale: any) : any;
+@declare function getToken(required String: any, required index: any, delimiters: any) : any;
+@declare function getTotalSpace(required path: any) : any;
+@declare function getUserRoles() : any;
+@declare function getVariable(required name: any) : any;
+@declare function getVFSMetadata(required fileSystemType: any) : any;
+@declare function getWriteableImageFormats() : any;
+@declare function hash(required string: any, algorithm: any, encoding: any, additionalIterations: any) : any;
+@declare function hash40(required input: any, algorithm: any, encoding: any, numIterations: any) : any;
+@declare function hmac(required message: any, required key: any, algorithm: any, encoding: any) : any;
+@declare function hour(required date: any) : any;
+@declare function htmlCodeFormat(required string: any, version: any) : any;
+@declare function htmlEditFormat(required string: any, version: any) : any;
+@declare function htmlParse(required html: any, caseSensitive: any) : any;
+@declare function iIf(required condition: any, required expression1: any, required expression2: any) : any;
+@declare function imageAddBorder(required name: any, required thickness: any, color: any, bordertype: any) : any;
+@declare function imageBlur(required name: any, blurradius: any) : any;
+@declare function imageClearRect(required name: any, required x: any, required y: any, required width: any, required height: any) : any;
+@declare function imageCopy(required name: any, required x: any, required y: any, required width: any, required height: any, dx: any, dy: any) : any;
+@declare function imageCreateCaptcha(required height: any, required width: any, required text: any, difficulty: any, font: any, fontsize: any) : any;
+@declare function imageCrop(required name: any, required x: any, required y: any, required width: any, required height: any) : any;
+@declare function imageDrawArc(required name: any, required x: any, required y: any, required width: any, required height: any, required startAngle: any, required archAngle: any, filled: any) : any;
+@declare function imageDrawBeveledRect(required name: any, required x: any, required y: any, required width: any, required height: any, required raised: any, filled: any) : any;
+@declare function imageDrawCubicCurve(required name: any, required ctrlx1: any, required ctrly1: any, required ctrlx2: any, required ctrly2: any, required x1: any, required y1: any, required x2: any, required y2: any) : any;
+@declare function imageDrawImage(required name: any, required image: any, required x: any, required y: any) : any;
+@declare function imageDrawLine(required name: any, required x1: any, required y1: any, required x2: any, required y2: any) : any;
+@declare function imageDrawLines(required name: any, required xcords: any, required ycords: any, isPolygon: any, filled: any) : any;
+@declare function imageDrawOval(required name: any, required x: any, required y: any, required width: any, required height: any, filled: any) : any;
+@declare function imageDrawPoint(required name: any, required x: any, required y: any) : any;
+@declare function imageDrawQuadraticCurve(required name: any, required x1: any, required y1: any, required ctrlx1: any, required ctrly1: any, required x2: any, required y2: any) : any;
+@declare function imageDrawRect(required name: any, required x: any, required y: any, required width: any, required height: any, filled: any) : any;
+@declare function imageDrawRoundRect(required name: any, required x: any, required y: any, required width: any, required height: any, required arcwidth: any, required archeight: any, filled: any) : any;
+@declare function imageDrawText(required name: any, required str: any, required x: any, required y: any, attributecollection: any) : any;
+@declare function imageFilter(required name: any, required filtername: any, parameters: any) : any;
+@declare function imageFilterColorMap(required type: any, lineColor1: any, lineColor2: any) : any;
+@declare function imageFilterCurves() : any;
+@declare function imageFilterKernel(required width: any, required height: any, required data: any) : any;
+@declare function imageFilterWarpGrid(required rows: any, required cols: any, required width: any, required height: any) : any;
+@declare function imageFlip(required name: any, required transpose: any) : any;
+@declare function imageFonts() : any;
+@declare function imageFormats() : any;
+@declare function imageGetBlob(required source: any) : any;
+@declare function imageGetBufferedImage(required name: any) : any;
+@declare function imageGetExifMetaData(required name: any) : any;
+@declare function imageGetEXIFTag(required name: any, required tagName: any) : any;
+@declare function imageGetHeight(required name: any) : any;
+@declare function imageGetIPTCMetaData(required name: any) : any;
+@declare function imageGetIPTCtag(required name: any, required tagName: any) : any;
+@declare function imageGetMetadata(required name: any) : any;
+@declare function imageGetWidth(required name: any) : any;
+@declare function imageGrayScale(required name: any) : any;
+@declare function imageInfo(required name: any) : any;
+@declare function imageMakeColorTransparent(required img: any, required color: any) : any;
+@declare function imageMakeTranslucent(required img: any, required percentage: any) : any;
+@declare function imageNegative(required name: any) : any;
+@declare function imageNew(source: any, width: any, height: any, imagetype: any, canvascolor: any) : any;
+@declare function imageOverlay(required source1: any, required source2: any, rule: any, alpha: any) : any;
+@declare function imagePaste(required image1: any, required image2: any, required x: any, required y: any) : any;
+@declare function imageRead(required path: any) : any;
+@declare function imageReadBase64(required string: any) : any;
+@declare function imageResize(required name: any, required width: any, required height: any, interpolation: any, blurfactor: any) : any;
+@declare function imageRotate(required name: any, required angle: any, x: any, y: any, interpolation: any) : any;
+@declare function imageRotateDrawingAxis(required name: any, required angle: any, x: any, y: any) : any;
+@declare function imageScaleTofit(required name: any, required fitWidth: any, required fitHeight: any, interpolation: any, blurfactor: any) : any;
+@declare function imageSetAntialiasing(required name: any, antialias: any) : any;
+@declare function imageSetBackgroundColor(required name: any, required color: any) : any;
+@declare function imageSetDrawingAlpha(required name: any, required alpha: any) : any;
+@declare function imageSetDrawingColor(required name: any, required color: any) : any;
+@declare function imageSetDrawingStroke(required name: any, attributecollection: any) : any;
+@declare function imageSetDrawingTransparency(required name: any, required percent: any) : any;
+@declare function imageSharpen(required name: any, gain: any) : any;
+@declare function imageShear(required name: any, required shear: any, direction: any, interpolation: any) : any;
+@declare function imageShearDrawingAxis(required name: any, required shrx: any, required shry: any) : any;
+@declare function imageTranslate(required name: any, required xTrans: any, required yTrans: any, interpolation: any) : any;
+@declare function imageTranslateDrawingAxis(required name: any, required x: any, required y: any) : any;
+@declare function imageWrite(required name: any, destination: any, quality: any, overwrite: any) : any;
+@declare function imageWriteBase64(required name: any, required destination: any, required format: any, inHTMLFormat: any, overwrite: any) : any;
+@declare function imageXORDrawingMode(required name: any, required c1: any) : any;
+@declare function incrementValue(required number: any) : any;
+@declare function inputBaseN(required String: any, required radix: any) : any;
+@declare function insert(required substring: any, required String: any, required position: any) : any;
+@declare function int(required number: any) : any;
+@declare function invalidateOauthAccesstoken(required token: any, required type: any) : any;
+@declare function invoke(required instance: any, required methodname: any, arguments: any) : any;
+@declare function isArray(required value: any, number: any) : any;
+@declare function isBinary(required value: any) : any;
+@declare function isBoolean(required value: any) : any;
+@declare function isClosure(required object: any) : any;
+@declare function isCustomFunction(required Object: any) : any;
+@declare function isDate(required Object: any) : any;
+@declare function isDDX(required path: any) : any;
+@declare function isDebugMode() : any;
+@declare function isDefined(required variable_name: any) : any;
+@declare function isEmpty(required value: any) : any;
+@declare function isFileObject(required object: any) : any;
+@declare function isImage(required name: any) : any;
+@declare function isImageFile(required path: any) : any;
+@declare function isInstanceOf(required object: any, required typename: any) : any;
+@declare function isIPInRange(required ips: any, required ip: any) : any;
+@declare function isIPV6(required IP: any) : any;
+@declare function isJSON(required var: any) : any;
+@declare function isK2ServerABroker() : any;
+@declare function isK2ServerDocCountExceeded() : any;
+@declare function isK2ServerOnline() : any;
+@declare function isLeapYear(required year: any) : any;
+@declare function isLocalhost(required ipaddress: any) : any;
+@declare function isNotMap(required obj: any) : any;
+@declare function isNull(required object: any) : any;
+@declare function isNumeric(required String: any) : any;
+@declare function isNumericDate(required number: any) : any;
+@declare function isObject(required value: any) : any;
+@declare function isPDFArchive(required path: any, required standard: any) : any;
+@declare function isPDFFile(required path: any) : any;
+@declare function isPDFObject(required value: any) : any;
+@declare function isQuery(required value: any) : any;
+@declare function isSafeHTML(required inputString: any, PolicyFile: any) : any;
+@declare function isSimpleValue(required value: any) : any;
+@declare function isSOAPRequest() : any;
+@declare function isSpreadsheetFile(required file: any) : any;
+@declare function isSpreadsheetObject(required object: any) : any;
+@declare function isStruct(required variable: any) : any;
+@declare function isUserInAnyRole(required roleList: any) : any;
+@declare function isUserInRole(required role_name: any) : any;
+@declare function isUserLoggedIn() : any;
+@declare function isValid(required type: any, required value: any, required min: any, required max: any, required pattern: any) : any;
+@declare function isValidOauthAccesstoken(required token: any, required type: any) : any;
+@declare function isVideoFile(required path: any) : any;
+@declare function isWDDX(required value: any) : any;
+@declare function isXML(required value: any) : any;
+@declare function isXMLAttribute(required value: any) : any;
+@declare function isXMLDoc(required value: any) : any;
+@declare function isXMLElem(required value: any) : any;
+@declare function isXMLNode(required value: any) : any;
+@declare function isXMLRoot(required value: any) : any;
+@declare function isZipFile(required path: any) : any;
+@declare function javacast(required type: any, required variable: any) : any;
+@declare function jsStringFormat(required String: any) : any;
+@declare function lCase(required String: any) : any;
+@declare function left(required String: any, required count: any) : any;
+@declare function len(required Object: any) : any;
+@declare function listAppend(required list: any, required value: any, delimiters: any, includeEmptyFields: any) : any;
+@declare function listAvg(required list: any, delimiters: any, multiCharacterDelimiter: any) : any;
+@declare function listChangeDelims(required list: any, required new_delimiter: any, delimiters: any, includeEmptyValues: any) : any;
+@declare function listCompact(required list: any, delimiters: any, multiCharacterDelimiter: any) : any;
+@declare function listContains(required list: any, required substring: any, delimiters: any) : any;
+@declare function listContainsNoCase(required list: any, required substring: any, delimiters: any) : any;
+@declare function listDeleteAt(required list: any, required position: any, delimiters: any) : any;
+@declare function listEach(required str: any, required function: any, required delim: any, includeEmptyFields: any) : any;
+@declare function listEvery(required list: any, required closure: any, delimiter: any, includeEmptyFields: any, multiCharacterDelimiter: any, parallel: any, maxThreads: any) : any;
+@declare function listFilter(required list: any, required function: any) : any;
+@declare function listFind(required list: any, required value: any, delimiters: any, includeEmptyValues: any) : any;
+@declare function listFindNoCase(required list: any, required value: any, delimiters: any, includeEmptyValues: any) : any;
+@declare function listFirst(required list: any, delimiters: any) : any;
+@declare function listGetAt(required list: any, required position: any, delimiters: any, includeEmptyValues: any) : any;
+@declare function listIndexExists(required list: any, required index: any, delimiter: any, includeEmptyFields: any) : any;
+@declare function listInsertAt(required list: any, required position: any, required value: any, delimiters: any) : any;
+@declare function listItemTrim(required list: any, delimiters: any, includeEmptyFields: any) : any;
+@declare function listLast(required list: any, delimiters: any, includeEmptyValues: any) : any;
+@declare function listLen(required list: any, delimiters: any, includeEmptyValues: any) : any;
+@declare function listMap(required list: any, required function: any, intialValue: any, delimiter: any, includeEmptyFields: any) : any;
+@declare function listPrepend(required list: any, required value: any, delimiters: any, includeEmptyFields: any) : any;
+@declare function listQualify(required list: any, required qualifier: any, delimiters: any, elements: any, includeEmptyFields: any) : any;
+@declare function listReduce(required list: any, required function: any, required intialValue: any, required delimiter: any, required includeEmptyFields: any) : any;
+@declare function listRemoveDuplicates(required list: any, delimiter: any, ignoreCase: any) : any;
+@declare function listRest(required list: any, delimiters: any) : any;
+@declare function listSetAt(required list: any, required position: any, required value: any, delimiters: any) : any;
+@declare function listSome(required list: any, required closure: any, delimiter: any, includeEmptyFields: any, multiCharacterDelimiter: any, parallel: any, maxThreads: any) : any;
+@declare function listSort(required list: any, required sort_type: any, sort_order: any, delimiters: any) : any;
+@declare function listToArray(required list: any, delimiters: any, includeEmptyFields: any, multiCharacterDelimiter: any) : any;
+@declare function listTrim(required list: any, delimiters: any) : any;
+@declare function listValueCount(required list: any, required value: any, delimiters: any) : any;
+@declare function listValueCountNoCase(required list: any, required value: any, delimiters: any) : any;
+@declare function lJustify(required String: any, required length: any) : any;
+@declare function location(required url: any, addtoken: any, statuscode: any) : any;
+@declare function log(required number: any) : any;
+@declare function log10(required number: any) : any;
+@declare function lsCurrencyFormat(required number: any, type: any) : any;
+@declare function lsDateFormat(required date: any, mask: any, locale: any) : any;
+@declare function lsDateTimeFormat(required date: any, mask: any, locale: any, timeZone: any) : any;
+@declare function lsDayOfWeek(required date: any, locale: any, timezone: any) : any;
+@declare function lsEuroCurrencyFormat(required currency: any, required type: any) : any;
+@declare function lsIsCurrency(required String: any) : any;
+@declare function lsIsDate(required String: any) : any;
+@declare function lsIsNumeric(required String: any) : any;
+@declare function lsNumberFormat(required number: any, mask: any) : any;
+@declare function lsParseCurrency(required String: any) : any;
+@declare function lsParseDateTime(required dt_string: any) : any;
+@declare function lsParseEuroCurrency(required currency_string: any) : any;
+@declare function lsParseNumber(required String: any, locale: any) : any;
+@declare function lsTimeFormat(required time: any, mask: any) : any;
+@declare function lsWeek(required date: any, locale: any, timezone: any) : any;
+@declare function lTrim(required String: any) : any;
+@declare function manifestRead(required path: any) : any;
+@declare function max(required number1: any, required number2: any) : any;
+@declare function metaphone(required str: any) : any;
+@declare function mid(required String: any, required start: any, required count: any) : any;
+@declare function millisecond(required date: any, timezone: any) : any;
+@declare function min(required number1: any, required number2: any) : any;
+@declare function minute(required date: any) : any;
+@declare function month(required date: any) : any;
+@declare function monthAsString(required month_number: any) : any;
+@declare function monthShortAsString(required monthnumber: any) : any;
+@declare function newLine() : any;
+@declare function now() : any;
+@declare function nowServer() : any;
+@declare function nullValue() : any;
+@declare function numberFormat(required number: any, mask: any) : any;
+@declare function objectEquals(required Param1: any, required Param2: any) : any;
+@declare function objectLoad(required binaryObject: any, required filepath: any) : any;
+@declare function objectSave(required object: any, file: any) : any;
+@declare function onApplicationEnd(required ApplicationScope: any) : any;
+@declare function onApplicationStart() : any;
+@declare function onError(required exception: any, required eventName: any) : any;
+@declare function onMissingMethod(required missingMethodName: any, required missingMethodArguments: any) : any;
+@declare function onMissingTemplate(required targetPage: any) : any;
+@declare function onRequest(required targetPage: any) : any;
+@declare function onRequestEnd(required targetPage: any) : any;
+@declare function onRequestStart(required targetPage: any) : any;
+@declare function onServerStart() : any;
+@declare function onSessionEnd(required sessionScope: any, required applicationScope: any) : any;
+@declare function onSessionStart() : any;
+@declare function ormClearSession(datasource: any) : any;
+@declare function ormCloseAllSessions(required region: any) : any;
+@declare function ormCloseSession(datasource: any) : any;
+@declare function ormEvictCollection(required componentName: any, required relationName: any, id: any) : any;
+@declare function ormEvictEntity(required componentName: any, id: any) : any;
+@declare function ormEvictQueries(cacheName: any) : any;
+@declare function ormExecuteQuery(required hql: any, params: any, unique: any, queryoptions: any) : any;
+@declare function ormFlush(datasource: any) : any;
+@declare function ormFlushAll(required region: any) : any;
+@declare function ormGetSession() : any;
+@declare function ormGetSessionFactory() : any;
+@declare function ormIndex() : any;
+@declare function ormIndexPurge(required region: any) : any;
+@declare function ormReload() : any;
+@declare function ormSearch(required query_text: any, required entityName: any, required fields: any, required optionMap: any) : any;
+@declare function ormSearchOffline(required query_text: any, required entityName: any, required fields_to_be_selected: any, required fields: any, optionMap: any, extra options: any) : any;
+@declare function pagePoolClear() : any;
+@declare function pagePoolList() : any;
+@declare function paragraphFormat(required String: any) : any;
+@declare function parameterExists(required parameter: any) : any;
+@declare function parseDateTime(required dt_string: any, pop_conversion: any) : any;
+@declare function parseNumber(required number: any, radix: any) : any;
+@declare function pi() : any;
+@declare function precisionEvaluate(required expressions: any) : any;
+@declare function preserveSingleQuotes(required variable: any) : any;
+@declare function quarter(required date: any) : any;
+@declare function query() : any;
+@declare function queryAddColumn(required query: any, required column_name: any, datatype: any, required array_name: any) : any;
+@declare function queryAddRow(required query: any, number/row(s): any) : any;
+@declare function queryAppend(required query1: any, required query2: any) : any;
+@declare function queryClear() : any;
+@declare function queryColumnArray(required query: any) : any;
+@declare function queryColumnCount(required query: any) : any;
+@declare function queryColumnData(required query: any, required columnName: any, closure: any) : any;
+@declare function queryColumnExists(required query: any, required column: any) : any;
+@declare function queryColumnList(required query: any, delimiter: any) : any;
+@declare function queryConvertForGrid(required query: any, required page: any, required pageSize: any) : any;
+@declare function queryCurrentRow(required query: any) : any;
+@declare function queryDeleteColumn(required query: any, required column: any) : any;
+@declare function queryDeleteRow(required query: any, row: any) : any;
+@declare function queryEach(required query: any, required callback: any, parallel: any, maxThreads: any) : any;
+@declare function queryEvery(required query: any, required closure: any, parallel: any, maxThreads: any) : any;
+@declare function queryExecute(required sql: any, params: any, options: any) : any;
+@declare function queryFilter(required query: any, required callback: any, parallel: any, maxThreads: any) : any;
+@declare function queryGetCell(required query: any, required column_name: any, row_number: any) : any;
+@declare function queryGetResult(required query: any) : any;
+@declare function queryGetRow(required query: any, required rowNumber: any) : any;
+@declare function queryKeyExists(required query: any, required key: any) : any;
+@declare function queryMap(required query: any, required callback: any, parallel: any, maxThreads: any) : any;
+@declare function queryNew(required columnList: any, columnTypeList: any, rowData: any) : any;
+@declare function queryPrepend(required query1: any, required query2: any) : any;
+@declare function queryRecordCount(required query: any) : any;
+@declare function queryReduce(required query: any, required callback: any, initialValue: any) : any;
+@declare function queryReverse(required query: any) : any;
+@declare function queryRowData(required query: any, required rowNumber: any) : any;
+@declare function querySetCell(required query: any, required column: any, required value: any, row: any) : any;
+@declare function querySlice(required query: any, required offset: any, length: any) : any;
+@declare function querySome(required query: any, required callback: any, parallel: any, maxThreads: any) : any;
+@declare function querySort(required query: any, required sortFunction: any, direction: any) : any;
+@declare function quotedValueList(required column: any, delimiter: any) : any;
+@declare function rand(algorithm: any) : any;
+@declare function randomize(required number: any, algorithm: any) : any;
+@declare function randRange(required number1: any, required number2: any, algorithm: any) : any;
+@declare function reEscape(required string: any) : any;
+@declare function reFind(required reg_expression: any, required string: any, start: any, returnsubexpressions: any, scope: any) : any;
+@declare function reFindNoCase(required reg_expression: any, required string: any, start: any, returnsubexpressions: any, scope: any) : any;
+@declare function releaseCOMObject(required objectName: any) : any;
+@declare function reMatch(required reg_expression: any, required string: any) : any;
+@declare function reMatchNoCase(required reg_expression: any, required string: any) : any;
+@declare function removeCachedQuery(required SQL: any, required datasource: any, params: any, region: any) : any;
+@declare function removeChars(required String: any, required start: any, required count: any) : any;
+@declare function render(required CFML: any, dialect: any) : any;
+@declare function repeatString(required String: any, required count: any) : any;
+@declare function replace(required String: any, required substring1: any, required substring2: any, scope: any) : any;
+@declare function replaceList(required String: any, required list1: any, required list2: any, delimiter: any, delimiterList1: any, delimiterList2: any, includeEmptyFields: any) : any;
+@declare function replaceListNoCase(required String: any, required list1: any, required list2: any, delimiter: any, delimiterList1: any, delimiterList2: any, includeEmptyFields: any) : any;
+@declare function replaceNoCase(required String: any, required substring1: any, required substring2: any, scope: any) : any;
+@declare function reReplace(required string: any, required regex: any, required substring: any, scope: any) : any;
+@declare function reReplaceNoCase(required String: any, required reg_expression: any, required substring: any, scope: any) : any;
+@declare function restDeleteApplication(required dirPath: any) : any;
+@declare function restInitApplication(required dirPath: any, required serviceMapping: any, default: any, required password: any) : any;
+@declare function restSetResponse(required response: any) : any;
+@declare function reverse(required String: any) : any;
+@declare function right(required String: any, required count: any) : any;
+@declare function rJustify(required String: any, required length: any) : any;
+@declare function round(required number: any) : any;
+@declare function rTrim(required String: any) : any;
+@declare function runAsync(callback: any, timeout: any) : any;
+@declare function second(required date: any) : any;
+@declare function sendGatewayMessage(required gatewayID: any, required data: any) : any;
+@declare function serialize(required objToBeSerialized: any, required type: any, required useCustomSerializer: any) : any;
+@declare function serializeJSON(required var: any, serializeQueryByColumns: any, useSecureJSONPrefix: any, useCustomSerializer: any) : any;
+@declare function serializeXML(required objToBeSerialized: any, required useCustomSerializer: any) : any;
+@declare function sessionGetMetadata(required region: any) : any;
+@declare function sessionInvalidate() : any;
+@declare function sessionRotate() : any;
+@declare function sessionstartTime() : any;
+@declare function setEncoding(required scope_name: any, required charset: any) : any;
+@declare function setLocale(required new_locale: any) : any;
+@declare function setProfileString(required inipath: any, required section: any, required entry: any, required value: any) : any;
+@declare function setTimezone(required timezone: any) : any;
+@declare function setVariable(required name: any, required value: any) : any;
+@declare function sgn(required number: any) : any;
+@declare function sin(required number: any) : any;
+@declare function sizeOf(required obj: any, complex: any) : any;
+@declare function sleep(required duration: any) : any;
+@declare function soundEx(required str: any) : any;
+@declare function spanExcluding(required String: any, required set: any) : any;
+@declare function spanIncluding(required String: any, required set: any) : any;
+@declare function spreadsheetAddAutoFilter(required spreadsheetObj: any, required autofilter: any) : any;
+@declare function spreadsheetAddColumn(required spreadsheetObj: any, required data: any, required startrow: any, required startcolumn: any, required insert: any, insert: any) : any;
+@declare function spreadsheetAddFreezePane(required spreadsheetObj: any, required freezeColumn: any, required freezeRow: any, hideColumn: any, hideRow: any) : any;
+@declare function spreadsheetAddimage(required spreadsheetObj: any, required imagefilepath: any, required anchor: any) : any;
+@declare function spreadsheetAddInfo(required spreadsheetObj: any, required info: any) : any;
+@declare function spreadsheetAddPagebreaks(required SpreadsheetObj: any, required rowbreaks: any, required colbreaks: any) : any;
+@declare function spreadsheetAddRow(required spreadsheetObj: any, required data: any, row: any, column: any, insert: any, datatype: any) : any;
+@declare function spreadsheetAddRows(required spreadsheetObj: any, required data: any, row: any, column: any, insert: any, datatype: any, includeColumnNames: any) : any;
+@declare function spreadsheetAddSplitPane(required spreadsheetObj: any, required x: any, required y: any, required splitColumn: any, required splitRow: any, position: any) : any;
+@declare function spreadsheetCreateSheet(required spreadsheetObj: any, required name: any) : any;
+@declare function spreadsheetDeleteColumn(required spreadsheetObj: any, required column: any) : any;
+@declare function spreadsheetDeleteColumns(required spreadsheetObj: any, required range: any) : any;
+@declare function spreadsheetDeleteRow(required spreadsheetObj: any, required row: any) : any;
+@declare function spreadsheetDeleteRows(required spreadsheetObj: any, required range: any) : any;
+@declare function spreadsheetFormatCell(required spreadsheetObj: any, required format: any, required row: any, required column: any) : any;
+@declare function spreadsheetFormatCellRange(required spreadsheetObj: any, required format: any, required startRow: any, required startColumn: any, required endRow: any, required endColumn: any) : any;
+@declare function spreadsheetFormatColumn(required spreadsheetObj: any, required format: any, required column: any) : any;
+@declare function spreadsheetFormatColumns(required spreadsheetObj: any, required format: any, required columns: any) : any;
+@declare function spreadsheetFormatRow(required spreadsheetObj: any, required format: any, required row: any) : any;
+@declare function spreadsheetFormatRows(required spreadsheetObj: any, required format: any, required rows: any) : any;
+@declare function spreadsheetGetCellComment(required author: any, column: any, comment: any, row: any) : any;
+@declare function spreadsheetGetCellFormula(required spreadsheetObj: any, required row: any, required column: any) : any;
+@declare function spreadsheetGetCellValue(required spreadsheetObj: any, required row: any, required column: any) : any;
+@declare function spreadsheetGetColumnCount(required spreadsheetObj: any, sheet: any) : any;
+@declare function spreadsheetInfo(required spreadsheetObj: any) : any;
+@declare function spreadsheetMergeCells(required spreadsheetObj: any, required startrow: any, required endrow: any, required startcolumn: any, required endcolumn: any) : any;
+@declare function spreadsheetNew(sheetname: any, xmlFormat: any) : any;
+@declare function spreadsheetRead(required fileName: any, required spreadsheetObj: any) : any;
+@declare function spreadsheetReadBinary(required spreadsheetObj: any) : any;
+@declare function spreadsheetRemoveSheet(required spreadsheetObj: any, required sheetname: any) : any;
+@declare function spreadsheetSetActiveSheet(required spreadsheetObj: any, name: any) : any;
+@declare function spreadsheetSetActiveSheetNumber(required spreadsheetObj: any, number: any) : any;
+@declare function spreadsheetSetCellComment(required spreadsheetObj: any, required comment: any, required row: any, required column: any) : any;
+@declare function spreadsheetSetCellFormula(required spreadsheetObj: any, required formula: any, required row: any, required column: any) : any;
+@declare function spreadsheetSetCellValue(required spreadsheetObj: any, required value: any, required row: any, required column: any) : any;
+@declare function spreadsheetSetColumnWidth(required spreadsheetObj: any, required columnNumber: any, required width: any) : any;
+@declare function spreadsheetSetFooter(required spreadsheetObj: any, required leftFooter: any, required centerFooter: any, required rightFooter: any) : any;
+@declare function spreadsheetSetHeader(required spreadsheetObj: any, required leftHeader: any, required centerHeader: any, required rightHeader: any) : any;
+@declare function spreadsheetSetRowHeight(required spreadsheetObj: any, required rowNumber: any, required height: any) : any;
+@declare function spreadsheetShiftColumns(required spreadsheetObj: any, required start: any, end: any, start: any) : any;
+@declare function spreadsheetShiftRows(required spreadsheetObj: any, required start: any, required end: any, rows: any) : any;
+@declare function spreadsheetwrite(required spreadsheetObj: any, required fileName: any, password: any, overwrite: any) : any;
+@declare function sqr(required number: any) : any;
+@declare function sslCertificateInstall(required host: any, port: any) : any;
+@declare function sslCertificateList(required host: any, port: any) : any;
+@declare function storeAddACL(required url: any, required ACLObject: any) : any;
+@declare function storeGetACL(required ulr: any, required ACLObject: any) : any;
+@declare function storeGetMetadata(required url: any) : any;
+@declare function storeSetACL(required url: any, required ACLObject: any) : any;
+@declare function storeSetMetadata(required url: any, required region: any) : any;
+@declare function stringLen(required string: any) : any;
+@declare function stripCR(required String: any) : any;
+@declare function structAppend(required destStruct: any, required sourceStruct: any, overwriteFlag: any) : any;
+@declare function structClear(required structure: any) : any;
+@declare function structCopy(required structure: any) : any;
+@declare function structCount(required structure: any) : any;
+@declare function structDelete(required structure: any, required key: any, indicateNotExisting: any) : any;
+@declare function structEach(required struct: any, required callback: any, parallel: any, maxThreads: any) : any;
+@declare function structEquals(required struct1: any, required struct2: any) : any;
+@declare function structEvery(required struct: any, required closure: any, parallel: any, maxThreads: any) : any;
+@declare function structFilter(required struct: any, required callback: any, parallel: any, maxThreads: any) : any;
+@declare function structFind(required structure: any, required key: any, defaultValue: any) : any;
+@declare function structFindKey(required top: any, required value: any, required scope: any) : any;
+@declare function structFindValue(required top: any, required value: any, scope: any) : any;
+@declare function structGet(required path: any) : any;
+@declare function structGetMetadata(required struct: any) : any;
+@declare function structInsert(required structure: any, required key: any, required value: any, allowoverwrite: any) : any;
+@declare function structIsEmpty(required structure: any) : any;
+@declare function structIsOrdered(required struct: any) : any;
+@declare function structKeyArray(required structure: any) : any;
+@declare function structKeyExists(required structure: any, required key: any) : any;
+@declare function structKeyList(required structure: any, delimiter: any) : any;
+@declare function structKeyTranslate(required structure: any, deepTranslation: any, leaveOriginalKey: any) : any;
+@declare function structListNew(required maxsize: any) : any;
+@declare function structMap(required struct: any, required callback: any, parallel: any, maxThreads: any) : any;
+@declare function structNew(structType: any) : any;
+@declare function structReduce(required struct: any, required callback: any, required initialVal: any) : any;
+@declare function structSetMetadata(required inputStruct: any, required metaStruct: any) : any;
+@declare function structSome(required struct: any, required callback: any, parallel: any, maxThreads: any) : any;
+@declare function structSort(required base: any, sorttype: any, sortorder: any, pathtosubelement: any, localeSensitive: any, callback: any) : any;
+@declare function structToSorted(required structure: any, callback: any, sorttype: any, sortorder: any, localeSensitive: any) : any;
+@declare function structUpdate(required structure: any, required key: any, required value: any) : any;
+@declare function structValueArray(required structure: any) : any;
+@declare function systemCacheClear(cacheName: any) : any;
+@declare function systemOutput(required obj: any, addNewLine: any, doErrorStream: any) : any;
+@declare function tan(required number: any) : any;
+@declare function threadJoin(threadName: any, timeout: any) : any;
+@declare function threadTerminate(required threadname: any) : any;
+@declare function throw(message: any, type: any, detail: any, errorcode: any, extendedinfo: any, object: any) : any;
+@declare function timeFormat(required time: any, mask: any) : any;
+@declare function toBase64(required string_or_object: any, encoding: any) : any;
+@declare function toBinary(required base64_or_object: any) : any;
+@declare function toNumeric(required value: any, radix: any) : any;
+@declare function toScript(required cfvar: any, required javascriptvar: any, outputformat: any, asformat: any) : any;
+@declare function toString(required any_value: any, encoding: any) : any;
+@declare function trace(var: any, text: any, type: any, category: any, inline: any, abort: any) : any;
+@declare function transactionCommit() : any;
+@declare function transactionRollback(savepoint: any) : any;
+@declare function transactionSetSavepoint(required savepoint: any) : any;
+@declare function trim(required String: any) : any;
+@declare function trueFalseFormat(required value: any) : any;
+@declare function uCase(required String: any) : any;
+@declare function ucFirst(required string: any, doAll: any, doLowerIfAllUppercase: any) : any;
+@declare function unserializeJava(required string: any) : any;
+@declare function urlDecode(required urlencodedstring: any, charset: any) : any;
+@declare function urlEncode(required string: any, charset: any, force: any) : any;
+@declare function urlEncodedFormat(required String: any, charset: any) : any;
+@declare function urlSessionFormat(required requesturl: any) : any;
+@declare function val(required String: any) : any;
+@declare function valueArray(required query: any, required column: any) : any;
+@declare function valueList(required column: any, delimiter: any) : any;
+@declare function verifyClient() : any;
+@declare function webserviceNew(required url: any, arguments: any) : any;
+@declare function week(required date: any) : any;
+@declare function wrap(required String: any, required limit: any, strip: any) : any;
+@declare function writeBody() : any;
+@declare function writeDump(required var: any, output: any, format: any, abort: any, label: any, metainfo: any, top: any, show: any, hide: any, keys: any, expand: any, showUDfs: any) : any;
+@declare function writeLog(required text: any, type: any, application: any, file: any, log: any) : any;
+@declare function writeOutput(required string: any, encodeFor: any) : any;
+@declare function wsGetAllChannels(channelName: any) : any;
+@declare function wsGetSubscribers(required channel: any) : any;
+@declare function wsPublish(required channel: any, required message: any, filterCriteria: any) : any;
+@declare function wsSendMessage(required message: any) : any;
+@declare function xmlChildPos(required elem: any, required childname: any, required n: any) : any;
+@declare function xmlElemNew(required xmlobj: any, namespace: any, required childname: any) : any;
+@declare function xmlFormat(required String: any, escapeChars: any) : any;
+@declare function xmlGetNodeType(required xmlNode: any) : any;
+@declare function xmlNew(casesensitive: any) : any;
+@declare function xmlParse(required xmlString: any, caseSensitive: any, validator: any) : any;
+@declare function xmlSearch(required xmlNode: any, required xpath: any, params: any) : any;
+@declare function xmlTransform(required xml: any, required xsl: any, parameters: any) : any;
+@declare function xmlValidate(required xmlDoc: any, validator: any) : any;
+@declare function year(required date: any) : any;
+@declare function yesNoFormat(required value: any) : any;
+
+@declare global cgi = {
     auth_password:        string,
     auth_type:            string,
     auth_user:            string,
@@ -798,6 +808,3 @@
     server_protocol:      string,
     server_software:      string,
 }
-
-<!--- @type CfSqlTypes = "CF_SQL_CHAR" | "CF_SQL_NUMERIC" | "CF_SQL_BIT" | "CF_SQL_NUMERIC" --->
-<!--- @declare tag #![requireParentTag("cfquery")] <cfqueryparam value:any list?:boolean cfsqltype:CfSqlTypes> --->

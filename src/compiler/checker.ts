@@ -1,5 +1,5 @@
-import { SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes, IndexedAccessChainElement, NodeFlags, BinaryOpTypeUiString, VariableDeclaration, Identifier, FlowId, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry } from "./node";
-import { Scanner } from "./scanner";
+import { SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes, IndexedAccessChainElement, NodeFlags, BinaryOpTypeUiString, VariableDeclaration, Identifier, FlowId, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges } from "./node";
+import { Scanner, SourceRange } from "./scanner";
 import { Diagnostic } from "./parser";
 import { cfFunctionSignature, cfIntersection, Type, TypeKind, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfNever, cfStruct, cfUnion, SyntheticType, TypeFlags } from "./types";
 import { findAncestor, getAttributeValue, getNodeLinks, getTriviallyComputableString } from "./utils";
@@ -17,19 +17,16 @@ export function Checker() {
         scanner = scanner_;
         diagnostics = diagnostics_;
 
-        stdLib = findStdLib(sourceFile);
-
         rootScope = sourceFile.containedScope!;
         rootScope; // "unused"
 
         checkList(sourceFile.content);
-        runDeferredFrames();
     }
 
-    function typeErrorAtNode(node: Node, msg: string) {
+    function typeErrorAtRange(range: SourceRange, msg: string) {
         const freshDiagnostic : Diagnostic = {
-            fromInclusive: node.range.fromInclusive,
-            toExclusive: node.range.toExclusive,
+            fromInclusive: range.fromInclusive,
+            toExclusive: range.toExclusive,
             msg: msg,
         }
 
@@ -42,6 +39,10 @@ export function Checker() {
         freshDiagnostic.__debug_to_col = debugTo.col+1;
 
         diagnostics.push(freshDiagnostic);
+    }
+
+    function typeErrorAtNode(node: Node, msg: string) {
+        typeErrorAtRange(node.range, msg);
     }
 
     function checkList(nodes: Node[]) {
@@ -305,17 +306,6 @@ export function Checker() {
         return undefined;
     }
 
-    function findStdLib(sourceFile: SourceFile) : cfStruct | undefined {
-        for (const libFile of sourceFile.libRefs) {
-            for (const typedef of libFile.content) {
-                if (typedef.kind === NodeType.type && typedef.typeKind === TypeKind.struct && typedef.name === "std") {
-                    return typedef;
-                }
-            }
-        }
-        return undefined;
-    }
-
     /**
      * lookup a name in a typestruct; cased takes precedence over uncased
      * @param struct 
@@ -395,7 +385,7 @@ export function Checker() {
 
             // if we got to root and didn't find it, see if we can find it in stdlib (if stdlib was available)
             if (flow.node?.kind === NodeType.sourceFile) {
-                if (stdLib) return lookupTypeStructMember(stdLib, canonicalName);
+                return checkLibRefsForName(canonicalName);
             }
 
             if (flow.predecessor.length === 1) {
@@ -452,6 +442,13 @@ export function Checker() {
         }
 
         return result;
+    }
+
+    function checkLibRefsForName(name: string) {
+        for (const lib of sourceFile.libRefs) {
+            if (lib.containedScope?.typedefs?.has(name)) return lib.containedScope.typedefs.get(name)!;
+        }
+        return undefined;
     }
 
     function isCallable(type: Type) : boolean {
@@ -515,18 +512,26 @@ export function Checker() {
         const type = getCachedTermEvaluatedType(node.left);
         if (type) {
             if (type.typeKind === TypeKind.any) {
-                setCachedTermEvaluatedType(node, type);
+                setCachedTermEvaluatedType(node, SyntheticType.any());
                 return;
             }
             if (isCallable(type)) {
                 unsafeAssertTypeKind<cfFunctionSignature>(type); // could be a `new` expression though?
                 setCachedTermEvaluatedType(node, type.returns);
 
-                //const requiredParams = type.params.filter(param => param.required === true);
+                const minRequiredParams = type.params.filter(param => param.required === true).length;
+                const maxParams = type.params.length;
                 const namedArgCount = node.args.filter(arg => !!arg.equals).length;
                 if (namedArgCount !== node.args.length && namedArgCount !== 0) {
-                    // error, named args must be all or none
+                    typeErrorAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), "All arguments must be named, if any are named.");
                 }
+                else if (node.args.length < minRequiredParams || node.args.length > maxParams) {
+                    let msg;
+                    if (minRequiredParams !== maxParams) msg = `Expected between ${minRequiredParams} and ${maxParams} arguments, but got ${node.args.length}`;
+                    else msg = `Expected ${maxParams} arguments, but got ${node.args.length}`;
+                    typeErrorAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), msg);
+                }
+
                 if (namedArgCount === node.args.length) {
                     // reorder args to match params ?
                 }
@@ -872,33 +877,10 @@ export function Checker() {
         }
     }
 
-    const frames : any[] = [];
-    let currentFrame = frames;
-    //const frameRoots : NodeId[] = [];
-    function runDeferredFrames() {
-        runFrameWorker(frames);
-        function runFrameWorker(frame: any | any[]) {
-            if (Array.isArray(frame)) {
-                for (let i = frame.length-1; i >= 0; i--) {
-                    runFrameWorker(frame[i]);
-                }
-            }
-            else {
-                frame.next();
-            }
-        }
-    }
-
     function checkFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {
         for (const param of node.params) {
             setCachedEvaluatedTypeOfIdentifierAtFlow(node.flow!, param.canonicalName, param.type || SyntheticType.any());
         }
-
-        const savedFrame = currentFrame;
-        const thisFrame : any[] = [];
-        currentFrame.push(thisFrame);
-        currentFrame = thisFrame;
-        //frameRoots.push(node.nodeId);
 
         if (node.kind === NodeType.functionDefinition && node.fromTag) {
             checkList(node.body);
@@ -906,13 +888,6 @@ export function Checker() {
         else {
             checkNode(node.body);
         }
-
-        if (thisFrame.length === 0) {
-            currentFrame.pop();
-            //frameRoots.pop();
-        }
-
-        currentFrame = savedFrame;
     }
 
     function checkSwitch(node: Switch) {

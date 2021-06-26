@@ -1,4 +1,5 @@
 import { BooleanLiteral, FunctionParameter, mergeRanges, NilTerminal, NodeBase, NodeType, NumericLiteral, SimpleStringLiteral, Terminal } from "./node";
+import { SourceRange } from "./scanner";
 
 let debugTypeModule = true;
 
@@ -74,8 +75,8 @@ export interface TypeBase extends NodeBase {
     __debug_kind?: string,
 }
 
-export function TypeBase<T extends Type>(typeKind: T["typeKind"]) : T {
-    const result = NodeBase<Type>(NodeType.type);
+export function TypeBase<T extends Type>(typeKind: T["typeKind"], range?: SourceRange) : T {
+    const result = NodeBase<Type>(NodeType.type, range);
     result.typeKind = typeKind;
     result.synthetic = false;
     result.typeFlags = TypeFlags.none;
@@ -113,7 +114,7 @@ export interface cfAny extends TypeBase {
 }
 
 export function cfAny(terminal: Terminal) : cfAny {
-    const v = TypeBase<cfAny>(TypeKind.any);
+    const v = TypeBase<cfAny>(TypeKind.any, terminal.range);
     v.terminal = terminal;
     return v;
 }
@@ -124,7 +125,7 @@ export interface cfVoid extends TypeBase {
 }
 
 export function cfVoid(terminal: Terminal) : cfVoid {
-    const v = TypeBase<cfVoid>(TypeKind.void);
+    const v = TypeBase<cfVoid>(TypeKind.void, terminal.range);
     v.terminal = terminal;
     return v;
 }
@@ -136,7 +137,7 @@ export interface cfString extends TypeBase {
 }
 
 export function cfString(terminal: Terminal | SimpleStringLiteral) : cfString {
-    const v = TypeBase<cfString>(TypeKind.string);
+    const v = TypeBase<cfString>(TypeKind.string, terminal.range);
     v.terminal = terminal;
     v.literal = terminal.kind === NodeType.simpleStringLiteral ? terminal.textSpan.text : null;
     return v;
@@ -149,7 +150,7 @@ export interface cfNumber extends TypeBase {
 }
 
 export function cfNumber(terminal: Terminal | NumericLiteral) : cfNumber {
-    const v = TypeBase<cfNumber>(TypeKind.number);
+    const v = TypeBase<cfNumber>(TypeKind.number, terminal.range);
     v.terminal = terminal;
     v.literal = terminal.kind === NodeType.numericLiteral ? parseFloat(terminal.literal.token.text) : null;
     return v;
@@ -162,7 +163,7 @@ export interface cfBoolean extends TypeBase {
 }
 
 export function cfBoolean(terminal: Terminal | BooleanLiteral) : cfBoolean {
-    const v = TypeBase<cfBoolean>(TypeKind.boolean);
+    const v = TypeBase<cfBoolean>(TypeKind.boolean, terminal.range);
     v.terminal = terminal;
     v.literal = terminal.kind === NodeType.booleanLiteral ? terminal.booleanValue : null;
     return v;
@@ -172,8 +173,8 @@ export interface cfNil extends TypeBase {
     typeKind: TypeKind.nil
 }
 
-export function cfNil() : cfNil {
-    const v = TypeBase<cfNil>(TypeKind.nil);
+export function cfNil(range?: SourceRange) : cfNil {
+    const v = TypeBase<cfNil>(TypeKind.nil, range);
     return v;
 }
 
@@ -209,7 +210,7 @@ export interface cfStruct extends TypeBase {
 }
 
 export function cfStruct(leftBrace: Terminal, members: cfStructMember[], membersMap: Map<string, Type>, caselessMembersMap: Map<string, Type>, rightBrace: Terminal) : cfStruct {
-    const v = TypeBase<cfStruct>(TypeKind.struct);
+    const v = TypeBase<cfStruct>(TypeKind.struct, mergeRanges(leftBrace, rightBrace));
     v.leftBrace = leftBrace;
     v.members = members;
     v.rightBrace = rightBrace;
@@ -387,47 +388,51 @@ export const SyntheticType = (function() {
 
     const any = () => {
         const any = cfAny(nilTerminal);
-        any.synthetic = true;
+        any.typeFlags |= TypeFlags.synthetic;
         return any;
     }
 
     const void_ = () => {
         const void_ = cfVoid(nilTerminal);
-        void_.synthetic = true;
+        void_.typeFlags |= TypeFlags.synthetic;
         return void_;
     }
 
     const string = () => {
         const string = cfString(nilTerminal);
-        string.synthetic = true;
+        string.typeFlags |= TypeFlags.synthetic;
         return string;
     }
 
     const number = () => {
         const number = cfNumber(nilTerminal);
-        number.synthetic = true;
+        number.typeFlags |= TypeFlags.synthetic;
         return number;
     }
 
     const boolean = () => {
         const boolean = cfBoolean(nilTerminal);
-        boolean.synthetic = true;
+        boolean.typeFlags |= TypeFlags.synthetic;
         return boolean;
     }
 
     const nil = () => {
         const nil = cfNil();
-        nil.synthetic = true;
+        nil.typeFlags |= TypeFlags.synthetic;
         return nil;
     }
 
     const struct = (membersMap: Map<string, Type> = new Map(), caselessMembersMap: Map<string, Type> = new Map()) => {
         const v = cfStruct(nilTerminal, [], membersMap, caselessMembersMap, nilTerminal);
-        v.synthetic = true;
+        v.typeFlags |= TypeFlags.synthetic;
         return v;
     }
 
-    const never = () => cfNever();
+    const never = () => {
+        const never = cfNever();
+        never.typeFlags |= TypeFlags.synthetic;
+        return never;
+    }
 
     return {
         any,
