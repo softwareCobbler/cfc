@@ -178,7 +178,8 @@ const staticallyKnownScopeName = [
     "thread",
     "threadLocal",
     "url",
-    "variables"
+    "variables",
+    "global", // fake scope where we stick things like `encodeForHTML` or etc.
 ] as const;
 
 export type StaticallyKnownScopeName = (typeof staticallyKnownScopeName)[number];

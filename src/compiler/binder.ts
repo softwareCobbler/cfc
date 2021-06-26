@@ -390,7 +390,7 @@ export function Binder() {
             inferredType,
             type: userType || inferredType || SyntheticType.any(),
         };
-        symTab.set(uiName, symTabEntry);
+        symTab.set(canonicalName, symTabEntry);
         return symTabEntry;
     }
 
@@ -1114,6 +1114,7 @@ export function Binder() {
         sourceFile.containedScope = {
             container: null,
             typedefs: new Map<string, Type>(),
+            global: new Map<string, SymTabEntry>()
         };
 
         for (const node of sourceFile.content) {
@@ -1121,7 +1122,7 @@ export function Binder() {
                 case NodeType.type: {
                     switch (node.typeKind) {
                         case TypeKind.functionSignature: {
-                            sourceFile.containedScope.typedefs.set(node.name.toLowerCase(), node);
+                            addSymbolToTable(sourceFile.containedScope!.global!, node.name, node, node, null);
                             break;
                         }
                     }

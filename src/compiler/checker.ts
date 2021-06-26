@@ -9,7 +9,6 @@ export function Checker() {
     let scanner!: Scanner;
     scanner;
     let diagnostics!: Diagnostic[];
-    let stdLib : cfStruct | undefined = undefined;
     let rootScope: ScopeDisplay;
 
     function check(sourceFile_: SourceFile, scanner_: Scanner, diagnostics_: Diagnostic[]) {
@@ -257,7 +256,7 @@ export function Checker() {
     }
 
     interface SymbolResolution extends SymTabResolution {
-        container: Node
+        container: Node | null
     }
 
     function getScopeDisplayMember(scope: ScopeDisplay, canonicalName: string) : SymTabResolution | undefined {
@@ -283,15 +282,8 @@ export function Checker() {
                 }
 
                 if (node.kind === NodeType.sourceFile) {
-                    if (stdLib) {
-                        const type = lookupTypeStructMember(stdLib, canonicalName);
-                        if (type) {
-                            //const scopeName = "variables";
-                            //return {scopeName, symTabEntry: type, container: node};
-                            return undefined;
-                        }
-                    }
-                    return undefined;
+                    const type = checkLibRefsForName(canonicalName);
+                    return type ? {scopeName: "global", symTabEntry: type, container: null} : undefined;
                 }
 
                 else {
@@ -304,15 +296,6 @@ export function Checker() {
         }
 
         return undefined;
-    }
-
-    /**
-     * lookup a name in a typestruct; cased takes precedence over uncased
-     * @param struct 
-     * @param name 
-     */
-    function lookupTypeStructMember(struct: cfStruct, name: string) {
-        return struct.membersMap.get(name) ?? struct.caselessMembersMap.get(name);
     }
 
     function getTypeAtFlow(base: Node, canonicalName: string) : Type | undefined {
@@ -385,7 +368,7 @@ export function Checker() {
 
             // if we got to root and didn't find it, see if we can find it in stdlib (if stdlib was available)
             if (flow.node?.kind === NodeType.sourceFile) {
-                return checkLibRefsForName(canonicalName);
+                return checkLibRefsForName(canonicalName)?.type;
             }
 
             if (flow.predecessor.length === 1) {
@@ -444,9 +427,9 @@ export function Checker() {
         return result;
     }
 
-    function checkLibRefsForName(name: string) {
+    function checkLibRefsForName(canonicalName: string) : SymTabEntry | undefined{
         for (const lib of sourceFile.libRefs) {
-            if (lib.containedScope?.typedefs?.has(name)) return lib.containedScope.typedefs.get(name)!;
+            if (lib.containedScope?.global?.has(canonicalName)) return lib.containedScope.global.get(canonicalName)!;
         }
         return undefined;
     }
