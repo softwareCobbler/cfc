@@ -317,7 +317,7 @@ export class SourceRange {
 
 type char = string; // with the intent being "exactly one character" (and non-empty!)
 
-export const enum CfFileType { /* first is non-zero */ cfm = 1, cfc };
+export const enum CfFileType { /* first is non-zero */ cfm = 1, cfc, dCfm };
 
 let debugScanner = false;
 export function setScannerDebug(isDebug: boolean) {
@@ -924,10 +924,14 @@ export function Scanner(source_: string | Buffer) {
     function lexeme() {
         const from = getIndex();
         if (maybeEat(/[$_a-z][$_a-z0-9]*/iy)) {
-            return setToken(TokenType.LEXEME, from, getIndex());
+            const index = getIndex();
+            lastScannedText = getTextSlice(new SourceRange(from, index))
+            return setToken(TokenType.LEXEME, from, index);
         }
         else {
             nextChar();
+            const index = getIndex();
+            lastScannedText = getTextSlice(new SourceRange(from, index))
             return setToken(TokenType.CHAR, from, getIndex());
         }
     }

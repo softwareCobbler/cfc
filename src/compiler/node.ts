@@ -1,5 +1,6 @@
 import { SourceRange, TokenType, Token, NilToken, TokenTypeUiString, CfFileType } from "./scanner";
-import { getAttributeValue, getTriviallyComputableString } from "./utils";
+import { getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString } from "./utils";
+import { Type as Type } from "./types";
 
 let debug = false;
 let nextNodeId : NodeId = 0;
@@ -11,7 +12,8 @@ export function setDebug(isDebug: boolean) {
 export const enum NodeFlags {
     none    = 0,
     error   = 0x00000001,
-    missing = 0x00000002
+    missing = 0x00000002,
+    checkerError = 0x00000004,
 }
 
 export const enum NodeType {
@@ -25,7 +27,7 @@ export const enum NodeType {
     dottedPath, switch, switchCase, do, while, ternary, for, structLiteral, arrayLiteral,
     structLiteralInitializerMember, arrayLiteralInitializerMember, try, catch, finally,
     breakStatement, continueStatement, returnStatement, importStatement,
-    new
+    new, type, typeAttribute,
 }
 
 const NodeTypeUiString : Record<NodeType, string> = {
@@ -75,6 +77,8 @@ const NodeTypeUiString : Record<NodeType, string> = {
     [NodeType.continueStatement]: "continue",
     [NodeType.importStatement]: "import",
     [NodeType.new]: "new",
+    [NodeType.type]: "type",
+    [NodeType.typeAttribute]: "type-attribute",
 };
 
 export type Node =
@@ -128,89 +132,108 @@ export type Node =
     | OptionalDotAccess
     | OptionalBracketAccess
     | OptionalCall
+    | Type
 
-interface FunctionSignature {
-    params: FunctionParameter[],
-    return: Type
-}
-
-type Type =
-    | "any"
-    | FunctionSignature
-
-export type InternId = number;
-export interface Variable {
+export interface Term {
     type: Type,
-    name: InternId,
+    name: string,
     final: boolean,
     var: boolean,
-    initializer: Node | undefined,
+    target: Node | undefined,
 }
 
-export type Scope = Map<InternId, Variable>;
-
-export interface ScopeDisplay {
-    container: Node | null,
-    
-    variables?: Scope,
-    this?: Scope,
-
-    arguments?: Scope,
-    local?: Scope,
-
-    url?: Scope,
-    form?: Scope,
-    cgi?: Scope,
-    server?: Scope,
+export interface SymTabEntry {
+    uiName: string,
+    canonicalName: string,
+    firstBinding: Node | null,
+    userType: Type | null,
+    inferredType: Type | null,
+    type: Type,
 }
 
-export type StaticallyKnownScopeName = keyof Omit<ScopeDisplay, "container">;
+export type SymTab = Map<string, SymTabEntry>;
 
-export interface RootScope {
-    url: Scope,
-    form: Scope,
-    cgi: Scope,
-    server: Scope
-}
+export type ScopeDisplay = {
+    container: Node | null, // rename to parentContainer
+    typedefs: Map<string, Type>,
+} & {[name in StaticallyKnownScopeName]?: Map<string, SymTabEntry>}
 
-export function isStaticallyKnownScopeName(name: string) : name is StaticallyKnownScopeName {
-    switch (name) {
-        case "variables":
-        case "this":
-        case "arguments":
-        case "local":
-        case "url":
-        case "form":
-        case "cgi":
-        case "server":
-            return true;
-        default:
-            return false;
-    }
-}
+const staticallyKnownScopeName = [
+    "application",
+    "arguments",
+    "attributes",
+    "caller",
+    "cgi",
+    "client",
+    "cookie",
+    "file",
+    "form",
+    "local",
+    "query",
+    "request",
+    "server",
+    "session",
+    "this",
+    "thisTag",
+    "thread",
+    "threadLocal",
+    "url",
+    "variables",
+    "global", // fake scope where we stick things like `encodeForHTML` or etc.
+] as const;
+
+export type StaticallyKnownScopeName = (typeof staticallyKnownScopeName)[number];
+
+export const isStaticallyKnownScopeName = (() => {
+    const scopeNames = new Set<string>(staticallyKnownScopeName);
+    return (name: string) : name is StaticallyKnownScopeName => scopeNames.has(name);
+})();
 
 export type NodeId = number;
-interface NodeBase {
+export type TypeId = number;
+export type FlowId = number;
+export type IdentifierId = number;
+export type NodeWithScope<N extends Node = Node, T extends (StaticallyKnownScopeName | never) = never> = N & {containedScope: ScopeDisplay & {[k in T]: SymTab}};
+
+export const enum FlowType {
+    default,
+    assignment,
+    postReturn
+}
+
+export interface Flow {
+    flowId: FlowId,
+    flowType: FlowType,
+    predecessor: Flow[],
+    successor: Flow | null,
+    node: Node | null // this effectively be null while a FlowNode is waiting on a node to attach to; but by the time we get to the checker it will have been populated or the entire flownode discarded
+}
+
+export type ReachableFlow = Flow & {node: Node};
+
+export interface NodeBase {
     kind: NodeType,
     nodeId: NodeId,
     parent: Node | null,
     range: SourceRange,
 
+    typeAnnotation: Type | null,
+
     fromTag?: boolean,
-    tagOrigin: {
+    tagOrigin: { // todo: make this only present on particular tags, and flatten it
         startTag: CfTag | null,
         endTag: CfTag | null,
     }
     flags: NodeFlags,
 
     containedScope?: ScopeDisplay,
+    links?: {
+        symTabEntry?: SymTabEntry
+    }
+    flow: Flow | null,
 
     __debug_type?: string;
 }
-
-export type NodeWithScope<
-    T extends Node = Node,
-    U extends keyof ScopeDisplay | never = never> = T & {containedScope: Pick<{[k in keyof ScopeDisplay]-?: ScopeDisplay[k]}, U | "container">};
 
 export function NodeBase<T extends NodeBase>(type: T["kind"], range: SourceRange = SourceRange.Nil()) : T {
     const result : Partial<T> = {};
@@ -218,11 +241,13 @@ export function NodeBase<T extends NodeBase>(type: T["kind"], range: SourceRange
     result.kind = type;
     result.parent = null;
     result.range = range ?? null;
+    result.typeAnnotation = null;
     result.tagOrigin = {
         startTag: null,
         endTag: null,
     }
     result.flags = NodeFlags.none;
+    result.flow = null;
 
     if (debug) {
         result.__debug_type = NodeTypeUiString[type];
@@ -272,6 +297,7 @@ export interface SourceFile extends NodeBase {
     cfFileType: CfFileType,
     source: string | Buffer,
     content: Node[]
+    libRefs: SourceFile[],
 }
 
 export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: string | Buffer) : SourceFile {
@@ -280,11 +306,13 @@ export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: 
     sourceFile.cfFileType = cfFileType;
     sourceFile.source = sourceText;
     sourceFile.content = [];
+    sourceFile.libRefs = [];
     return sourceFile;
 }
 
 export const NilCfm = (text: string) => SourceFile("nil!", CfFileType.cfm, text);
 export const NilCfc = (text: string) => SourceFile("nil!", CfFileType.cfc, text);
+export const NilDCfm = (text: string) => SourceFile("nil!", CfFileType.dCfm, text);
 
 export interface Terminal extends NodeBase {
     kind: NodeType.terminal;
@@ -309,16 +337,41 @@ export function Terminal(token: Token, trivia: Node[] = []) : Terminal {
 
 export const NilTerminal = (pos: number) => Terminal(NilToken(pos));
 
+export const freshFlow = (function() {
+    let flowId = 0;
+    return (predecessor: Flow | Flow[], flowType: FlowType, node: Node | null = null) : Flow => ({
+        flowId: flowId++,
+        flowType: flowType,
+        predecessor: Array.isArray(predecessor) ? predecessor : [predecessor],
+        successor: null,
+        node});
+})();
+
 export const enum CommentType { tag, scriptSingleLine, scriptMultiLine };
 export interface Comment extends NodeBase {
     kind: NodeType.comment;
     commentType: CommentType;
+    typedefs?: Type[],
 }
 
-export function Comment(commentType: CommentType, range: SourceRange) {
-    const comment = NodeBase<Comment>(NodeType.comment, range);
-    comment.commentType = commentType;
-    return comment;
+export function Comment(tagOrigin: CfTag.Comment) : Comment;
+export function Comment(commentType: CommentType, range: SourceRange, typedefs?: Type[]) : Comment;
+export function Comment(commentType: CfTag.Comment | CommentType, range?: SourceRange, typedefs?: Type[]) {
+    if (typeof commentType === "number") { // overload 2
+        const comment = NodeBase<Comment>(NodeType.comment, range);
+        comment.commentType = commentType;
+        if (typedefs) comment.typedefs = typedefs;
+        return comment;
+    }
+    else { // overload 1
+        const tagOrigin = commentType as CfTag.Comment;
+        const comment = NodeBase<Comment>(NodeType.comment, tagOrigin.range);
+        comment.commentType = CommentType.tag;
+        if (tagOrigin.typedefs) {
+            comment.typedefs = tagOrigin.typedefs;
+        }
+        return comment;
+    }
 }
 
 export interface TextSpan extends NodeBase {
@@ -494,8 +547,9 @@ export namespace CfTag {
     }
 
     export interface Comment extends TagBase {
-        tagType: TagType.comment;
-        body: TagBase[];
+        tagType: TagType.comment,
+        body: TagBase[],
+        typedefs?: Type[],
     }
     export function Comment(
         tagStart: Terminal,
@@ -594,7 +648,7 @@ export const enum BinaryOpType {
     contains, does_not_contain, strict_eq, strict_neq,
     equivalent, implies
 }
-const BinaryOpTypeUiString : Record<BinaryOpType, string> = {
+export const BinaryOpTypeUiString : Record<BinaryOpType, string> = {
     [BinaryOpType.add]:              "+",
     [BinaryOpType.sub]:              "-",
     [BinaryOpType.mul]:              "*",
@@ -1170,18 +1224,20 @@ export function NumericLiteral(literal: Terminal) : NumericLiteral {
 export interface BooleanLiteral extends NodeBase {
     kind: NodeType.booleanLiteral;
     literal: Terminal;
+    booleanValue: boolean;
 }
 
-export function BooleanLiteral(literal: Terminal) {
+export function BooleanLiteral(literal: Terminal, value: boolean) {
     const v = NodeBase<BooleanLiteral>(NodeType.booleanLiteral, literal.range);
     v.literal = literal;
+    v.booleanValue = value;
     return v;
 }
 
 export interface Identifier extends NodeBase {
     kind: NodeType.identifier;
     source: Node; // can be e.g, `var x = 42`, `var 'x' = 42`, `var #x# = 42`; <cfargument name="#'interpolated_string_but_constant'#">`
-    canonicalName: string | undefined;
+    canonicalName: string | undefined; // undefined at least in the case of something like var '#foo#' = bar;
 }
 
 export function Identifier(identifier: Node, name: string | undefined) {
@@ -1345,10 +1401,18 @@ export function pushAccessElement(base: IndexedAccess, element: IndexedAccessCha
 
 interface FunctionParameterBase extends NodeBase {
     kind: NodeType.functionParameter,
+    required: boolean | null,
     fromTag: boolean,
 }
 
 export type FunctionParameter = Script.FunctionParameter | Tag.FunctionParameter;
+
+export function copyFunctionParameterForTypePurposes(param: FunctionParameter) {
+    if (param.fromTag) {
+        return Tag.FunctionParameter(param.tagOrigin.startTag! as CfTag.Common, param.type);
+    }
+    return Script.FunctionParameter(param.requiredTerminal, param.javaLikeTypename, param.dotDotDot, param.identifier, param.equals, param.defaultValue, param.comma, param.type)
+}
 
 export namespace Script {
     export interface FunctionParameter extends FunctionParameterBase {
@@ -1361,8 +1425,8 @@ export namespace Script {
         equals: Terminal | null,
         defaultValue: Node | null,
         comma: Terminal | null,
-        canonicalName: string | undefined,
-        required: boolean,
+        canonicalName: string,
+        type: Type | null,
     }
 
     export function FunctionParameter(
@@ -1372,7 +1436,8 @@ export namespace Script {
         identifier: Identifier,
         equals: Terminal | null,
         defaultValue: Node | null,
-        comma: Terminal | null) : FunctionParameter {
+        comma: Terminal | null,
+        type: Type | null) : FunctionParameter {
         const v = NodeBase<FunctionParameter>(NodeType.functionParameter, mergeRanges(requiredTerminal, javaLikeTypename, identifier, defaultValue, comma));
         v.fromTag = false;
         v.requiredTerminal = requiredTerminal;
@@ -1382,8 +1447,9 @@ export namespace Script {
         v.equals = equals;
         v.defaultValue = defaultValue;
         v.comma = comma;
-        v.canonicalName = identifier.canonicalName;
-        v.required = !!requiredTerminal;
+        v.canonicalName = identifier.canonicalName || "<<ERROR>>";
+        v.type = type;
+        v.required = !!(requiredTerminal);
         return v;
     }
 }
@@ -1392,14 +1458,17 @@ export namespace Tag {
     export interface FunctionParameter extends FunctionParameterBase {
         kind: NodeType.functionParameter,
         fromTag: true,
-        canonicalName: string | undefined,
+        canonicalName: string,
+        type: Type | null,
     }
 
-    export function FunctionParameter(tag: CfTag.Common) : FunctionParameter {
+    export function FunctionParameter(tag: CfTag.Common, type: Type | null) : FunctionParameter {
         const v = NodeBase<FunctionParameter>(NodeType.functionParameter, tag.range);
         v.fromTag = true;
         v.tagOrigin.startTag = tag;
-        v.canonicalName = getTriviallyComputableString(getAttributeValue(tag.attrs, "name"))?.toLowerCase() ?? undefined
+        v.canonicalName = getTriviallyComputableString(getAttributeValue(tag.attrs, "name"))?.toLowerCase() ?? "<<ERROR>>";
+        v.required = getTriviallyComputableBoolean(getAttributeValue(tag.attrs, "required")) ?? null;
+        v.type = type;
         return v;
     }
 }
@@ -1425,6 +1494,7 @@ export namespace Script {
         attrs          : TagAttribute[],
         body           : Block,
         canonicalName  : string | null,
+        returnTypeAnnotation : Type | null,
     }
 
     export function FunctionDefinition(
@@ -1436,7 +1506,8 @@ export namespace Script {
         params        : FunctionParameter[],
         rightParen    : Terminal,
         attrs         : TagAttribute[],
-        body          : Block
+        body          : Block,
+        returnTypeAnnotation : Type | null
     ) : FunctionDefinition {
         const v = NodeBase<FunctionDefinition>(NodeType.functionDefinition, mergeRanges(accessModifier, returnType, functionToken, body));
         v.fromTag        = false;
@@ -1449,6 +1520,7 @@ export namespace Script {
         v.rightParen     = rightParen;
         v.attrs          = attrs;
         v.body           = body;
+        v.returnTypeAnnotation = returnTypeAnnotation;
         v.canonicalName  = nameToken?.token.text.toLowerCase() ?? null;
         return v;
     }
@@ -1459,7 +1531,7 @@ export namespace Tag {
         kind: NodeType.functionDefinition;
         fromTag        : true,
         params         : FunctionParameter[],
-        body           : Node[],
+        body           : Node[], // fixme: block?
         canonicalName  : string | undefined,
     }
 

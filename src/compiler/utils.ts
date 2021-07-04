@@ -1,4 +1,4 @@
-import { ArrayLiteralInitializerMemberSubtype, BlockType, CfTag, ForSubType, IndexedAccessType, Node, NodeId, Scope, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, TagAttribute, UnaryOperatorPos } from "./node";
+import { ArrayLiteralInitializerMemberSubtype, BlockType, CfTag, ForSubType, IndexedAccessType, Node, NodeId, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
 import { NodeType } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
 
@@ -221,8 +221,9 @@ export function castCfStringAsCfBoolean(stringText: string) : boolean | undefine
  *      null if not found
  */
 export function getAttributeValue(attrs: TagAttribute[], name: string) : Node | undefined | null {
+    const name_ = name.toLowerCase();
     for (const attr of attrs) {
-        if (attr.lcName === name) {
+        if (attr.lcName === name_) {
             return attr.expr
                 ? attr.expr
                 : undefined;
@@ -241,7 +242,10 @@ function forEachNode<T>(nodeList: Node[], f: (node: Node) => T) : T | undefined 
 }
 
 // a falsy value returned by the visitor keeps it going
-export function visit(node: Node, visitor: (arg: Node | undefined | null) => any) : void {
+export function visit(node: Node | Node[], visitor: (arg: Node | undefined | null) => any) : void {
+    if (Array.isArray(node)) {
+        return forEachNode(node, visitor);
+    }
     switch (node.kind) {
         case NodeType.comment:
         case NodeType.textSpan:
@@ -609,6 +613,8 @@ export function visit(node: Node, visitor: (arg: Node | undefined | null) => any
         case NodeType.new:
             return visitor(node.newToken)
                 || visitor(node.callExpr);
+        case NodeType.type:
+            return;
         default:
             ((_:never) => { throw "Non-exhaustive case or unintentional fallthrough." })(node);
     }
@@ -791,7 +797,7 @@ export function isCfScriptTagBlock(node: Node | null) : boolean {
     return false;
 }
 
-export function getNearestEnclosingScope(node: Node, scopeName: StaticallyKnownScopeName) : Scope | undefined {
+export function getNearestEnclosingScope(node: Node, scopeName: StaticallyKnownScopeName) : SymTab | undefined {
     while (true) {
         // scope on this node contains the target scope
         if (node.containedScope?.[scopeName]) {
@@ -853,4 +859,29 @@ export class BiMap<K,V> {
     allValues() : V[] {
         return [...this.#reverse.keys()];
     }
+}
+
+export function findAncestor(node: Node, predicate: (node: Node | null) => true | false | "bail") : Node | undefined {
+    let current : Node | null = node;
+    while (current) {
+        const result = predicate(current);
+        if (result === true) {
+            return current;
+        }
+        else if (result === false) {
+            current = current.parent;
+        }
+        else if (result === "bail") {
+            break;
+        }
+    }
+    return undefined;
+}
+
+export function getContainingFunction(node: Node) : Node | undefined {
+    return findAncestor(node, (node) => node?.kind === NodeType.functionDefinition);
+}
+
+export function getNodeLinks(node: Node) {
+    return node.links ?? (node.links = {});
 }

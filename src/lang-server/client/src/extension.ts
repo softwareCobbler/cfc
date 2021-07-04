@@ -14,8 +14,11 @@ import {
 } from 'vscode-languageclient/node';
 
 let client: LanguageClient;
+let libAbsPath : string | null = null;
 
 export function activate(context: ExtensionContext) {
+	libAbsPath = context.asAbsolutePath("./out/lib.cf2018.d.cfm");
+	
 	// The server is implemented in node
 	let serverModule = context.asAbsolutePath("./out/server.js"); 
 	
@@ -44,7 +47,8 @@ export function activate(context: ExtensionContext) {
 		synchronize: {
 			// Notify the server about file changes to '.clientrc files contained in the workspace
 			fileEvents: workspace.createFileSystemWatcher('**/.clientrc')
-		}
+		},
+		initializationOptions: "some-data-init-here",
 	};
 
 	// Create the language client and start the client.
@@ -55,9 +59,18 @@ export function activate(context: ExtensionContext) {
 		clientOptions
 	);
 
+	
 	// Start the client. This will also launch the server
 	client.start();
+
+	client.onReady().then(() =>
+		client.onNotification("cflsp/libpath", () => {
+			client.sendNotification("cflsp/libpath", libAbsPath);
+		})
+	);
 }
+
+
 
 export function deactivate(): Thenable<void> | undefined {
 	if (!client) {

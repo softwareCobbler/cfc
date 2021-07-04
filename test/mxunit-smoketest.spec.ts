@@ -1,12 +1,12 @@
 import * as assert from "assert";
 import * as fs from "fs";
 import * as path from "path";
-import { Parser, Binder, cfmOrCfc, SourceFile, flattenTree } from "../out/compiler";
+import { Parser, Binder, cfmOrCfc, SourceFile, flattenTree, Checker, CfFileType } from "../out/compiler";
 
 const expectedDiagnosticCountByFile : Record<string, number> = {
     "./mxunit/mxunit-TestCase-Template.cfc": 0,
     "./mxunit/mxunit-TestSuiteTemplate.cfm": 0,
-    "./mxunit/doc/build.cfm": 0,
+    "./mxunit/doc/build.cfm": 1, // assignments to `file`
     "./mxunit/doc/colddoc/ColdDoc.cfc": 0,
     "./mxunit/doc/colddoc/strategy/AbstractTemplateStrategy.cfc": 4, // assignments to `local`
     "./mxunit/doc/colddoc/strategy/api/HTMLAPIStrategy.cfc": 0,
@@ -27,7 +27,7 @@ const expectedDiagnosticCountByFile : Record<string, number> = {
     "./mxunit/framework/MockFactoryFactory.cfc": 0,
     "./mxunit/framework/MXUnitAssertionExtensions.cfc": 0,
     "./mxunit/framework/POIUtility.cfc": 9, // assignments to `local`
-    "./mxunit/framework/PublicProxyMaker.cfc": 0,
+    "./mxunit/framework/PublicProxyMaker.cfc": 1, // assignments to `file`
     "./mxunit/framework/QueryTestResult.cfc": 0,
     "./mxunit/framework/RemoteFacade.cfc": 0,
     "./mxunit/framework/RemoteFacadeObjectCache.cfc": 0,
@@ -47,8 +47,8 @@ const expectedDiagnosticCountByFile : Record<string, number> = {
     "./mxunit/framework/decorators/OrderedTestDecorator.cfc": 0,
     "./mxunit/framework/decorators/TransactionRollbackDecorator.cfc": 0,
     "./mxunit/framework/ext/AssertionExtensionTemplate.cfc": 0,
-    "./mxunit/framework/javaloader/JavaCompiler.cfc": 0,
-    "./mxunit/framework/javaloader/JavaLoader.cfc": 1, // assignment to `local`
+    "./mxunit/framework/javaloader/JavaCompiler.cfc": 1, // assignment to `file`
+    "./mxunit/framework/javaloader/JavaLoader.cfc": 6, // assignment to `local`, `thread`, `file`
     "./mxunit/framework/javaloader/JavaProxy.cfc": 0,
     "./mxunit/framework/mightymock/AbstractMock.cfc": 0,
     "./mxunit/framework/mightymock/ArgumentMatcher.cfc": 0,
@@ -243,14 +243,19 @@ const expectedDiagnosticCountByFile : Record<string, number> = {
     "./mxunit/tests/samples/MyComponent.cfc": 0,
     "./mxunit/tests/samples/MyComponentTest.cfc": 0,
     "./mxunit/tests/samples/MyOtherComponentTest.cfc": 0,
-    "./mxunit/tests/utils/TestBubbleSort.cfc": 0,
+    "./mxunit/tests/utils/TestBubbleSort.cfc": 0, // during checking: cannot find name assertequals - this is in the parent component
     "./mxunit/utils/BubbleSort.cfc": 0,
 };
-
 
 describe("MX-Unit smoke test", () => {
     const parser = Parser().setDebug(true);
     const binder = Binder().setDebug(true);
+    const checker = Checker();
+
+    const libPath = path.resolve("./src/lang-server/server/src/runtimelib/lib.cf2018.d.cfm");
+    const stdLib = SourceFile(libPath , CfFileType.dCfm, fs.readFileSync(libPath));
+    parser.setSourceFile(stdLib).parse();
+    binder.bind(stdLib, parser.getScanner(), parser.getDiagnostics());
     
     for (const fileBaseName of Object.keys(expectedDiagnosticCountByFile)) {
         const expectedDiagnosticCount = expectedDiagnosticCountByFile[fileBaseName];
@@ -259,11 +264,13 @@ describe("MX-Unit smoke test", () => {
             const absPath = path.resolve(__dirname, fileBaseName);
             const textBuffer = fs.readFileSync(absPath);
             const sourceFile = SourceFile(absPath, cfmOrCfc(absPath)!, textBuffer);
+            sourceFile.libRefs.push(stdLib);
             parser.setSourceFile(sourceFile).parse();
             const diagnostics = parser.getDiagnostics();
 
             flattenTree(sourceFile);
             binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
+            //checker.check(sourceFile, parser.getScanner(), parser.getDiagnostics());
             
             assert.strictEqual(diagnostics.length, expectedDiagnosticCount, `${fileBaseName} parsed with exactly ${expectedDiagnosticCount} emitted diagnostics`);
         });

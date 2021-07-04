@@ -21,27 +21,48 @@ import {
 	SymbolKind,
 	CompletionContext,
 	CompletionParams,
-	CompletionTriggerKind
+	CompletionTriggerKind,
+	SignatureInformation,
+	ParameterInformation,
+	DidChangeConfigurationParams,
+	ConfigurationItem
 } from 'vscode-languageserver/node';
+
+import { SignatureHelp } from "vscode-languageserver-types"
 
 import {
 	TextDocument
 } from 'vscode-languageserver-textdocument';
 
-import { NodeId, SourceFile, Parser, Binder, Node as cfNode, binarySearch, CfFileType, Diagnostic as cfcDiagnostic, cfmOrCfc, flattenTree, getScopeContainedNames, NodeSourceMap, isExpressionContext, getTriviallyComputableString } from "compiler";
+import * as fs from "fs";
+import * as path from "path";
+
+import { NodeId, SourceFile, Parser, Binder, Node as cfNode, binarySearch, CfFileType, Diagnostic as cfcDiagnostic, cfmOrCfc, flattenTree, NodeSourceMap, isExpressionContext, getTriviallyComputableString, Checker } from "compiler";
 import { CfTag, isStaticallyKnownScopeName, NodeType, ScopeDisplay, StaticallyKnownScopeName } from '../../../compiler/node';
 import { findNodeInFlatSourceMap, getNearestEnclosingScope, isCfScriptTagBlock } from '../../../compiler/utils';
 
 import { tagNames } from "./tagnames";
 import { TokenType } from '../../../compiler/scanner';
+import { cfStruct, TypeKind } from '../../../compiler/types';
 
-const parser = Parser().setDebug(true);
-const binder = Binder().setDebug(true);
 type TextDocumentUri = string;
-const parseCache = new Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, cfNode>}>();
 
-function naiveGetDiagnostics(uri: TextDocumentUri, text: string, fileType: CfFileType) : readonly cfcDiagnostic[] {
+interface CflsConfig {
+	parser: ReturnType<typeof Parser>,
+	binder: ReturnType<typeof Binder>,
+	checker: ReturnType<typeof Checker>,
+	parseCache: Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, cfNode>}>,
+	lib: SourceFile | null,
+	x_types: boolean
+}
+
+let cflsConfig! : CflsConfig;
+
+function naiveGetDiagnostics(uri: TextDocumentUri, text: string, fileType: CfFileType) : cfcDiagnostic[] {
+	if (!cflsConfig) return [];
+	
 	// how to tell if we were launched in debug mode ?
+	const {parser,binder,checker, parseCache} = cflsConfig;
 
 	const cfFileType = cfmOrCfc(uri);
 	if (!cfFileType) {
@@ -49,10 +70,18 @@ function naiveGetDiagnostics(uri: TextDocumentUri, text: string, fileType: CfFil
 	}
 
 	const sourceFile = SourceFile(uri, cfFileType, text);
+	if (cflsConfig.lib) {
+		sourceFile.libRefs.push(cflsConfig.lib);
+	}
+
     parser.setSourceFile(sourceFile);
 
     parser.parse(fileType);
 	binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
+	
+	if (cflsConfig.x_types) {
+		checker.check(sourceFile, parser.getScanner(), parser.getDiagnostics());
+	}
 	
 	parseCache.set(uri, {
 		parsedSourceFile: sourceFile,
@@ -96,8 +125,13 @@ connection.onInitialize((params: InitializeParams) => {
 			textDocumentSync: TextDocumentSyncKind.Incremental,
 			// Tell the client that this server supports code completion.
 			completionProvider: {triggerCharacters: ["."]},
+			//signatureHelpProvider: {triggerCharacters: ["("]},
 		}
 	};
+
+	if (params.initializationOptions?.libpath) {
+		
+	}
 	/*
 	if (hasWorkspaceFolderCapability) {
 		result.capabilities.workspace = {
@@ -109,11 +143,48 @@ connection.onInitialize((params: InitializeParams) => {
 	return result;
 });
 
+function resetCflsp(x_types: boolean) {
+	console.info("[reset] x_types=" + x_types);
+	cflsConfig = {
+		parser: Parser().setDebug(true).setParseTypes(x_types),
+		binder: Binder().setDebug(true),
+		checker: Checker(),
+		parseCache: new Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, cfNode>}>(),
+		lib: cflsConfig?.lib ?? null, // carry forward lib
+		x_types: x_types,
+	};
+}
+
+function reemitDiagnostics() {
+	connection.console.info("reemit diagnositcs for " + cflsConfig.parseCache.size + " file URIs");
+	for (const uri of cflsConfig.parseCache.keys()) {
+		const textDocument = documents.get(uri);
+		const text = textDocument?.getText();
+		const fileType = cfmOrCfc(uri);
+
+		if (text && fileType) {
+			connection.sendDiagnostics({
+				uri: uri,
+				diagnostics: cfcDiagnosticsToLspDiagnostics(textDocument!, naiveGetDiagnostics(uri, text, fileType))
+			});
+		}
+	}
+}
+
 connection.onInitialized(() => {
 	if (hasConfigurationCapability) {
 		// Register for all configuration changes.
 		connection.client.register(DidChangeConfigurationNotification.type, undefined);
+		connection.workspace.getConfiguration("cflsp").then((config) => {
+			resetCflsp(config.x_types ?? false);
+		});
 	}
+	else {
+		resetCflsp(/*x_types*/false);
+	}
+
+	connection.sendNotification("cflsp/libpath");
+
 	/*
 	if (hasWorkspaceFolderCapability) {
 		connection.workspace.onDidChangeWorkspaceFolders(_event => {
@@ -136,21 +207,28 @@ let globalSettings: ExampleSettings = defaultSettings;
 // Cache the settings of all open documents
 let documentSettings: Map<string, Thenable<ExampleSettings>> = new Map();
 
-connection.onDidChangeConfiguration(change => {
+connection.onDidChangeConfiguration(async change => {
+	let x_types : boolean;
 	if (hasConfigurationCapability) {
 		// Reset all cached document settings
 		documentSettings.clear();
+		connection.workspace.getConfiguration("cflsp").then((config) => {
+			resetCflsp(config.x_types ?? false);
+			documents.all().forEach(validateTextDocument);
+		});
 	} else {
 		globalSettings = <ExampleSettings>(
 			(change.settings.languageServerExample || defaultSettings)
 		);
+		resetCflsp(/*x_types*/false);
+		// Revalidate all open text documents
+		documents.all().forEach(validateTextDocument);
 	}
-
-	// Revalidate all open text documents
-	documents.all().forEach(validateTextDocument);
 });
 
 connection.onDocumentSymbol((params: DocumentSymbolParams) => {
+	return [];
+	/*
 	params.textDocument.uri;
 	const textDocument = documents.get(params.textDocument.uri);
 
@@ -168,7 +246,7 @@ connection.onDocumentSymbol((params: DocumentSymbolParams) => {
 			}
 		}];
 
-	return v;
+	return v;*/
 });
 
 function getDocumentSettings(resource: string): Thenable<ExampleSettings> {
@@ -201,24 +279,7 @@ documents.onDidChangeContent(change => {
 const cfmPattern = /cfml?$/i;
 const cfcPattern = /cfc$/i;
 
-async function validateTextDocument(textDocument: TextDocument): Promise<void> {
-	// In this simple example we get the settings for every validate run.
-	//let settings = await getDocumentSettings(textDocument.uri);
-	
-	let cfDiagnostics : readonly cfcDiagnostic[];
-
-	if (cfmPattern.test(textDocument.uri)) {
-		cfDiagnostics = naiveGetDiagnostics(textDocument.uri, textDocument.getText(), CfFileType.cfm);
-	}
-	else if (cfcPattern.test(textDocument.uri)) {
-		cfDiagnostics = naiveGetDiagnostics(textDocument.uri, textDocument.getText(), CfFileType.cfc);
-	}
-	else {
-		// didn't match a cf file type, send an empty diagnostics list and we're done
-		connection.sendDiagnostics({ uri: textDocument.uri, diagnostics: [] });
-		return;
-	}
-
+function cfcDiagnosticsToLspDiagnostics(textDocument: TextDocument, cfDiagnostics: cfcDiagnostic[]) {
 	let diagnostics: Diagnostic[] = [];
 
 	for (const diagnostic of cfDiagnostics) {
@@ -232,38 +293,29 @@ async function validateTextDocument(textDocument: TextDocument): Promise<void> {
 			source: "cfls"
 		});
 	}
-	/*
-	while ((m = pattern.exec(text)) && problems < settings.maxNumberOfProblems) {
-		problems++;
-		let diagnostic: Diagnostic = {
-			severity: DiagnosticSeverity.Warning,
-			range: {
-				start: textDocument.positionAt(m.index),
-				end: textDocument.positionAt(m.index + m[0].length)
-			},
-			message: `${m[0]} is all uppercase.`,
-			source: 'ex'
-		};
-		if (hasDiagnosticRelatedInformationCapability) {
-			diagnostic.relatedInformation = [
-				{
-					location: {
-						uri: textDocument.uri,
-						range: Object.assign({}, diagnostic.range)
-					},
-					message: 'Spelling matters'
-				},
-				{
-					location: {
-						uri: textDocument.uri,
-						range: Object.assign({}, diagnostic.range)
-					},
-					message: 'Particularly for names'
-				}
-			];
-		}
-		diagnostics.push(diagnostic);
-	}*/
+
+	return diagnostics;
+}
+
+async function validateTextDocument(textDocument: TextDocument): Promise<void> {
+	// In this simple example we get the settings for every validate run.
+	//let settings = await getDocumentSettings(textDocument.uri);
+	
+	let cfDiagnostics : cfcDiagnostic[];
+
+	if (cfmPattern.test(textDocument.uri)) {
+		cfDiagnostics = naiveGetDiagnostics(textDocument.uri, textDocument.getText(), CfFileType.cfm);
+	}
+	else if (cfcPattern.test(textDocument.uri)) {
+		cfDiagnostics = naiveGetDiagnostics(textDocument.uri, textDocument.getText(), CfFileType.cfc);
+	}
+	else {
+		// didn't match a cf file type, send an empty diagnostics list and we're done
+		connection.sendDiagnostics({ uri: textDocument.uri, diagnostics: [] });
+		return;
+	}
+
+	const diagnostics = cfcDiagnosticsToLspDiagnostics(textDocument, cfDiagnostics);
 
 	// Send the computed diagnostics to VSCode.
 	connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
@@ -282,7 +334,7 @@ connection.onCompletion(
 		if (!document) return [];
 
 		const targetIndex = document.offsetAt(textDocumentPosition.position);
-		const docCache = parseCache.get(textDocumentPosition.textDocument.uri)!;
+		const docCache = cflsConfig.parseCache.get(textDocumentPosition.textDocument.uri)!;
 
 		const node = findNodeInFlatSourceMap(docCache.flatTree, docCache.nodeMap, targetIndex);
 
@@ -303,23 +355,44 @@ connection.onCompletion(
 			return [];
 		}
 
-		// if we got an indexed access chain, we only want to provide completions for the first dot
+		if (node.parent?.kind)
+
+		// if we got an indexed access chain
 		if (node.parent?.kind === NodeType.indexedAccessChainElement) {
-			if (node.parent?.parent?.kind === NodeType.indexedAccess) {
+			/*if (node.parent?.parent?.parent?.kind === NodeType.indexedAccess) {
 				// if so, try to get the identifier used as the root of the chain
 				// if that name is a known scope, try to find the names in that scope
-				const scopeName = getTriviallyComputableString(node.parent.parent.root)?.toLowerCase();
-				if (scopeName && isStaticallyKnownScopeName(scopeName)) {
-					const scope = getNearestEnclosingScope(node, scopeName);
-					if (scope) {
-						const detailLabel = "scope:" + scopeName;
-						return getScopeContainedNames(scope).map(name => ({
-							label: name,
-							kind: CompletionItemKind.Field,
-							detail: detailLabel
-						}));
+				const rootName = getTriviallyComputableString(node.parent.parent.parent.root)?.toLowerCase();
+				if (rootName) {
+					if (isStaticallyKnownScopeName(rootName)) {
+						const scope = getNearestEnclosingScope(node, rootName);
+						if (scope) {
+							const detailLabel = "scope:" + rootName;
+							return getScopeContainedNames(scope).map(name => ({
+								label: name,
+								kind: CompletionItemKind.Field,
+								detail: detailLabel
+							}));
+						}
 					}
 				}
+			}*/
+
+			// get the type one level before the current
+			// x.y| -- we want the type of `x` for completions, not `y`
+			const typeinfo = cflsConfig.checker.getCachedTermEvaluatedType(node.parent.parent);
+			if (typeinfo.typeKind === TypeKind.struct) {
+				const result : CompletionItem[] = [];
+				for (const [name,type] of [...typeinfo.membersMap.entries(), ...typeinfo.caselessMembersMap.entries()]) {
+					result.push({
+						label: name,
+						kind: type.typeKind === TypeKind.functionSignature
+							? CompletionItemKind.Function
+							: CompletionItemKind.Field,
+						detail: ""
+					})
+				}
+				return result;
 			}
 
 			return [];
@@ -358,14 +431,15 @@ connection.onCompletion(
 				}
 			}
 
+			// fixme
 			const allVisibleNames = (function x(node: cfNode | null) {
-				const result = new Map<string, number>();
+				const result = new Map<string, [StaticallyKnownScopeName, number]>();
 				let scopeDistance = 0; // keep track of "how far away" some name is, in terms of parent scopes; we can then offer closer names first
 				while (node) {
 					if (node.containedScope) {
-						const names = getAllNamesOfScopeDisplay(node.containedScope, "variables", "local", "arguments");
-						for (const name of names ){
-							result.set(name, scopeDistance);
+						const names = getAllNamesOfScopeDisplay(node.containedScope, "local", "arguments", "this", "variables");
+						for (const [scopeName, varName] of names){
+							result.set(varName, [scopeName, scopeDistance]);
 						}
 						scopeDistance++;
 					}
@@ -375,9 +449,9 @@ connection.onCompletion(
 			})(node);
 
 			const result : CompletionItem[] = [];
-			for (const [key, scopeDistance] of allVisibleNames) { 
+			for (const [varName, [x, scopeDistance]] of allVisibleNames) { 
 				result.push({
-					label: key,
+					label: varName,
 					kind: CompletionItemKind.Field,
 					// sort the first two scopes to the top of the list; the rest get lexically sorted as one agglomerated scope
 					sortText: (scopeDistance === 0 ? 'a' : scopeDistance === 1 ? 'b' : 'c') + scopeDistance
@@ -402,22 +476,50 @@ connection.onCompletion(
 						return node;
 				}
 			}
+
 			return null;
 		}
 
-		function getAllNamesOfScopeDisplay(scopeDisplay : ScopeDisplay, ...keys: StaticallyKnownScopeName[]) : string[] {
-			const result : string[] = [];
-			const targetKeys = keys.length > 0 ? keys : Object.keys(scopeDisplay) as (keyof ScopeDisplay)[];
-			for (const key of targetKeys) {
-				if (key === "container" || !(key in scopeDisplay)) continue;
-				result.push(...getScopeContainedNames(scopeDisplay[key]!));
+		function getAllNamesOfScopeDisplay(scopeDisplay : ScopeDisplay, ...targetKeys: StaticallyKnownScopeName[]) : [StaticallyKnownScopeName, string][] {
+			const result : [StaticallyKnownScopeName, string][] = [];
+			for (const scopeName of targetKeys) {
+				if (scopeDisplay.hasOwnProperty(scopeName)) {
+					for (const symTabEntry of scopeDisplay[scopeName]!.values()) {
+						result.push([scopeName, symTabEntry.uiName]);
+					}
+				}
 			}
+
 			return result;
 		}
 
 		return [];
 	}
 );
+
+/*connection.onSignatureHelp((params) : SignatureHelp => {
+	params;
+	const x : ParameterInformation[] = [];
+	x.push(ParameterInformation.create("someparam1", "1111 where does type info go"));
+	x.push(ParameterInformation.create("someparam2", "2222 where does type info go"));
+	const siginfo = SignatureInformation.create("foo", "docstring goes here\nmaybe a newline?", ...x);
+	return {
+		signatures: [siginfo],
+		activeSignature: null,
+		activeParameter: 0 // 0 indexed
+	}
+})*/
+
+connection.onNotification("cflsp/libpath", (libAbsPath: string) => {
+	connection.console.info("received cflsp/libpath notification, path=" + libAbsPath);
+	if (!libAbsPath) return;
+	const path = libAbsPath;
+	const sourceFile = SourceFile(path, CfFileType.dCfm, fs.readFileSync(path));
+	cflsConfig.parser.setSourceFile(sourceFile).parse();
+	cflsConfig.binder.bind(sourceFile, cflsConfig.parser.getScanner(), cflsConfig.parser.getDiagnostics());
+	cflsConfig.lib = sourceFile;
+	reemitDiagnostics();
+});
 
 // This handler resolves additional information for the item selected in
 // the completion list.

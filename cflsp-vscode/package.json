@@ -20,6 +20,7 @@
 		"onLanguage:cfml"
 	],
 	"main": "./out/cflsp.js",
+	"files": ["out/lib.cf2018.d.cfm"],
 	"contributes": {
 		"languages": [
 			{
@@ -34,11 +35,11 @@
 			"type": "object",
 			"title": "Example configuration",
 			"properties": {
-				"cflsp.x": {
+				"cflsp.x_types": {
 					"scope": "resource",
 					"type": "boolean",
 					"default": false,
-					"description": "experimental"
+					"description": "experimental types / flow analysis"
 				}
 			}
 		}

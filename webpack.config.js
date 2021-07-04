@@ -1,8 +1,9 @@
 const path = require('path');
+const CopyPlugin = require("copy-webpack-plugin");
 
 const TsconfigPathsPlugin = require('tsconfig-paths-webpack-plugin');
 
-module.exports = [{    
+module.exports = [{
     mode: "development", // "production" | "development" | "none"
     target: "node",
     entry: "./src/lang-server/client/src/extension.ts",
@@ -42,19 +43,19 @@ module.exports = [{
     devtool: "source-map",
 },
 {
-    /*watch: true,
-    watchOptions: {
-        aggregateTimeout: 2500
-    },*/
+    //watch: true,
+    //watchOptions: {
+    //    aggregateTimeout: 2500
+    //},
     mode: "development", // "production" | "development" | "none"
     target: "node",
     entry: "./src/lang-server/server/src/server.ts",
     output: {
         path: path.resolve("./cflsp-vscode/out/"), // string (default)
         filename: "server.js", // string (default)
-        /*library: {
-            type: "commonjs2",
-        },*/
+        //library: {
+        //    type: "commonjs2",
+        //},
         uniqueName: "cfls", // (defaults to package.json "name")
     },
     resolve: {
@@ -83,4 +84,13 @@ module.exports = [{
         ]
     },
     devtool: "source-map",
-}]
+    plugins: [
+        new CopyPlugin({
+            patterns: [{
+                from: "./src/lang-server/server/src/runtimelib/lib.cf2018.d.cfm",
+                to: "lib.cf2018.d.cfm",
+            }],
+        }),
+    ],
+},
+]

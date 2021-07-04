@@ -1,118 +1,115 @@
-import { NodeWithScope, Variable, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, Scope, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMember, StructLiteralInitializerMemberSubtype, SliceExpression } from "./node";
-import { getTriviallyComputableString, BiMap, visit } from "./utils";
+import { SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, Script, Tag, ConditionalSubtype, SymTab } from "./node";
+import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, getNodeLinks } from "./utils";
 import { Diagnostic } from "./parser";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
-
-type InternedStringId = number;
-const InternedStrings = new BiMap<InternedStringId, string>();
-let internStringId = 0;
-
-function internString(s: string) {
-    const internId = InternedStrings.getByValue(s);
-    if (internId !== undefined) {
-        return internId;
-    }
-    const freshInternId = internStringId++;
-    InternedStrings.set(freshInternId, s);
-    return freshInternId;
-}
-
-export function getScopeContainedNames(scope: Scope) : string[] {
-    const result = [];
-    for (const internId of scope.keys()) {
-        result.push(InternedStrings.getByKey(internId)!);
-    }
-    return result;
-}
-
-const staticCgiScope = (function () {
-    const result = new Map<number, Variable>();
-    // https://helpx.adobe.com/coldfusion/cfml-reference/reserved-words-and-variables/cgi-environment-cgi-scope-variables.html
-    const staticNames = [
-        "auth_password",
-        "auth_type",
-        "auth_user",
-        "cert_cookie",
-        "cert_flags",
-        "cert_issuer",
-        "cert_keysize",
-        "cert_secretkeysize",
-        "cert_serialnumber",
-        "cert_server_issuer",
-        "cert_server_subject",
-        "cert_subject",
-        "cf_template_path",
-        "content_length",
-        "content_type",
-        "context_path",
-        "gateway_interface",
-        "https",
-        "https_keysize",
-        "https_secretkeysize",
-        "https_server_issuer",
-        "https_server_subject",
-        "http_accept",
-        "http_accept_encoding",
-        "http_accept_language",
-        "http_connection",
-        "http_cookie",
-        "http_host",
-        "http_referer",
-        "http_user_agent",
-        "query_string",
-        "remote_addr",
-        "remote_host",
-        "remote_user",
-        "request_method",
-        "script_name",
-        "server_name",
-        "server_port",
-        "server_port_secure",
-        "server_protocol",
-        "server_software",
-    ];
-    for (const name of staticNames) {
-        const internId = internString(name);
-        result.set(
-            internId, {
-                type: "any",
-                name: internId,
-                final: false,
-                var: false,
-                initializer: undefined,
-            })
-    }
-    return result;
-})();
+import { cfFunctionSignature, SyntheticType, Type, TypeKind } from "./types";
 
 export function Binder() {
-    let RootNode : NodeWithScope;
+    let RootNode : NodeWithScope<SourceFile>;
     let currentContainer : NodeWithScope;
     let scanner : Scanner;
     let diagnostics: Diagnostic[];
 
+    let currentFlow : Flow;
+    let detachedClosureFlows : Flow[] = [];
+
     let nodeMap = new Map<NodeId, Node>();
 
     function bind(sourceFile: SourceFile, scanner_: Scanner, diagnostics_: Diagnostic[]) {
+        if (sourceFile.cfFileType === CfFileType.dCfm) {
+            bindDeclarationFile(sourceFile);
+            return;
+        }
+
         nodeMap = new Map<NodeId, Node>();
         scanner = scanner_;
         diagnostics = diagnostics_;
 
         RootNode = sourceFile as NodeWithScope<SourceFile>;
+
         RootNode.containedScope = {
             container: null,
-            cgi: staticCgiScope,
-            variables: new Map(),
-            url: new Map(),
-            form: new Map(),
+            typedefs: new Map<string, Type>(),
+            cgi: new Map<string, SymTabEntry>(),
+            variables: new Map<string, SymTabEntry>(),
+            url: new Map<string, SymTabEntry>(),
+            form: new Map<string, SymTabEntry>(),
         };
 
         if (sourceFile.cfFileType === CfFileType.cfc) {
-            RootNode.containedScope.this = new Map();
+            RootNode.containedScope.this = new Map<string, SymTabEntry>();
+        }
+
+        currentFlow = freshFlow([], FlowType.default);
+        bindFlowToNode(currentFlow, RootNode);
+
+        if (sourceFile.cfFileType === CfFileType.cfc) {
+            RootNode.containedScope.this = new Map<string, SymTabEntry>();
         }
 
         currentContainer = RootNode;
-        bindList(sourceFile.content, sourceFile);
+        bindListFunctionsFirst(sourceFile.content, sourceFile);
+        connectDetachedClosureFlowsToCurrentFlow();
+    }
+
+    function newFlowGraphRootedAt(node: Node) : Flow {
+        const flow = freshFlow([], FlowType.default);
+        bindFlowToNode(flow, node);
+        return flow;
+    }
+
+    function bindFlowToNode(flow: Flow, node: Node) : void {
+        flow.node = node;
+        node.flow = flow;
+    }
+
+    function isBoundFlow(flow: Flow) : flow is ReachableFlow {
+        return !!flow.node;
+    }
+
+    function extendCurrentFlowToNode(node: Node, flowType: FlowType = FlowType.default) : void {
+        // if the current flow is already bound to a node, make a new flow and connect them
+        if (isBoundFlow(currentFlow)) {
+            const flow = freshFlow(currentFlow, flowType);
+            bindFlowToNode(flow, node);
+            currentFlow.successor = flow;
+            currentFlow = flow;
+        }
+        else {
+            // otherwise, the current flow is "dangling", just bind the dangling flow to the current node
+            bindFlowToNode(currentFlow, node);
+        }
+    }
+
+    /**
+     *    <0>       <- current flow
+     *  /     \
+     * a<1> = b<2>; <- assignment, with new flows <1> and <2>; program continues with <1> as predecessor
+     * |
+     * <program continues>
+     */
+    function bindAssignmentFlow(assignmentTarget: Node, expr: Node) {
+        bindFlowToNode(freshFlow(currentFlow, FlowType.default), expr);
+        extendCurrentFlowToNode(assignmentTarget, FlowType.assignment);
+    }
+
+    /*function dangleFreshFlowFromCurrentFlow(flowType: FlowType = FlowType.default) {
+        if (!isBoundFlow(currentFlow)) {
+            throw "dangling flow must dangle from a bound flow";
+        }
+        const flow = freshFlow(currentFlow, flowType);
+        currentFlow.successor = flow;
+        currentFlow = flow;
+    }*/
+
+    // closures have their predecessor flows connected to the final flow node of their containing scope
+    // there is no flow node with a successor of a closure flow, it is not possible to "flow into" a closure
+    // we can only use the flow to walk out of a closure and into the surrounding environment
+    function connectDetachedClosureFlowsToCurrentFlow() {
+        for (const flow of detachedClosureFlows) {
+            flow.predecessor.push(currentFlow);
+        }
+        detachedClosureFlows = [];
     }
 
     function bindNode(node: Node | null | undefined, parent: Node) {
@@ -125,9 +122,15 @@ export function Binder() {
         switch (node.kind) {
             case NodeType.sourceFile:
                 throw "Bind source files by binding its content";
-            case NodeType.comment:  // fallthrough
+            case NodeType.comment:
+                if (node.typedefs) {
+                    bindList(node.typedefs, node);
+                }
+                return;
+            case NodeType.type:
+                bindType(node);
+                return;
             case NodeType.textSpan:
-                node.parent = parent;
                 return;
             case NodeType.terminal:
                 bindList(node.trivia, node);
@@ -156,7 +159,7 @@ export function Binder() {
                 bindConditional(node);
                 return;
             case NodeType.variableDeclaration:
-                bindDeclaration(node);
+                bindVariableDeclaration(node);
                 return;
             case NodeType.statement:
                 bindStatement(node);
@@ -271,6 +274,18 @@ export function Binder() {
         }
     }
 
+    function bindListFunctionsFirst(nodes: Node[], parent: Node) {
+        bindList(nodes.filter(node => node.kind === NodeType.functionDefinition), parent);
+        bindList(nodes.filter(node => node.kind !== NodeType.functionDefinition), parent);
+    }
+
+    function bindType(node: Type) {
+        // types always have names here?
+        // we get them from `@type x = ` so presumably always...
+        // also `@declare function foo` and possibly `@declare global <identifier-name> : type`
+        currentContainer.containedScope.typedefs.set(node.name!, node);
+    }
+
     function bindTag(node: CfTag) {
         if (node.which === CfTag.Which.end) {
             // all terminals, already bound
@@ -316,31 +331,104 @@ export function Binder() {
     }
 
     function bindBinaryOperator(node: BinaryOperator) {
-        bindNode(node.left, node);
-        bindNode(node.right, node);
-
         if (node.optype === BinaryOpType.assign) {
             bindAssignment(node);
+            return;
         }
+
+        const savedFlow = currentFlow;
+        extendCurrentFlowToNode(node.left);
+        bindNode(node.left, node);
+
+        currentFlow = savedFlow;
+        extendCurrentFlowToNode(node.right);
+        bindNode(node.right, node);
+
+        currentFlow = savedFlow;
     }
 
     function bindConditional(node: Conditional) {
-        if (node.fromTag) {
-            bindNode(node.tagOrigin.startTag, node);
-            bindNode(node.consequent, node);
-            bindNode(node.alternative, node);
-            bindNode(node.tagOrigin.endTag, node);
+        const baseFlow = currentFlow;
+
+        if (node.subType === ConditionalSubtype.if || node.subType === ConditionalSubtype.elseif) {
+            let expr : Node;
+            if (node.fromTag) {
+                expr = (node.tagOrigin.startTag as CfTag.ScriptLike).expr!;
+            }
+            else {
+                expr = node.expr!;
+            }
+
+            extendCurrentFlowToNode(expr);
+            bindNode(expr, node);
         }
-        else {
-            bindNode(node.expr, node);
-            bindNode(node.consequent, node);
+            
+        extendCurrentFlowToNode(node.consequent);
+        bindNode(node.consequent, node);
+        const trueFlow = currentFlow;
+
+        if (node.alternative) {
+            currentFlow = baseFlow;
+            extendCurrentFlowToNode(node.alternative);
             bindNode(node.alternative, node);
+            const falseFlow = currentFlow;
+            currentFlow = freshFlow([trueFlow, falseFlow], FlowType.default);
+        }
+        else if (node.subType !== ConditionalSubtype.else) {
+            const falseFlow = freshFlow(baseFlow, FlowType.default);
+            currentFlow = freshFlow([trueFlow, falseFlow], FlowType.default);
         }
     }
 
-    // all declarations should be of the s-expr form (decl (binary-op<assignment>))
-    // that is, VariableDeclarations just wrap assignment nodes (which are themselves just binary operators with '=' as the operator)
-    function bindDeclaration(node: VariableDeclaration) {
+    function addSymbolToTable(symTab: SymTab, uiName: string, firstBinding: Node, userType: Type | null, inferredType: Type | null) : SymTabEntry {
+        const canonicalName = uiName.toLowerCase();
+        const symTabEntry : SymTabEntry = {
+            uiName,
+            canonicalName,
+            firstBinding,
+            userType,
+            inferredType,
+            type: userType || inferredType || SyntheticType.any(),
+        };
+        symTab.set(canonicalName, symTabEntry);
+        return symTabEntry;
+    }
+
+    function bindForInInit(node: VariableDeclaration) : void {
+        let targetScope = RootNode.containedScope.variables!;
+        if (node.varModifier) {
+            const containingFunction = getContainingFunction(node);
+            if (!containingFunction) {
+                errorAtRange(node.expr.range, "Local variables may not be declared at top-level scope.");
+                return;
+            }
+            targetScope = containingFunction.containedScope?.arguments!;
+        }
+
+        const name = getTriviallyComputableString(node.expr);
+        if (!name || /\./.test(name)) return;
+
+        getNodeLinks(node).symTabEntry = addSymbolToTable(targetScope, name, node, null, SyntheticType.any());
+    }
+
+    function bindVariableDeclaration(node: VariableDeclaration) {
+        if (!node.flow) extendCurrentFlowToNode(node); // for-in declarations will already have flows
+        
+        if (node.parent?.kind === NodeType.for && node.parent.subType === ForSubType.forIn && node.parent.init === node) {
+            bindForInInit(node);
+            return;
+        }
+
+        if (node.expr.kind === NodeType.binaryOperator) {
+            bindAssignmentFlow(node.expr.left, node.expr.right);
+            bindNode(node.expr.left, node);
+
+            const savedFlow = currentFlow;
+            currentFlow = node.expr.right.flow!;
+            bindNode(node.expr.right, node);
+            currentFlow = savedFlow;
+        }
+
         let identifierBaseName : string | undefined = undefined;
         if (node.expr.kind === NodeType.binaryOperator && node.expr.optype === BinaryOpType.assign) {
             if (node.expr.left.kind === NodeType.indexedAccess) {
@@ -358,6 +446,7 @@ export function Binder() {
 
         if (isStaticallyKnownScopeName(identifierBaseName)) {
             if (node.varModifier) {
+                // we might have to consider our current container, like are we after a <cffile> tag? Does that matter?
                 errorAtRange(mergeRanges(node.finalModifier, node.varModifier, (<BinaryOperator>node.expr).left), "Variable declaration shadows built-in scope `" + identifierBaseName + "`");
             }
 
@@ -374,34 +463,26 @@ export function Binder() {
                 else if (element?.accessType === IndexedAccessType.bracket) {
                     accessName = getTriviallyComputableString((element.expr));
                 }
-
+                accessName;
+/*
                 if (accessName) {
-                    const internId = internString(accessName);
                     RootNode.containedScope[identifierBaseName]!.set(
-                        internId, {
-                            type: "any",
-                            name: internId,
+                        accessName, {
+                            type: cfAny(),
+                            name: accessName,
                             final: true,
                             var: false,
-                            initializer: (<BinaryOperator>node.expr).right
+                            target: (<BinaryOperator>node.expr).right
                         });
-                }
+                }*/
             }
 
             return;
         }
 
         if (node.finalModifier || node.varModifier) {
-            const internId = internString(identifierBaseName);
             if (currentContainer.containedScope.local) {
-                (<Map<number, Variable>>currentContainer.containedScope.local).set(
-                    internId, {
-                        type: "any",
-                        name: internId,
-                        final: !!node.finalModifier,
-                        var: !!node.varModifier,
-                        initializer: node.expr ?? undefined
-                    });
+                addSymbolToTable(currentContainer.containedScope.local!, identifierBaseName, node, node.typeAnnotation, SyntheticType.any());
             }
             else {
                 // there is no local scope, so we must be at top-level scope
@@ -414,7 +495,7 @@ export function Binder() {
                 // e.g, 
                 // function foo(bar) { var bar = 42; }
                 // is an error: "bar is already defined in argument scope"
-                if (enclosingFunction.containedScope.arguments.has(internId)) {
+                if (enclosingFunction.containedScope.arguments.has(identifierBaseName)) {
                     errorAtRange(mergeRanges(node.finalModifier, node.varModifier, node.expr), `'${identifierBaseName}' is already defined in argument scope.`);
                 }
             }
@@ -427,6 +508,7 @@ export function Binder() {
                 // e.g, cftransaction(action="rollback");
                 // bind parens specially; callStatement is not a Node so it wasn't considered
                 // can probably make callStatement a Parenthetical<CallArgument> or something
+                extendCurrentFlowToNode(node);
                 bindNode(node.callStatement!.leftParen, node);
                 bindList(node.callStatement!.args, node);
                 bindNode(node.callStatement!.rightParen, node);
@@ -434,16 +516,23 @@ export function Binder() {
             case StatementType.expressionWrapper:
                 // if it is a tagOrigin node, it is a <cfset> tag
                 if (node.tagOrigin.startTag) {
+                    extendCurrentFlowToNode(node.tagOrigin.startTag);
                     bindNode(node.tagOrigin.startTag, node);
                     return;
                 }
+                
+                if (node.expr) extendCurrentFlowToNode(node.expr); // it could be a "null statement"
                 bindNode(node.expr, node);
+
                 return;
             case StatementType.fromTag:
+                maybeBindTagResult(node.tagOrigin.startTag);
+                if (node.tagOrigin.startTag) extendCurrentFlowToNode(node.tagOrigin.startTag);
                 bindNode(node.tagOrigin.startTag, node);
                 break;
             case StatementType.scriptSugaredTagCallStatement:
                 // check attrs against cf tag meta here
+                if (node.expr) extendCurrentFlowToNode(node.expr);
                 bindNode(node.expr, node);
                 bindList(node.scriptSugaredTagStatement!.attrs, node);
                 return;
@@ -452,10 +541,22 @@ export function Binder() {
 
     function bindReturnStatement(node: ReturnStatement) {
         if (node.tagOrigin.startTag) {
-            bindNode(node.tagOrigin.startTag, node);
-            return;
+            const expr = (node.tagOrigin.startTag as CfTag.ScriptLike).expr;
+            extendCurrentFlowToNode(node);
+            if (expr) {
+                extendCurrentFlowToNode(expr);
+                bindNode(expr, node);
+            }
         }
-        bindNode(node.expr, node);
+        else {
+            extendCurrentFlowToNode(node);
+            if (node.expr) {
+                extendCurrentFlowToNode(node.expr);
+                bindNode(node.expr, node);
+            }
+        }
+
+        currentFlow = freshFlow(/*predecessor*/ [], FlowType.postReturn);
     }
 
     function bindBreakStatement(node: BreakStatement) {
@@ -475,27 +576,149 @@ export function Binder() {
     }
 
     function bindBlock(node: Block) {
+        // kludge-ish: after binding block contents, extend the current flow to the block terminator (whatever it is, as per the block type)
+        // goal here is we get a flow node from which every block-contained flow is reachable; especially helpful for using as the predecessor
+        // for closureflows
+        // n.b, cf is not block scoped, but function scoped; so while we extend the flow here, it may well just carry on into the next block, that 
+        // should be no problem
         switch (node.subType) {
+            // @fixme better fromTag type safety (always a common tag? never scriptlike, definitely never script or comment or text)
+            // and so a cLike block has non-null left/right braces, and etc.
             case BlockType.fromTag:
-                bindNode(node.tagOrigin.startTag, node);
-                bindList(node.stmtList, node);
-                bindNode(node.tagOrigin.endTag, node);
+                maybeBindTagResult(node.tagOrigin.startTag);
+                bindNode(node.tagOrigin.startTag!, node);
+                bindListFunctionsFirst(node.stmtList, node);
+                bindNode(node.tagOrigin.endTag!, node);
                 break;
             case BlockType.scriptSugaredTagCallBlock:
                 // check against cf tag meta
                 bindList(node.sugaredCallStatementAttrs!, node);
-                bindList(node.stmtList, node);
+                bindListFunctionsFirst(node.stmtList, node);
                 break;
             case BlockType.scriptTagCallBlock:
                 // check against cf tag meta
                 // maybe push context to make sure children are correct
                 bindList(node.tagCallStatementArgs!.args, node);
-                bindList(node.stmtList, node);
+                bindListFunctionsFirst(node.stmtList, node);
                 break;
             case BlockType.cLike:
-                bindList(node.stmtList, node);
+                bindListFunctionsFirst(node.stmtList, node);
                 break;
         }
+    }
+
+    function STUB_RELOCATEME_isValidIdentifier(s: string) {
+        s;
+        return true;
+    }
+
+    /**
+     * some tags write their results in the current environment
+     * it would be better if we defined this at a library level, but then we would need some minimal effect system
+     * to say "this binds the name E to a type of T in some visible scope G"
+     */
+    function maybeBindTagResult(tag: CfTag | null) : void {
+        if (!tag) return;
+        if (tag.tagType !== CfTag.TagType.common) {
+            return;
+        }
+
+        function getReturnValueIdentifier(attrName: string) : string[] | undefined {
+            const string = getTriviallyComputableString(getAttributeValue((<CfTag.Common>tag).attrs, attrName));
+            if (string !== undefined && STUB_RELOCATEME_isValidIdentifier(string)) {
+               return string.split(".");
+            }
+            return undefined;
+        }
+
+        let attrName : string | undefined = undefined;
+
+        switch (tag.canonicalName) {
+            case "directory":
+            case "param":
+            case "query": {
+                attrName = "name";
+                break;
+            }
+            case "savecontent": {
+                attrName = "variable";
+                break;
+            }
+            case "http": {
+                attrName = "result";
+                break;
+            }
+            case "loop": {
+                const enum TagLoopKind { condition, query, struct, array, ranged };
+
+                function determineTagLoopKind(tag: CfTag.Common) : TagLoopKind | undefined {
+                    // <cfloop condition="expr">
+                    if (getAttributeValue(tag.attrs, "condition")) return TagLoopKind.condition;
+                    // <cfloop query=#q#>
+                    if (getAttributeValue(tag.attrs, "query")) return TagLoopKind.query;
+                    // <cfloop collection=#c# item="keyname">
+                    if (getAttributeValue(tag.attrs, "collection")) return TagLoopKind.struct;
+                    // <cfloop array=#a# item="elementname">
+                    if (getAttributeValue(tag.attrs, "array")) return TagLoopKind.array;
+                    // <cfloop from=#1# to=#n# index="indexname">
+                    if (getAttributeValue(tag.attrs, "from")) return TagLoopKind.ranged;
+                    return undefined;
+                }
+
+                switch (determineTagLoopKind(tag)) {
+                    case TagLoopKind.condition:
+                    case TagLoopKind.query: {
+                        return;
+                    }
+                    case TagLoopKind.struct:
+                    case TagLoopKind.array: {
+                        attrName = "item";
+                        break;
+                    }
+                    case TagLoopKind.ranged: {
+                        attrName = "index";
+                        break;
+                    }
+                    default: return;
+                }
+            }
+        }
+
+        if (!attrName) return;
+
+        const name = getReturnValueIdentifier(attrName);
+
+        if (!name || name.length > 2) {
+            return;
+        }
+
+        let targetScope : SymTab = RootNode.containedScope.variables!;
+        let targetName = name.length === 1 ? name[0] : name[1];
+
+        if (name.length === 2) {
+            switch (name[0].toLowerCase()) {
+                case "local": {
+                    if (currentContainer.containedScope.local) {
+                        targetScope = currentContainer.containedScope.local;
+                    }
+                    else {
+                        const attrVal = getAttributeValue((<CfTag.Common>tag).attrs, attrName);
+                        // this is not really an error; it will simply write into `local.foo` in the global context
+                        // but perhaps is a code smell to be warned about
+                        if (attrVal) errorAtRange(attrVal.range, `Tag binds result name '${name[1]}' to a local scope in a non-local context.`);
+                        return;
+                    }
+                }
+                case "variables": {
+                    break;
+                }
+                default: {
+                    return;
+                }
+            }
+        }
+
+        addSymbolToTable(targetScope, targetName, tag, tag.typeAnnotation, null);
     }
 
     function bindSimpleStringLiteral(node: SimpleStringLiteral) {
@@ -512,7 +735,7 @@ export function Binder() {
 
     function bindIndexedAccess(node: IndexedAccess) {
         bindNode(node.root, node);
-        let parent : Node = node;
+        let parent : Node = node.root;
         for (let i = 0; i < node.accessElements.length; i++) {
             const element = node.accessElements[i];
             bindNode(element, parent);
@@ -540,18 +763,19 @@ export function Binder() {
         bindNode(node.stride, node);
     }
 
+    // @todo - extract non-canonical name for uiName
     function bindFunctionParameter(node: FunctionParameter) {
         if (node.fromTag) {
             bindNode(node.tagOrigin.startTag, node);
 
             if (node.canonicalName !== undefined) {
-                weakBindIdentifierToScope(node.canonicalName, currentContainer.containedScope.arguments!);
+                addSymbolToTable(currentContainer.containedScope.arguments!, node.canonicalName, node, null, null);
             }
 
             return;
         }
 
-        weakBindIdentifierToScope(node.canonicalName!, currentContainer.containedScope.arguments!);
+        addSymbolToTable(currentContainer.containedScope.arguments!, node.canonicalName, node, null, null);
         bindNode(node.javaLikeTypename, node);
         bindNode(node.identifier, node);
         bindNode(node.defaultValue, node);
@@ -577,7 +801,7 @@ export function Binder() {
         return undefined;
     }
 
-    function isBuiltinScopeName(s: string | undefined) : s is keyof Omit<ScopeDisplay, "container"> {
+    function isBuiltinScopeName(s: string | undefined) : s is keyof Omit<ScopeDisplay, "container" | "typedefs"> {
         switch (s) {
             case "url":
             case "form":
@@ -590,27 +814,18 @@ export function Binder() {
         }
     }
 
-    /**
-     * support weakly binding identifiers, for the common scenario of
-     * `x = y`, where x has never been seen before
-     * we just want to know that some name is available in this scope
-     */
-    function weakBindIdentifierToScope(name: string, scope: Scope) : void {
-        const internId = internString(name);
-        if (scope.has(internId)) {
-            return;
-        }
-        scope.set(internId, {
-            type: "any",
-            name: internId,
-            final: false,
-            var: false,
-            initializer: undefined
-        })
-    }
-
+    // assignment and declaration should share more code
     function bindAssignment(node: BinaryOperator) {
+        bindAssignmentFlow(node.left, node.right);
+        bindNode(node.left, node);
+
+        const savedFlow = currentFlow;
+        currentFlow = node.right.flow!;
+        bindNode(node.right, node);
+        currentFlow = savedFlow;
+
         const target = node.left;
+
         if (target.kind === NodeType.indexedAccess) {
             const targetBaseName = getTriviallyComputableString(target.root)?.toLowerCase();
 
@@ -626,7 +841,7 @@ export function Binder() {
                 const firstAccessElement = target.accessElements[0];
                 let firstAccessAsString : string | undefined = undefined;
                 if (firstAccessElement.accessType === IndexedAccessType.dot) {
-                    firstAccessAsString = firstAccessElement.dot.token.text.toLowerCase();
+                    firstAccessAsString = firstAccessElement.property.token.text.toLowerCase();
                 }
                 else if (firstAccessElement.accessType === IndexedAccessType.bracket) {
                     firstAccessAsString = getTriviallyComputableString(firstAccessElement.expr)
@@ -638,72 +853,99 @@ export function Binder() {
 
                 if (targetBaseName === "local") {
                     if (currentContainer.containedScope.local) {
-                        weakBindIdentifierToScope(firstAccessAsString, currentContainer.containedScope.local);
+                        addSymbolToTable(currentContainer.containedScope.local, firstAccessAsString, node, null, SyntheticType.any());
                     }
                     else {
                         // assigning to `local.x` in a non-local scope just binds the name `local` to the root variables scope
-                        weakBindIdentifierToScope("local", RootNode.containedScope.variables!);
+                        addSymbolToTable(RootNode.containedScope.variables!, "local", node, null, SyntheticType.any());
                     }
                 }
                 else {
                     if (targetBaseName in RootNode.containedScope) {
-                        weakBindIdentifierToScope(firstAccessAsString, RootNode.containedScope[targetBaseName]!);
+                        addSymbolToTable(RootNode.containedScope[targetBaseName]!, firstAccessAsString, node, null, SyntheticType.any());
                     }
                 }
             }
-            // not a built-in scope name, just use target base name as identifier, and write to the local scope (if it exists), falling
-            // back to the global variables scope
+            // not a built-in scope name, just use target base name as identifier
+            // this is not a declaration so it binds to the root variables scope
             else {
-                if (currentContainer.containedScope.local) {
-                    weakBindIdentifierToScope(targetBaseName, currentContainer.containedScope.local);
-                }
-                else {
-                    weakBindIdentifierToScope(targetBaseName, RootNode.containedScope.variables!);
-                }
+                //weakBindIdentifierToScope(targetBaseName, RootNode.containedScope.variables!);
             }
         }
         else {
-            const targetBaseName = getTriviallyComputableString(target)?.toLowerCase();
+            const targetBaseName = getTriviallyComputableString(target);
             if (targetBaseName) {
-                if (currentContainer.containedScope.local) {
-                    weakBindIdentifierToScope(targetBaseName, currentContainer.containedScope.local);
+                const targetBaseCanonicalName = targetBaseName.toLowerCase();
+                const targetScope = currentContainer.containedScope.local
+                    ? currentContainer.containedScope.local
+                    : RootNode.containedScope.variables!;
+
+                if (targetScope.has(targetBaseCanonicalName)) {
+                    return;
                 }
-                else {
-                    weakBindIdentifierToScope(targetBaseName, RootNode.containedScope.variables!);
-                }
+
+                addSymbolToTable(targetScope, targetBaseName, node, null, SyntheticType.any());
             }
         }
     }
 
+    function isHoistableFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) : node is FunctionDefinition {
+        return node.kind === NodeType.functionDefinition && node.parent?.kind !== NodeType.binaryOperator;
+    }
+
     function bindFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {
+        if (isHoistableFunctionDefinition(node) && typeof node.canonicalName === "string") {
+            // lucee appears to not err on the following, but acf does
+            // we need to model that hoistable functions are always hoisted into the root scope,
+            // but are only visible within their declaration container:
+            // function foo() { 
+            //      function bar() {}
+            // }
+            // function bar() {} -- error, functions may only be defined once
+            // bar(); -- error, bar is not visible
+
+            let scopeTarget : SymTab;
+            if (currentContainer.containedScope.local) {
+                scopeTarget = currentContainer.containedScope.local;
+            }
+            else {
+                scopeTarget = RootNode.containedScope.variables!;
+            }
+            
+            addSymbolToTable(
+                scopeTarget,
+                node.canonicalName,
+                node,
+                cfFunctionSignature(
+                    node.canonicalName,
+                    (<any[]>node.params).map((param: Script.FunctionParameter | Tag.FunctionParameter) => ({...param, type: SyntheticType.any()})),
+                    SyntheticType.any()),
+                null);
+        }
+
         node.containedScope = {
             container: currentContainer,
-            local: new Map(),
-            arguments: new Map()
+            typedefs: new Map<string, Type>(),
+            local: new Map<string, SymTabEntry>(),
+            arguments: new Map<string, SymTabEntry>(),
         };
 
+        for (const param of node.params) {
+            addSymbolToTable(node.containedScope.arguments!, param.canonicalName, param, null, SyntheticType.any());
+        }
+
+        const detachedFlow = newFlowGraphRootedAt(node);
+        detachedClosureFlows.push(detachedFlow);
+
+        const savedFlow = currentFlow;
+        const savedContainer = currentContainer;
+        const savedDetachedClosureFlows = detachedClosureFlows;
+        
+        currentFlow = detachedFlow;
         currentContainer = node as NodeWithScope;
+        detachedClosureFlows = [];
 
         bindList(node.params, node);
-
-        if (node.kind === NodeType.functionDefinition) {
-            // this is a non-arrow function definition
-            // tag functions and named script functions like `function foo() {}` are hoisted
-            if (node.canonicalName) {
-                const internId = internString(node.canonicalName);
-                RootNode.containedScope.variables!.set(
-                    internId, {
-                        type: {
-                            params: node.params,
-                            return: "any"
-                        },
-                        name: internId,
-                        final: false,
-                        var: false,
-                        initializer: undefined
-                    });
-            }
-        }
 
         if (node.kind === NodeType.functionDefinition && node.fromTag) {
             bindList(node.body, node);
@@ -712,7 +954,11 @@ export function Binder() {
             bindNode(node.body, node);
         }
 
-        currentContainer = node.containedScope.container! as NodeWithScope;
+        connectDetachedClosureFlowsToCurrentFlow();
+
+        currentFlow = savedFlow;
+        currentContainer = savedContainer;
+        detachedClosureFlows = savedDetachedClosureFlows;
     }
 
     function bindSwitch(node: Switch) {
@@ -755,8 +1001,13 @@ export function Binder() {
 
     function bindFor(node: For) {
         if (node.subType === ForSubType.forIn) {
+            extendCurrentFlowToNode(node.expr);
+            extendCurrentFlowToNode(node.init);
+            extendCurrentFlowToNode(node.body);
+
             bindNode(node.init, node);
             bindNode(node.inToken, node);
+
             bindNode(node.expr, node);
             bindNode(node.body, node);
             return;
@@ -857,6 +1108,32 @@ export function Binder() {
         }
 
         diagnostics.push(freshDiagnostic);
+    }
+
+    function bindDeclarationFile(sourceFile: SourceFile) {
+        sourceFile.containedScope = {
+            container: null,
+            typedefs: new Map<string, Type>(),
+            global: new Map<string, SymTabEntry>()
+        };
+
+        for (const node of sourceFile.content) {
+            switch (node.kind) {
+                case NodeType.type: {
+                    switch (node.typeKind) {
+                        case TypeKind.functionSignature: {
+                            addSymbolToTable(sourceFile.containedScope!.global!, node.name, node, node, null);
+                            break;
+                        }
+                    }
+                    break;
+                }
+                default: {
+                    errorAtRange(node.range, "Illegal non-declaration in declaration file.");
+                    continue;
+                }
+            }
+        }
     }
 
     function errorAtRange(range: SourceRange, msg: string) : void {
