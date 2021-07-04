@@ -56,10 +56,11 @@ interface CflsConfig {
 	x_types: boolean
 }
 
-
 let cflsConfig! : CflsConfig;
 
 function naiveGetDiagnostics(uri: TextDocumentUri, text: string, fileType: CfFileType) : cfcDiagnostic[] {
+	if (!cflsConfig) return [];
+	
 	// how to tell if we were launched in debug mode ?
 	const {parser,binder,checker, parseCache} = cflsConfig;
 
@@ -143,17 +144,19 @@ connection.onInitialize((params: InitializeParams) => {
 });
 
 function resetCflsp(x_types: boolean) {
+	console.info("[reset] x_types=" + x_types);
 	cflsConfig = {
 		parser: Parser().setDebug(true).setParseTypes(x_types),
 		binder: Binder().setDebug(true),
 		checker: Checker(),
 		parseCache: new Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, cfNode>}>(),
-		lib: null,
+		lib: cflsConfig?.lib ?? null, // carry forward lib
 		x_types: x_types,
 	};
 }
 
 function reemitDiagnostics() {
+	connection.console.info("reemit diagnositcs for " + cflsConfig.parseCache.size + " file URIs");
 	for (const uri of cflsConfig.parseCache.keys()) {
 		const textDocument = documents.get(uri);
 		const text = textDocument?.getText();
@@ -172,10 +175,9 @@ connection.onInitialized(() => {
 	if (hasConfigurationCapability) {
 		// Register for all configuration changes.
 		connection.client.register(DidChangeConfigurationNotification.type, undefined);
-		/*connection.workspace.getConfiguration("cflsp").then((config) => {
+		connection.workspace.getConfiguration("cflsp").then((config) => {
 			resetCflsp(config.x_types ?? false);
-		})*/
-		resetCflsp(true);
+		});
 	}
 	else {
 		resetCflsp(/*x_types*/false);
@@ -509,6 +511,7 @@ connection.onCompletion(
 })*/
 
 connection.onNotification("cflsp/libpath", (libAbsPath: string) => {
+	connection.console.info("received cflsp/libpath notification, path=" + libAbsPath);
 	if (!libAbsPath) return;
 	const path = libAbsPath;
 	const sourceFile = SourceFile(path, CfFileType.dCfm, fs.readFileSync(path));
