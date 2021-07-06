@@ -196,4 +196,14 @@ describe("general smoke test for particular constructs", () => {
             }
         </cfscript>`, CfFileType.cfm, 8);
     });
+    it("Should accept a function returning a function with functions as arguments", () => {
+        assertDiagnosticsCount(`
+        component {
+            public  function function f1(required function f, function g) attr1=foo { final var internal = (function baz) => baz(f, g); }
+            private function function f2(required function f, function g) attr1=foo { final var internal = (function baz) => baz(f, g); }
+            package function function f3(required function f, function g) attr1=foo { final var internal = (function baz) => baz(f, g); }
+            remote  function function f4(required function f, function g) attr1=foo { final var internal = (function baz) => baz(f, g); }
+                    function function f5(required function f, function g) attr1=foo { final var internal = (function baz) => baz(f, g); }
+        }`, CfFileType.cfc, 0);
+    });
 });

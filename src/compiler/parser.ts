@@ -2868,7 +2868,7 @@ export function Parser() {
     }
 
     function isAccessModifier() : boolean {
-        const peekedText = peek().text;
+        const peekedText = peek().text.toLowerCase();
         const accessModifiers = ["public", "private", "package", "remote"];
         for (const accessModifier of accessModifiers) {
             if (peekedText === accessModifier) return true;
@@ -2880,7 +2880,7 @@ export function Parser() {
      * allowTrailingGlob is for import statements like `import foo.bar.*;`
      */
     function parseDottedPathTypename(allowTrailingGlob = false) : DottedPath<Terminal> {
-        const result = DottedPath<Terminal>(parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia));
+        const result = DottedPath<Terminal>(parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false));
         while (lookahead() === TokenType.DOT) {
             const dot = parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
             
@@ -2892,7 +2892,7 @@ export function Parser() {
                 break;
             }
             else {
-                const key = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia)
+                const key = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
                 result.rest.push({dot, key});
             }
         }
