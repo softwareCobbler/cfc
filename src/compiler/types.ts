@@ -1,4 +1,4 @@
-import { BooleanLiteral, FunctionParameter, mergeRanges, NilTerminal, NodeBase, NodeType, NumericLiteral, SimpleStringLiteral, Terminal } from "./node";
+import { BooleanLiteral, FunctionParameter, mergeRanges, NilTerminal, NodeBase, NodeType, NumericLiteral, SimpleStringLiteral, SymTabEntry, Terminal } from "./node";
 import { SourceRange } from "./scanner";
 
 let debugTypeModule = true;
@@ -99,6 +99,11 @@ export function TypeBase<T extends Type>(typeKind: T["typeKind"], range?: Source
     }
 
     return result as T;
+}
+
+export interface _Type {
+    flags: TypeFlags,
+    type: Type
 }
 
 export type Type =
@@ -205,18 +210,16 @@ export interface cfStruct extends TypeBase {
     leftBrace: Terminal,
     members: cfStructMember[],
     rightBrace: Terminal,
-    membersMap: Map<string, Type>,
-    caselessMembersMap: Map<string, Type>,
+    membersMap: Map<string, SymTabEntry>,
 }
 
-export function cfStruct(leftBrace: Terminal, members: cfStructMember[], membersMap: Map<string, Type>, caselessMembersMap: Map<string, Type>, rightBrace: Terminal) : cfStruct {
+export function cfStruct(leftBrace: Terminal, members: cfStructMember[], membersMap: Map<string, SymTabEntry>, rightBrace: Terminal) : cfStruct {
     const v = TypeBase<cfStruct>(TypeKind.struct, mergeRanges(leftBrace, rightBrace));
     v.leftBrace = leftBrace;
     v.members = members;
     v.rightBrace = rightBrace;
 
     v.membersMap = membersMap;
-    v.caselessMembersMap = caselessMembersMap;
     return v;
 }
 
@@ -386,6 +389,14 @@ export function TypeAttribute(
 export const SyntheticType = (function() {
     const nilTerminal = NilTerminal(-1);
 
+    const global_any = cfAny(nilTerminal);
+    const _any = () : _Type => {
+        return {
+            flags: TypeFlags.synthetic,
+            type: global_any,
+        }
+    }
+
     const any = () => {
         const any = cfAny(nilTerminal);
         any.typeFlags |= TypeFlags.synthetic;
@@ -422,8 +433,8 @@ export const SyntheticType = (function() {
         return nil;
     }
 
-    const struct = (membersMap: Map<string, Type> = new Map(), caselessMembersMap: Map<string, Type> = new Map()) => {
-        const v = cfStruct(nilTerminal, [], membersMap, caselessMembersMap, nilTerminal);
+    const struct = (membersMap: Map<string, SymTabEntry> = new Map()) => {
+        const v = cfStruct(nilTerminal, [], membersMap, nilTerminal);
         v.typeFlags |= TypeFlags.synthetic;
         return v;
     }
@@ -435,6 +446,7 @@ export const SyntheticType = (function() {
     }
 
     return {
+        _any,
         any,
         void_,
         string,

@@ -28,7 +28,7 @@ import {
 	ConfigurationItem
 } from 'vscode-languageserver/node';
 
-import { SignatureHelp } from "vscode-languageserver-types"
+import { SignatureHelp, Position, Location, Range } from "vscode-languageserver-types"
 
 import {
 	TextDocument
@@ -38,8 +38,8 @@ import * as fs from "fs";
 import * as path from "path";
 
 import { NodeId, SourceFile, Parser, Binder, Node as cfNode, binarySearch, CfFileType, Diagnostic as cfcDiagnostic, cfmOrCfc, flattenTree, NodeSourceMap, isExpressionContext, getTriviallyComputableString, Checker } from "compiler";
-import { CfTag, isStaticallyKnownScopeName, NodeType, ScopeDisplay, StaticallyKnownScopeName } from '../../../compiler/node';
-import { findNodeInFlatSourceMap, getNearestEnclosingScope, isCfScriptTagBlock } from '../../../compiler/utils';
+import { CfTag, isStaticallyKnownScopeName, NodeType, ScopeDisplay, StaticallyKnownScopeName, FunctionDefinition, mergeRanges } from '../../../compiler/node';
+import { findAncestor, findNodeInFlatSourceMap, getAttributeValue, getNearestConstruct, getNearestEnclosingScope, getSourceFile, isCfScriptTagBlock } from '../../../compiler/utils';
 
 import { tagNames } from "./tagnames";
 import { TokenType } from '../../../compiler/scanner';
@@ -51,6 +51,7 @@ interface CflsConfig {
 	parser: ReturnType<typeof Parser>,
 	binder: ReturnType<typeof Binder>,
 	checker: ReturnType<typeof Checker>,
+	// we need to hold an *instance* of a checker per file in the cache
 	parseCache: Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, cfNode>}>,
 	lib: SourceFile | null,
 	x_types: boolean
@@ -126,6 +127,7 @@ connection.onInitialize((params: InitializeParams) => {
 			// Tell the client that this server supports code completion.
 			completionProvider: {triggerCharacters: ["."]},
 			//signatureHelpProvider: {triggerCharacters: ["("]},
+			//definitionProvider: true,
 		}
 	};
 
@@ -141,6 +143,80 @@ connection.onInitialize((params: InitializeParams) => {
 		};
 	}*/
 	return result;
+});
+
+interface ClientRequest {
+	textDocument: {uri: TextDocumentUri},
+	position: Position,
+}
+
+function getNodeTargetedByClientRequest(clientRequest : ClientRequest) : cfNode | undefined {
+	const uri = clientRequest.textDocument.uri;
+	const position = clientRequest.position;
+
+	const document = documents.get(uri);
+	if (!document) return undefined;
+
+	const targetIndex = document.offsetAt(position);
+	const docCache = cflsConfig.parseCache.get(uri);
+
+	if (!docCache) return undefined;
+
+	return findNodeInFlatSourceMap(docCache.flatTree, docCache.nodeMap, targetIndex);
+}
+
+connection.onDefinition((params) : Location | undefined  => {
+	return undefined;
+	/*
+	const doc = documents.get(params.textDocument.uri);
+	if (!doc) return;
+	const targetNode = getNodeTargetedByClientRequest(params);
+	if (!targetNode) return undefined;
+	const node = getNearestConstruct(targetNode);
+	if (!node || !isExpressionContext(node)) return undefined;
+
+	if (node.kind === NodeType.callExpression) {
+		return getFunctionDefinitionLocation(node.left, doc);
+	}
+	else if (node.parent?.kind === NodeType.callExpression && node === node.parent?.left) {
+		return getFunctionDefinitionLocation(node, doc);
+	}
+	else {
+		return undefined;
+	}
+
+	function getFunctionDefinitionLocation(node: cfNode, doc: TextDocument) : Location | undefined {
+		if (node.kind === NodeType.identifier && node.canonicalName) {
+			const sourceFile = getSourceFile(node);
+			if (sourceFile?.cfFileType === CfFileType.cfc) {
+				const symbol = sourceFile.containedScope!.this?.get(node.canonicalName);
+				if (!symbol || !symbol.firstBinding) return undefined;
+				const functionDef = symbol.firstBinding as FunctionDefinition;
+				let range : Range;
+				if (functionDef.fromTag) {
+					const attrVal = getAttributeValue((node.tagOrigin.startTag as CfTag.Common).attrs, "name");
+					if (!attrVal) {
+						return undefined;
+					}
+					range = {
+						start: doc.positionAt(attrVal.range.fromInclusive),
+						end: doc.positionAt(attrVal.range.toExclusive)
+					};
+				}
+				else {
+					const mergedRange = mergeRanges(functionDef.accessModifier, functionDef.returnType, functionDef.functionToken, functionDef.rightParen, functionDef.attrs);
+					range = {
+						start: doc.positionAt(mergedRange.fromInclusive),
+						end: doc.positionAt(mergedRange.toExclusive)
+					};
+				}
+				return {
+					uri: params.textDocument.uri,
+					range
+				}
+			}		
+		}
+	}*/
 });
 
 function resetCflsp(x_types: boolean) {
@@ -175,8 +251,16 @@ connection.onInitialized(() => {
 	if (hasConfigurationCapability) {
 		// Register for all configuration changes.
 		connection.client.register(DidChangeConfigurationNotification.type, undefined);
+
+		// immediately configure ourselves as NOT using types
+		resetCflsp(/*x_types*/ false);
+
+		// ok, now we can wait to ask the client for the workspace configuration; this might take a while to complete
+		// and completions requests and etc. can be arriving and getting serviced during the wait
 		connection.workspace.getConfiguration("cflsp").then((config) => {
-			resetCflsp(config.x_types ?? false);
+			if (config.x_types !== cflsConfig.x_types) {
+				resetCflsp(config.x_types ?? false);
+			}
 		});
 	}
 	else {
@@ -329,7 +413,9 @@ connection.onDidChangeWatchedFiles(_change => {
 // This handler provides the initial list of the completion items.
 connection.onCompletion(
 	(textDocumentPosition: CompletionParams): CompletionItem[] => {
-		
+		// we might not be setup yet; which I don't quite understand -- this should be set in onInitialized
+		if (!cflsConfig?.checker) return [];
+
 		const document = documents.get(textDocumentPosition.textDocument.uri);
 		if (!document) return [];
 
@@ -383,12 +469,12 @@ connection.onCompletion(
 			const typeinfo = cflsConfig.checker.getCachedTermEvaluatedType(node.parent.parent);
 			if (typeinfo.typeKind === TypeKind.struct) {
 				const result : CompletionItem[] = [];
-				for (const [name,type] of [...typeinfo.membersMap.entries(), ...typeinfo.caselessMembersMap.entries()]) {
+				for (const symTabEntry of typeinfo.membersMap.values()) {
 					result.push({
-						label: name,
-						kind: type.typeKind === TypeKind.functionSignature
+						label: symTabEntry.uiName,
+						kind: symTabEntry.type.typeKind === TypeKind.functionSignature
 							? CompletionItemKind.Function
-							: CompletionItemKind.Field,
+							: CompletionItemKind.Variable,
 						detail: ""
 					})
 				}
@@ -452,32 +538,13 @@ connection.onCompletion(
 			for (const [varName, [x, scopeDistance]] of allVisibleNames) { 
 				result.push({
 					label: varName,
-					kind: CompletionItemKind.Field,
+					kind: CompletionItemKind.Variable,
 					// sort the first two scopes to the top of the list; the rest get lexically sorted as one agglomerated scope
 					sortText: (scopeDistance === 0 ? 'a' : scopeDistance === 1 ? 'b' : 'c') + scopeDistance
 				});
 			}
 
 			return result;
-		}
-
-		// find the nearest construct - a binary operator, function parameter, etc.
-		// 
-		function getNearestConstruct(node: cfNode | null) : cfNode | null {
-			while (node) {
-				switch (node.kind) {
-					case NodeType.textSpan:
-					case NodeType.terminal:
-					case NodeType.identifier:
-					case NodeType.indexedAccessChainElement:
-						node = node.parent;
-						continue;
-					default:
-						return node;
-				}
-			}
-
-			return null;
 		}
 
 		function getAllNamesOfScopeDisplay(scopeDisplay : ScopeDisplay, ...targetKeys: StaticallyKnownScopeName[]) : [StaticallyKnownScopeName, string][] {

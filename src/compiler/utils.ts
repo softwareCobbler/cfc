@@ -1,4 +1,4 @@
-import { ArrayLiteralInitializerMemberSubtype, BlockType, CfTag, ForSubType, IndexedAccessType, Node, NodeId, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
+import { ArrayLiteralInitializerMemberSubtype, BlockType, CfTag, ForSubType, IndexedAccessType, Node, NodeId, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
 import { NodeType } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
 
@@ -884,4 +884,33 @@ export function getContainingFunction(node: Node) : Node | undefined {
 
 export function getNodeLinks(node: Node) {
     return node.links ?? (node.links = {});
+}
+
+export function getSourceFile(node: Node) : SourceFile | undefined {
+    return findAncestor(node, (node) => node?.kind === NodeType.sourceFile) as SourceFile | undefined;
+}
+
+export function getNearestConstruct(node: Node) : Node | undefined {
+    return findAncestor(node, (node) => {
+        return !!node
+            && node.kind !== NodeType.terminal
+            && node.kind !== NodeType.textSpan;
+    });
+}
+
+export function isInCfcPsuedoConstructor(node: Node) : boolean {
+    return !!findAncestor(node, (node) => {
+        if (!node) return false;
+        // if we have an ancestor of a function definition, we weren't in a psuedo constructor
+        if (node.parent?.kind === NodeType.functionDefinition) return "bail";
+        // otherwise, if this is a block, check if the block is:
+        // 1) a component tag block (i.e., `<cfcomponent>...</cfcomponent>`)
+        // 2) a script sugared component block (i.e., `component { ... }`)
+        // if it is, then OK, we are in a psuedo constructor
+        // otherwise, keep climbing
+        return node.parent?.kind === NodeType.block && (
+            (node.parent.subType === BlockType.fromTag && node.parent.tagOrigin.startTag?.canonicalName === "component")
+            || (node.parent.subType === BlockType.scriptSugaredTagCallBlock && node.parent.name?.token.text.toLowerCase() === "component")
+        );
+    })
 }

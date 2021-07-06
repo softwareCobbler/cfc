@@ -24,7 +24,7 @@ import {
     New,
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
-    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression } from "./node";
+    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, getAttributeValue } from "./utils";
 import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type, TypeFlags, cfFunctionSignature, cfTypeConstructorInvocation, cfVoid, cfTypeConstructorParam, cfTypeConstructor, cfIntersection, cfTypeId, cfUnion, cfStructMember, SyntheticType, TypeAttribute } from "./types";
@@ -1691,7 +1691,8 @@ export function Parser() {
                         if (!functionDecl.returnTypeAnnotation) {
                             parseErrorAtRange(functionDecl.range, "A function declaration in a declaration file requires a return type.");
                         }
-                        result.push(cfFunctionSignature(functionDecl.nameToken!.token.text, functionDecl.params, functionDecl.returnTypeAnnotation || cfNil()));
+                        // this is a named function, it definitely has a nameToken with a non-null canonicalName property
+                        result.push(cfFunctionSignature(functionDecl.nameToken!.canonicalName!, functionDecl.params, functionDecl.returnTypeAnnotation || cfNil()));
                     }
                     else if (declarationSpecifier.text === "global") {
                         parseErrorAtRange(contextualKeyword.range, "Global declarations are not yet supported. This would be for the cgi and etc. scopes.");
@@ -2786,7 +2787,7 @@ export function Parser() {
         }
         else {
             if (isIllegalKeywordTokenAsIdentifier(lookahead())) {
-                parseErrorAtCurrentToken(`Reserved keyword \`${peek().text.toLowerCase()}\` cannot be used as a variable name.`);
+                parseErrorAtCurrentToken(`Reserved keyword \`${peek().text.toLowerCase()}\` cannot be used as an identifier.`);
             }
 
             terminal = Terminal(scanIdentifier()!, withTrivia ? parseTrivia() : []);
@@ -3199,7 +3200,7 @@ export function Parser() {
         let accessModifier: Terminal | null = null;
         let returnType    : DottedPath<Terminal> | null = null;
         let functionToken : Terminal | null;
-        let nameToken     : Terminal;
+        let nameToken     : Identifier;
         let leftParen     : Terminal;
         let params        : Script.FunctionParameter[];
         let rightParen    : Terminal;
@@ -3224,7 +3225,7 @@ export function Parser() {
             functionToken = parseExpectedTerminal(TokenType.KW_FUNCTION, ParseOptions.withTrivia);
         }
 
-        nameToken     = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
+        nameToken     = parseIdentifier();
         leftParen     = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
         params        = tryParseFunctionDefinitionParameters(/*speculative*/ false, asDeclaration);
         
@@ -3835,8 +3836,7 @@ export function Parser() {
                     const kvPairs = parseList(ParseContext.typeStruct, parseTypeStructMemberElement);
                     const rightBrace = parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
 
-                    const computedMembers = new Map<string, Type>();
-                    const caselessMembers = new Map<string, Type>();
+                    const members = new Map<string, SymTabEntry>();
                     for (const member of kvPairs) {
                         let noCase = false;
                         for (const attr of member.attributes) {
@@ -3851,14 +3851,21 @@ export function Parser() {
                         if (noCase) {
                             // "caseless" members get set to all lowercase, generally to support later comparisons with "canonicalized"
                             // cf case-insensitive identifiers
-                            caselessMembers.set(member.propertyName.token.text.toLowerCase(), member.type);
+                            //caselessMembers.set(member.propertyName.token.text.toLowerCase(), member.type);
                         }
                         else {
-                            computedMembers.set(member.propertyName.token.text, member.type);
+                            members.set(member.propertyName.token.text.toLowerCase(), {
+                                uiName: member.propertyName.token.text,
+                                canonicalName: member.propertyName.token.text.toLowerCase(),
+                                firstBinding: null,
+                                inferredType: null,
+                                userType: member.type,
+                                type: member.type,
+                            })
                         }
                     }
 
-                    result = cfStruct(leftBrace, kvPairs, computedMembers, caselessMembers, rightBrace);
+                    result = cfStruct(leftBrace, kvPairs, members, rightBrace);
                     result = maybeParseArrayModifier(result);
 
                     break;

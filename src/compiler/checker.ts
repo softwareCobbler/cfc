@@ -1,8 +1,8 @@
-import { SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes, IndexedAccessChainElement, NodeFlags, BinaryOpTypeUiString, VariableDeclaration, Identifier, FlowId, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges } from "./node";
-import { Scanner, SourceRange } from "./scanner";
+import { SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, FlowId, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges } from "./node";
+import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { Diagnostic } from "./parser";
 import { cfFunctionSignature, cfIntersection, Type, TypeKind, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfNever, cfStruct, cfUnion, SyntheticType, TypeFlags } from "./types";
-import { findAncestor, getAttributeValue, getNodeLinks, getTriviallyComputableString } from "./utils";
+import { findAncestor, getAttributeValue, getContainingFunction, getNodeLinks, getSourceFile, getTriviallyComputableString } from "./utils";
 
 export function Checker() {
     let sourceFile!: SourceFile;
@@ -10,6 +10,7 @@ export function Checker() {
     scanner;
     let diagnostics!: Diagnostic[];
     let rootScope: ScopeDisplay;
+    let emitTypeErrors = false;
 
     function check(sourceFile_: SourceFile, scanner_: Scanner, diagnostics_: Diagnostic[]) {
         sourceFile = sourceFile_;
@@ -22,7 +23,13 @@ export function Checker() {
         checkList(sourceFile.content);
     }
 
-    function typeErrorAtRange(range: SourceRange, msg: string) {
+    function setEmitTypeErrors(newVal: boolean) : void {
+        emitTypeErrors = newVal;
+    }
+
+    function typeErrorAtRange(range: SourceRange, msg: string) : void {
+        if (!emitTypeErrors) return;
+
         const freshDiagnostic : Diagnostic = {
             fromInclusive: range.fromInclusive,
             toExclusive: range.toExclusive,
@@ -446,6 +453,7 @@ export function Checker() {
     /**
      * is the following legal:
      * <to> = <assignThis>
+     * this needs alot of work
      * @param assignThis 
      * @param to 
      */
@@ -465,9 +473,9 @@ export function Checker() {
                 if (!assignThis.membersMap.has(key)) {
                     return false;
                 }
-                if (!isAssignable(assignThis.membersMap.get(key)!, to.membersMap.get(key)!)) {
-                    return false;
-                }
+                //if (!isAssignable(assignThis.membersMap.get(key)!, to.membersMap.get(key)!)) {
+                //    return false;
+                //}
             }
 
             return true;
@@ -568,7 +576,7 @@ export function Checker() {
                         if (node.typeAnnotation) {
                             const evaluatedTypeAnnotation = evaluateType(node, node.typeAnnotation);
                             if (!isAssignable(rhsType, node.typeAnnotation)) {
-                                typeErrorAtNode(node.right, "RHS is not assignable to LHS.");
+                                //typeErrorAtNode(node.right, "RHS is not assignable to LHS.");
                             }
                             setCachedEvaluatedTypeOfIdentifierAtFlow(node.left.flow!, node.left.canonicalName, evaluatedTypeAnnotation);
                         }
@@ -578,10 +586,10 @@ export function Checker() {
                     }
                     else {
                         if (node.typeAnnotation) {
-                            typeErrorAtNode(node, "Type annotations can only be bound to an identifier's first assignment.");
+                            //typeErrorAtNode(node, "Type annotations can only be bound to an identifier's first assignment.");
                         }
                         if (!isAssignable(rhsType, lhsType)) {
-                            typeErrorAtNode(node.right, "RHS is not assignable to LHS.");
+                            //typeErrorAtNode(node.right, "RHS is not assignable to LHS.");
                         }
                     }
                 }
@@ -595,10 +603,10 @@ export function Checker() {
                 const leftType = getCachedTermEvaluatedType(node.left);
                 const rightType = getCachedTermEvaluatedType(node.right);
                 if (leftType.typeKind !== TypeKind.any && leftType.typeKind !== TypeKind.string) {
-                    typeErrorAtNode(node.left, `Left operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a string.`);
+                    //typeErrorAtNode(node.left, `Left operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a string.`);
                 }
                 if (rightType.typeKind !== TypeKind.any && rightType.typeKind !== TypeKind.string) {
-                    typeErrorAtNode(node.right, `Right operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a string.`);
+                    //typeErrorAtNode(node.right, `Right operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a string.`);
                 }
                 break;
             }
@@ -613,10 +621,10 @@ export function Checker() {
                 const rightType = getCachedTermEvaluatedType(node.right);
                 // acf allows (bool) + (bool), but maybe we don't want to support that
                 if (leftType.typeKind !== TypeKind.any && leftType.typeKind !== TypeKind.number) {
-                    typeErrorAtNode(node.left, `Left operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a number.`);
+                    //typeErrorAtNode(node.left, `Left operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a number.`);
                 }
                 if (rightType.typeKind !== TypeKind.any && rightType.typeKind !== TypeKind.number) {
-                    typeErrorAtNode(node.right, `Right operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a number.`);
+                    //typeErrorAtNode(node.right, `Right operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a number.`);
                 }
             }
         }
@@ -649,9 +657,14 @@ export function Checker() {
     function checkVariableDeclaration(node: VariableDeclaration) : void {
         if (node.parent?.kind === NodeType.for && node.parent.subType === ForSubType.forIn && node.parent.init === node) {
             const symTabEntry = getNodeLinks(node).symTabEntry;
-            if (!symTabEntry) throw "no symtab entry for node";
-            setCachedEvaluatedTypeOfIdentifierAtFlow(node.flow!, symTabEntry.canonicalName, evaluateType(node, symTabEntry.type));
-            return;
+            if (!symTabEntry) {
+                // in what situations would we not get a symTabEntry
+                // `for (<indexed-access> in <var>) { ... }` the indexed access doesn't yet do expando property install into whatever target scope there is
+                return;
+            }
+            else {
+                setCachedEvaluatedTypeOfIdentifierAtFlow(node.flow!, symTabEntry.canonicalName, evaluateType(node, symTabEntry.type));
+            }
         }
 
         // check for re-defined finals in current scope...or maybe during binding phase
@@ -742,6 +755,12 @@ export function Checker() {
         return findAncestor(node, (node) => !!node?.containedScope);
     }
 
+    // kludgy shim to take a ScopeDisplay member and wrap it in a cfStruct, so we can bridge the gap between those worlds, mostly for the 
+    // sake of completions; a "scope" in CF is essentially a struct, but not quite; and vice versa; so the abstraction is not perfect but it's close
+    function structViewOfScope(scopeContents: Map<string, SymTabEntry>) : cfStruct {
+        return SyntheticType.struct(scopeContents);
+    }
+
     function checkIdentifier(node: Identifier) {
         // if we're on the lefthand side of a non-fv qualified assignment, we're done
         // an fv-qualified assignment is handled by checkVariableDeclaration
@@ -754,12 +773,23 @@ export function Checker() {
 
         if (name !== undefined) {
             const useContainer = getContainer(node);
-            //const containingFunction = getContainingFunction(node);
 
             if (isStaticallyKnownScopeName(name)) {
                 if (name === "local" || name === "arguments") {
-                    // @fixme
-                    //if (containingFunction) setCachedTermEvaluatedType(node, containingFunction.containedScope![name]!);
+                    const containingFunction = getContainingFunction(node);
+                    if (!containingFunction) {
+                        // warn about local/arguments use outside of function
+                        return;
+                    }
+                    setCachedTermEvaluatedType(node, structViewOfScope(containingFunction.containedScope![name]!));
+                }
+                else if (name === "this") {
+                    const sourceFile = getSourceFile(node)!;
+                    if (sourceFile.cfFileType !== CfFileType.cfc) {
+                        // warn about using `this` outside of a cfc
+                        return;
+                    }
+                    setCachedTermEvaluatedType(node, structViewOfScope(sourceFile.containedScope![name]!));
                 }
                 else {
                     // @fixme
@@ -776,7 +806,9 @@ export function Checker() {
                 }
 
                 const evaluatedType = evaluateType(node, type);
-                setCachedEvaluatedTypeOfIdentifierAtFlow(node.flow!, name, evaluatedType);
+
+                // is it necessary to cache the type on both the flow node (if it exists) *and* the node?
+                if (node.flow) setCachedEvaluatedTypeOfIdentifierAtFlow(node.flow, name, evaluatedType);
                 setCachedTermEvaluatedType(node, evaluatedType);
                 return;
             }
@@ -954,7 +986,7 @@ export function Checker() {
             for (const libFile of node.libRefs) {
                 for (const typedef of libFile.content) {
                     if (typedef.kind === NodeType.type && typedef.typeKind === TypeKind.struct && typedef.name === "std") {
-                        return typedef.membersMap.get(type.name);
+                        return typedef.membersMap.get(type.name)?.type;
                     }
                 }
             }
@@ -1032,7 +1064,7 @@ export function Checker() {
         }
         else if (type.typeKind === TypeKind.struct) {
             const memberType = type.membersMap.get(name);
-            return memberType ? evaluateType(context, memberType) : SyntheticType.any();
+            return memberType ? evaluateType(context, memberType.type) : SyntheticType.any();
         }
 
         return SyntheticType.any();
@@ -1195,13 +1227,13 @@ export function Checker() {
                         let shortest = longest === left.membersMap ? right.membersMap : left.membersMap;
                 
                         const remainingLongestKeys = new Set([...longest.keys()]);
-                        const result = new Map<string, Type>();
+                        const result = new Map<string, SymTabEntry>();
                         for (const key of shortest.keys()) {
                             remainingLongestKeys.delete(key);
-                            const evaluatedShortest = typeWorker(shortest.get(key)!);
-                            const evaluatedLongest = longest.has(key) ? typeWorker(longest.get(key)!) : null;
+                            const evaluatedShortest = typeWorker(shortest.get(key)!.type);
+                            const evaluatedLongest = longest.has(key) ? typeWorker(longest.get(key)!.type) : null;
                             if (!evaluatedLongest) {
-                                result.set(key, evaluatedShortest);
+                                result.set(key, {uiName: shortest.get(key)!.uiName, canonicalName: key, firstBinding: null, userType: null, inferredType: null, type: evaluatedShortest});
                                 continue;
                             }
                             const intersect = evaluateIntersection(evaluatedShortest, evaluatedLongest);
@@ -1209,7 +1241,7 @@ export function Checker() {
                                 return cfNever();
                             }
                             else {
-                                result.set(key, intersect);
+                                result.set(key, {uiName: longest.get(key)!.uiName, canonicalName: key, firstBinding: null, userType: null, inferredType: null, type: evaluatedLongest});
                             }
                         }
                 
@@ -1246,16 +1278,23 @@ export function Checker() {
                             return cfUnion(left, right);
                         }
                         case TypeKind.struct: { // work on cacheability of this; it is concrete just return a cached copy or something like that
-                            const evaluatedStructContents = new Map<string, Type>();
+                            const evaluatedStructContents = new Map<string, SymTabEntry>();
                             let concrete = true;
                             for (const key of type.membersMap.keys()) {
-                                const preEvaluatedId = type.membersMap.get(key)!.nodeId;
-                                const evaluatedType = typeWorker(type.membersMap.get(key)!);
+                                const preEvaluatedId = type.membersMap.get(key)!.type.nodeId;
+                                const evaluatedType = typeWorker(type.membersMap.get(key)!.type);
                                 const postEvaluatedId = evaluatedType.nodeId;
                                 if (preEvaluatedId !== postEvaluatedId) {
                                     concrete = false;
                                 }
-                                evaluatedStructContents.set(key, evaluatedType);
+                                evaluatedStructContents.set(key, {
+                                    uiName: type.membersMap.get(key)!.uiName,
+                                    firstBinding: null,
+                                    canonicalName: key,
+                                    userType: null,
+                                    inferredType: null,
+                                    type: evaluatedType
+                                });
                             }
                             if (concrete) {
                                 return type;
@@ -1343,6 +1382,7 @@ export function Checker() {
 
     return {
         check,
-        getCachedTermEvaluatedType
+        getCachedTermEvaluatedType,
+        setEmitTypeErrors,
     }
 }

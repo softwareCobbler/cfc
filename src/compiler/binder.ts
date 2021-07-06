@@ -1,5 +1,5 @@
 import { SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, Script, Tag, ConditionalSubtype, SymTab } from "./node";
-import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, getNodeLinks } from "./utils";
+import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, getNodeLinks, isInCfcPsuedoConstructor } from "./utils";
 import { Diagnostic } from "./parser";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { cfFunctionSignature, SyntheticType, Type, TypeKind } from "./types";
@@ -405,10 +405,14 @@ export function Binder() {
             targetScope = containingFunction.containedScope?.arguments!;
         }
 
-        const name = getTriviallyComputableString(node.expr);
-        if (!name || /\./.test(name)) return;
-
-        getNodeLinks(node).symTabEntry = addSymbolToTable(targetScope, name, node, null, SyntheticType.any());
+        if (node.expr.kind === NodeType.identifier) {
+            const name = getTriviallyComputableString(node.expr);
+            if (!name) return;
+            getNodeLinks(node).symTabEntry = addSymbolToTable(targetScope, name, node, null, SyntheticType.any());
+        }
+        else if (node.expr.kind === NodeType.indexedAccess) {
+            // need a dot/bracket "path creation" mechanism, e.g., for (local.foo in bar) {}
+        }
     }
 
     function bindVariableDeclaration(node: VariableDeclaration) {
@@ -912,15 +916,26 @@ export function Binder() {
                 scopeTarget = RootNode.containedScope.variables!;
             }
             
+            const sig = cfFunctionSignature(
+                node.canonicalName,
+                (<any[]>node.params).map((param: Script.FunctionParameter | Tag.FunctionParameter) => ({...param, type: SyntheticType.any()})),
+                SyntheticType.any());
+
             addSymbolToTable(
                 scopeTarget,
                 node.canonicalName,
                 node,
-                cfFunctionSignature(
-                    node.canonicalName,
-                    (<any[]>node.params).map((param: Script.FunctionParameter | Tag.FunctionParameter) => ({...param, type: SyntheticType.any()})),
-                    SyntheticType.any()),
+                sig,
                 null);
+
+            if (RootNode.cfFileType === CfFileType.cfc && isInCfcPsuedoConstructor(node)) {
+                addSymbolToTable(
+                    RootNode.containedScope.this!,
+                    node.canonicalName,
+                    node,
+                    sig,
+                    null);
+            }
         }
 
         node.containedScope = {

@@ -1487,7 +1487,7 @@ export namespace Script {
         accessModifier : Terminal | null,
         returnType     : DottedPath<Terminal> | null,
         functionToken  : Terminal,
-        nameToken      : Terminal | null,
+        nameToken      : Identifier | null,
         leftParen      : Terminal,
         params         : FunctionParameter[],
         rightParen     : Terminal,
@@ -1501,7 +1501,7 @@ export namespace Script {
         accessModifier: Terminal | null,
         returnType    : DottedPath<Terminal> | null,
         functionToken : Terminal,
-        nameToken     : Terminal | null,
+        nameToken     : Identifier | null,
         leftParen     : Terminal,
         params        : FunctionParameter[],
         rightParen    : Terminal,
@@ -1521,7 +1521,7 @@ export namespace Script {
         v.attrs          = attrs;
         v.body           = body;
         v.returnTypeAnnotation = returnTypeAnnotation;
-        v.canonicalName  = nameToken?.token.text.toLowerCase() ?? null;
+        v.canonicalName  = nameToken?.canonicalName ?? null;
         return v;
     }
 }

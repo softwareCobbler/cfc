@@ -206,4 +206,13 @@ describe("general smoke test for particular constructs", () => {
                     function function f5(required function f, function g) attr1=foo { final var internal = (function baz) => baz(f, g); }
         }`, CfFileType.cfc, 0);
     });
+    it("Should disallow `function` as a function name", () => {
+        assertDiagnosticsCount(`
+            <cfscript>
+                // function returns a function taking a function -- that's ok
+                // function as the function name -- no good
+                function function function(function f) {};
+            </cfscript>
+        }`, CfFileType.cfm, 1);
+    });
 });

@@ -3,7 +3,7 @@
 	"description": "ColdFusion syntax error checker",
 	"author": "David Rogers",
 	"license": "MIT",
-	"version": "1.0.20",
+	"version": "1.0.21",
 	"publisher": "DavidRogers",
 	"categories": [],
 	"repository": {
@@ -39,7 +39,7 @@
 					"scope": "resource",
 					"type": "boolean",
 					"default": false,
-					"description": "experimental types / flow analysis"
+					"description": "experimental types / flow analysis; toggling it on enables better autocomplete and errors, but it is still in development and WILL crash. default is OFF (unchecked / false)."
 				}
 			}
 		}
