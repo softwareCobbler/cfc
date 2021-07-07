@@ -22,10 +22,8 @@ const stdLib = SourceFile(libPath , CfFileType.dCfm, fs.readFileSync(libPath));
 //const sourceFile = fromFile("./test/mxunit/framework/POIUtility.cfc");
 
 const sourceFile = NilCfm(`
-<cfscript>
-    // function returns a function taking a function
-    function function function(function f) {};
-</cfscript>
+<cfif 0>
+</
 `);
 
 const parser = Parser().setDebug(true).setParseTypes(true);

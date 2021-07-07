@@ -590,9 +590,9 @@ export function Binder() {
             // and so a cLike block has non-null left/right braces, and etc.
             case BlockType.fromTag:
                 maybeBindTagResult(node.tagOrigin.startTag);
-                bindNode(node.tagOrigin.startTag!, node);
+                bindNode(node.tagOrigin.startTag, node);
                 bindListFunctionsFirst(node.stmtList, node);
-                bindNode(node.tagOrigin.endTag!, node);
+                bindNode(node.tagOrigin.endTag, node);
                 break;
             case BlockType.scriptSugaredTagCallBlock:
                 // check against cf tag meta
@@ -1077,7 +1077,9 @@ export function Binder() {
             bindList(node.body, node);
             bindNode(node.tagOrigin.endTag, node);
             if (!getAncestorOfType(node, NodeType.try)) {
-                errorAtRange(node.tagOrigin.startTag!.range, "A catch tag must be contained within a try tag-block.");
+                if (node.tagOrigin.startTag) {
+                    errorAtRange(node.tagOrigin.startTag.range, "A catch tag must be contained within a try tag-block.");
+                }
             }
             return;
         }

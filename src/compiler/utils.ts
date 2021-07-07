@@ -768,7 +768,9 @@ export function isExpressionContext(node: Node | null) : boolean {
             case NodeType.block:
                 switch (node.subType) {
                     case BlockType.fromTag:
-                        return node.tagOrigin.startTag!.canonicalName === "script";
+                        // startTag might be undefined if this is a "loose" tag block like `<cfif> [here] <cfelseif> ... </cfif>`
+                        // should probably represent a "loose" tag block more explicitly
+                        return node.tagOrigin.startTag?.canonicalName === "script";
                     case BlockType.scriptSugaredTagCallBlock:
                     case BlockType.cLike:
                     case BlockType.scriptSugaredTagCallBlock:
