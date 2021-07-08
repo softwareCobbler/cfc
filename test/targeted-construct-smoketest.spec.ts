@@ -12,6 +12,7 @@ function assertDiagnosticsCount(text: string, cfFileType: CfFileType, count: num
     parser.setSourceFile(sourceFile).parse(cfFileType);
     const diagnostics = parser.getDiagnostics();
     binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
+    flattenTree(sourceFile); // just checking that it doesn't throw
     assert.strictEqual(diagnostics.length, count, `${count} diagnostics emitted`);
 }
 
@@ -214,5 +215,22 @@ describe("general smoke test for particular constructs", () => {
                 function function function(function f) {};
             </cfscript>
         }`, CfFileType.cfm, 1);
+    });
+    it("Should find containing functions - both function and arrow functions", () => {
+        assertDiagnosticsCount(`
+            <cfscript>
+                a = function() {
+                    var x = 1; // illegal top-level var if it doesn't find function as a container
+                }
+                b = () => {
+                    var x = 1; // illegal top-level var if it doesn't find the containing arrow function
+                }
+            </cfscript>
+        }`, CfFileType.cfm, 0);
+    });
+    it("Should not throw when encountering an unterminated comment inside a tag", () => {
+        // expected expression, unterminated tag comment, no matching </cfif> tag
+        // but! it shouldn't throw
+        assertDiagnosticsCount(`<cfif <!---`, CfFileType.cfm, 3);
     });
 });

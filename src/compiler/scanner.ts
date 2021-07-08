@@ -469,6 +469,7 @@ export function Scanner(source_: string | Buffer) {
 
     function peekToken(jump: number, mode: ScannerMode) : Token {
         const saveIndex = getIndex();
+        const saveToken = token;
         let result : Token;
 
         do {
@@ -476,6 +477,7 @@ export function Scanner(source_: string | Buffer) {
         } while (jump--);
 
         restoreIndex(saveIndex);
+        token = saveToken;
 
         return result;
     }
@@ -499,7 +501,7 @@ export function Scanner(source_: string | Buffer) {
         const c = peekChar()!.codepoint;
         switch (c) {
             case 0:
-                return setToken(TokenType.EOF, from, from);
+                return setToken(TokenType.EOF, from, from, '');
             case AsciiMap.LEFT_ANGLE:
                 if (tag && maybeEat(/<\s*cf/iy)) return setToken(TokenType.CF_START_TAG_START, from, getIndex());
                 // it would be nice to only eat "</cf" in tag mode, but we need to match it in script mode, so we can recognize when
@@ -680,7 +682,7 @@ export function Scanner(source_: string | Buffer) {
      * target is expected to be a string of length 1, or a TokenType
      * if a char, it is case-sensitive
      * this leaves the scanner primed to scan the target char or TokenType on the next call to `nextToken`
-     * if we're already on top of the target char or token type we do not move
+     * if we're already primed to scan the target char or token type we do not move
      */
     function scanToNext(target: char) : void;
     function scanToNext(target: TokenType[], mode: ScannerMode) : void;
@@ -701,19 +703,31 @@ export function Scanner(source_: string | Buffer) {
             }
         }
         else {
-            if (target.includes(currentToken().type)) {
+            let lastIndex = getIndex();
+            let lastToken = currentToken();
+            let token     = peekToken(0, mode!);
+            while (!target.includes(token.type) && token.type !== TokenType.EOF) {
+                lastIndex   = getIndex();
+                lastToken = currentToken();
+                token           = nextToken(mode!);
+            }
+            restoreIndex(lastIndex);
+            setToken(lastToken);
+
+            /*
+            if (target.includes(token.type)) {
                 return;
             }
             while (true) { // will bail on EOF
                 const lastIndex   = getIndex();
                 const lastToken = currentToken();
-                const token     = nextToken(mode!);
+                token           = nextToken(mode!);
                 if (target.includes(token.type) || token.type === TokenType.EOF) {
                     restoreIndex(lastIndex); // jump back to the previous token, so the scanner is primed to consume it on the next call to next
                     setToken(lastToken);
                     break;
                 }
-            }
+            }*/
         }
     }
 
@@ -786,7 +800,7 @@ export function Scanner(source_: string | Buffer) {
     }
 
     function isTagCommentClose() {
-        if (index + "--->".length >= annotatedChars.length) {
+        if (index + "--->".length >= annotatedChars.length) { // final annotated char is EOF
             return false;
         }
         return annotatedChars[index + 0].codepoint === AsciiMap.MINUS
@@ -800,7 +814,7 @@ export function Scanner(source_: string | Buffer) {
      * which could reasonably be matched as [DBL_MINUS, DBL_MINUS, MINUS, RIGHT_ANGLE]
      */
     function scanToNextTagCommentToken() : void {
-        while (index < annotatedChars.length) {
+        while (index < annotatedChars.length - 1) { // final annotated char is EOF
             if (isTagCommentOpen() || isTagCommentClose()) {
                 return;
             }
@@ -973,6 +987,8 @@ export function Scanner(source_: string | Buffer) {
         restoreIndex,
         maybeEat,
         getUtf16Position,
+        // @fixme - externally, callers just use `currentToken` for retrieving an error index;
+        // it would probably be good for callers to manually handle that, and not have to keep track of this here (to do it right we have to set it when restoring scanner state and that is not great)
         currentToken,
         getTokenText,
         getAnnotatedChar,

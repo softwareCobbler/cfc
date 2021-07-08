@@ -485,11 +485,11 @@ export function Binder() {
         }
 
         if (node.finalModifier || node.varModifier) {
-            if (currentContainer.containedScope.local) {
+            if (getContainingFunction(node)) {
                 addSymbolToTable(currentContainer.containedScope.local!, identifierBaseName, node, node.typeAnnotation, SyntheticType.any());
             }
             else {
-                // there is no local scope, so we must be at top-level scope
+                // we're not in a function, so we must be at top-level scope
                 errorAtRange(mergeRanges(node.finalModifier, node.varModifier, (<BinaryOperator>node.expr)?.left), "Local variables may not be declared at top-level scope.");
             }
         

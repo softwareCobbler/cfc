@@ -278,7 +278,7 @@ export function Parser() {
         primeLookahead();
     }
 
-    function scanTagName() {
+    function scanTagName() : Token | null {
         const result = scanner.scanTagName();
         if (result && !isInSomeContext(ParseContext.trivia)) lastNonTriviaToken = result;
         primeLookahead();
@@ -334,7 +334,7 @@ export function Parser() {
     function restoreScannerState(state: ScannerState) {
         scanner.restoreIndex(state.index);
         mode = state.mode;
-        if (state.artificialEndLimit) {
+        if (state.artificialEndLimit !== undefined) {
             scanner.setArtificialEndLimit(state.artificialEndLimit);
         }
         else {
@@ -475,8 +475,8 @@ export function Parser() {
             const actualError = errorMsg ?? "Expected '" + TokenTypeUiString[type] + "'";
             parseErrorAtPos(lastNonTriviaToken.range.toExclusive, actualError);
 
-            const pos = scanner.currentToken().range.fromInclusive;
-            const emptyRange = new SourceRange(pos, pos);
+            const errorPos = pos();
+            const emptyRange = new SourceRange(errorPos, errorPos);
             const phonyToken : Token = Token(type, "", emptyRange);
             return createMissingNode(Terminal(phonyToken));
         }
@@ -490,7 +490,6 @@ export function Parser() {
             return createMissingNode(Terminal(parseNextToken()));
         }
 
-        lastNonTriviaToken = tagName;
         return Terminal(tagName, parseTrivia());
     }
 

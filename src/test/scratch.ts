@@ -19,12 +19,9 @@ const libPath = path.resolve("./src/lang-server/server/src/runtimelib/lib.cf2018
 const stdLib = SourceFile(libPath , CfFileType.dCfm, fs.readFileSync(libPath));
 
 
-//const sourceFile = fromFile("./test/mxunit/framework/POIUtility.cfc");
+const sourceFile = fromFile("./test/mxunit/mxunit-TestCase-Template.cfc");
 
-const sourceFile = NilCfm(`
-<cfif 0>
-</
-`);
+//const sourceFile = NilCfm(`<cfif <!--- `);
 
 const parser = Parser().setDebug(true).setParseTypes(true);
 const binder = Binder().setDebug(true);
@@ -40,6 +37,9 @@ sourceFile.libRefs.push(stdLib);*/
 parser.setSourceFile(sourceFile);
 parser.parse();
 binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
+
+const flatTree = flattenTree(sourceFile);
+
 checker.check(sourceFile, parser.getScanner(), parser.getDiagnostics());
 
 const diagnostics = parser.getDiagnostics();
