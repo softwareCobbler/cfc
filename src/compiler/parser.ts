@@ -152,6 +152,7 @@ export function Parser() {
     let mode: ScannerMode;
     let parseContext : ParseContext;
     let lookahead_ : TokenType;
+    let token_ : Token;
     let lastNonTriviaToken : Token;
     let diagnostics : Diagnostic[] = [];
 
@@ -247,12 +248,14 @@ export function Parser() {
      */
     function next() : Token {
         const result = scanner.next(mode);
+        token_ = result;
         lookahead_ = peek().type;
         return result;
     }
 
     /**
      * move the scanner forward, update lookahead, run appropriate state updates
+     * fixme: get rid of this, just use next()
      */
     function parseNextToken() : Token {
         const token = next();
@@ -440,7 +443,7 @@ export function Parser() {
     }
 
     function parseErrorAtCurrentToken(msg: string) : void {
-        parseErrorAtRange(scanner.currentToken().range, msg);
+        if (token_) parseErrorAtRange(token_.range, msg);
     }
 
     function createMissingNode<T extends Node>(node: T) {
@@ -2786,7 +2789,7 @@ export function Parser() {
         }
         else {
             if (isIllegalKeywordTokenAsIdentifier(lookahead())) {
-                parseErrorAtCurrentToken(`Reserved keyword \`${peek().text.toLowerCase()}\` cannot be used as an identifier.`);
+                parseErrorAtRange(peek().range, `Reserved keyword \`${peek().text.toLowerCase()}\` cannot be used as an identifier.`);
             }
 
             terminal = Terminal(scanIdentifier()!, withTrivia ? parseTrivia() : []);
@@ -3607,10 +3610,13 @@ export function Parser() {
                         return Statement(result, semi);
                     }
                     else {
-                        parseErrorAtRange(peeked.range, "NEVER");
+                        // some unrecoverable error; here we are expecting a statement so we are not inside of any compound expression,
+                        // such as an array literal or etc; so this error message is not unreasonable but could probably be improved
+                        parseErrorAtRange(peeked.range, "Declaration or statement expected.");
+                        
+                        // eat the erroneous construct and associated trivia
                         next();
                         parseTrivia();
-                        //throw "never";
                     }
                 }
             }
@@ -3623,7 +3629,7 @@ export function Parser() {
         // return nil statement
         //
         const nilStatement = Statement(null, null);
-        nilStatement.range = scanner.currentToken().range;
+        nilStatement.range = new SourceRange(pos(), pos());
         return nilStatement;
     }
 
