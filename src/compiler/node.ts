@@ -24,7 +24,7 @@ export const enum NodeType {
     identifier,
     indexedAccess, indexedAccessChainElement, sliceExpression,
     functionDefinition, arrowFunctionDefinition, functionParameter,
-    dottedPath, switch, switchCase, do, while, ternary, for, structLiteral, arrayLiteral,
+    dottedPath, dottedPathRest, switch, switchCase, do, while, ternary, for, structLiteral, arrayLiteral,
     structLiteralInitializerMember, arrayLiteralInitializerMember, try, catch, finally,
     breakStatement, continueStatement, returnStatement, importStatement,
     new, type, typeAttribute,
@@ -59,6 +59,7 @@ const NodeTypeUiString : Record<NodeType, string> = {
     [NodeType.arrowFunctionDefinition]: "arrowFunctionDefinition",
     [NodeType.functionParameter]: "functionParameter",
     [NodeType.dottedPath]: "dottedPath",
+    [NodeType.dottedPathRest]: "dottedPathRest",
     [NodeType.switch]: "switch",
     [NodeType.switchCase]: "switchCase",
     [NodeType.do]: "do",
@@ -111,7 +112,8 @@ export type Node =
     | FunctionParameter
     | FunctionDefinition
     | ArrowFunctionDefinition
-    | DottedPath<any> // `"x"."x"` in a struct literal, `x.x` in a function parameter declaration, maybe others 
+    | DottedPath // `"x"."x"` in a struct literal, `x.x` in a function parameter declaration, maybe others 
+    | DottedPathRest
     | Switch
     | SwitchCase
     | Do
@@ -305,26 +307,29 @@ export interface SourceFile extends NodeBase {
     kind: NodeType.sourceFile,
     absPath: string,
     cfFileType: CfFileType,
-    source: string | Buffer,
+    containedScope: ScopeDisplay,
     content: Node[]
     libRefs: SourceFile[],
     diagnostics: Diagnostic[],
     scanner: Scanner,
-    nodeTypes: Map<NodeId, Type>,
-    flowTypes: Map<FlowId, Type>,
+    cachedNodeTypes: Map<NodeId, Type>, // type of a particular node, exactly zero or one per node
+    cachedFlowTypes: Map<FlowId, Map<string, Type>>, // types for symbols as determined at particular flow nodes, zero or more per flow node
 }
 
 export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: string | Buffer) : SourceFile {
     const sourceFile = NodeBase<SourceFile>(NodeType.sourceFile);
     sourceFile.absPath = absPath;
     sourceFile.cfFileType = cfFileType;
-    sourceFile.source = sourceText;
+    sourceFile.containedScope = {
+        container: null,
+        typedefs: new Map(),
+    };
     sourceFile.content = [];
     sourceFile.libRefs = [];
     sourceFile.diagnostics = [];
-    sourceFile.scanner = Scanner(sourceFile.source);
-    sourceFile.nodeTypes = new Map<NodeId, Type>();
-    sourceFile.flowTypes = new Map<FlowId, Type>();
+    sourceFile.scanner = Scanner(sourceText);
+    sourceFile.cachedNodeTypes = new Map<NodeId, Type>();
+    sourceFile.cachedFlowTypes = new Map<FlowId, Map<string, Type>>();
     return sourceFile;
 }
 
@@ -1256,11 +1261,13 @@ export interface Identifier extends NodeBase {
     kind: NodeType.identifier;
     source: Node; // can be e.g, `var x = 42`, `var 'x' = 42`, `var #x# = 42`; <cfargument name="#'interpolated_string_but_constant'#">`
     canonicalName: string | undefined; // undefined at least in the case of something like var '#foo#' = bar;
+    uiName: string | undefined;
 }
 
 export function Identifier(identifier: Node, name: string | undefined) {
     const v = NodeBase<Identifier>(NodeType.identifier, identifier.range);
     v.source = identifier;
+    v.uiName = name;
     v.canonicalName = name?.toLowerCase();
     return v;
 }
@@ -1421,6 +1428,8 @@ interface FunctionParameterBase extends NodeBase {
     kind: NodeType.functionParameter,
     required: boolean | null,
     fromTag: boolean,
+    canonicalName: string,
+    uiName: string,
 }
 
 export type FunctionParameter = Script.FunctionParameter | Tag.FunctionParameter;
@@ -1437,19 +1446,18 @@ export namespace Script {
         kind: NodeType.functionParameter,
         fromTag: false,
         requiredTerminal: Terminal | null,
-        javaLikeTypename: DottedPath<Terminal> | null,
+        javaLikeTypename: DottedPath | null,
         dotDotDot: Terminal | null,
         identifier: Identifier,
         equals: Terminal | null,
         defaultValue: Node | null,
         comma: Terminal | null,
-        canonicalName: string,
         type: Type | null,
     }
 
     export function FunctionParameter(
         requiredTerminal : Terminal | null,
-        javaLikeTypename: DottedPath<Terminal> | null,
+        javaLikeTypename: DottedPath | null,
         dotDotDot: Terminal | null,
         identifier: Identifier,
         equals: Terminal | null,
@@ -1466,6 +1474,7 @@ export namespace Script {
         v.defaultValue = defaultValue;
         v.comma = comma;
         v.canonicalName = identifier.canonicalName || "<<ERROR>>";
+        v.uiName = identifier.uiName || "<<ERROR>>";
         v.type = type;
         v.required = !!(requiredTerminal);
         return v;
@@ -1475,16 +1484,18 @@ export namespace Script {
 export namespace Tag {
     export interface FunctionParameter extends FunctionParameterBase {
         kind: NodeType.functionParameter,
-        fromTag: true,
-        canonicalName: string,
+        fromTag: true,        
         type: Type | null,
     }
 
     export function FunctionParameter(tag: CfTag.Common, type: Type | null) : FunctionParameter {
+        const name = getTriviallyComputableString(getAttributeValue(tag.attrs, "name"));
+
         const v = NodeBase<FunctionParameter>(NodeType.functionParameter, tag.range);
         v.fromTag = true;
         v.tagOrigin.startTag = tag;
-        v.canonicalName = getTriviallyComputableString(getAttributeValue(tag.attrs, "name"))?.toLowerCase() ?? "<<ERROR>>";
+        v.canonicalName = name?.toLowerCase() || "<<ERROR>>";
+        v.uiName = name || "<<ERROR>>";
         v.required = getTriviallyComputableBoolean(getAttributeValue(tag.attrs, "required")) ?? null;
         v.type = type;
         return v;
@@ -1494,6 +1505,8 @@ export namespace Tag {
 interface FunctionDefinitionBase extends NodeBase {
     kind: NodeType.functionDefinition,
     fromTag: boolean,
+    canonicalName  : string | null,
+    uiName         : string | null,
 }
 
 export type FunctionDefinition = Script.FunctionDefinition | Tag.FunctionDefinition;
@@ -1503,7 +1516,7 @@ export namespace Script {
         kind: NodeType.functionDefinition;
         fromTag        : false,
         accessModifier : Terminal | null,
-        returnType     : DottedPath<Terminal> | null,
+        returnType     : DottedPath | null,
         functionToken  : Terminal,
         nameToken      : Identifier | null,
         leftParen      : Terminal,
@@ -1511,13 +1524,12 @@ export namespace Script {
         rightParen     : Terminal,
         attrs          : TagAttribute[],
         body           : Block,
-        canonicalName  : string | null,
         returnTypeAnnotation : Type | null,
     }
 
     export function FunctionDefinition(
         accessModifier: Terminal | null,
-        returnType    : DottedPath<Terminal> | null,
+        returnType    : DottedPath | null,
         functionToken : Terminal,
         nameToken     : Identifier | null,
         leftParen     : Terminal,
@@ -1540,6 +1552,7 @@ export namespace Script {
         v.body           = body;
         v.returnTypeAnnotation = returnTypeAnnotation;
         v.canonicalName  = nameToken?.canonicalName ?? null;
+        v.uiName         = nameToken?.uiName ?? null;
         return v;
     }
 }
@@ -1550,17 +1563,18 @@ export namespace Tag {
         fromTag        : true,
         params         : FunctionParameter[],
         body           : Node[], // fixme: block?
-        canonicalName  : string | undefined,
     }
 
     export function FunctionDefinition(startTag: CfTag.Common, params: FunctionParameter[], body: Node[], endTag: CfTag.Common) : FunctionDefinition {
+        const name = getTriviallyComputableString(getAttributeValue(startTag.attrs, "name")) ?? null;
         const v = NodeBase<FunctionDefinition>(NodeType.functionDefinition, mergeRanges(startTag, endTag));
         v.fromTag            = true;
         v.tagOrigin.startTag = startTag;
         v.tagOrigin.endTag   = endTag;
         v.params             = params;
         v.body               = body;
-        v.canonicalName      = getTriviallyComputableString(getAttributeValue(startTag.attrs, "name"))?.toLowerCase();
+        v.uiName             = name;
+        v.canonicalName      = name?.toLowerCase() ?? null;
         return v;
     }
 }
@@ -1583,17 +1597,35 @@ export function ArrowFunctionDefinition(leftParen: Terminal | null, params: Func
     return v;
 };
 
-// @fixme clean this up
-export interface DottedPath<T extends NodeBase> extends NodeBase {
-    kind: NodeType.dottedPath;
-    headKey: T;
-    rest: {dot: Terminal, key: T}[]
+export interface DottedPathRest extends NodeBase {
+    kind: NodeType.dottedPathRest,
+    dot: Terminal,
+    key: Terminal,
 }
-export function DottedPath<T extends NodeBase>(headKey: T) : DottedPath<T> {
-    const v = NodeBase<DottedPath<T>>(NodeType.dottedPath, headKey.range);
+
+export interface DottedPath extends NodeBase {
+    kind: NodeType.dottedPath;
+    headKey: Terminal;
+    rest: DottedPathRest[],
+}
+
+export function DottedPath(headKey: Terminal) : DottedPath {
+    const v = NodeBase<DottedPath>(NodeType.dottedPath, headKey.range);
     v.headKey = headKey;
     v.rest = [];
     return v;
+}
+
+export function DottedPathRest(dot: Terminal, key: Terminal) {
+    const v = NodeBase<DottedPathRest>(NodeType.dottedPathRest, mergeRanges(dot, key));
+    v.dot = dot;
+    v.key = key;
+    return v;
+}
+
+export function pushDottedPathElement(dottedPath: DottedPath, dot: Terminal, key: Terminal) {
+    dottedPath.rest.push(DottedPathRest(dot, key));
+    dottedPath.range = mergeRanges(dottedPath, dot, key);
 }
 
 interface SwitchBase extends NodeBase {
@@ -2115,7 +2147,7 @@ export namespace Script {
         fromTag: false,
         catchToken: Terminal,
         leftParen: Terminal,
-        exceptionType: DottedPath<Terminal>,
+        exceptionType: DottedPath,
         exceptionBinding: Identifier,
         rightParen: Terminal,
         leftBrace: Terminal,
@@ -2126,7 +2158,7 @@ export namespace Script {
     export function Catch(
         catchToken: Terminal,
         leftParen: Terminal,
-        exceptionType: DottedPath<Terminal>,
+        exceptionType: DottedPath,
         exceptionBinding: Identifier,
         rightParen: Terminal,
         leftBrace: Terminal,
@@ -2227,13 +2259,13 @@ export namespace Tag {
 export interface ImportStatement extends NodeBase {
     kind: NodeType.importStatement,
     importToken: Terminal,
-    path: DottedPath<Terminal>,
+    path: DottedPath,
     semicolon: Terminal | null,
 }
 
 export function ImportStatement(
     importToken: Terminal,
-    path: DottedPath<Terminal>,
+    path: DottedPath,
     semicolon: Terminal | null
 ) : ImportStatement {
     const v = NodeBase<ImportStatement>(NodeType.importStatement, mergeRanges(importToken, path, semicolon));

@@ -238,4 +238,17 @@ describe("general smoke test for particular constructs", () => {
         // but! it shouldn't throw
         assertDiagnosticsCount(`<cfif <!---`, CfFileType.cfm, 3);
     });
+    it("should bind and be able to find in the flatmap a script function definition return type", () => {
+        const completionsTestCase = TestLoader.loadCompletionAtTest("./test/sourcefiles/tree-flatten-1.cfm");
+
+        const sourceFile = NilCfm(completionsTestCase.sourceText);
+        parser.setSourceFile(sourceFile).parse();
+        binder.bind(sourceFile);
+        const flatSourceMap = flattenTree(sourceFile);
+        const nodeMap = binder.getNodeMap();
+
+        const node = findNodeInFlatSourceMap(flatSourceMap, nodeMap, completionsTestCase.index);
+        assert.strictEqual(node?.parent?.kind, NodeType.dottedPath);
+        assert.strictEqual(node?.parent?.parent?.kind, NodeType.functionDefinition);
+    });
 });

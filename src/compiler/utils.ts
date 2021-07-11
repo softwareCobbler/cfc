@@ -1,6 +1,7 @@
-import { ArrayLiteralInitializerMemberSubtype, BlockType, CfTag, ForSubType, IndexedAccessType, Node, NodeId, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
+import { ArrayLiteralInitializerMemberSubtype, BlockType, CfTag, ForSubType, IndexedAccessType, Node, NodeId, ScopeDisplay, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
 import { NodeType } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
+import { cfFunctionSignature } from "./types";
 
 const enum TagFact {
     ALLOW_VOID		= 0x00000001, // tag can be void, e.g., <cfhttp> can be loose, or have a body like <cfhttp><cfhttpparam></cfhttp>
@@ -471,12 +472,11 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                 || visitor(node.fatArrow)
                 || visitor(node.body)
         case NodeType.dottedPath:
-            // @fixme dottedpath is just wrong
-            // the ...rest part of node needs to be a Node[],
-            // or we need to find the more correct abstraction of DottedPath
-            // really it is an indexed access where all elements are Dot?
             return visitor(node.headKey)
-                || false;
+                || forEachNode(node.rest, visitor);
+        case NodeType.dottedPathRest:
+            return visitor(node.dot)
+                || visitor(node.key);
         case NodeType.switch:
             if (node.fromTag) {
                 return visitor(node.tagOrigin.startTag)
@@ -710,7 +710,7 @@ export function findNodeInFlatSourceMap(flatSourceMap: NodeSourceMap[], nodeMap:
         (v) => {
             //
             // can be equal to range.toExclusive because if the cursor is "on" "abc.|x"
-            //                                            single char is [3,4)  ---^^--- on pos 4
+            //                                        single char '.' is [3,4)  ---^^--- cursor is "on" pos 4
             // so cursor is right after the dot, on position 4
             // we want to say were "in" the dot
             //
@@ -718,10 +718,10 @@ export function findNodeInFlatSourceMap(flatSourceMap: NodeSourceMap[], nodeMap:
                 // match: on or in the target index
                 return 0;
             }
-            else if (v.range.toExclusive < index) {
+            else if (v.range.toExclusive < index) { // move floor up, our target is further ahead in the input
                 return -1;
             }
-            else {
+            else { // move ceiling down, our target node is before this node
                 return 1;
             }
         });
@@ -915,4 +915,26 @@ export function isInCfcPsuedoConstructor(node: Node) : boolean {
             || (node.parent.subType === BlockType.scriptSugaredTagCallBlock && node.parent.name?.token.text.toLowerCase() === "component")
         );
     })
+}
+
+export function getAllNamesOfScopeDisplay(scopeDisplay : ScopeDisplay, ...targetKeys: StaticallyKnownScopeName[]) : [StaticallyKnownScopeName, string][] {
+    const result : [StaticallyKnownScopeName, string][] = [];
+    for (const scopeName of targetKeys) {
+        if (scopeDisplay.hasOwnProperty(scopeName)) {
+            for (const symTabEntry of scopeDisplay[scopeName]!.values()) {
+                result.push([scopeName, symTabEntry.uiName]);
+            }
+        }
+    }
+
+    return result;
+}
+
+export function getFunctionSignatureParamNames(sig: cfFunctionSignature, ...omit: string[]) {
+    const result : string[] = [];
+    const omitSet = new Set(omit);
+    for (const param of sig.params) {
+        if (!omitSet.has(param.canonicalName)) result.push(param.canonicalName);
+    }
+    return result;
 }

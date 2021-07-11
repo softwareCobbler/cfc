@@ -25,7 +25,7 @@ import {
     New,
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
-    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry } from "./node";
+    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, getAttributeValue } from "./utils";
 import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type, TypeFlags, cfFunctionSignature, cfTypeConstructorInvocation, cfVoid, cfTypeConstructorParam, cfTypeConstructor, cfIntersection, cfTypeId, cfUnion, cfStructMember, SyntheticType, TypeAttribute } from "./types";
@@ -2762,13 +2762,13 @@ export function Parser() {
     // in order to grab type annotations that are inside comments
     function parseIdentifier(withTrivia = true) : Identifier {
         let terminal : Terminal;
-        let canonicalName : string;
+        let name : string;
 
         if (!isIdentifier()) {
             parseErrorAtPos(lastNonTriviaToken.range.toExclusive, parseErrorMsg ?? "Expected an identifier.");
 
             terminal = NilTerminal(pos());
-            canonicalName = "";
+            name = "";
         }
         else {
             if (isIllegalKeywordTokenAsIdentifier(lookahead())) {
@@ -2776,11 +2776,11 @@ export function Parser() {
             }
 
             terminal = Terminal(scanIdentifier()!, withTrivia ? parseTrivia() : []);
-            canonicalName = terminal.token.text.toLowerCase();
+            name = terminal.token.text;
         }
 
         // @fixme: need to mark node with error flags if there was an error
-        return Identifier(terminal, canonicalName);
+        return Identifier(terminal, name);
     }
 
     function parseStringLiteral(allowInterpolations = true) : SimpleStringLiteral | InterpolatedStringLiteral {
@@ -2865,8 +2865,8 @@ export function Parser() {
     /**
      * allowTrailingGlob is for import statements like `import foo.bar.*;`
      */
-    function parseDottedPathTypename(allowTrailingGlob = false) : DottedPath<Terminal> {
-        const result = DottedPath<Terminal>(parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false));
+    function parseDottedPathTypename(allowTrailingGlob = false) : DottedPath {
+        const result = DottedPath(parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false));
         while (lookahead() === TokenType.DOT) {
             const dot = parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
             
@@ -2874,12 +2874,12 @@ export function Parser() {
                 const glob = parseNextToken();
                 const trivia = parseTrivia();
                 const key = Terminal(glob, trivia);
-                result.rest.push({dot, key});
+                pushDottedPathElement(result, dot, key);
                 break;
             }
             else {
                 const key = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
-                result.rest.push({dot, key});
+                pushDottedPathElement(result, dot, key);
             }
         }
         return result;
@@ -2899,7 +2899,7 @@ export function Parser() {
         // we could set a flag saying we're in a functionParameterList to help out
         while (isStartOfExpression()) {
             let requiredTerminal : Terminal | null = null;
-            let javaLikeTypename : DottedPath<Terminal> | null = null;
+            let javaLikeTypename : DottedPath | null = null;
             let dotDotDot : Terminal | null = null;
             let name : Identifier;
             let equal : Terminal | null = null;
@@ -3183,7 +3183,7 @@ export function Parser() {
     function tryParseNamedFunctionDefinition(speculative: true) : Script.FunctionDefinition | null;
     function tryParseNamedFunctionDefinition(speculative: boolean, asDeclaration = false) : Script.FunctionDefinition | null {
         let accessModifier: Terminal | null = null;
-        let returnType    : DottedPath<Terminal> | null = null;
+        let returnType    : DottedPath | null = null;
         let functionToken : Terminal | null;
         let nameToken     : Identifier;
         let leftParen     : Terminal;

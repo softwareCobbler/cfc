@@ -13,7 +13,7 @@ export function loadCompletionAtTest(absPath: string) {
             throw "expected only one completions marker";
         }
         matchIndex = match.index;
-        sourceText = sourceText.slice(0, matchIndex) + sourceText.slice(matchIndex + match[0].length);
+        sourceText = sourceText.slice(0, matchIndex) + sourceText.slice(matchIndex + match[0].length); // "x.|<<<<y" becomes "x.y"
     }
 
     if (matchIndex === null) {

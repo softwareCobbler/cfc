@@ -36,14 +36,14 @@ sourceFile.libRefs.push(stdLib);*/
 
 parser.setSourceFile(sourceFile);
 parser.parse();
-binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
+binder.bind(sourceFile);
 
 const flatTree = flattenTree(sourceFile);
 
-checker.check(sourceFile, parser.getScanner(), parser.getDiagnostics());
+checker.check(sourceFile);
 
-const diagnostics = parser.getDiagnostics();
+const diagnostics = sourceFile.diagnostics;
 console.log("got ", diagnostics.length + " diagnostics");
-for (const diag of parser.getDiagnostics()) {
+for (const diag of diagnostics) {
     console.log(diag);
 }

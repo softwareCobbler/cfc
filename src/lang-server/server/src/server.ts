@@ -38,8 +38,8 @@ import * as fs from "fs";
 import * as path from "path";
 
 import { NodeId, SourceFile, Parser, Binder, Node as cfNode, binarySearch, CfFileType, Diagnostic as cfcDiagnostic, cfmOrCfc, flattenTree, NodeSourceMap, isExpressionContext, getTriviallyComputableString, Checker } from "compiler";
-import { CfTag, isStaticallyKnownScopeName, NodeType, ScopeDisplay, StaticallyKnownScopeName, FunctionDefinition, mergeRanges } from '../../../compiler/node';
-import { findAncestor, findNodeInFlatSourceMap, getAttributeValue, getNearestConstruct, getNearestEnclosingScope, getSourceFile, isCfScriptTagBlock } from '../../../compiler/utils';
+import { CfTag, isStaticallyKnownScopeName, NodeType, ScopeDisplay, StaticallyKnownScopeName, FunctionDefinition, mergeRanges, CallExpression, Terminal } from '../../../compiler/node';
+import { findAncestor, findNodeInFlatSourceMap, getAttributeValue, getFunctionSignatureParamNames, getNearestConstruct, getNearestEnclosingScope, getSourceFile, isCfScriptTagBlock } from '../../../compiler/utils';
 
 import { tagNames } from "./tagnames";
 import { TokenType } from '../../../compiler/scanner';
@@ -52,13 +52,14 @@ interface CflsConfig {
 	binder: ReturnType<typeof Binder>,
 	checker: Checker,
 	parseCache: Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, cfNode>}>,
+	evictFile: (uri: TextDocumentUri) => void,
 	lib: SourceFile | null,
 	x_types: boolean
 }
 
 let cflsConfig! : CflsConfig;
 
-function naiveGetDiagnostics(uri: TextDocumentUri, text: string, fileType: CfFileType) : cfcDiagnostic[] {
+function naiveGetDiagnostics(uri: TextDocumentUri, text: string) : cfcDiagnostic[] {
 	if (!cflsConfig) return [];
 	
 	// how to tell if we were launched in debug mode ?
@@ -74,9 +75,7 @@ function naiveGetDiagnostics(uri: TextDocumentUri, text: string, fileType: CfFil
 		sourceFile.libRefs.push(cflsConfig.lib);
 	}
 
-    parser.setSourceFile(sourceFile);
-
-    parser.parse(fileType);
+    parser.setSourceFile(sourceFile).parse();
 	binder.bind(sourceFile);
 	
 	if (cflsConfig.x_types) {
@@ -226,24 +225,32 @@ function resetCflsp(x_types: boolean) {
 		checker: Checker(),
 		parseCache: new Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, cfNode>}>(),
 		lib: cflsConfig?.lib ?? null, // carry forward lib
+		evictFile: (uri: TextDocumentUri) : void => {
+			if (cflsConfig.parseCache.has(uri)) {
+				cflsConfig.parseCache.delete(uri);
+			}
+		},
 		x_types: x_types,
 	};
 }
 
 function reemitDiagnostics() {
 	connection.console.info("reemit diagnositcs for " + cflsConfig.parseCache.size + " file URIs");
-	for (const uri of cflsConfig.parseCache.keys()) {
+	const uris = [...cflsConfig.parseCache.keys()]; // parseCache is indirectly updated in-loop, so grab a copy of the values before iterating
+	for (const uri of uris) {
 		const textDocument = documents.get(uri);
 		const text = textDocument?.getText();
 		const fileType = cfmOrCfc(uri);
 
 		if (text && fileType) {
+			cflsConfig.evictFile(uri);
 			connection.sendDiagnostics({
 				uri: uri,
-				diagnostics: cfcDiagnosticsToLspDiagnostics(textDocument!, naiveGetDiagnostics(uri, text, fileType))
+				diagnostics: cfcDiagnosticsToLspDiagnostics(textDocument!, naiveGetDiagnostics(uri, text))
 			});
 		}
 	}
+	connection.console.info("...done with diagnostic reemit");
 }
 
 connection.onInitialized(() => {
@@ -386,11 +393,9 @@ async function validateTextDocument(textDocument: TextDocument): Promise<void> {
 	
 	let cfDiagnostics : cfcDiagnostic[];
 
-	if (cfmPattern.test(textDocument.uri)) {
-		cfDiagnostics = naiveGetDiagnostics(textDocument.uri, textDocument.getText(), CfFileType.cfm);
-	}
-	else if (cfcPattern.test(textDocument.uri)) {
-		cfDiagnostics = naiveGetDiagnostics(textDocument.uri, textDocument.getText(), CfFileType.cfc);
+	if (cfmOrCfc(textDocument.uri) !== undefined) {
+		cflsConfig.evictFile(textDocument.uri);
+		cfDiagnostics = naiveGetDiagnostics(textDocument.uri, textDocument.getText());
 	}
 	else {
 		// didn't match a cf file type, send an empty diagnostics list and we're done
@@ -419,9 +424,10 @@ connection.onCompletion(
 		if (!document) return [];
 
 		const targetIndex = document.offsetAt(textDocumentPosition.position);
-		const docCache = cflsConfig.parseCache.get(textDocumentPosition.textDocument.uri)!;
+		const docCache = cflsConfig.parseCache.get(textDocumentPosition.textDocument.uri);
+		if (!docCache) return [];
 
-		const node = findNodeInFlatSourceMap(docCache.flatTree, docCache.nodeMap, targetIndex);
+		const node = findNodeInFlatSourceMap(docCache.flatTree, docCache.nodeMap, targetIndex) as Terminal | undefined;
 
 		if (!node) return [];
 
@@ -440,32 +446,53 @@ connection.onCompletion(
 			return [];
 		}
 
-		if (node.parent?.kind)
-
-		// if we got an indexed access chain
-		if (node.parent?.kind === NodeType.indexedAccessChainElement) {
-			/*if (node.parent?.parent?.parent?.kind === NodeType.indexedAccess) {
-				// if so, try to get the identifier used as the root of the chain
-				// if that name is a known scope, try to find the names in that scope
-				const rootName = getTriviallyComputableString(node.parent.parent.parent.root)?.toLowerCase();
-				if (rootName) {
-					if (isStaticallyKnownScopeName(rootName)) {
-						const scope = getNearestEnclosingScope(node, rootName);
-						if (scope) {
-							const detailLabel = "scope:" + rootName;
-							return getScopeContainedNames(scope).map(name => ({
-								label: name,
-								kind: CompletionItemKind.Field,
-								detail: detailLabel
-							}));
-						}
-					}
+		if (isCfScriptTagBlock(node)) {
+			let justCfScriptCompletion = false;
+			// if we got </cf then we are in an unfinished tag node
+			if (node.parent?.kind === NodeType.tag && node.parent?.which === CfTag.Which.end) {
+				justCfScriptCompletion = true;
+			}
+			// if we got got an identifier but the previous text is "</" (not valid in any expression) then just provide a cfscript completion
+			else if (node.parent?.kind === NodeType.identifier && node.range.fromInclusive >= 2) {
+				const text = document.getText();
+				if (text[node.range.fromInclusive-2] === "<" && text[node.range.fromInclusive-1] === "/") {
+					justCfScriptCompletion = true;
 				}
-			}*/
+			}
 
+			if (justCfScriptCompletion) {
+				return [{
+					label: "cfscript",
+					kind: CompletionItemKind.Property,
+					detail: "cflsp:<<taginfo?>>",
+					insertText: "cfscript>",
+				}];
+			}
+		}
+
+		// `foo(bar = baz, |)`
+		if (node.parent?.parent?.kind === NodeType.callArgument) {
+			const callExpr = node.parent.parent.parent as CallExpression;
+			if (!callExpr) return []; // shouldn't happen...
+			const sig = cflsConfig.checker.getCachedEvaluatedNodeType(callExpr.left, docCache.parsedSourceFile);
+			if (!sig || sig.typeKind !== TypeKind.functionSignature) return [];
+
+			const result : CompletionItem[] = [];
+			for (const param of sig.params) {
+				result.push({
+					label: param.uiName + "=",
+					kind: CompletionItemKind.Variable,
+					detail: "named function argument",
+					sortText: "a_" + param.uiName, // we'd like param name suggestions first
+				});
+			}
+			return result;
+		}
+
+		if (node.parent?.kind === NodeType.indexedAccessChainElement) {
 			// get the type one level before the current
 			// x.y| -- we want the type of `x` for completions, not `y`
-			const typeinfo = cflsConfig.checker.getCachedTermEvaluatedType(node.parent.parent);
+			const typeinfo = cflsConfig.checker.getCachedEvaluatedNodeType(node.parent.parent, docCache.parsedSourceFile);
 			if (typeinfo.typeKind === TypeKind.struct) {
 				const result : CompletionItem[] = [];
 				for (const symTabEntry of typeinfo.membersMap.values()) {
@@ -473,7 +500,7 @@ connection.onCompletion(
 						label: symTabEntry.uiName,
 						kind: symTabEntry.type.typeKind === TypeKind.functionSignature
 							? CompletionItemKind.Function
-							: CompletionItemKind.Variable,
+							: CompletionItemKind.Field,
 						detail: ""
 					})
 				}
@@ -482,84 +509,42 @@ connection.onCompletion(
 
 			return [];
 		}
-		
-		const nearestConstruct = getNearestConstruct(node);
-		if (nearestConstruct?.kind === NodeType.functionParameter || nearestConstruct?.kind === NodeType.comment || nearestConstruct?.kind === NodeType.sourceFile) {
-			// don't offer completions in function parameter lists `f(a, b, c|)`
-			// don't offer completions outside of any construct (in cfm's this is html output space; in cfcs this void space where only comments should go)
-			//          actually at root we could offer <cfcomponent> tag completion, and `component ` sugared tag block completion, and that's it
-			// don't offer completions inside comments
-			return [];
-		}
-		else if (isExpressionContext(node)) {
-			if (isCfScriptTagBlock(node)) {
-				let justCfScriptCompletion = false;
-				// if we got </cf then we are in an unfinished tag node
-				if (node.parent?.kind === NodeType.tag && node.parent?.which === CfTag.Which.end) {
-					justCfScriptCompletion = true;
-				}
-				// if we got got an identifier but the previous text is "</" (not valid in any expression) then just provide a cfscript completion
-				else if (node.parent?.kind === NodeType.identifier && node.range.fromInclusive >= 2) {
-					const text = document.getText();
-					if (text[node.range.fromInclusive-2] === "<" && text[node.range.fromInclusive-1] === "/") {
-						justCfScriptCompletion = true;
-					}
-				}
 
-				if (justCfScriptCompletion) {
-					return [{
-						label: "cfscript",
-						kind: CompletionItemKind.Property,
-						detail: "cflsp:<<taginfo?>>",
-						insertText: "cfscript>",
-					}];
-				}
-			}
-
-			// fixme
-			const allVisibleNames = (function x(node: cfNode | null) {
-				const result = new Map<string, [StaticallyKnownScopeName, number]>();
-				let scopeDistance = 0; // keep track of "how far away" some name is, in terms of parent scopes; we can then offer closer names first
-				while (node) {
-					if (node.containedScope) {
-						const names = getAllNamesOfScopeDisplay(node.containedScope, "local", "arguments", "this", "variables");
-						for (const [scopeName, varName] of names){
-							result.set(varName, [scopeName, scopeDistance]);
+		// we're in a primary expression context, where we need to do symbol lookup in all visible scopes
+		// e.g,. `x = | + y`
+		const allVisibleNames = (function (node: cfNode | null) {
+			const result = new Map<string, [StaticallyKnownScopeName, CompletionItemKind, number]>();
+			let scopeDistance = 0; // keep track of "how far away" some name is, in terms of parent scopes; we can then offer closer names first
+			while (node) {
+				if (node.containedScope) {
+					for (const searchScope of ["local", "arguments", "this", "variables"] as StaticallyKnownScopeName[]) {
+						const symTab = node.containedScope[searchScope];
+						if (!symTab) continue;
+						for (const symTabEntry of symTab.values()) {
+							const completionKind = symTabEntry.type.typeKind === TypeKind.functionSignature
+								? CompletionItemKind.Function
+								: CompletionItemKind.Variable;
+							result.set(symTabEntry.uiName, [searchScope, completionKind, scopeDistance]);
 						}
-						scopeDistance++;
 					}
-					node = node.containedScope?.container || node.parent;
+					scopeDistance++;
 				}
-				return result;
-			})(node);
-
-			const result : CompletionItem[] = [];
-			for (const [varName, [x, scopeDistance]] of allVisibleNames) { 
-				result.push({
-					label: varName,
-					kind: CompletionItemKind.Variable,
-					// sort the first two scopes to the top of the list; the rest get lexically sorted as one agglomerated scope
-					sortText: (scopeDistance === 0 ? 'a' : scopeDistance === 1 ? 'b' : 'c') + scopeDistance
-				});
+				node = node.containedScope?.container || node.parent;
 			}
-
 			return result;
+		})(node);
+
+		const result : CompletionItem[] = [];
+		for (const [varName, [_, completionKind, scopeDistance]] of allVisibleNames) { 
+			result.push({
+				label: varName,
+				kind: completionKind,
+				// sort the first two scopes to the top of the list; the rest get lexically sorted as one agglomerated scope
+				sortText: (scopeDistance === 0 ? 'a' : scopeDistance === 1 ? 'b' : 'c') + scopeDistance
+			});
 		}
 
-		function getAllNamesOfScopeDisplay(scopeDisplay : ScopeDisplay, ...targetKeys: StaticallyKnownScopeName[]) : [StaticallyKnownScopeName, string][] {
-			const result : [StaticallyKnownScopeName, string][] = [];
-			for (const scopeName of targetKeys) {
-				if (scopeDisplay.hasOwnProperty(scopeName)) {
-					for (const symTabEntry of scopeDisplay[scopeName]!.values()) {
-						result.push([scopeName, symTabEntry.uiName]);
-					}
-				}
-			}
-
-			return result;
-		}
-
-		return [];
+		return result;
 	}
 );
 

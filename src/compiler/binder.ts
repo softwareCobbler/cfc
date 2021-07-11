@@ -207,6 +207,9 @@ export function Binder() {
             case NodeType.dottedPath:
                 // ?
                 return;
+            case NodeType.dottedPathRest:
+                // no-op, taken care of by dottedpath
+                return;
             case NodeType.switch:
                 bindSwitch(node);
                 return;
@@ -772,13 +775,13 @@ export function Binder() {
             bindNode(node.tagOrigin.startTag, node);
 
             if (node.canonicalName !== undefined) {
-                addSymbolToTable(currentContainer.containedScope.arguments!, node.canonicalName, node, null, null);
+                addSymbolToTable(currentContainer.containedScope.arguments!, node.uiName, node, null, null);
             }
 
             return;
         }
 
-        addSymbolToTable(currentContainer.containedScope.arguments!, node.canonicalName, node, null, null);
+        addSymbolToTable(currentContainer.containedScope.arguments!, node.uiName, node, null, null);
         bindNode(node.javaLikeTypename, node);
         bindNode(node.identifier, node);
         bindNode(node.defaultValue, node);
@@ -907,34 +910,36 @@ export function Binder() {
             // function bar() {} -- error, functions may only be defined once
             // bar(); -- error, bar is not visible
 
+            const existingFunction = RootNode.containedScope.variables!.get(node.canonicalName) || currentContainer.containedScope.this?.get(node.canonicalName);
+            if (existingFunction && existingFunction.type.typeKind === TypeKind.functionSignature) {
+                // if acf { ...
+                //      errorAtRange(getFunctionNameRange(node.range), "Redefinition of hoistable function.");
+                // }
+            }
+
             let scopeTarget : SymTab;
+
             if (currentContainer.containedScope.local) {
                 scopeTarget = currentContainer.containedScope.local;
+            }
+            else if (RootNode.cfFileType === CfFileType.cfc && isInCfcPsuedoConstructor(node)) {
+                scopeTarget = currentContainer.containedScope.this!;
             }
             else {
                 scopeTarget = RootNode.containedScope.variables!;
             }
             
             const sig = cfFunctionSignature(
-                node.canonicalName,
+                node.uiName!, // canonicalName implies we have a uiName, and we know here that we have a valid canonicalName
                 (<any[]>node.params).map((param: Script.FunctionParameter | Tag.FunctionParameter) => ({...param, type: SyntheticType.any()})),
                 SyntheticType.any());
 
             addSymbolToTable(
                 scopeTarget,
-                node.canonicalName,
+                node.uiName!,
                 node,
                 sig,
                 null);
-
-            if (RootNode.cfFileType === CfFileType.cfc && isInCfcPsuedoConstructor(node)) {
-                addSymbolToTable(
-                    RootNode.containedScope.this!,
-                    node.canonicalName,
-                    node,
-                    sig,
-                    null);
-            }
         }
 
         node.containedScope = {
@@ -948,6 +953,12 @@ export function Binder() {
             addSymbolToTable(node.containedScope.arguments!, param.canonicalName, param, null, SyntheticType.any());
         }
 
+        if (!node.fromTag && node.kind === NodeType.functionDefinition) {
+            // access modifier is a terminal which gets autobound in bindDirectTerminals, otherwise we would bind that here, too
+            bindNode(node.returnType, node);
+            bindNode(node.nameToken, node);
+        }
+        
         const detachedFlow = newFlowGraphRootedAt(node);
         detachedClosureFlows.push(detachedFlow);
 

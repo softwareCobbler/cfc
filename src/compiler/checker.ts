@@ -1,4 +1,4 @@
-import { Diagnostic, SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, FlowId, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges } from "./node";
+import { Diagnostic, SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges } from "./node";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, cfIntersection, Type, TypeKind, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfNever, cfStruct, cfUnion, SyntheticType, TypeFlags } from "./types";
 import { findAncestor, getAttributeValue, getContainingFunction, getNodeLinks, getSourceFile, getTriviallyComputableString } from "./utils";
@@ -124,17 +124,17 @@ export function Checker() {
                 }
                 return;
             case NodeType.simpleStringLiteral:
-                setCachedTermEvaluatedType(node, SyntheticType.string());
+                setCachedEvaluatedNodeType(node, SyntheticType.string());
                 return;
             case NodeType.interpolatedStringLiteral:
                 checkList(node.elements);
-                setCachedTermEvaluatedType(node, SyntheticType.string());
+                setCachedEvaluatedNodeType(node, SyntheticType.string());
                 return;
             case NodeType.numericLiteral:
-                setCachedTermEvaluatedType(node, SyntheticType.number());
+                setCachedEvaluatedNodeType(node, SyntheticType.number());
                 return;
             case NodeType.booleanLiteral:
-                setCachedTermEvaluatedType(node, SyntheticType.boolean());
+                setCachedEvaluatedNodeType(node, SyntheticType.boolean());
                 return;
             case NodeType.identifier:
                 // klude/fixme!: identifier.source can be an indexed access
@@ -165,6 +165,9 @@ export function Checker() {
                 checkFunctionDefinition(node);
                 return;
             case NodeType.dottedPath:
+                return;
+            case NodeType.dottedPathRest:
+                // no-op, taken care of by dottedPath
                 return;
             case NodeType.switch:
                 checkSwitch(node);
@@ -335,7 +338,7 @@ export function Checker() {
         return work(flow);
 
         function work(flow: Flow) : Type | undefined {
-            const type = getCachedEvaluatedTypeOfIdentifierAtFlow(flow, canonicalName);
+            const type = getCachedEvaluatedFlowType(flow, canonicalName);
 
             // we got a type at this flow
             if (type) {
@@ -496,23 +499,24 @@ export function Checker() {
     function checkCallExpression(node: CallExpression) {
         checkNode(node.left);
         checkList(node.args);
-        const type = getCachedTermEvaluatedType(node.left);
+        const type = getCachedEvaluatedNodeType(node.left);
         if (type) {
             if (type.typeKind === TypeKind.any) {
-                setCachedTermEvaluatedType(node, SyntheticType.any());
+                setCachedEvaluatedNodeType(node, SyntheticType.any());
                 return;
             }
-            if (isCallable(type)) {
-                unsafeAssertTypeKind<cfFunctionSignature>(type); // could be a `new` expression though?
-                setCachedTermEvaluatedType(node, type.returns);
+            if (isCallable(type) && type.typeKind === TypeKind.functionSignature) {
+                setCachedEvaluatedNodeType(node, type.returns);
 
                 const minRequiredParams = type.params.filter(param => param.required === true).length;
                 const maxParams = type.params.length;
                 const namedArgCount = node.args.filter(arg => !!arg.equals).length;
+
                 if (namedArgCount !== node.args.length && namedArgCount !== 0) {
                     typeErrorAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), "All arguments must be named, if any are named.");
                 }
-                else if (node.args.length < minRequiredParams || node.args.length > maxParams) {
+
+                if (node.args.length < minRequiredParams || node.args.length > maxParams) {
                     let msg;
                     if (minRequiredParams !== maxParams) msg = `Expected between ${minRequiredParams} and ${maxParams} arguments, but got ${node.args.length}`;
                     else msg = `Expected ${maxParams} arguments, but got ${node.args.length}`;
@@ -527,7 +531,7 @@ export function Checker() {
                     const paramType = type.params[i]?.type ?? null;
                     if (!paramType) break;
                     const arg = node.args[i];
-                    const argType = getCachedTermEvaluatedType(arg);
+                    const argType = getCachedEvaluatedNodeType(arg);
                     if (!isAssignable(/*assignThis*/ argType, /*to*/ paramType)) {
                         // error
                     }
@@ -550,7 +554,7 @@ export function Checker() {
 
     function checkUnaryOperator(node: UnaryOperator) {
         checkNode(node.expr);
-        const type = getCachedTermEvaluatedType(node.expr);
+        const type = getCachedEvaluatedNodeType(node.expr);
         if (type.typeKind !== TypeKind.any && type.typeKind !== TypeKind.number) {
             typeErrorAtNode(node.expr, "Unary operator requires a numeric operand.");
         }
@@ -566,7 +570,7 @@ export function Checker() {
                 // `x = y` is effectively `variables.x = y`
                 if (node.left.kind === NodeType.identifier && node.left.canonicalName) {
                     const lhsType = getTypeAtFlow(node.left, node.left.canonicalName);
-                    const rhsType = getCachedTermEvaluatedType(node.right);
+                    const rhsType = getCachedEvaluatedNodeType(node.right);
                     if (!lhsType) {
                         // there is no type at the current flow; so, this is the first assignment for this var in this scope
                         if (node.typeAnnotation) {
@@ -574,10 +578,10 @@ export function Checker() {
                             if (!isAssignable(rhsType, node.typeAnnotation)) {
                                 //typeErrorAtNode(node.right, "RHS is not assignable to LHS.");
                             }
-                            setCachedEvaluatedTypeOfIdentifierAtFlow(node.left.flow!, node.left.canonicalName, evaluatedTypeAnnotation);
+                            setCachedEvaluatedFlowType(node.left.flow!, node.left.canonicalName, evaluatedTypeAnnotation);
                         }
                         else {
-                            setCachedEvaluatedTypeOfIdentifierAtFlow(node.left.flow!, node.left.canonicalName, SyntheticType.any());
+                            setCachedEvaluatedFlowType(node.left.flow!, node.left.canonicalName, SyntheticType.any());
                         }
                     }
                     else {
@@ -596,8 +600,8 @@ export function Checker() {
             case BinaryOpType.contains:
             case BinaryOpType.does_not_contain:
             case BinaryOpType.cat: {
-                const leftType = getCachedTermEvaluatedType(node.left);
-                const rightType = getCachedTermEvaluatedType(node.right);
+                const leftType = getCachedEvaluatedNodeType(node.left);
+                const rightType = getCachedEvaluatedNodeType(node.right);
                 if (leftType.typeKind !== TypeKind.any && leftType.typeKind !== TypeKind.string) {
                     //typeErrorAtNode(node.left, `Left operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a string.`);
                 }
@@ -613,8 +617,8 @@ export function Checker() {
                 break;
             }
             default: { // all other operators are (number op number)
-                const leftType = getCachedTermEvaluatedType(node.left);
-                const rightType = getCachedTermEvaluatedType(node.right);
+                const leftType = getCachedEvaluatedNodeType(node.left);
+                const rightType = getCachedEvaluatedNodeType(node.right);
                 // acf allows (bool) + (bool), but maybe we don't want to support that
                 if (leftType.typeKind !== TypeKind.any && leftType.typeKind !== TypeKind.number) {
                     //typeErrorAtNode(node.left, `Left operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a number.`);
@@ -638,16 +642,15 @@ export function Checker() {
         }
     }
 
-    const evaluatedTypeMap = new Map<FlowId, Map<string, Type>>();
-    function setCachedEvaluatedTypeOfIdentifierAtFlow(flow: Flow, name: string, type: Type) : void {
-        if (!evaluatedTypeMap.has(flow.flowId)) {
-            evaluatedTypeMap.set(flow.flowId, new Map());
+    function setCachedEvaluatedFlowType(flow: Flow, name: string, type: Type) : void {
+        if (!sourceFile.cachedFlowTypes.has(flow.flowId)) {
+            sourceFile.cachedFlowTypes.set(flow.flowId, new Map());
         }
-        evaluatedTypeMap.get(flow.flowId)!.set(name, type);
+        sourceFile.cachedFlowTypes.get(flow.flowId)!.set(name, type);
     }
 
-    function getCachedEvaluatedTypeOfIdentifierAtFlow(flow: Flow, name: string) : Type | undefined {
-        return evaluatedTypeMap.get(flow.flowId)?.get(name);
+    function getCachedEvaluatedFlowType(flow: Flow, name: string) : Type | undefined {
+        return sourceFile.cachedFlowTypes.get(flow.flowId)?.get(name);
     }
 
     function checkVariableDeclaration(node: VariableDeclaration) : void {
@@ -659,7 +662,7 @@ export function Checker() {
                 return;
             }
             else {
-                setCachedEvaluatedTypeOfIdentifierAtFlow(node.flow!, symTabEntry.canonicalName, evaluateType(node, symTabEntry.type));
+                setCachedEvaluatedFlowType(node.flow!, symTabEntry.canonicalName, evaluateType(node, symTabEntry.type));
             }
         }
 
@@ -678,7 +681,7 @@ export function Checker() {
                 evaluatedType = SyntheticType.any();
             }
 
-            const rhsType = getCachedTermEvaluatedType(node.expr.right);
+            const rhsType = getCachedEvaluatedNodeType(node.expr.right);
             if (!isAssignable(rhsType, evaluatedType)) {
                 typeErrorAtNode(node.expr.left, "Leftside type is not assignable to rightside type.");
                 evaluatedType = SyntheticType.any();
@@ -700,16 +703,13 @@ export function Checker() {
             }
 
             if (node.expr.left.kind === NodeType.identifier && node.expr.left.canonicalName !== undefined) {
-                setCachedEvaluatedTypeOfIdentifierAtFlow(node.expr.left.flow!, node.expr.left.canonicalName, evaluatedType);
+                setCachedEvaluatedFlowType(node.expr.left.flow!, node.expr.left.canonicalName, evaluatedType);
             }
         }
     }
 
-    // fixme: only good per instance...
-    // is this a singleton or what
-    const termEvaluatedTypeCache = new Map<NodeId, Type>();
-
-    function getCachedTermEvaluatedType(node: Node | null) : Type {
+    // fixme: needs to take a SourceFile arg or that defaults to our current or ...
+    function getCachedEvaluatedNodeTypeImpl(node: Node | null, workingSourceFile: SourceFile) : Type {
         if (!node) {
             return SyntheticType.any();
         }
@@ -720,23 +720,27 @@ export function Checker() {
             targetId = node.accessElements[node.accessElements.length-1].nodeId;
         }*/
 
-        if (termEvaluatedTypeCache.has(targetId)) {
-            return termEvaluatedTypeCache.get(targetId)!;
+        if (workingSourceFile.cachedNodeTypes.has(targetId)) {
+            return workingSourceFile.cachedNodeTypes.get(targetId)!;
         }
         else {
             return SyntheticType.any();
         }
     }
 
-    function setCachedTermEvaluatedType(node: Node, type: Type) {
+    function getCachedEvaluatedNodeType(node: Node | null) {
+        return getCachedEvaluatedNodeTypeImpl(node, sourceFile);
+    }
+
+    function setCachedEvaluatedNodeType(node: Node, type: Type) {
         if (type.typeKind === TypeKind.typeConstructor
             || type.typeKind === TypeKind.typeConstructorInvocation
             || type.typeKind === TypeKind.cachedTypeConstructorInvocation) {
             typeErrorAtNode(node, "Type is not concrete.");
-            termEvaluatedTypeCache.set(node.nodeId, SyntheticType.any());
+            sourceFile.cachedNodeTypes.set(node.nodeId, SyntheticType.any());
         }
         else {
-            termEvaluatedTypeCache.set(node.nodeId, type);
+            sourceFile.cachedNodeTypes.set(node.nodeId, type);
         }
     }
 
@@ -777,7 +781,7 @@ export function Checker() {
                         // warn about local/arguments use outside of function
                         return;
                     }
-                    setCachedTermEvaluatedType(node, structViewOfScope(containingFunction.containedScope![name]!));
+                    setCachedEvaluatedNodeType(node, structViewOfScope(containingFunction.containedScope![name]!));
                 }
                 else if (name === "this") {
                     const sourceFile = getSourceFile(node)!;
@@ -785,7 +789,7 @@ export function Checker() {
                         // warn about using `this` outside of a cfc
                         return;
                     }
-                    setCachedTermEvaluatedType(node, structViewOfScope(sourceFile.containedScope![name]!));
+                    setCachedEvaluatedNodeType(node, structViewOfScope(sourceFile.containedScope!.this!));
                 }
                 else {
                     // @fixme
@@ -804,8 +808,8 @@ export function Checker() {
                 const evaluatedType = evaluateType(node, type);
 
                 // is it necessary to cache the type on both the flow node (if it exists) *and* the node?
-                if (node.flow) setCachedEvaluatedTypeOfIdentifierAtFlow(node.flow, name, evaluatedType);
-                setCachedTermEvaluatedType(node, evaluatedType);
+                if (node.flow) setCachedEvaluatedFlowType(node.flow, name, evaluatedType);
+                setCachedEvaluatedNodeType(node, evaluatedType);
                 return;
             }
 
@@ -817,12 +821,12 @@ export function Checker() {
                     if (noUndefinedVars) {
                         typeErrorAtNode(node, `Identifier '${name}' is used before its declaration.`);
                     }
-                    setCachedTermEvaluatedType(node, SyntheticType.any());
+                    setCachedEvaluatedNodeType(node, SyntheticType.any());
                     return;
                 }
                 else {
                     // identifer is declared in some outer scope, we have to assume it is ok
-                    setCachedTermEvaluatedType(node, resolvedSymbol.symTabEntry.type);
+                    setCachedEvaluatedNodeType(node, resolvedSymbol.symTabEntry.type);
                     return;
                 }
             }
@@ -836,7 +840,7 @@ export function Checker() {
     function checkIndexedAccess(node: IndexedAccess) {
         checkNode(node.root);
 
-        let type = getCachedTermEvaluatedType(node.root);
+        let type = getCachedEvaluatedNodeType(node.root);
         if (!type || type.typeKind === TypeKind.any) {
             return;
         }
@@ -845,26 +849,26 @@ export function Checker() {
         // that is, the indexed-access root node itself, and the subsequent elements
         // not on the component identifiers, dots, brackets, etc.
         if (isStructOrArray(type)) {
-            setCachedTermEvaluatedType(node.root, type);
+            setCachedEvaluatedNodeType(node.root, type);
             for (let i = 0; i < node.accessElements.length; i++) {
                 const element = node.accessElements[i];
                 if (element.accessType === IndexedAccessType.dot) {
                     type = getMemberType(type, node, element.property.token.text);
                     if (type.typeKind === TypeKind.any) {
                         type = SyntheticType.any(); // subsequent access elements will also be any
-                        setCachedTermEvaluatedType(element, SyntheticType.any());
+                        setCachedEvaluatedNodeType(element, SyntheticType.any());
                     }
                     else {
-                        setCachedTermEvaluatedType(element, type);
+                        setCachedEvaluatedNodeType(element, type);
                     }
                 }
             }
-            setCachedTermEvaluatedType(node, type);
+            setCachedEvaluatedNodeType(node, type);
         }
         else {
-            setCachedTermEvaluatedType(node.root, SyntheticType.any());
+            setCachedEvaluatedNodeType(node.root, SyntheticType.any());
             for (const element of node.accessElements) {
-                setCachedTermEvaluatedType(element, SyntheticType.any());
+                setCachedEvaluatedNodeType(element, SyntheticType.any());
             }
             // error: some kind of indexed access error
         }
@@ -874,10 +878,11 @@ export function Checker() {
 
     function checkIndexedAccessChainElement(node: IndexedAccessChainElement) {
         if (node.parent!.flags & NodeFlags.checkerError) {
+            setCachedEvaluatedFlowType
             return;
         }
 
-        const parentType = getCachedTermEvaluatedType(node.parent);
+        const parentType = getCachedEvaluatedNodeType(node.parent);
         if (parentType.typeKind === TypeKind.any) {
             return;
         }
@@ -885,8 +890,9 @@ export function Checker() {
         if (node.accessType === IndexedAccessType.dot) {
             const name = node.property.token.text;
             if (!(<cfStruct>parentType).membersMap.has(name)) {
-                // need a flag like "checked struct accesses"
-                //typeErrorAtNode(node.property, `Property '${name}' does not exist on parent type.`);
+                if (noUndefinedVars) {
+                    //typeErrorAtNode(node.property, `Property '${name}' does not exist on parent type.`);
+                }
                 node.flags |= NodeFlags.checkerError;
             }
         }
@@ -894,7 +900,7 @@ export function Checker() {
 
     function checkFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {
         for (const param of node.params) {
-            setCachedEvaluatedTypeOfIdentifierAtFlow(node.flow!, param.canonicalName, param.type || SyntheticType.any());
+            setCachedEvaluatedFlowType(node.flow!, param.canonicalName, param.type || SyntheticType.any());
         }
 
         if (node.kind === NodeType.functionDefinition && node.fromTag) {
@@ -1382,7 +1388,7 @@ export function Checker() {
 
     return {
         check,
-        getCachedTermEvaluatedType,
+        getCachedEvaluatedNodeType: getCachedEvaluatedNodeTypeImpl,
         setNoUndefinedVars,
     }
 }
