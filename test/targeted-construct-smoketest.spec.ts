@@ -93,6 +93,12 @@ describe("general smoke test for particular constructs", () => {
 
                     argName = 42; // ok, not a redeclaration, just a reassignment
                 }
+
+                f = () => {
+                    // var x redeclaration should be OK
+                    for (var x in y) {}
+                    for (var x in y) {}
+                }
             </cfscript>
         `, CfFileType.cfm, 6);
     });

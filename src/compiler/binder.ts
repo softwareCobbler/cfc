@@ -402,7 +402,7 @@ export function Binder() {
                 errorAtRange(node.expr.range, "Local variables may not be declared at top-level scope.");
                 return;
             }
-            targetScope = containingFunction.containedScope?.arguments!;
+            targetScope = containingFunction.containedScope?.local!;
         }
 
         if (node.expr.kind === NodeType.identifier) {
