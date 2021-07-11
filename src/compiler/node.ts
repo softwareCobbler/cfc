@@ -1,4 +1,4 @@
-import { SourceRange, TokenType, Token, NilToken, TokenTypeUiString, CfFileType } from "./scanner";
+import { Scanner, SourceRange, TokenType, Token, NilToken, TokenTypeUiString, CfFileType } from "./scanner";
 import { getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString } from "./utils";
 import { Type as Type } from "./types";
 
@@ -291,6 +291,16 @@ export function mergeRanges(...nodes : (SourceRange | Node | Node[] | undefined 
     return result;
 }
 
+export interface Diagnostic {
+    fromInclusive: number;
+    toExclusive: number;
+    msg: string;
+    __debug_from_line?: number,
+    __debug_from_col?: number,
+    __debug_to_line?: number,
+    __debug_to_col?: number,
+}
+
 export interface SourceFile extends NodeBase {
     kind: NodeType.sourceFile,
     absPath: string,
@@ -298,6 +308,10 @@ export interface SourceFile extends NodeBase {
     source: string | Buffer,
     content: Node[]
     libRefs: SourceFile[],
+    diagnostics: Diagnostic[],
+    scanner: Scanner,
+    nodeTypes: Map<NodeId, Type>,
+    flowTypes: Map<FlowId, Type>,
 }
 
 export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: string | Buffer) : SourceFile {
@@ -307,6 +321,10 @@ export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: 
     sourceFile.source = sourceText;
     sourceFile.content = [];
     sourceFile.libRefs = [];
+    sourceFile.diagnostics = [];
+    sourceFile.scanner = Scanner(sourceFile.source);
+    sourceFile.nodeTypes = new Map<NodeId, Type>();
+    sourceFile.flowTypes = new Map<FlowId, Type>();
     return sourceFile;
 }
 

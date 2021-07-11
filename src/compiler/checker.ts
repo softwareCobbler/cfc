@@ -1,21 +1,19 @@
-import { SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, FlowId, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges } from "./node";
-import { CfFileType, Scanner, SourceRange } from "./scanner";
-import { Diagnostic } from "./parser";
+import { Diagnostic, SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, FlowId, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges } from "./node";
+import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, cfIntersection, Type, TypeKind, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfNever, cfStruct, cfUnion, SyntheticType, TypeFlags } from "./types";
 import { findAncestor, getAttributeValue, getContainingFunction, getNodeLinks, getSourceFile, getTriviallyComputableString } from "./utils";
 
 export function Checker() {
     let sourceFile!: SourceFile;
     let scanner!: Scanner;
-    scanner;
     let diagnostics!: Diagnostic[];
     let rootScope: ScopeDisplay;
-    let emitTypeErrors = false;
+    let noUndefinedVars = false;
 
-    function check(sourceFile_: SourceFile, scanner_: Scanner, diagnostics_: Diagnostic[]) {
+    function check(sourceFile_: SourceFile) {
         sourceFile = sourceFile_;
-        scanner = scanner_;
-        diagnostics = diagnostics_;
+        scanner = sourceFile.scanner;
+        diagnostics = sourceFile.diagnostics;
 
         rootScope = sourceFile.containedScope!;
         rootScope; // "unused"
@@ -23,13 +21,11 @@ export function Checker() {
         checkList(sourceFile.content);
     }
 
-    function setEmitTypeErrors(newVal: boolean) : void {
-        emitTypeErrors = newVal;
+    function setNoUndefinedVars(newVal: boolean) : void {
+        noUndefinedVars = newVal;
     }
 
     function typeErrorAtRange(range: SourceRange, msg: string) : void {
-        if (!emitTypeErrors) return;
-
         const freshDiagnostic : Diagnostic = {
             fromInclusive: range.fromInclusive,
             toExclusive: range.toExclusive,
@@ -818,7 +814,9 @@ export function Checker() {
                 if (useContainer === resolvedSymbol.container) {
                     // there is a symbol table entry, but we could not find a type on the flow graph
                     // if we're toplevel 
-                    typeErrorAtNode(node, `Identifier '${name}' is used before its declaration.`);
+                    if (noUndefinedVars) {
+                        typeErrorAtNode(node, `Identifier '${name}' is used before its declaration.`);
+                    }
                     setCachedTermEvaluatedType(node, SyntheticType.any());
                     return;
                 }
@@ -829,7 +827,9 @@ export function Checker() {
                 }
             }
 
-            typeErrorAtNode(node, `Cannot find name '${name}'.`);
+            if (noUndefinedVars) {
+                typeErrorAtNode(node, `Cannot find name '${name}'.`);
+            }
         }
     }
 
@@ -1383,6 +1383,8 @@ export function Checker() {
     return {
         check,
         getCachedTermEvaluatedType,
-        setEmitTypeErrors,
+        setNoUndefinedVars,
     }
 }
+
+export type Checker = ReturnType<typeof Checker>;

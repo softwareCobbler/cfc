@@ -1,4 +1,5 @@
 import {
+    Diagnostic,
     setDebug as setNodeFactoryDebug,
     CfTag, Node, NodeType, TagAttribute, NodeFlags, Terminal, Comment, TextSpan, NilTerminal,
     Conditional, FunctionParameter, FromTag, CommentType,
@@ -100,28 +101,12 @@ interface ScannerState {
     artificialEndLimit: number | undefined;
 }
 
-export interface Diagnostic {
-    fromInclusive: number;
-    toExclusive: number;
-    msg: string;
-    __debug_from_line?: number,
-    __debug_from_col?: number,
-    __debug_to_line?: number,
-    __debug_to_col?: number,
-}
-
-
-
 export function Parser() {
-    function getScanner() {
-        return scanner;
-    }
-
     function setSourceFile(sourceFile_: SourceFile) {
         sourceFile = sourceFile_;
-        scanner = Scanner(sourceFile.source);
+        scanner = sourceFile.scanner;
         parseContext = ParseContext.none;
-        diagnostics = [];
+        diagnostics = sourceFile.diagnostics;
         return self_;
     }
 
@@ -213,13 +198,11 @@ export function Parser() {
 
     const self_ = {
         setScannerMode,
-        getScanner,
         setSourceFile,
 
         setDebug,
         setParseTypes,
 
-        getDiagnostics,
         parseTags,
         parseScript,
         parse,
@@ -3963,9 +3946,5 @@ export function Parser() {
         parseContext = savedContext;
 
         return {trivia, type};
-    }
-
-    function getDiagnostics() : Diagnostic[] {
-        return diagnostics;
     }
 }

@@ -1,6 +1,5 @@
-import { SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, Script, Tag, ConditionalSubtype, SymTab } from "./node";
+import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, Script, Tag, ConditionalSubtype, SymTab } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, getNodeLinks, isInCfcPsuedoConstructor } from "./utils";
-import { Diagnostic } from "./parser";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { cfFunctionSignature, SyntheticType, Type, TypeKind } from "./types";
 
@@ -15,17 +14,17 @@ export function Binder() {
 
     let nodeMap = new Map<NodeId, Node>();
 
-    function bind(sourceFile: SourceFile, scanner_: Scanner, diagnostics_: Diagnostic[]) {
-        if (sourceFile.cfFileType === CfFileType.dCfm) {
-            bindDeclarationFile(sourceFile);
+    function bind(sourceFile_: SourceFile) {
+        if (sourceFile_.cfFileType === CfFileType.dCfm) {
+            bindDeclarationFile(sourceFile_);
             return;
         }
 
+        scanner = sourceFile_.scanner;
+        diagnostics = sourceFile_.diagnostics;
         nodeMap = new Map<NodeId, Node>();
-        scanner = scanner_;
-        diagnostics = diagnostics_;
 
-        RootNode = sourceFile as NodeWithScope<SourceFile>;
+        RootNode = sourceFile_ as NodeWithScope<SourceFile>;
 
         RootNode.containedScope = {
             container: null,
@@ -36,19 +35,19 @@ export function Binder() {
             form: new Map<string, SymTabEntry>(),
         };
 
-        if (sourceFile.cfFileType === CfFileType.cfc) {
+        if (sourceFile_.cfFileType === CfFileType.cfc) {
             RootNode.containedScope.this = new Map<string, SymTabEntry>();
         }
 
         currentFlow = freshFlow([], FlowType.default);
         bindFlowToNode(currentFlow, RootNode);
 
-        if (sourceFile.cfFileType === CfFileType.cfc) {
+        if (sourceFile_.cfFileType === CfFileType.cfc) {
             RootNode.containedScope.this = new Map<string, SymTabEntry>();
         }
 
         currentContainer = RootNode;
-        bindListFunctionsFirst(sourceFile.content, sourceFile);
+        bindListFunctionsFirst(sourceFile_.content, sourceFile_);
         connectDetachedClosureFlowsToCurrentFlow();
     }
 

@@ -255,7 +255,7 @@ describe("MX-Unit smoke test", () => {
     const libPath = path.resolve("./src/lang-server/server/src/runtimelib/lib.cf2018.d.cfm");
     const stdLib = SourceFile(libPath , CfFileType.dCfm, fs.readFileSync(libPath));
     parser.setSourceFile(stdLib).parse();
-    binder.bind(stdLib, parser.getScanner(), parser.getDiagnostics());
+    binder.bind(stdLib);
     
     for (const fileBaseName of Object.keys(expectedDiagnosticCountByFile)) {
         const expectedDiagnosticCount = expectedDiagnosticCountByFile[fileBaseName];
@@ -266,13 +266,12 @@ describe("MX-Unit smoke test", () => {
             const sourceFile = SourceFile(absPath, cfmOrCfc(absPath)!, textBuffer);
             sourceFile.libRefs.push(stdLib);
             parser.setSourceFile(sourceFile).parse();
-            const diagnostics = parser.getDiagnostics();
 
-            flattenTree(sourceFile);
-            binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
+            flattenTree(sourceFile); // just make sure it doesn't throw
+            binder.bind(sourceFile);
             //checker.check(sourceFile, parser.getScanner(), parser.getDiagnostics());
             
-            assert.strictEqual(diagnostics.length, expectedDiagnosticCount, `${fileBaseName} parsed with exactly ${expectedDiagnosticCount} emitted diagnostics`);
+            assert.strictEqual(sourceFile.diagnostics.length, expectedDiagnosticCount, `${fileBaseName} parsed with exactly ${expectedDiagnosticCount} emitted diagnostics`);
         });
     }
 });

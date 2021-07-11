@@ -50,8 +50,7 @@ type TextDocumentUri = string;
 interface CflsConfig {
 	parser: ReturnType<typeof Parser>,
 	binder: ReturnType<typeof Binder>,
-	checker: ReturnType<typeof Checker>,
-	// we need to hold an *instance* of a checker per file in the cache
+	checker: Checker,
 	parseCache: Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, cfNode>}>,
 	lib: SourceFile | null,
 	x_types: boolean
@@ -63,7 +62,7 @@ function naiveGetDiagnostics(uri: TextDocumentUri, text: string, fileType: CfFil
 	if (!cflsConfig) return [];
 	
 	// how to tell if we were launched in debug mode ?
-	const {parser,binder,checker, parseCache} = cflsConfig;
+	const {parser,binder, parseCache} = cflsConfig;
 
 	const cfFileType = cfmOrCfc(uri);
 	if (!cfFileType) {
@@ -78,10 +77,10 @@ function naiveGetDiagnostics(uri: TextDocumentUri, text: string, fileType: CfFil
     parser.setSourceFile(sourceFile);
 
     parser.parse(fileType);
-	binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
+	binder.bind(sourceFile);
 	
 	if (cflsConfig.x_types) {
-		checker.check(sourceFile, parser.getScanner(), parser.getDiagnostics());
+		cflsConfig.checker.check(sourceFile);
 	}
 	
 	parseCache.set(uri, {
@@ -90,7 +89,7 @@ function naiveGetDiagnostics(uri: TextDocumentUri, text: string, fileType: CfFil
 		nodeMap: binder.getNodeMap(),
 	});
 
-    return parser.getDiagnostics();
+    return sourceFile.diagnostics;
 }
 
 // Create a connection for the server, using Node's IPC as a transport.
@@ -583,7 +582,7 @@ connection.onNotification("cflsp/libpath", (libAbsPath: string) => {
 	const path = libAbsPath;
 	const sourceFile = SourceFile(path, CfFileType.dCfm, fs.readFileSync(path));
 	cflsConfig.parser.setSourceFile(sourceFile).parse();
-	cflsConfig.binder.bind(sourceFile, cflsConfig.parser.getScanner(), cflsConfig.parser.getDiagnostics());
+	cflsConfig.binder.bind(sourceFile);
 	cflsConfig.lib = sourceFile;
 	reemitDiagnostics();
 });
