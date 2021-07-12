@@ -358,7 +358,7 @@ export function Terminal(token: Token, trivia: Node[] = []) : Terminal {
     return v;
 }
 
-export const NilTerminal = (pos: number) => Terminal(NilToken(pos));
+export function NilTerminal(pos: number) { return Terminal(NilToken(pos)) };
 
 export const freshFlow = (function() {
     let flowId = 0;
@@ -1434,13 +1434,6 @@ interface FunctionParameterBase extends NodeBase {
 
 export type FunctionParameter = Script.FunctionParameter | Tag.FunctionParameter;
 
-export function copyFunctionParameterForTypePurposes(param: FunctionParameter) {
-    if (param.fromTag) {
-        return Tag.FunctionParameter(param.tagOrigin.startTag! as CfTag.Common, param.type);
-    }
-    return Script.FunctionParameter(param.requiredTerminal, param.javaLikeTypename, param.dotDotDot, param.identifier, param.equals, param.defaultValue, param.comma, param.type)
-}
-
 export namespace Script {
     export interface FunctionParameter extends FunctionParameterBase {
         kind: NodeType.functionParameter,
@@ -1488,7 +1481,7 @@ export namespace Tag {
         type: Type | null,
     }
 
-    export function FunctionParameter(tag: CfTag.Common, type: Type | null) : FunctionParameter {
+    export function FunctionParameter(tag: CfTag.Common) : FunctionParameter {
         const name = getTriviallyComputableString(getAttributeValue(tag.attrs, "name"));
 
         const v = NodeBase<FunctionParameter>(NodeType.functionParameter, tag.range);
@@ -1497,7 +1490,7 @@ export namespace Tag {
         v.canonicalName = name?.toLowerCase() || "<<ERROR>>";
         v.uiName = name || "<<ERROR>>";
         v.required = getTriviallyComputableBoolean(getAttributeValue(tag.attrs, "required")) ?? null;
-        v.type = type;
+        v.type = null;
         return v;
     }
 }
@@ -1518,7 +1511,7 @@ export namespace Script {
         accessModifier : Terminal | null,
         returnType     : DottedPath | null,
         functionToken  : Terminal,
-        nameToken      : Identifier | null,
+        nameToken      : Identifier | null, // fixme: need to know if this null because of an error or because it's an anonymous function
         leftParen      : Terminal,
         params         : FunctionParameter[],
         rightParen     : Terminal,
@@ -1582,12 +1575,12 @@ export namespace Tag {
 export interface ArrowFunctionDefinition extends NodeBase {
     kind: NodeType.arrowFunctionDefinition;
     parens: {left: Terminal, right: Terminal} | null,
-    params: FunctionParameter[];
+    params: Script.FunctionParameter[]; // not possible to have a tag based arrow function def
     fatArrow: Terminal,
     body: Node;
 }
 
-export function ArrowFunctionDefinition(leftParen: Terminal | null, params: FunctionParameter[], rightParen: Terminal | null, fatArrow: Terminal, body: Node) : ArrowFunctionDefinition {
+export function ArrowFunctionDefinition(leftParen: Terminal | null, params: Script.FunctionParameter[], rightParen: Terminal | null, fatArrow: Terminal, body: Node) : ArrowFunctionDefinition {
     const v = NodeBase<ArrowFunctionDefinition>(NodeType.arrowFunctionDefinition);
     v.range = mergeRanges(leftParen, body);
     v.parens = (leftParen && rightParen) ? {left: leftParen, right: rightParen} : null,

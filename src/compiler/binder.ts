@@ -1,7 +1,7 @@
-import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, Script, Tag, ConditionalSubtype, SymTab } from "./node";
-import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, getNodeLinks, isInCfcPsuedoConstructor } from "./utils";
+import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, ConditionalSubtype, SymTab } from "./node";
+import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, getNodeLinks, isInCfcPsuedoConstructor, isHoistableFunctionDefinition } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
-import { cfFunctionSignature, SyntheticType, Type, TypeKind } from "./types";
+import { SyntheticType, Type, TypeKind, extractCfFunctionSignature } from "./types";
 
 export function Binder() {
     let RootNode : NodeWithScope<SourceFile>;
@@ -285,7 +285,7 @@ export function Binder() {
         // types always have names here?
         // we get them from `@type x = ` so presumably always...
         // also `@declare function foo` and possibly `@declare global <identifier-name> : type`
-        currentContainer.containedScope.typedefs.set(node.name!, node);
+        currentContainer.containedScope.typedefs.set(node.uiName!, node);
     }
 
     function bindTag(node: CfTag) {
@@ -895,10 +895,6 @@ export function Binder() {
         }
     }
 
-    function isHoistableFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) : node is FunctionDefinition {
-        return node.kind === NodeType.functionDefinition && node.parent?.kind !== NodeType.binaryOperator;
-    }
-
     function bindFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {
         if (isHoistableFunctionDefinition(node) && typeof node.canonicalName === "string") {
             // lucee appears to not err on the following, but acf does
@@ -919,7 +915,7 @@ export function Binder() {
 
             let scopeTarget : SymTab;
 
-            if (currentContainer.containedScope.local) {
+            if (currentContainer.containedScope.local) { // it's only callable from local, but in ACF the name is taken globally
                 scopeTarget = currentContainer.containedScope.local;
             }
             else if (RootNode.cfFileType === CfFileType.cfc && isInCfcPsuedoConstructor(node)) {
@@ -929,10 +925,7 @@ export function Binder() {
                 scopeTarget = RootNode.containedScope.variables!;
             }
             
-            const sig = cfFunctionSignature(
-                node.uiName!, // canonicalName implies we have a uiName, and we know here that we have a valid canonicalName
-                (<any[]>node.params).map((param: Script.FunctionParameter | Tag.FunctionParameter) => ({...param, type: SyntheticType.any()})),
-                SyntheticType.any());
+            const sig = extractCfFunctionSignature(node);
 
             addSymbolToTable(
                 scopeTarget,
@@ -958,7 +951,7 @@ export function Binder() {
             bindNode(node.returnType, node);
             bindNode(node.nameToken, node);
         }
-        
+
         const detachedFlow = newFlowGraphRootedAt(node);
         detachedClosureFlows.push(detachedFlow);
 
@@ -1149,7 +1142,7 @@ export function Binder() {
                 case NodeType.type: {
                     switch (node.typeKind) {
                         case TypeKind.functionSignature: {
-                            addSymbolToTable(sourceFile.containedScope!.global!, node.name, node, node, null);
+                            addSymbolToTable(sourceFile.containedScope!.global!, node.uiName, node, node, null);
                             break;
                         }
                     }

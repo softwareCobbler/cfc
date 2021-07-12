@@ -19,9 +19,13 @@ const libPath = path.resolve("./src/lang-server/server/src/runtimelib/lib.cf2018
 const stdLib = SourceFile(libPath , CfFileType.dCfm, fs.readFileSync(libPath));
 
 
-const sourceFile = fromFile("./test/mxunit/mxunit-TestCase-Template.cfc");
+//const sourceFile = fromFile("./test/mxunit/mxunit-TestCase-Template.cfc");
 
-//const sourceFile = NilCfm(`<cfif <!--- `);
+const sourceFile = NilCfm(`
+<cfscript>
+    x = {a: {xyz: 1}, b: 2};
+    x.a.
+</cfscript>`);
 
 const parser = Parser().setDebug(true).setParseTypes(true);
 const binder = Binder().setDebug(true);
@@ -37,10 +41,11 @@ sourceFile.libRefs.push(stdLib);*/
 parser.setSourceFile(sourceFile);
 parser.parse();
 binder.bind(sourceFile);
+checker.check(sourceFile);
 
 const flatTree = flattenTree(sourceFile);
 
-checker.check(sourceFile);
+//checker.check(sourceFile);
 
 const diagnostics = sourceFile.diagnostics;
 console.log("got ", diagnostics.length + " diagnostics");

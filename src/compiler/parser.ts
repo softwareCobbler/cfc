@@ -2,7 +2,7 @@ import {
     Diagnostic,
     setDebug as setNodeFactoryDebug,
     CfTag, Node, NodeType, TagAttribute, NodeFlags, Terminal, Comment, TextSpan, NilTerminal,
-    Conditional, FunctionParameter, FromTag, CommentType,
+    Conditional, FromTag, CommentType,
     HashWrappedExpr, BinaryOperator, Parenthetical, UnaryOperator, BooleanLiteral,
     CallExpression, IndexedAccess, pushAccessElement, CallArgument, Identifier, SimpleStringLiteral, InterpolatedStringLiteral,
     NumericLiteral, DottedPath, ArrowFunctionDefinition, Statement, Block, 
@@ -27,8 +27,9 @@ import {
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
-import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, getAttributeValue } from "./utils";
-import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type, TypeFlags, cfFunctionSignature, cfTypeConstructorInvocation, cfVoid, cfTypeConstructorParam, cfTypeConstructor, cfIntersection, cfTypeId, cfUnion, cfStructMember, SyntheticType, TypeAttribute } from "./types";
+import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName} from "./utils";
+import { extractCfFunctionSignature, extractScriptFunctionParam } from "./types";
+import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type, TypeFlags, cfFunctionSignature, cfTypeConstructorInvocation, cfVoid, cfTypeConstructorParam, cfTypeConstructor, cfIntersection, cfTypeId, cfUnion, cfStructMember, SyntheticType, TypeAttribute, cfFunctionSignatureParam } from "./types";
 
 let debugParseModule = false;
 let parseTypes = false;
@@ -675,12 +676,12 @@ export function Parser() {
 
                 const types = parseTypeAnnotations(/*asDeclarationFile*/ false);
                 
-                const typedefs = types.filter(type => type.name !== undefined);
+                const typedefs = types.filter(type => type.uiName !== undefined);
                 if (typedefs.length > 0) {
                     node.typedefs = typedefs; // store the parsed type functions on the trivia node
                 }
 
-                const typeAnnotations = types.filter(type => type.name === undefined);
+                const typeAnnotations = types.filter(type => type.uiName === undefined);
                 if (typeAnnotations.length > 1) {
                     // we need to get the type's ranges and terminals and etc.
                     parseErrorAtRange(node.range, "Only one @type annotation is permitted per comment.");
@@ -1176,12 +1177,7 @@ export function Parser() {
                         continue;
                     }
                     if (node.kind === NodeType.tag && node.canonicalName === "argument") {
-                        const tagArgumentTypeAnnotation = getAttributeValue((<CfTag.Common>node).attrs, "type:");
-                        let type : Type | null = null;
-                        if (tagArgumentTypeAnnotation?.kind === NodeType.simpleStringLiteral) {
-                            type = parseType(tagArgumentTypeAnnotation.range.fromInclusive+1, tagArgumentTypeAnnotation.range.toExclusive-1);
-                        }
-                        params.push(Tag.FunctionParameter(node as CfTag.Common, type));
+                        params.push(Tag.FunctionParameter(node as CfTag.Common));
                         i++;
                         continue;
                     }
@@ -1672,12 +1668,7 @@ export function Parser() {
                     parseTrivia();
                     const declarationSpecifier = peek();
                     if (declarationSpecifier.text === "function") {
-                        const functionDecl = tryParseNamedFunctionDefinition(/*speculative*/false, /*asDeclaration*/true);
-                        if (!functionDecl.returnTypeAnnotation) {
-                            parseErrorAtRange(functionDecl.range, "A function declaration in a declaration file requires a return type.");
-                        }
-                        // this is a named function, it definitely has a nameToken with a non-null canonicalName property
-                        result.push(cfFunctionSignature(functionDecl.nameToken!.canonicalName!, functionDecl.params, functionDecl.returnTypeAnnotation || cfNil()));
+                        result.push(parseNamedFunctionDeclaration());
                     }
                     else if (declarationSpecifier.text === "global") {
                         parseErrorAtRange(contextualKeyword.range, "Global declarations are not yet supported. This would be for the cgi and etc. scopes.");
@@ -1717,7 +1708,7 @@ export function Parser() {
                         if (type.typeKind !== TypeKind.typeConstructor) {
                             type = cfTypeConstructor([], type);
                         }*/
-                        type.name = nameIfIsTypeConstructor.token.text;
+                        type.uiName = nameIfIsTypeConstructor.token.text;
                         result.push(type);
                     }
                     // a non-definition is a type-to-term assignment, it will be bound to the next non-trivia/non-type production
@@ -2730,7 +2721,7 @@ export function Parser() {
                     elements.push(SpreadArrayLiteralInitializerMember(dotDotDot, expr, maybeComma));
                 }
                 else {
-                    const expr = parseExpression();
+                    const expr = parseAnonymousFunctionDefinitionOrExpression();
                     const maybeComma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
 
                     if (!maybeComma && lookahead() !== TokenType.RIGHT_BRACKET) {
@@ -2885,6 +2876,11 @@ export function Parser() {
         return result;
     }
 
+    function parseFunctionDeclarationParameters() : cfFunctionSignatureParam[] {
+        const params = tryParseFunctionDefinitionParameters(/*speculative*/ false, /*asDeclaration*/ true);
+        return extractScriptFunctionParam(params);
+    }
+
     // speculative overload is last in overload set so speculation-forwarder can see it
     // this might not be maintainable in the long run ? the alternative is to not overload, and
     // use definite! syntax at non-speculative call-
@@ -2990,8 +2986,8 @@ export function Parser() {
 
             comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
 
-            if (type && !requiredTerminal) {
-                type.typeFlags |= TypeFlags.optional;
+            if (type && requiredTerminal) {
+                type.typeFlags |= TypeFlags.required;
             }
 
             result.push(Script.FunctionParameter(requiredTerminal, javaLikeTypename, dotDotDot, name, equal, defaultValue, comma, type));
@@ -3008,7 +3004,7 @@ export function Parser() {
 
     function tryParseArrowFunctionDefinition() : ArrowFunctionDefinition | null {
         let leftParen : Terminal | null = null;
-        let params : FunctionParameter[];
+        let params : Script.FunctionParameter[];
         let rightParen : Terminal | null = null;
 
         if (SpeculationHelper.lookahead(isIdentifierThenFatArrow)) {
@@ -3177,6 +3173,15 @@ export function Parser() {
         body       = parseBracedBlock(ScannerMode.script);
 
         return Script.FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body, null);
+    }
+
+    function parseNamedFunctionDeclaration() : cfFunctionSignature {
+        const decl = tryParseNamedFunctionDefinition(/*speculative*/ false, /*asDeclaration*/ true);
+        if (!decl.returnTypeAnnotation) {
+            parseErrorAtRange(decl.range, "A function declaration requires a return type.");
+        }
+        const sig = extractCfFunctionSignature(decl);
+        return sig;
     }
 
     function tryParseNamedFunctionDefinition(speculative: false, asDeclaration: boolean) : Script.FunctionDefinition;
@@ -3811,7 +3816,7 @@ export function Parser() {
                         break;
                     }
                     else {
-                        const params = tryParseFunctionDefinitionParameters(/*speculative*/false, /*asDeclaration*/ true);
+                        const params = parseFunctionDeclarationParameters();
                         parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
                         parseExpectedTerminal(TokenType.EQUAL_RIGHT_ANGLE, ParseOptions.withTrivia);
                         const returnType = parseType();
@@ -3893,7 +3898,7 @@ export function Parser() {
                     continue intersectionsAndUnions;
                 case TokenType.PIPE:
                     next(), parseTrivia();
-                    result = cfUnion(result, localParseType());
+                    result = cfUnion(result, localParseType()); // fixme, we need a list not a tree
                     continue intersectionsAndUnions;
                 default:
                     break intersectionsAndUnions;
@@ -3905,7 +3910,7 @@ export function Parser() {
         }
 
         if (name) {
-            result.name = name;
+            result.uiName = name;
         }
 
         return result;

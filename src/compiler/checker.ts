@@ -1,7 +1,7 @@
-import { Diagnostic, SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, FunctionParameter, copyFunctionParameterForTypePurposes, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges } from "./node";
+import { Diagnostic, SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, NodeId, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges } from "./node";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
-import { cfFunctionSignature, cfIntersection, Type, TypeKind, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfNever, cfStruct, cfUnion, SyntheticType, TypeFlags } from "./types";
-import { findAncestor, getAttributeValue, getContainingFunction, getNodeLinks, getSourceFile, getTriviallyComputableString } from "./utils";
+import { hashType, cfFunctionSignature, cfIntersection, Type, TypeKind, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfNever, cfStruct, cfUnion, SyntheticType, TypeFlags, cfArray, cfFunctionSignatureParam, extractCfFunctionSignature } from "./types";
+import { findAncestor, getAttributeValue, getContainingFunction, getNodeLinks, getSourceFile, getTriviallyComputableString, isHoistableFunctionDefinition } from "./utils";
 
 export function Checker() {
     let sourceFile!: SourceFile;
@@ -391,45 +391,30 @@ export function Checker() {
     }
 
     // needs to merge 2+ unions, dedup, etc.
+    // union type needs to be a Set<Type>
+    // "instantiated type": {flags: TypeFlag, type: Type} so we can share "any" and "void" and etc.
     function unionify(types: (Type|undefined)[]) : Type {
-        if (types.length === 1) {
-            return types[0] === undefined
-                ? SyntheticType.nil()
-                : types[0];
-        }
-
-        function final(type: Type | undefined) : 0 | 1 {
-            return type
-                ? ((type.typeFlags & TypeFlags.final) ? 1 : 0)
-                : 0;
-        }
-
-        let finalCount = 0;
-        let total = 0; total;
-        let containsUndefined = false;
-
-        let result = cfUnion(types[0] || SyntheticType.nil(), types[1] || SyntheticType.nil());
-        finalCount = final(types[0]) + final(types[1]);
-        total = 2;
-        containsUndefined = !types[0]
-            || !types[1]
-            || !!(types[0].typeFlags & TypeFlags.containsUndefined)
-            || !!(types[1].typeFlags & TypeFlags.containsUndefined);
-
+        let flags : TypeFlags = TypeFlags.none;
+        const members : Type[] = [];
+        const seen = new Set<string>();
         for (const type of types) {
-            result = cfUnion(result, type || SyntheticType.nil());
-            finalCount += final(type);
-            total += 1;
-            containsUndefined = containsUndefined || !type || !!(type.flags & TypeFlags.containsUndefined);
+            if (type === undefined) {
+                flags |= TypeFlags.containsUndefined;
+            }
+            else if (type.typeKind === TypeKind.any || type.typeKind === TypeKind.never) {
+                return type;
+            }
+            else {
+                const hash = hashType(type);
+                if (!seen.has(hash)) {
+                    members.push(type);
+                    seen.add(hash);
+                }
+            }
         }
 
-        if (finalCount > 0) {
-            result.typeFlags |= TypeFlags.final;
-        }
-        if (containsUndefined) {
-            result.typeFlags |= TypeFlags.containsUndefined;
-        }
-
+        let result = members.length === 1 ? members[0] : cfUnion(...members);
+        result.typeFlags = flags;
         return result;
     }
 
@@ -444,7 +429,7 @@ export function Checker() {
         return type.typeKind === TypeKind.any
             || type.typeKind === TypeKind.functionSignature
             || (type.typeKind === TypeKind.intersection && (isCallable(type.left) || isCallable(type.right)))
-            || (type.typeKind === TypeKind.union && isCallable(type.left) && isCallable(type.right));
+            || (type.typeKind === TypeKind.union && type.members.every(type => isCallable(type)));
     }
 
     function unsafeAssertTypeKind<T extends Type>(_type: Type) : asserts _type is T {}
@@ -460,7 +445,7 @@ export function Checker() {
         if (assignThis.typeKind === TypeKind.any || to.typeKind === TypeKind.any) {
             return true;
         }
-        if (assignThis.typeKind !== to.typeKind) {
+        if (assignThis.typeKind !== to.typeKind) { // structs to structs, arrays to arrays, etc
             return false;
         }
         if (assignThis.typeKind === TypeKind.struct && to.typeKind === TypeKind.struct) {
@@ -472,9 +457,9 @@ export function Checker() {
                 if (!assignThis.membersMap.has(key)) {
                     return false;
                 }
-                //if (!isAssignable(assignThis.membersMap.get(key)!, to.membersMap.get(key)!)) {
-                //    return false;
-                //}
+                if (!isAssignable(assignThis.membersMap.get(key)!.type, to.membersMap.get(key)!.type)) {
+                    return false;
+                }
             }
 
             return true;
@@ -508,7 +493,7 @@ export function Checker() {
             if (isCallable(type) && type.typeKind === TypeKind.functionSignature) {
                 setCachedEvaluatedNodeType(node, type.returns);
 
-                const minRequiredParams = type.params.filter(param => param.required === true).length;
+                const minRequiredParams = type.params.filter(param => param.flags & TypeFlags.required).length;
                 const maxParams = type.params.length;
                 const namedArgCount = node.args.filter(arg => !!arg.equals).length;
 
@@ -560,6 +545,28 @@ export function Checker() {
         }
     }
 
+    function stringifyLValue(node: Identifier | IndexedAccess) : string | undefined {
+        if (node.kind === NodeType.identifier) return node.canonicalName;
+        let result = "";
+        if (node.root.kind === NodeType.identifier && node.root.canonicalName) result = node.root.canonicalName;
+        else return undefined;
+        for (let i = 0; i < node.accessElements.length; i++) {
+            const element = node.accessElements[i];
+            if (element.accessType === IndexedAccessType.dot) {
+                result += "." + element.property.token.text.toLowerCase();
+            }
+            else if (element.accessType === IndexedAccessType.bracket) {
+                const property = getTriviallyComputableString(element.expr)
+                if (!property) return undefined;
+                result += "." + property.toLowerCase();
+            }
+            else {
+                return undefined;
+            }
+        }
+        return result;
+    }
+
     function checkBinaryOperator(node: BinaryOperator) {
         checkNode(node.left);
         checkNode(node.right);
@@ -568,28 +575,34 @@ export function Checker() {
             case BinaryOpType.assign: {
                 // an assignment, even fv-unqualified, will always be bound to a scope
                 // `x = y` is effectively `variables.x = y`
-                if (node.left.kind === NodeType.identifier && node.left.canonicalName) {
-                    const lhsType = getTypeAtFlow(node.left, node.left.canonicalName);
+                if (node.left.kind === NodeType.identifier || node.left.kind === NodeType.indexedAccess) {
+                    const lValIdent = stringifyLValue(node.left);
+                    if (!lValIdent) return;
+
+                    const lhsType = getTypeAtFlow(node.left, lValIdent);
                     const rhsType = getCachedEvaluatedNodeType(node.right);
                     if (!lhsType) {
-                        // there is no type at the current flow; so, this is the first assignment for this var in this scope
+                        // there is no type in the current flow; so, this is the first assignment for this var in this scope
                         if (node.typeAnnotation) {
                             const evaluatedTypeAnnotation = evaluateType(node, node.typeAnnotation);
                             if (!isAssignable(rhsType, node.typeAnnotation)) {
                                 //typeErrorAtNode(node.right, "RHS is not assignable to LHS.");
                             }
-                            setCachedEvaluatedFlowType(node.left.flow!, node.left.canonicalName, evaluatedTypeAnnotation);
+                            setCachedEvaluatedFlowType(node.left.flow!, lValIdent, evaluatedTypeAnnotation);
                         }
                         else {
-                            setCachedEvaluatedFlowType(node.left.flow!, node.left.canonicalName, SyntheticType.any());
+                            setCachedEvaluatedFlowType(node.left.flow!, lValIdent, rhsType);
                         }
                     }
                     else {
                         if (node.typeAnnotation) {
-                            //typeErrorAtNode(node, "Type annotations can only be bound to an identifier's first assignment.");
+                            typeErrorAtNode(node, "Type annotations can only be bound to an identifier's first assignment.");
                         }
-                        if (!isAssignable(rhsType, lhsType)) {
-                            //typeErrorAtNode(node.right, "RHS is not assignable to LHS.");
+                        if (isAssignable(/*assignThis*/rhsType, /*to*/lhsType)) {
+                            setCachedEvaluatedFlowType(node.left.flow!, lValIdent, rhsType);
+                        }
+                        else {
+                            typeErrorAtNode(node.right, "RHS is not assignable to LHS.");
                         }
                     }
                 }
@@ -748,7 +761,7 @@ export function Checker() {
         return type.typeKind === TypeKind.struct
             || type.typeKind === TypeKind.array
             || (type.typeKind === TypeKind.intersection && (isStructOrArray(type.left) || isStructOrArray(type.right)))
-            || (type.typeKind === TypeKind.union && isStructOrArray(type.left) && isStructOrArray(type.right));
+            || (type.typeKind === TypeKind.union && type.members.every(type => isStructOrArray(type)));
     }
 
     function getContainer(node: Node) {
@@ -840,7 +853,7 @@ export function Checker() {
     function checkIndexedAccess(node: IndexedAccess) {
         checkNode(node.root);
 
-        let type = getCachedEvaluatedNodeType(node.root);
+        let type : Type | undefined = getCachedEvaluatedNodeType(node.root);
         if (!type || type.typeKind === TypeKind.any) {
             return;
         }
@@ -849,11 +862,14 @@ export function Checker() {
         // that is, the indexed-access root node itself, and the subsequent elements
         // not on the component identifiers, dots, brackets, etc.
         if (isStructOrArray(type)) {
-            setCachedEvaluatedNodeType(node.root, type);
             for (let i = 0; i < node.accessElements.length; i++) {
                 const element = node.accessElements[i];
                 if (element.accessType === IndexedAccessType.dot) {
                     type = getMemberType(type, node, element.property.token.text);
+                    if (!type) {
+                        type = SyntheticType.any();
+                        typeErrorAtNode(element, `Property '${element.property.token.text}' does not exist on type`);
+                    }
                     if (type.typeKind === TypeKind.any) {
                         type = SyntheticType.any(); // subsequent access elements will also be any
                         setCachedEvaluatedNodeType(element, SyntheticType.any());
@@ -863,7 +879,7 @@ export function Checker() {
                     }
                 }
             }
-            setCachedEvaluatedNodeType(node, type);
+            setCachedEvaluatedNodeType(node, type); // in `a.b.c`, the whole indexedAccess expression type is typeof c
         }
         else {
             setCachedEvaluatedNodeType(node.root, SyntheticType.any());
@@ -899,6 +915,23 @@ export function Checker() {
     }
 
     function checkFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {
+        // we need the extracted cf type, and then, if there is a type annotation, make sure the types are assignable (in either direction?)
+        // the extracted cf type is in the symbol table for the scope "into which" it was hoisted; could be variables, local, or this
+        // we should maybe just extract the cf type here..., as long as we check hoistable functions first....
+        // const extracedType...
+        // if no type annotation
+        //      set type to extracted type, which in the limit will be (...any: []) => any
+        // else if node.typeAnnotation...
+        // if (!isAssignable(extractedType, typeAnnotation) || (!isAssignable(typeAnnotation, extractedType)))
+        //      error, set type to any
+        // else
+        //      set type to typeAnnotation, on the assumption it will be more specific (why'd the user type it otherwise)
+        //
+
+        if (!isHoistableFunctionDefinition(node)) {
+            setCachedEvaluatedNodeType(node, extractCfFunctionSignature(node));
+        }
+        
         for (const param of node.params) {
             setCachedEvaluatedFlowType(node.flow!, param.canonicalName, param.type || SyntheticType.any());
         }
@@ -966,7 +999,7 @@ export function Checker() {
         }
 
         let node : Node | null = context;
-        const typeName = type.name;
+        const typeName = type.uiName;
 
         while (node) {
             if (node.containedScope) {
@@ -991,15 +1024,15 @@ export function Checker() {
             // find the `std` type in the libfiles, which we're just assuming will be either present or not, and if so, it is the only libfile
             for (const libFile of node.libRefs) {
                 for (const typedef of libFile.content) {
-                    if (typedef.kind === NodeType.type && typedef.typeKind === TypeKind.struct && typedef.name === "std") {
-                        return typedef.membersMap.get(type.name)?.type;
+                    if (typedef.kind === NodeType.type && typedef.typeKind === TypeKind.struct && typedef.uiName === "std") {
+                        return typedef.membersMap.get(type.uiName)?.type;
                     }
                 }
             }
         }
 
         if (!type.synthetic) {
-            typeErrorAtNode(type, `Cannot find name '${type.name}'.`);
+            typeErrorAtNode(type, `Cannot find name '${type.uiName}'.`);
         }
         return undefined;
     }
@@ -1018,12 +1051,30 @@ export function Checker() {
             return;
         }
         checkList(node.members);
+        const memberTypes = new Map<string, SymTabEntry>();
+        for (const member of node.members) {
+            if (member.subType === StructLiteralInitializerMemberSubtype.keyed) {
+                const key = getTriviallyComputableString(member.key);
+                if (!key) continue;
+                const canonicalName = key.toLowerCase();
+                memberTypes.set(canonicalName, {
+                    uiName: key,
+                    canonicalName,
+                    firstBinding: member,
+                    inferredType: null,
+                    userType: null,
+                    type: getCachedEvaluatedNodeType(member)
+                });
+            }
+        }
+        setCachedEvaluatedNodeType(node, SyntheticType.struct(memberTypes));
     }
 
     function checkStructLiteralInitializerMember(node: StructLiteralInitializerMember) {
         if (node.subType === StructLiteralInitializerMemberSubtype.keyed) {
             checkNode(node.key);
             checkNode(node.expr);
+            setCachedEvaluatedNodeType(node, getCachedEvaluatedNodeType(node.expr));
         }
         else /* spread */ {
             checkNode(node.expr);
@@ -1032,10 +1083,12 @@ export function Checker() {
 
     function checkArrayLiteral(node: ArrayLiteral) {
         checkList(node.members);
+        setCachedEvaluatedNodeType(node, cfArray(unionify(node.members.map(member => getCachedEvaluatedNodeType(member)))));
     }
 
     function checkArrayLiteralInitializerMember(node: ArrayLiteralInitializerMember) {
         checkNode(node.expr);
+        setCachedEvaluatedNodeType(node, getCachedEvaluatedNodeType(node.expr));
     }
 
     function checkTry(node: Try) {
@@ -1062,19 +1115,26 @@ export function Checker() {
         checkNode(node.callExpr);
     }
 
-    function getMemberType(type: Type, context: Node, name: string) : Type {
+    function getMemberType(type: Type, context: Node, name: string) : Type | undefined {
         if (type.typeKind === TypeKind.intersection) {
             const left = getMemberType(type.left, context, name);
             const right = getMemberType(type.right, context, name);
+            if (!left || !right) return cfNever();
             return cfIntersection(left, right);
         }
         else if (type.typeKind === TypeKind.struct) {
             const memberType = type.membersMap.get(name);
-            return memberType ? evaluateType(context, memberType.type) : SyntheticType.any();
+            return memberType ? evaluateType(context, memberType.type) : undefined;
         }
 
-        return SyntheticType.any();
+        return undefined;
     }
+
+    function getTypeOfExpression(node: Node) : Type {
+        if (!getCachedEvaluatedNodeType(node)) checkNode(node);
+        return getCachedEvaluatedNodeType(node);
+    }
+    getTypeOfExpression;
 
     //
     // type evaluation
@@ -1200,7 +1260,7 @@ export function Checker() {
                     const typeParamMap = new Map(typeFunction.capturedParams.entries());
                     // extend constructor's captured environment with the argument list
                     for (let i = 0; i < typeFunction.params.length; i++) {
-                        typeParamMap.set(typeFunction.params[i].name, args[i]);
+                        typeParamMap.set(typeFunction.params[i].uiName, args[i]);
                     }
                 
                     // say our current evaluation is for `T<U>`
@@ -1279,9 +1339,7 @@ export function Checker() {
                             return evaluateIntersection(left, right);
                         }
                         case TypeKind.union: {
-                            const left = typeWorker(type.left);
-                            const right = typeWorker(type.right);
-                            return cfUnion(left, right);
+                            return cfUnion(...type.members.map(type => typeWorker(type))); // need to dedupe and etc.
                         }
                         case TypeKind.struct: { // work on cacheability of this; it is concrete just return a cached copy or something like that
                             const evaluatedStructContents = new Map<string, SymTabEntry>();
@@ -1309,7 +1367,7 @@ export function Checker() {
                         }
                         case TypeKind.functionSignature:
                             // need a more lean version of functionParameter
-                            const params : FunctionParameter[] = type.params.map(param => copyFunctionParameterForTypePurposes(param));
+                            const params : cfFunctionSignatureParam[] = [...type.params];
                             for (let i = 0; i < type.params.length; i++) {
                                 if (!params[i].type) {
                                     throw "no type for parameter " + i; /// can we get here? parser / binder should convert this to any before we get here...
@@ -1317,7 +1375,7 @@ export function Checker() {
                                 params[i].type = typeWorker(params[i].type!);
                             }
                             const returns = typeWorker(type.returns);
-                            return cfFunctionSignature(type.name, params, returns);
+                            return cfFunctionSignature(type.uiName, params, returns);
                         case TypeKind.typeConstructorInvocation: {
                             const typeConstructor = typeWorker(type.left);
                             if (typeConstructor.typeKind === TypeKind.never) {
@@ -1338,7 +1396,7 @@ export function Checker() {
                             const args : Type[] = [];
                             for (const arg of type.args) {
                                 if (arg.typeKind === TypeKind.typeId) {
-                                    args.push(typeWorker(typeParamMap.get(arg.name) || walkUpContainersToFindType(context, arg) || SyntheticType.any()));
+                                    args.push(typeWorker(typeParamMap.get(arg.uiName) || walkUpContainersToFindType(context, arg) || SyntheticType.any()));
                                 }
                                 else {
                                     args.push(typeWorker(arg));
@@ -1370,7 +1428,7 @@ export function Checker() {
                         }
                         case TypeKind.typeId: {
                             // @fixme: should error if we can't find it; and return never ?
-                            const result = typeParamMap.get(type.name) || walkUpContainersToFindType(context, type) || null;
+                            const result = typeParamMap.get(type.uiName) || walkUpContainersToFindType(context, type) || null;
                             if (!result) return cfNever();
                             return typeWorker(result);
                         }

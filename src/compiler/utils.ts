@@ -1,4 +1,4 @@
-import { ArrayLiteralInitializerMemberSubtype, BlockType, CfTag, ForSubType, IndexedAccessType, Node, NodeId, ScopeDisplay, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
+import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, BlockType, CfTag, ForSubType, FunctionDefinition, IndexedAccessType, Node, NodeId, ScopeDisplay, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
 import { NodeType } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature } from "./types";
@@ -937,4 +937,9 @@ export function getFunctionSignatureParamNames(sig: cfFunctionSignature, ...omit
         if (!omitSet.has(param.canonicalName)) result.push(param.canonicalName);
     }
     return result;
+}
+
+export function isHoistableFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) : node is FunctionDefinition {
+    // fixme: need a more explicit way to say "this function is anonymous", right now we imply it by saying a function has a name
+    return node.kind === NodeType.functionDefinition && (typeof node.canonicalName === "string");
 }
