@@ -1,4 +1,4 @@
-import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, BlockType, CfTag, ForSubType, FunctionDefinition, IndexedAccessType, Node, NodeId, ScopeDisplay, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
+import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, BlockType, CfTag, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, Node, NodeId, ScopeDisplay, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
 import { NodeType } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature } from "./types";
@@ -942,4 +942,41 @@ export function getFunctionSignatureParamNames(sig: cfFunctionSignature, ...omit
 export function isHoistableFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) : node is FunctionDefinition {
     // fixme: need a more explicit way to say "this function is anonymous", right now we imply it by saying a function has a name
     return node.kind === NodeType.functionDefinition && (typeof node.canonicalName === "string");
+}
+
+export function stringifyLValue(node: Identifier | IndexedAccess) : {ui: string, canonical: string} | undefined {
+    if (node.kind === NodeType.identifier) return node.uiName && node.canonicalName ? {ui: node.uiName, canonical: node.canonicalName} : undefined;
+    let result : {ui: string, canonical: string};
+    if (node.root.kind === NodeType.identifier && node.root.canonicalName && node.root.uiName) result = {ui: node.root.uiName, canonical: node.root.canonicalName};
+    else return undefined;
+    for (let i = 0; i < node.accessElements.length; i++) {
+        const element = node.accessElements[i];
+        if (element.accessType === IndexedAccessType.dot) {
+            result.canonical += "." + element.property.token.text.toLowerCase();
+            result.ui += "." + element.property.token.text;
+        }
+        else if (element.accessType === IndexedAccessType.bracket) {
+            const propertyName = getTriviallyComputableString(element.expr)
+            if (!propertyName) return undefined;
+            result.canonical += "." + propertyName.toLowerCase();
+            result.ui += "." + propertyName;
+        }
+        else {
+            return undefined;
+        }
+    }
+    return result;
+}
+
+export function filterNodeList(node: Node | Node[] | null | undefined, cb: (node: Node) => boolean) : Node[] {
+    if (!node) return [];
+    if (Array.isArray(node)) {
+        return node.filter(cb);
+    }
+    else if (cb(node)) {
+        return [node];
+    }
+    else {
+        return [];
+    }
 }

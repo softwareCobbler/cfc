@@ -78,9 +78,10 @@ function naiveGetDiagnostics(uri: TextDocumentUri, text: string) : cfcDiagnostic
     parser.setSourceFile(sourceFile).parse();
 	binder.bind(sourceFile);
 	
-	if (cflsConfig.x_types) {
+	// we need finer granularity of what the checker emits errors for
+	//if (cflsConfig.x_types) {
 		cflsConfig.checker.check(sourceFile);
-	}
+	//}
 	
 	parseCache.set(uri, {
 		parsedSourceFile: sourceFile,
@@ -517,7 +518,7 @@ connection.onCompletion(
 			let scopeDistance = 0; // keep track of "how far away" some name is, in terms of parent scopes; we can then offer closer names first
 			while (node) {
 				if (node.containedScope) {
-					for (const searchScope of ["local", "arguments", "this", "variables"] as StaticallyKnownScopeName[]) {
+					for (const searchScope of ["local", "arguments", "variables"] as StaticallyKnownScopeName[]) {
 						const symTab = node.containedScope[searchScope];
 						if (!symTab) continue;
 						for (const symTabEntry of symTab.values()) {

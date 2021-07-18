@@ -147,7 +147,7 @@ export interface Term {
 export interface SymTabEntry {
     uiName: string,
     canonicalName: string,
-    firstBinding: Node | null,
+    declarations: Node | Node[] | null,
     userType: Type | null,
     inferredType: Type | null,
     type: Type,

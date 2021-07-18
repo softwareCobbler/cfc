@@ -18,14 +18,25 @@ function fromFile(fname: string) {
 const libPath = path.resolve("./src/lang-server/server/src/runtimelib/lib.cf2018.d.cfm");
 const stdLib = SourceFile(libPath , CfFileType.dCfm, fs.readFileSync(libPath));
 
+//const sourceFile = fromFile("./test/mxunit/tests/framework/AssertSameTest.cfc");
 
-//const sourceFile = fromFile("./test/mxunit/mxunit-TestCase-Template.cfc");
+const sourceFile = NilCfc(`
+<cfcomponent>
+    <cfset final this.lel = {
+        m1: 1,
+        m2: 2,
+        m3: 3
+    }>
 
-const sourceFile = NilCfm(`
-<cfscript>
-    x = {a: {xyz: 1}, b: 2};
-    x.a.
-</cfscript>`);
+    <cffunction name="foo">
+        <cfscript>
+            for (var x in xxx) {
+                this.lel.
+            }
+        </cfscript>
+    </cffunction>
+</cfcomponent>
+`);
 
 const parser = Parser().setDebug(true).setParseTypes(true);
 const binder = Binder().setDebug(true);
@@ -44,8 +55,6 @@ binder.bind(sourceFile);
 checker.check(sourceFile);
 
 const flatTree = flattenTree(sourceFile);
-
-//checker.check(sourceFile);
 
 const diagnostics = sourceFile.diagnostics;
 console.log("got ", diagnostics.length + " diagnostics");

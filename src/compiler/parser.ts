@@ -3273,9 +3273,10 @@ export function Parser() {
             const inToken = Terminal(parseNextToken(), parseTrivia());
             const expr = parseExpression();
             const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
-            const body = parseStatement();
 
             parseContext = savedContext;
+            const body = parseStatement();
+
             return For.ForIn(forToken, leftParen, init, inToken, expr, rightParen, body);
         }
         else {
@@ -3284,9 +3285,10 @@ export function Parser() {
             const semi2 = parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia);
             const incrementExpr = isStartOfExpression() ? parseAssignmentOrLower() : null;
             const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
-            const body = parseStatement();
 
             parseContext = savedContext;
+            const body = parseStatement();
+            
             return For.For(forToken, leftParen, init, semi1, condition, semi2, incrementExpr, rightParen, body);
         }
     }
@@ -3850,7 +3852,7 @@ export function Parser() {
                             members.set(member.propertyName.token.text.toLowerCase(), {
                                 uiName: member.propertyName.token.text,
                                 canonicalName: member.propertyName.token.text.toLowerCase(),
-                                firstBinding: null,
+                                declarations: null,
                                 inferredType: null,
                                 userType: member.type,
                                 type: member.type,

@@ -56,6 +56,7 @@ export const enum TypeFlags {
     required           = 1 << 4,
     synthetic          = 1 << 5,
     spread             = 1 << 6,
+    pending            = 1 << 7, // in the binder, we've constructed a symtab entry, but we don't anything about types yet
     END                = 1 << 8,
 }
 
@@ -610,12 +611,21 @@ export function hashType(type: Type) : string {
         case TypeKind.string: return "string";
         case TypeKind.void: return "void";
         case TypeKind.never: return "never";
+        case TypeKind.boolean: return "boolean";
+        case TypeKind.nil: return "nil";
+        case TypeKind.typeId: return type.terminal.token.text;
         case TypeKind.functionSignature:
             return type.uiName +
                 "(" + type.params.map(param => param.canonicalName + ":" + hashType(param.type)).join(",") + ")" +
                 "=>" + hashType(type.returns);
         case TypeKind.array: return "[" + hashType(type.T) + "]";
         case TypeKind.struct: return "{" + type.members.map(member => member.propertyName + ":" + hashType(member.type)).join(",") + "}";
+        case TypeKind.union: {
+            const op = type.typeKind === TypeKind.union ? "|" : "&";
+            return type.members.length > 0 ? type.members.map(type => hashType(type)).join(op) : "never";
+        }
+        /*default:
+            ((_: never) => { throw "" })(type);*/
     }
-    throw "unhandled hash type";
+    throw "unhandled hash type " + type.__debug_kind || "";
 }

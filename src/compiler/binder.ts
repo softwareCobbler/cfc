@@ -1,5 +1,5 @@
 import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, ConditionalSubtype, SymTab } from "./node";
-import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, getNodeLinks, isInCfcPsuedoConstructor, isHoistableFunctionDefinition } from "./utils";
+import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, getNodeLinks, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { SyntheticType, Type, TypeKind, extractCfFunctionSignature } from "./types";
 
@@ -382,17 +382,33 @@ export function Binder() {
         }
     }
 
-    function addSymbolToTable(symTab: SymTab, uiName: string, firstBinding: Node, userType: Type | null, inferredType: Type | null) : SymTabEntry {
+    function addSymbolToTable(symTab: SymTab, uiName: string, declaringNode: Node, userType: Type | null, inferredType: Type | null) : SymTabEntry {
         const canonicalName = uiName.toLowerCase();
-        const symTabEntry : SymTabEntry = {
-            uiName,
-            canonicalName,
-            firstBinding,
-            userType,
-            inferredType,
-            type: userType || inferredType || SyntheticType.any(),
-        };
-        symTab.set(canonicalName, symTabEntry);
+        let symTabEntry : SymTabEntry;
+
+        // fixme: if there are type annotations on multiple declarations of the same var, they should match
+        if (symTab.has(canonicalName)) {
+            symTabEntry = symTab.get(canonicalName)!;
+            if (Array.isArray(symTabEntry.declarations)) {
+                symTabEntry.declarations.push(declaringNode);
+            }
+            else {
+                symTabEntry.declarations = symTabEntry.declarations ? [symTabEntry.declarations, declaringNode] : declaringNode;
+            }
+        }
+        else {
+            symTabEntry = {
+                uiName,
+                canonicalName,
+                declarations: declaringNode,
+                userType,
+                inferredType,
+                type: userType || inferredType || SyntheticType.any(),
+            };
+
+            symTab.set(canonicalName, symTabEntry);
+        }
+
         return symTabEntry;
     }
 
@@ -421,6 +437,7 @@ export function Binder() {
         if (!node.flow) extendCurrentFlowToNode(node); // for-in declarations will already have flows
         
         if (node.parent?.kind === NodeType.for && node.parent.subType === ForSubType.forIn && node.parent.init === node) {
+            extendCurrentFlowToNode(node.expr);
             bindForInInit(node);
             return;
         }
@@ -435,14 +452,11 @@ export function Binder() {
             currentFlow = savedFlow;
         }
 
-        let identifierBaseName : string | undefined = undefined;
-        if (node.expr.kind === NodeType.binaryOperator && node.expr.optype === BinaryOpType.assign) {
-            if (node.expr.left.kind === NodeType.indexedAccess) {
-                identifierBaseName = getTriviallyComputableString(node.expr.left.root)?.toLowerCase();
-            }
-            else {
-                identifierBaseName = getTriviallyComputableString(node.expr.left)?.toLowerCase();
-            }
+        let identifierBaseName : ReturnType<typeof stringifyLValue> | undefined = undefined;
+        
+        if (node.expr.kind === NodeType.binaryOperator && node.expr.optype === BinaryOpType.assign &&
+            (node.expr.left.kind === NodeType.indexedAccess || node.expr.left.kind === NodeType.identifier)) {
+            identifierBaseName = stringifyLValue(node.expr.left);
         }
 
         // make sure we got a useable name
@@ -450,37 +464,22 @@ export function Binder() {
             return;
         }
 
-        if (isStaticallyKnownScopeName(identifierBaseName)) {
-            if (node.varModifier) {
-                // we might have to consider our current container, like are we after a <cffile> tag? Does that matter?
-                errorAtRange(mergeRanges(node.finalModifier, node.varModifier, (<BinaryOperator>node.expr).left), "Variable declaration shadows built-in scope `" + identifierBaseName + "`");
+        const [uiPath, canonicalPath] = [identifierBaseName.ui.split("."), identifierBaseName.canonical.split(".")];
+
+        if (isStaticallyKnownScopeName(canonicalPath[0]) && canonicalPath.length === 1 && node.varModifier) {
+            errorAtRange(mergeRanges(node.finalModifier, node.varModifier, (<BinaryOperator>node.expr).left), "Variable declaration shadows built-in scope `" + canonicalPath[0] + "`");
+        }
+        else if (isStaticallyKnownScopeName(canonicalPath[0]) && canonicalPath.length === 2) {
+            let targetScope : SymTab | undefined = undefined;
+            if (canonicalPath[0] === "local") {
+                targetScope = currentContainer.containedScope.local;
+            }
+            else {
+                targetScope = RootNode.containedScope[canonicalPath[0]];
             }
 
-            // if we got `url.foo`, put `foo` into the `url` scope
-            // only descend the one child level, `url.foo.bar` still only puts `foo` into `url`
-            if ((<BinaryOperator>node.expr).left.kind === NodeType.indexedAccess) {
-                const indexedAccess = (<BinaryOperator>node.expr).left as IndexedAccess;
-                const element = indexedAccess.accessElements[0];
-
-                let accessName : string | undefined;
-                if (element?.accessType === IndexedAccessType.dot) {
-                    accessName = getTriviallyComputableString((element.property));
-                }
-                else if (element?.accessType === IndexedAccessType.bracket) {
-                    accessName = getTriviallyComputableString((element.expr));
-                }
-                accessName;
-/*
-                if (accessName) {
-                    RootNode.containedScope[identifierBaseName]!.set(
-                        accessName, {
-                            type: cfAny(),
-                            name: accessName,
-                            final: true,
-                            var: false,
-                            target: (<BinaryOperator>node.expr).right
-                        });
-                }*/
+            if (targetScope) {
+                addSymbolToTable(targetScope, uiPath[1], node, node.typeAnnotation, SyntheticType.any());
             }
 
             return;
@@ -488,7 +487,7 @@ export function Binder() {
 
         if (node.finalModifier || node.varModifier) {
             if (getContainingFunction(node)) {
-                addSymbolToTable(currentContainer.containedScope.local!, identifierBaseName, node, node.typeAnnotation, SyntheticType.any());
+                addSymbolToTable(currentContainer.containedScope.local!, uiPath[0], node, node.typeAnnotation, SyntheticType.any());
             }
             else {
                 // we're not in a function, so we must be at top-level scope
@@ -501,8 +500,8 @@ export function Binder() {
                 // e.g, 
                 // function foo(bar) { var bar = 42; }
                 // is an error: "bar is already defined in argument scope"
-                if (enclosingFunction.containedScope.arguments.has(identifierBaseName)) {
-                    errorAtRange(mergeRanges(node.finalModifier, node.varModifier, node.expr), `'${identifierBaseName}' is already defined in argument scope.`);
+                if (enclosingFunction.containedScope.arguments.has(canonicalPath[0])) {
+                    errorAtRange(mergeRanges(node.finalModifier, node.varModifier, node.expr), `'${uiPath[0]}' is already defined in argument scope.`);
                 }
             }
         }
@@ -907,7 +906,7 @@ export function Binder() {
             // bar(); -- error, bar is not visible
 
             const existingFunction = RootNode.containedScope.variables!.get(node.canonicalName) || currentContainer.containedScope.this?.get(node.canonicalName);
-            if (existingFunction && existingFunction.type.typeKind === TypeKind.functionSignature) {
+            if (existingFunction && (existingFunction as SymTabEntry).type.typeKind === TypeKind.functionSignature) {
                 // if acf { ...
                 //      errorAtRange(getFunctionNameRange(node.range), "Redefinition of hoistable function.");
                 // }
@@ -1030,11 +1029,19 @@ export function Binder() {
             bindNode(node.body, node);
             return;
         }
+        
         bindNode(node.initExpr, node);
         bindNode(node.semi1, node);
+
+        if (node.conditionExpr) extendCurrentFlowToNode(node.conditionExpr);
         bindNode(node.conditionExpr, node);
+
         bindNode(node.semi2, node);
+
+        if (node.incrementExpr) extendCurrentFlowToNode(node.incrementExpr);
         bindNode(node.incrementExpr, node);
+
+        extendCurrentFlowToNode(node.body);
         bindNode(node.body, node);
     }
 
