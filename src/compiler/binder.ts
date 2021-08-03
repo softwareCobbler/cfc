@@ -1,7 +1,7 @@
 import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, ConditionalSubtype, SymTab } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, getNodeLinks, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
-import { SyntheticType, _Type, extractCfFunctionSignature } from "./types";
+import { SyntheticType, _Type, extractCfFunctionSignature, isFunctionSignature } from "./types";
 
 export function Binder() {
     let RootNode : NodeWithScope<SourceFile>;
@@ -123,7 +123,7 @@ export function Binder() {
                 throw "Bind source files by binding its content";
             case NodeType.comment:
                 if (node.typedefs) {
-                    bindList(node.typedefs, node);
+                    //bindList(node.typedefs, node);
                 }
                 return;
             case NodeType.textSpan:
@@ -252,6 +252,8 @@ export function Binder() {
             case NodeType.new:
                 bindNew(node);
                 return;
+            case NodeType.typeShim:
+                return;
             default:
                 ((_:never) => { throw "Non-exhaustive case or unintentional fallthrough." })(node);
         }
@@ -278,12 +280,12 @@ export function Binder() {
         bindList(nodes.filter(node => node.kind !== NodeType.functionDefinition), parent);
     }
 
-    function bindType(node: _Type) {
+    /*function bindType(node: _Type) {
         // types always have names here?
         // we get them from `@type x = ` so presumably always...
         // also `@declare function foo` and possibly `@declare global <identifier-name> : type`
         currentContainer.containedScope.typedefs.set(node.uiName!, node);
-    }
+    }*/
 
     function bindTag(node: CfTag) {
         if (node.which === CfTag.Which.end) {
@@ -379,7 +381,7 @@ export function Binder() {
         }
     }
 
-    function addSymbolToTable(symTab: SymTab, uiName: string, declaringNode: Node, userType: _Type | null, inferredType: _Type | null) : SymTabEntry {
+    function addSymbolToTable(symTab: SymTab, uiName: string, declaringNode: Node, type: _Type | null = null) : SymTabEntry {
         const canonicalName = uiName.toLowerCase();
         let symTabEntry : SymTabEntry;
 
@@ -398,7 +400,7 @@ export function Binder() {
                 uiName,
                 canonicalName,
                 declarations: declaringNode,
-                type: userType || inferredType || SyntheticType.any,
+                type: type ?? SyntheticType.any,
             };
 
             symTab.set(canonicalName, symTabEntry);
@@ -421,7 +423,7 @@ export function Binder() {
         if (node.expr.kind === NodeType.identifier) {
             const name = getTriviallyComputableString(node.expr);
             if (!name) return;
-            getNodeLinks(node).symTabEntry = addSymbolToTable(targetScope, name, node, null, SyntheticType.any());
+            getNodeLinks(node).symTabEntry = addSymbolToTable(targetScope, name, node);
         }
         else if (node.expr.kind === NodeType.indexedAccess) {
             // need a dot/bracket "path creation" mechanism, e.g., for (local.foo in bar) {}
@@ -474,7 +476,7 @@ export function Binder() {
             }
 
             if (targetScope) {
-                addSymbolToTable(targetScope, uiPath[1], node, node.typeAnnotation, SyntheticType.any);
+                addSymbolToTable(targetScope, uiPath[1], node, node.typeAnnotation);
             }
 
             return;
@@ -482,7 +484,7 @@ export function Binder() {
 
         if (node.finalModifier || node.varModifier) {
             if (getContainingFunction(node)) {
-                addSymbolToTable(currentContainer.containedScope.local!, uiPath[0], node, node.typeAnnotation, SyntheticType.any);
+                addSymbolToTable(currentContainer.containedScope.local!, uiPath[0], node, node.typeAnnotation);
             }
             else {
                 // we're not in a function, so we must be at top-level scope
@@ -718,7 +720,7 @@ export function Binder() {
             }
         }
 
-        addSymbolToTable(targetScope, targetName, tag, tag.typeAnnotation, null);
+        addSymbolToTable(targetScope, targetName, tag, tag.typeAnnotation);
     }
 
     function bindSimpleStringLiteral(node: SimpleStringLiteral) {
@@ -769,13 +771,13 @@ export function Binder() {
             bindNode(node.tagOrigin.startTag, node);
 
             if (node.canonicalName !== undefined) {
-                addSymbolToTable(currentContainer.containedScope.arguments!, node.uiName, node, null, null);
+                addSymbolToTable(currentContainer.containedScope.arguments!, node.uiName, node);
             }
 
             return;
         }
 
-        addSymbolToTable(currentContainer.containedScope.arguments!, node.uiName, node, null, null);
+        addSymbolToTable(currentContainer.containedScope.arguments!, node.uiName, node);
         bindNode(node.javaLikeTypename, node);
         bindNode(node.identifier, node);
         bindNode(node.defaultValue, node);
@@ -853,16 +855,16 @@ export function Binder() {
 
                 if (targetBaseName === "local") {
                     if (currentContainer.containedScope.local) {
-                        addSymbolToTable(currentContainer.containedScope.local, firstAccessAsString, node, null, SyntheticType.any);
+                        addSymbolToTable(currentContainer.containedScope.local, firstAccessAsString, node);
                     }
                     else {
                         // assigning to `local.x` in a non-local scope just binds the name `local` to the root variables scope
-                        addSymbolToTable(RootNode.containedScope.variables!, "local", node, null, SyntheticType.any);
+                        addSymbolToTable(RootNode.containedScope.variables!, "local", node);
                     }
                 }
                 else {
                     if (targetBaseName in RootNode.containedScope) {
-                        addSymbolToTable(RootNode.containedScope[targetBaseName]!, firstAccessAsString, node, null, SyntheticType.any);
+                        addSymbolToTable(RootNode.containedScope[targetBaseName]!, firstAccessAsString, node);
                     }
                 }
             }
@@ -884,7 +886,7 @@ export function Binder() {
                     return;
                 }
 
-                addSymbolToTable(targetScope, targetBaseName, node, null, SyntheticType.any);
+                addSymbolToTable(targetScope, targetBaseName, node);
             }
         }
     }
@@ -901,7 +903,7 @@ export function Binder() {
             // bar(); -- error, bar is not visible
 
             const existingFunction = RootNode.containedScope.variables!.get(node.canonicalName) || currentContainer.containedScope.this?.get(node.canonicalName);
-            if (existingFunction && (existingFunction as SymTabEntry).type.typeKind === TypeKind.functionSignature) {
+            if (existingFunction && isFunctionSignature((existingFunction as SymTabEntry).type)) {
                 // if acf { ...
                 //      errorAtRange(getFunctionNameRange(node.range), "Redefinition of hoistable function.");
                 // }
@@ -925,8 +927,7 @@ export function Binder() {
                 scopeTarget,
                 node.uiName!,
                 node,
-                sig,
-                null);
+                sig);
         }
 
         node.containedScope = {
@@ -937,7 +938,7 @@ export function Binder() {
         };
 
         for (const param of node.params) {
-            addSymbolToTable(node.containedScope.arguments!, param.canonicalName, param, null, SyntheticType.any());
+            addSymbolToTable(node.containedScope.arguments!, param.canonicalName, param);
         }
 
         if (!node.fromTag && node.kind === NodeType.functionDefinition) {
@@ -1140,20 +1141,14 @@ export function Binder() {
         };
 
         for (const node of sourceFile.content) {
-            switch (node.kind) {
-                case NodeType.type: {
-                    switch (node.typeKind) {
-                        case TypeKind.functionSignature: {
-                            addSymbolToTable(sourceFile.containedScope!.global!, node.uiName, node, node, null);
-                            break;
-                        }
-                    }
-                    break;
+            if (node.kind === NodeType.typeShim) {
+                if (isFunctionSignature(node.type)) {
+                    addSymbolToTable(sourceFile.containedScope!.global!, node.type.uiName, node);
                 }
-                default: {
-                    errorAtRange(node.range, "Illegal non-declaration in declaration file.");
-                    continue;
-                }
+            }
+            else {
+                errorAtRange(node.range, "Illegal non-declaration in declaration file.");
+                continue;
             }
         }
     }

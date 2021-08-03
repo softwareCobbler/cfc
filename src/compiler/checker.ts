@@ -222,6 +222,8 @@ export function Checker() {
             case NodeType.new:
                 checkNew(node);
                 return;
+            case NodeType.typeShim:
+                return;
             default:
                 ((_:never) => { throw "Non-exhaustive case or unintentional fallthrough." })(node);
         }

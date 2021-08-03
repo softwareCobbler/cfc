@@ -613,7 +613,7 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
         case NodeType.new:
             return visitor(node.newToken)
                 || visitor(node.callExpr);
-        case NodeType.type:
+        case NodeType.typeShim:
             return;
         default:
             ((_:never) => { throw "Non-exhaustive case or unintentional fallthrough." })(node);
@@ -980,3 +980,5 @@ export function filterNodeList(node: Node | Node[] | null | undefined, cb: (node
         return [];
     }
 }
+
+export type Mutable<T> = {-readonly [K in keyof T]: T[K]};

@@ -59,6 +59,7 @@ TypeKindUiString; // @fixme: use this in a debug string
 
 export interface _Type {
     readonly flags: TypeFlags,
+    readonly name?: string,
 }
 
 export interface cfArray extends _Type {

@@ -25,11 +25,11 @@ import {
     New,
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
-    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement } from "./node";
+    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, TypeShim } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
-import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName} from "./utils";
+import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, Mutable} from "./utils";
 import { extractCfFunctionSignature, extractScriptFunctionParam } from "./types";
-import { _Type, cfArray, cfStruct, cfTuple, TypeFlags, cfFunctionSignature, cfTypeConstructorInvocation, cfTypeConstructorParam, cfTypeConstructor, cfIntersection, cfTypeId, cfUnion, SyntheticType, cfFunctionSignatureParam } from "./types";
+import { _Type, cfArray, cfStruct, cfTuple, cfFunctionSignature, cfTypeConstructorInvocation, cfTypeConstructorParam, cfTypeConstructor, cfIntersection, cfTypeId, cfUnion, SyntheticType, cfFunctionSignatureParam } from "./types";
 
 let debugParseModule = false;
 let parseTypes = false;
@@ -649,51 +649,6 @@ export function Parser() {
         parseContext = savedContext; // clear trivia context; parsing types inside comments is not considered trivia
 
         return result;
-    }
-
-    /**
-     * every call to this method clears the last known trivia-bound type annotation,
-     * and sets it to the final type annotation of the current trivia collection, if it exists
-     */
-    function parseTypeAnnotationsFromPreParsedTrivia(trivia: Node | Node[]) : void {
-        lastTypeAnnotation = null;
-
-        if (!Array.isArray(trivia)) trivia = [trivia];
-
-        if (trivia.length === 0) {
-            return;
-        }
-
-        const savedScannerState = getScannerState();
-
-        for (const node of trivia) {
-            if (node.kind === NodeType.comment || (node.kind === NodeType.tag && node.tagType === CfTag.TagType.comment)) {
-                restoreScannerState({
-                    index: node.range.fromInclusive,
-                    artificialEndLimit: node.range.toExclusive,
-                    mode: ScannerMode.allow_both, // make this optional? it is set in parseTypeAnnotations, too; so we only set it because it is required here
-                })
-
-                const types = parseTypeAnnotations(/*asDeclarationFile*/ false);
-                
-                const typedefs = types.filter(type => type.uiName !== undefined);
-                if (typedefs.length > 0) {
-                    node.typedefs = typedefs; // store the parsed type functions on the trivia node
-                }
-
-                const typeAnnotations = types.filter(type => type.uiName === undefined);
-                if (typeAnnotations.length > 1) {
-                    // we need to get the type's ranges and terminals and etc.
-                    parseErrorAtRange(node.range, "Only one @type annotation is permitted per comment.");
-                }
-
-                // <whitespace><comment><whitespace><comment>
-                // only the last final comment's type annotation will be considered for the next non-trivial production
-                lastTypeAnnotation = typeAnnotations.length === 1 ? typeAnnotations[0] : null;
-            }
-        }
-
-        restoreScannerState(savedScannerState);
     }
 
     function parseCfStartTag() {
@@ -1649,86 +1604,7 @@ export function Parser() {
         setScannerMode(savedMode);
 
         return treeifyTagList(result);
-    }
-
-    /**
-     * parse type annotations, 
-     */
-    function parseTypeAnnotations(asDeclarationFile: boolean) : _Type[] {
-        setScannerMode(ScannerMode.allow_both);
-        const savedContext = updateParseContext(ParseContext.typeAnnotation);
-        const result : _Type[] = []; // declarations (function | global)
-        while (lookahead() !== TokenType.EOF) {
-            if (asDeclarationFile) {
-                parseTrivia();
-            }
-            if (next().text === "@") {
-                const contextualKeyword = next();
-                if (contextualKeyword.text === "declare") {
-                    parseTrivia();
-                    const declarationSpecifier = peek();
-                    if (declarationSpecifier.text === "function") {
-                        result.push(parseNamedFunctionDeclaration());
-                    }
-                    else if (declarationSpecifier.text === "global") {
-                        parseErrorAtRange(contextualKeyword.range, "Global declarations are not yet supported. This would be for the cgi and etc. scopes.");
-                        next();
-                    }
-                    else {
-                        parseErrorAtRange(contextualKeyword.range, "Invalid declaration specifier.");
-                        next();
-                    }
-                }
-                else if (contextualKeyword.text === "type") {
-                    parseTrivia();
-                    
-                    const nameIfIsTypeConstructor = SpeculationHelper.speculate(() => {
-                        const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
-                        if (lookahead() === TokenType.EQUAL) {
-                            return name;
-                        }
-                        else return null;
-                    });
-                    
-                    // a type definition, valid for the current enclosing context
-                    // like @type foo = bar<baz>
-                    // `@type foo = number` is a type function from () -> number
-                    // in ts this would be `type foo = number;`
-                    // `@type foo = <T> => T` is the identity type function from T -> T
-                    // in ts this would be `type foo<T> = T`;
-                    // `@type foo = <T> => <U> => T` maps T to <U> => T, which is then a constant map from U to T
-                    // in ts this is not (easily?) expressible
-                    if (nameIfIsTypeConstructor) {
-                        parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
-                        let type = parseType();
-                        /*
-                        // the type parser saw only a type; but from here, we know that we are defining a type constructor (giving a
-                        // name to something that will eventually resolve to become a term's type)
-                        // in this case, the type is already concrete; but we will say it is a 0 argument type constructor for uniformity
-                        if (type.typeKind !== TypeKind.typeConstructor) {
-                            type = cfTypeConstructor([], type);
-                        }*/
-                        type.uiName = nameIfIsTypeConstructor.token.text;
-                        result.push(type);
-                    }
-                    // a non-definition is a type-to-term assignment, it will be bound to the next non-trivia/non-type production
-                    // like 
-                    // <!--- @type Query<Schema> --->
-                    // <cfquery name="q"> <!--- q has type `Query<Schema>` --->
-                    //
-                    else {
-                        const type = parseType();
-                        result.push(type);
-                    }
-                }
-                else {
-                    // parse error ? if skipUnrecognized === false?
-                }
-            }
-        }
-        parseContext = savedContext;
-        return result;
-    }
+    }  
 
     function parseStringBody(quoteDelimiter: TokenType.QUOTE_SINGLE | TokenType.QUOTE_DOUBLE, allowInterpolations: boolean) : (TextSpan | HashWrappedExpr)[] {
         // when we enter a new interpolation context, we can reset our hashWrappedExpr flag;
@@ -2943,7 +2819,7 @@ export function Parser() {
                         }
                         else {
                             name = parseIdentifier(/*withTrivia*/ false);
-                            const triviaAndType = parseScriptTriviaWithPossibleTypeAnnotation((<Terminal>name.source).token.text);
+                            const triviaAndType = parseScriptTriviaWithPossibleTypeAnnotation();
                             if (!triviaAndType.type) {
                                 parseErrorAtRange(name.range, "Expected a type annotation.");
                             }
@@ -2985,10 +2861,6 @@ export function Parser() {
             }
 
             comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
-
-            if (type && requiredTerminal) {
-                type.flags |= TypeFlags.required;
-            }
 
             result.push(Script.FunctionParameter(requiredTerminal, javaLikeTypename, dotDotDot, name, equal, defaultValue, comma, type));
         }
@@ -3623,9 +3495,124 @@ export function Parser() {
         return nilStatement;
     }
 
+    /**
+     * every call to this method clears the last known trivia-bound type annotation,
+     * and sets it to the final type annotation of the current trivia collection, if it exists
+     */
+     function parseTypeAnnotationsFromPreParsedTrivia(trivia: Node | Node[]) : void {
+        lastTypeAnnotation = null;
+
+        if (!Array.isArray(trivia)) trivia = [trivia];
+
+        if (trivia.length === 0) {
+            return;
+        }
+
+        const savedScannerState = getScannerState();
+
+        for (const node of trivia) {
+            if (node.kind === NodeType.comment || (node.kind === NodeType.tag && node.tagType === CfTag.TagType.comment)) {
+                restoreScannerState({
+                    index: node.range.fromInclusive,
+                    artificialEndLimit: node.range.toExclusive,
+                    mode: ScannerMode.allow_both, // make this optional? it is set in parseTypeAnnotations, too; so we only set it because it is required here
+                })
+
+                const types = parseTypeAnnotations(/*asDeclarationFile*/ false);
+                
+                const typedefs = types.filter(typeShim => typeShim.type.name !== undefined);
+                if (typedefs.length > 0) {
+                    node.typedefs = typedefs; // store the parsed type functions on the trivia node
+                }
+
+                const typeAnnotations = types.filter(typeShim => typeShim.type.name === undefined);
+                if (typeAnnotations.length > 1) {
+                    // we need to get the type's ranges and terminals and etc.
+                    parseErrorAtRange(node.range, "Only one @type annotation is permitted per comment.");
+                }
+
+                // <whitespace><comment><whitespace><comment>
+                // only the last final comment's type annotation will be considered for the next non-trivial production
+                lastTypeAnnotation = typeAnnotations.length === 1 ? typeAnnotations[0].type : null;
+            }
+        }
+
+        restoreScannerState(savedScannerState);
+    }
+
+    /**
+     * parse type annotations, 
+     */
+     function parseTypeAnnotations(asDeclarationFile: boolean) : TypeShim[] {
+        setScannerMode(ScannerMode.allow_both);
+        const savedContext = updateParseContext(ParseContext.typeAnnotation);
+        const result : TypeShim[] = [];
+        while (lookahead() !== TokenType.EOF) {
+            if (asDeclarationFile) {
+                parseTrivia();
+            }
+            if (next().text === "@") {
+                const contextualKeyword = next();
+                if (contextualKeyword.text === "declare") {
+                    parseTrivia();
+                    const declarationSpecifier = peek();
+                    if (declarationSpecifier.text === "function") {
+                        const functionDecl = parseNamedFunctionDeclaration();
+                        result.push(TypeShim(functionDecl));
+                    }
+                    else if (declarationSpecifier.text === "global") {
+                        parseErrorAtRange(contextualKeyword.range, "Global declarations are not yet supported. This would be for the cgi and etc. scopes.");
+                        next();
+                    }
+                    else {
+                        parseErrorAtRange(contextualKeyword.range, "Invalid declaration specifier.");
+                        next();
+                    }
+                }
+                else if (contextualKeyword.text === "type") {
+                    parseTrivia();
+                    
+                    const nameIfIsTypeConstructorOrAlias = SpeculationHelper.speculate(() => {
+                        const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
+                        if (lookahead() === TokenType.EQUAL) {
+                            return name;
+                        }
+                        else return null;
+                    });
+
+                    //
+                    // an assignment generates an alias for the type on the RHS
+                    // `@type foo = bar` is an alias declaration
+                    // `@type {foo:bar}` is an annotation to be attached to a subsequent node
+                    //
+                    if (nameIfIsTypeConstructorOrAlias) {
+                        parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
+                        let type = parseType();
+                        (type as Mutable<_Type>).name = nameIfIsTypeConstructorOrAlias.token.text;
+                        result.push(TypeShim(type));
+                    }
+                    // a non-definition is a type-to-term assignment, it will be bound to the next non-trivia/non-type production
+                    // like 
+                    // <!--- @type Query<Schema> --->
+                    // <cfquery name="q"> <!--- q has type `Query<Schema>` --->
+                    //
+                    else {
+                        const type = parseType();
+                        result.push(TypeShim(type));
+                    }
+                }
+                else {
+                    // parse error ? if skipUnrecognized === false?
+                }
+            }
+        }
+        parseContext = savedContext;
+        return result;
+    }
+
     function parseType() : _Type;
-    function parseType(fromInclusive: number, toExclusive: number, name?: string) : _Type;
-    function parseType(fromInclusive?: number, toExclusive?: number, name?: string) : _Type {
+    function parseType(fromInclusive: number, toExclusive: number) : _Type;
+    function parseType(fromInclusive?: number, toExclusive?: number) : _Type {
         function lexemeToType(lexeme: Token) {
             switch (lexeme.text) {
                 case "number":
@@ -3651,16 +3638,7 @@ export function Parser() {
 
         function parseTypeParam() : cfTypeConstructorParam {
             const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/false, /*allowNumeric*/false);
-            let extendsToken : Terminal | null = null;
-            let extendsType : _Type | null = null;
-
-            if (peek().text === "extends") {
-                extendsToken = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/false, /*allowNumeric*/false);
-                extendsType = parseType();
-            }
-
             parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
-
             return cfTypeConstructorParam(name.token.text);
         }
 
@@ -3883,7 +3861,7 @@ export function Parser() {
         return result;
     }
 
-    function parseScriptTriviaWithPossibleTypeAnnotation(name?: string) : {trivia: Node[], type: _Type | null} {
+    function parseScriptTriviaWithPossibleTypeAnnotation() : {trivia: Node[], type: _Type | null} {
         const trivia : Node[] = [];
         let type : _Type | null = null;
 
@@ -3904,7 +3882,7 @@ export function Parser() {
                         scanToNextToken([TokenType.STAR_FORWARD_SLASH], /*endOnOrAfter*/ "after");
                         const commentEnd = pos();
 
-                        type = parseType(commentStart+3, commentEnd-2, name);
+                        type = parseType(commentStart+3, commentEnd-2);
 
                         trivia.push(Comment(CommentType.scriptMultiLine, new SourceRange(commentStart, commentEnd)));
                     }

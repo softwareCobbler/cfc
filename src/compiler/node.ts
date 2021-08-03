@@ -27,7 +27,7 @@ export const enum NodeType {
     dottedPath, dottedPathRest, switch, switchCase, do, while, ternary, for, structLiteral, arrayLiteral,
     structLiteralInitializerMember, arrayLiteralInitializerMember, try, catch, finally,
     breakStatement, continueStatement, returnStatement, importStatement,
-    new, type, typeAttribute,
+    new, typeShim,
 }
 
 const NodeTypeUiString : Record<NodeType, string> = {
@@ -78,8 +78,7 @@ const NodeTypeUiString : Record<NodeType, string> = {
     [NodeType.continueStatement]: "continue",
     [NodeType.importStatement]: "import",
     [NodeType.new]: "new",
-    [NodeType.type]: "type",
-    [NodeType.typeAttribute]: "type-attribute",
+    [NodeType.typeShim]: "typeshim",
 };
 
 export type Node =
@@ -134,14 +133,7 @@ export type Node =
     | OptionalDotAccess
     | OptionalBracketAccess
     | OptionalCall
-
-export interface Term {
-    type: _Type,
-    name: string,
-    final: boolean,
-    var: boolean,
-    target: Node | undefined,
-}
+    | TypeShim // Node-based Type wrapper, would be nice to unify all types/nodes
 
 export interface SymTabEntry {
     uiName: string,
@@ -371,12 +363,12 @@ export const enum CommentType { tag, scriptSingleLine, scriptMultiLine };
 export interface Comment extends NodeBase {
     kind: NodeType.comment;
     commentType: CommentType;
-    typedefs?: _Type[],
+    typedefs?: TypeShim[],
 }
 
 export function Comment(tagOrigin: CfTag.Comment) : Comment;
-export function Comment(commentType: CommentType, range: SourceRange, typedefs?: _Type[]) : Comment;
-export function Comment(commentType: CfTag.Comment | CommentType, range?: SourceRange, typedefs?: _Type[]) {
+export function Comment(commentType: CommentType, range: SourceRange, typedefs?: TypeShim[]) : Comment;
+export function Comment(commentType: CfTag.Comment | CommentType, range?: SourceRange, typedefs?: TypeShim[]) {
     if (typeof commentType === "number") { // overload 2
         const comment = NodeBase<Comment>(NodeType.comment, range);
         comment.commentType = commentType;
@@ -569,7 +561,7 @@ export namespace CfTag {
     export interface Comment extends TagBase {
         tagType: TagType.comment,
         body: TagBase[],
-        typedefs?: _Type[],
+        typedefs?: TypeShim[],
     }
     export function Comment(
         tagStart: Terminal,
@@ -2278,5 +2270,16 @@ export function New(
     const v = NodeBase<New>(NodeType.new, mergeRanges(newToken, callExpr));
     v.newToken = newToken;
     v.callExpr = callExpr;
+    return v;
+}
+
+export interface TypeShim extends NodeBase {
+    kind: NodeType.typeShim,
+    type: _Type
+}
+
+export function TypeShim(type: _Type) : TypeShim {
+    const v = NodeBase<TypeShim>(NodeType.typeShim, SourceRange.Nil());
+    v.type = type;
     return v;
 }
