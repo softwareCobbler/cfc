@@ -1,6 +1,6 @@
 import { Scanner, SourceRange, TokenType, Token, NilToken, TokenTypeUiString, CfFileType } from "./scanner";
 import { getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString } from "./utils";
-import { Type as Type } from "./types";
+import { _Type } from "./types";
 
 let debug = false;
 let nextNodeId : NodeId = 0;
@@ -10,10 +10,10 @@ export function setDebug(isDebug: boolean) {
 }
 
 export const enum NodeFlags {
-    none    = 0,
-    error   = 0x00000001,
-    missing = 0x00000002,
-    checkerError = 0x00000004,
+    none         = 0,
+    error        = 1 << 0,
+    missing      = 1 << 1,
+    checkerError = 1 << 2,
 }
 
 export const enum NodeType {
@@ -134,10 +134,9 @@ export type Node =
     | OptionalDotAccess
     | OptionalBracketAccess
     | OptionalCall
-    | Type
 
 export interface Term {
-    type: Type,
+    type: _Type,
     name: string,
     final: boolean,
     var: boolean,
@@ -148,16 +147,14 @@ export interface SymTabEntry {
     uiName: string,
     canonicalName: string,
     declarations: Node | Node[] | null,
-    userType: Type | null,
-    inferredType: Type | null,
-    type: Type,
+    type: _Type,
 }
 
 export type SymTab = Map<string, SymTabEntry>;
 
 export type ScopeDisplay = {
     container: Node | null, // rename to parentContainer
-    typedefs: Map<string, Type>,
+    typedefs: Map<string, _Type>,
 } & {[name in StaticallyKnownScopeName]?: Map<string, SymTabEntry>}
 
 const staticallyKnownScopeName = [
@@ -219,7 +216,7 @@ export interface NodeBase {
     parent: Node | null,
     range: SourceRange,
 
-    typeAnnotation: Type | null,
+    typeAnnotation: _Type | null,
 
     fromTag?: boolean,
     tagOrigin: { // todo: make this only present on particular tags, and flatten it
@@ -312,8 +309,8 @@ export interface SourceFile extends NodeBase {
     libRefs: SourceFile[],
     diagnostics: Diagnostic[],
     scanner: Scanner,
-    cachedNodeTypes: Map<NodeId, Type>, // type of a particular node, exactly zero or one per node
-    cachedFlowTypes: Map<FlowId, Map<string, Type>>, // types for symbols as determined at particular flow nodes, zero or more per flow node
+    cachedNodeTypes: Map<NodeId, _Type>, // type of a particular node, exactly zero or one per node
+    cachedFlowTypes: Map<FlowId, Map<string, _Type>>, // types for symbols as determined at particular flow nodes, zero or more per flow node
 }
 
 export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: string | Buffer) : SourceFile {
@@ -328,8 +325,8 @@ export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: 
     sourceFile.libRefs = [];
     sourceFile.diagnostics = [];
     sourceFile.scanner = Scanner(sourceText);
-    sourceFile.cachedNodeTypes = new Map<NodeId, Type>();
-    sourceFile.cachedFlowTypes = new Map<FlowId, Map<string, Type>>();
+    sourceFile.cachedNodeTypes = new Map<NodeId, _Type>();
+    sourceFile.cachedFlowTypes = new Map<FlowId, Map<string, _Type>>();
     return sourceFile;
 }
 
@@ -374,12 +371,12 @@ export const enum CommentType { tag, scriptSingleLine, scriptMultiLine };
 export interface Comment extends NodeBase {
     kind: NodeType.comment;
     commentType: CommentType;
-    typedefs?: Type[],
+    typedefs?: _Type[],
 }
 
 export function Comment(tagOrigin: CfTag.Comment) : Comment;
-export function Comment(commentType: CommentType, range: SourceRange, typedefs?: Type[]) : Comment;
-export function Comment(commentType: CfTag.Comment | CommentType, range?: SourceRange, typedefs?: Type[]) {
+export function Comment(commentType: CommentType, range: SourceRange, typedefs?: _Type[]) : Comment;
+export function Comment(commentType: CfTag.Comment | CommentType, range?: SourceRange, typedefs?: _Type[]) {
     if (typeof commentType === "number") { // overload 2
         const comment = NodeBase<Comment>(NodeType.comment, range);
         comment.commentType = commentType;
@@ -572,7 +569,7 @@ export namespace CfTag {
     export interface Comment extends TagBase {
         tagType: TagType.comment,
         body: TagBase[],
-        typedefs?: Type[],
+        typedefs?: _Type[],
     }
     export function Comment(
         tagStart: Terminal,
@@ -1445,7 +1442,7 @@ export namespace Script {
         equals: Terminal | null,
         defaultValue: Node | null,
         comma: Terminal | null,
-        type: Type | null,
+        type: _Type | null,
     }
 
     export function FunctionParameter(
@@ -1456,7 +1453,7 @@ export namespace Script {
         equals: Terminal | null,
         defaultValue: Node | null,
         comma: Terminal | null,
-        type: Type | null) : FunctionParameter {
+        type: _Type | null) : FunctionParameter {
         const v = NodeBase<FunctionParameter>(NodeType.functionParameter, mergeRanges(requiredTerminal, javaLikeTypename, identifier, defaultValue, comma));
         v.fromTag = false;
         v.requiredTerminal = requiredTerminal;
@@ -1478,7 +1475,7 @@ export namespace Tag {
     export interface FunctionParameter extends FunctionParameterBase {
         kind: NodeType.functionParameter,
         fromTag: true,        
-        type: Type | null,
+        type: _Type | null,
     }
 
     export function FunctionParameter(tag: CfTag.Common) : FunctionParameter {
@@ -1517,7 +1514,7 @@ export namespace Script {
         rightParen     : Terminal,
         attrs          : TagAttribute[],
         body           : Block,
-        returnTypeAnnotation : Type | null,
+        returnTypeAnnotation : _Type | null,
     }
 
     export function FunctionDefinition(
@@ -1530,7 +1527,7 @@ export namespace Script {
         rightParen    : Terminal,
         attrs         : TagAttribute[],
         body          : Block,
-        returnTypeAnnotation : Type | null
+        returnTypeAnnotation : _Type | null
     ) : FunctionDefinition {
         const v = NodeBase<FunctionDefinition>(NodeType.functionDefinition, mergeRanges(accessModifier, returnType, functionToken, body));
         v.fromTag        = false;

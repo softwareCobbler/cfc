@@ -29,7 +29,7 @@ import {
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName} from "./utils";
 import { extractCfFunctionSignature, extractScriptFunctionParam } from "./types";
-import { cfBoolean, cfAny, cfArray, cfNil, cfNumber, cfString, cfStruct, cfTuple, Type, TypeFlags, cfFunctionSignature, cfTypeConstructorInvocation, cfVoid, cfTypeConstructorParam, cfTypeConstructor, cfIntersection, cfTypeId, cfUnion, cfStructMember, SyntheticType, TypeAttribute, cfFunctionSignatureParam } from "./types";
+import { _Type, cfArray, cfStruct, cfTuple, TypeFlags, cfFunctionSignature, cfTypeConstructorInvocation, cfTypeConstructorParam, cfTypeConstructor, cfIntersection, cfTypeId, cfUnion, SyntheticType, cfFunctionSignatureParam } from "./types";
 
 let debugParseModule = false;
 let parseTypes = false;
@@ -142,7 +142,7 @@ export function Parser() {
     let lastNonTriviaToken : Token;
     let diagnostics : Diagnostic[] = [];
 
-    let lastTypeAnnotation : Type | null = null;
+    let lastTypeAnnotation : _Type | null = null;
     
     let parseErrorMsg : string | null = null;
 
@@ -1654,10 +1654,10 @@ export function Parser() {
     /**
      * parse type annotations, 
      */
-    function parseTypeAnnotations(asDeclarationFile: boolean) : Type[] {
+    function parseTypeAnnotations(asDeclarationFile: boolean) : _Type[] {
         setScannerMode(ScannerMode.allow_both);
         const savedContext = updateParseContext(ParseContext.typeAnnotation);
-        const result : Type[] = []; // declarations (function | global)
+        const result : _Type[] = []; // declarations (function | global)
         while (lookahead() !== TokenType.EOF) {
             if (asDeclarationFile) {
                 parseTrivia();
@@ -2901,7 +2901,7 @@ export function Parser() {
             let equal : Terminal | null = null;
             let defaultValue : Node | null = null;
             let comma : Terminal | null = null;
-            let type : Type | null = null;
+            let type : _Type | null = null;
 
             //
             // required is a contextual keyword when in left-most parameter definition position
@@ -2987,7 +2987,7 @@ export function Parser() {
             comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
 
             if (type && requiredTerminal) {
-                type.typeFlags |= TypeFlags.required;
+                type.flags |= TypeFlags.required;
             }
 
             result.push(Script.FunctionParameter(requiredTerminal, javaLikeTypename, dotDotDot, name, equal, defaultValue, comma, type));
@@ -3196,7 +3196,7 @@ export function Parser() {
         let rightParen    : Terminal;
         let attrs         : TagAttribute[];
         let body          : Block;
-        let returnTypeAnnotation : Type | null = null;
+        let returnTypeAnnotation : _Type | null = null;
         
         if (SpeculationHelper.lookahead(isAccessModifier)) {
             accessModifier = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ false);
@@ -3357,7 +3357,7 @@ export function Parser() {
     function parseErrorBasedOnContext(context: ParseContext) {
         switch (context) {
             case ParseContext.typeStruct:
-                parseErrorAtCurrentToken("Type-level struct member definition expected.");
+                parseErrorAtCurrentToken("_Type-level struct member definition expected.");
                 return;
             case ParseContext.argOrParamList:
                 parseErrorAtPos(lastNonTriviaToken.range.toExclusive, "Expression expected.");
@@ -3623,55 +3623,55 @@ export function Parser() {
         return nilStatement;
     }
 
-    function parseType() : Type;
-    function parseType(fromInclusive: number, toExclusive: number, name?: string) : Type;
-    function parseType(fromInclusive?: number, toExclusive?: number, name?: string) : Type {
+    function parseType() : _Type;
+    function parseType(fromInclusive: number, toExclusive: number, name?: string) : _Type;
+    function parseType(fromInclusive?: number, toExclusive?: number, name?: string) : _Type {
         function lexemeToType(lexeme: Token) {
             switch (lexeme.text) {
                 case "number":
-                    return cfNumber(Terminal(lexeme));
+                    return SyntheticType.number;
                 case "string":
-                    return cfString(Terminal(lexeme));
+                    return SyntheticType.string;
                 case "any":
-                    return cfAny(Terminal(lexeme));
+                    return SyntheticType.any;
                 case "nil":
-                    return cfNil();
+                    return SyntheticType.nil;
                 case "boolean":
-                    return cfBoolean(Terminal(lexeme));
+                    return SyntheticType.boolean;
                 case "true":
-                    return cfBoolean(BooleanLiteral(Terminal(lexeme), true));
+                    return SyntheticType.boolean;
                 case "false":
-                    return cfBoolean(BooleanLiteral(Terminal(lexeme), false));
+                    return SyntheticType.boolean;
                 case "void":
-                    return cfVoid(Terminal(lexeme));
+                    return SyntheticType.void_;
                 default:
-                    return cfTypeId(Terminal(lexeme));
+                    return cfTypeId(lexeme.text);
             }
         }
 
         function parseTypeParam() : cfTypeConstructorParam {
             const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/false, /*allowNumeric*/false);
             let extendsToken : Terminal | null = null;
-            let extendsType : Type | null = null;
+            let extendsType : _Type | null = null;
 
             if (peek().text === "extends") {
                 extendsToken = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/false, /*allowNumeric*/false);
                 extendsType = parseType();
             }
 
-            const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+            parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
 
-            return cfTypeConstructorParam(name.token.text, extendsToken, extendsType, comma);
+            return cfTypeConstructorParam(name.token.text);
         }
 
-        function parseTypeConstructorInvocation(left: Type) : Type {
+        function parseTypeConstructorInvocation(left: _Type) : _Type {
             parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
             const args = parseList(ParseContext.typeParamList, parseTypeElement);
             parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia)
             return cfTypeConstructorInvocation(left, args)
         }
 
-        function maybeParseArrayModifier(type: Type) : Type {
+        function maybeParseArrayModifier(type: _Type) : _Type {
             outer:
             while (true) {
                 switch (lookahead()) {
@@ -3688,22 +3688,13 @@ export function Parser() {
             return type;
         }
 
-        function parseTypeElement() : Type {
+        function parseTypeElement() : _Type {
             const type = parseType();
             parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
             return type;
         }
 
-        function parseTypeAttribute() : TypeAttribute {
-            const hash         = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
-            const exclamation  = parseExpectedTerminal(TokenType.EXCLAMATION, ParseOptions.withTrivia);
-            const leftBracket  = parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
-            const name         = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
-            const rightBracket = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
-            return TypeAttribute(hash, exclamation, leftBracket, name, rightBracket);
-        }
-
-        function parseTypeStructMemberElement() : cfStructMember {
+        function parseTypeStructMemberElement() {
             // @fixme!: lexemeLikeStructKey accepts `a.b` but we don't want the dots
             const key = scanLexemeLikeStructKey();
             if (!key) {
@@ -3719,17 +3710,10 @@ export function Parser() {
                 parseTrivia();
             }
 
-            const attrs : TypeAttribute[] = [];
-            if (lookahead() === TokenType.HASH) {
-                while (lookahead() !== TokenType.EOF && lookahead() === TokenType.HASH) {
-                    attrs.push(parseTypeAttribute());
-                }
-            }
-
-            const colon = parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
+            parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
             const type = parseType();
-            const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
-            return cfStructMember(name, colon, type, comma, attrs);
+            parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+            return {name, type};
         }
 
         let savedScannerState : ScannerState | null = null;
@@ -3756,14 +3740,14 @@ export function Parser() {
 
         if (!startsType()) {
             parseErrorAtPos(pos(), "Expected a type expression.");
-            return cfNil(new SourceRange(pos(), pos()));
+            return SyntheticType.any;
         }
 
         parseTrivia(); // only necessary if we just updated scanner state? caller can maybe guarantee that the target scanner state begins on non-trivial input?
 
-        function localParseType() : Type {
+        function localParseType() : _Type {
 
-            let result : Type = cfNil();
+            let result : _Type = SyntheticType.any;
 
             switch (lookahead()) {
                 case TokenType.LEFT_BRACKET: {
@@ -3827,40 +3811,21 @@ export function Parser() {
                     }
                 }
                 case TokenType.LEFT_BRACE: {
-                    const leftBrace = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
+                    parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
                     const kvPairs = parseList(ParseContext.typeStruct, parseTypeStructMemberElement);
-                    const rightBrace = parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
+                    parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
 
                     const members = new Map<string, SymTabEntry>();
                     for (const member of kvPairs) {
-                        let noCase = false;
-                        for (const attr of member.attributes) {
-                            if (attr.name.token.text === "noCase") {
-                                noCase = true;
-                            }
-                            else {
-                                parseErrorAtRange(attr.range, "Unsupported attribute.");
-                            }
-                        }
-                        
-                        if (noCase) {
-                            // "caseless" members get set to all lowercase, generally to support later comparisons with "canonicalized"
-                            // cf case-insensitive identifiers
-                            //caselessMembers.set(member.propertyName.token.text.toLowerCase(), member.type);
-                        }
-                        else {
-                            members.set(member.propertyName.token.text.toLowerCase(), {
-                                uiName: member.propertyName.token.text,
-                                canonicalName: member.propertyName.token.text.toLowerCase(),
-                                declarations: null,
-                                inferredType: null,
-                                userType: member.type,
-                                type: member.type,
-                            })
-                        }
+                        members.set(member.name.token.text.toLowerCase(), {
+                            uiName: member.name.token.text,
+                            canonicalName: member.name.token.text.toLowerCase(),
+                            declarations: null,
+                            type: member.type,
+                        })
                     }
 
-                    result = cfStruct(leftBrace, kvPairs, members, rightBrace);
+                    result = cfStruct(members);
                     result = maybeParseArrayModifier(result);
 
                     break;
@@ -3878,10 +3843,10 @@ export function Parser() {
                 case TokenType.QUOTE_DOUBLE: {
                     const s = parseStringLiteral(/*allowInterpolations*/false);
                     if (s.kind === NodeType.simpleStringLiteral) {
-                        result = cfString(s);
+                        result = SyntheticType.string;//cfString(s);
                     }
                     else {
-                        result = SyntheticType.string(); // should never happen, parseStringLiteral(false) should always return a simpleStringLiteral
+                        result = SyntheticType.string; // should never happen, parseStringLiteral(false) should always return a simpleStringLiteral
                     }
                 }
             }
@@ -3911,16 +3876,16 @@ export function Parser() {
             restoreScannerState(savedScannerState);
         }
 
-        if (name) {
+        /*if (name) {
             result.uiName = name;
-        }
+        }*/
 
         return result;
     }
 
-    function parseScriptTriviaWithPossibleTypeAnnotation(name?: string) : {trivia: Node[], type: Type | null} {
+    function parseScriptTriviaWithPossibleTypeAnnotation(name?: string) : {trivia: Node[], type: _Type | null} {
         const trivia : Node[] = [];
-        let type : Type | null = null;
+        let type : _Type | null = null;
 
         const savedContext = updateParseContext(ParseContext.trivia);
 

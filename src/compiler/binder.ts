@@ -1,7 +1,7 @@
 import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, ConditionalSubtype, SymTab } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, getNodeLinks, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
-import { SyntheticType, Type, TypeKind, extractCfFunctionSignature } from "./types";
+import { SyntheticType, _Type, extractCfFunctionSignature } from "./types";
 
 export function Binder() {
     let RootNode : NodeWithScope<SourceFile>;
@@ -28,7 +28,7 @@ export function Binder() {
 
         RootNode.containedScope = {
             container: null,
-            typedefs: new Map<string, Type>(),
+            typedefs: new Map<string, _Type>(),
             cgi: new Map<string, SymTabEntry>(),
             variables: new Map<string, SymTabEntry>(),
             url: new Map<string, SymTabEntry>(),
@@ -125,9 +125,6 @@ export function Binder() {
                 if (node.typedefs) {
                     bindList(node.typedefs, node);
                 }
-                return;
-            case NodeType.type:
-                bindType(node);
                 return;
             case NodeType.textSpan:
                 return;
@@ -281,7 +278,7 @@ export function Binder() {
         bindList(nodes.filter(node => node.kind !== NodeType.functionDefinition), parent);
     }
 
-    function bindType(node: Type) {
+    function bindType(node: _Type) {
         // types always have names here?
         // we get them from `@type x = ` so presumably always...
         // also `@declare function foo` and possibly `@declare global <identifier-name> : type`
@@ -382,7 +379,7 @@ export function Binder() {
         }
     }
 
-    function addSymbolToTable(symTab: SymTab, uiName: string, declaringNode: Node, userType: Type | null, inferredType: Type | null) : SymTabEntry {
+    function addSymbolToTable(symTab: SymTab, uiName: string, declaringNode: Node, userType: _Type | null, inferredType: _Type | null) : SymTabEntry {
         const canonicalName = uiName.toLowerCase();
         let symTabEntry : SymTabEntry;
 
@@ -401,9 +398,7 @@ export function Binder() {
                 uiName,
                 canonicalName,
                 declarations: declaringNode,
-                userType,
-                inferredType,
-                type: userType || inferredType || SyntheticType.any(),
+                type: userType || inferredType || SyntheticType.any,
             };
 
             symTab.set(canonicalName, symTabEntry);
@@ -479,7 +474,7 @@ export function Binder() {
             }
 
             if (targetScope) {
-                addSymbolToTable(targetScope, uiPath[1], node, node.typeAnnotation, SyntheticType.any());
+                addSymbolToTable(targetScope, uiPath[1], node, node.typeAnnotation, SyntheticType.any);
             }
 
             return;
@@ -487,7 +482,7 @@ export function Binder() {
 
         if (node.finalModifier || node.varModifier) {
             if (getContainingFunction(node)) {
-                addSymbolToTable(currentContainer.containedScope.local!, uiPath[0], node, node.typeAnnotation, SyntheticType.any());
+                addSymbolToTable(currentContainer.containedScope.local!, uiPath[0], node, node.typeAnnotation, SyntheticType.any);
             }
             else {
                 // we're not in a function, so we must be at top-level scope
@@ -858,16 +853,16 @@ export function Binder() {
 
                 if (targetBaseName === "local") {
                     if (currentContainer.containedScope.local) {
-                        addSymbolToTable(currentContainer.containedScope.local, firstAccessAsString, node, null, SyntheticType.any());
+                        addSymbolToTable(currentContainer.containedScope.local, firstAccessAsString, node, null, SyntheticType.any);
                     }
                     else {
                         // assigning to `local.x` in a non-local scope just binds the name `local` to the root variables scope
-                        addSymbolToTable(RootNode.containedScope.variables!, "local", node, null, SyntheticType.any());
+                        addSymbolToTable(RootNode.containedScope.variables!, "local", node, null, SyntheticType.any);
                     }
                 }
                 else {
                     if (targetBaseName in RootNode.containedScope) {
-                        addSymbolToTable(RootNode.containedScope[targetBaseName]!, firstAccessAsString, node, null, SyntheticType.any());
+                        addSymbolToTable(RootNode.containedScope[targetBaseName]!, firstAccessAsString, node, null, SyntheticType.any);
                     }
                 }
             }
@@ -889,7 +884,7 @@ export function Binder() {
                     return;
                 }
 
-                addSymbolToTable(targetScope, targetBaseName, node, null, SyntheticType.any());
+                addSymbolToTable(targetScope, targetBaseName, node, null, SyntheticType.any);
             }
         }
     }
@@ -936,7 +931,7 @@ export function Binder() {
 
         node.containedScope = {
             container: currentContainer,
-            typedefs: new Map<string, Type>(),
+            typedefs: new Map<string, _Type>(),
             local: new Map<string, SymTabEntry>(),
             arguments: new Map<string, SymTabEntry>(),
         };
@@ -1140,7 +1135,7 @@ export function Binder() {
     function bindDeclarationFile(sourceFile: SourceFile) {
         sourceFile.containedScope = {
             container: null,
-            typedefs: new Map<string, Type>(),
+            typedefs: new Map<string, _Type>(),
             global: new Map<string, SymTabEntry>()
         };
 
