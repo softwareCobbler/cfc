@@ -22,6 +22,7 @@ const stdLib = SourceFile(libPath , CfFileType.dCfm, fs.readFileSync(libPath));
 
 const sourceFile = NilCfc(`
 <cfcomponent>
+    <!--- @type Query = <T> => {recordCount: number, x: T} --->
     <cfset final this.lel = {
         m1: 1,
         m2: 2,
@@ -30,9 +31,8 @@ const sourceFile = NilCfc(`
 
     <cffunction name="foo">
         <cfscript>
-            for (var x in xxx) {
-                this.lel.
-            }
+            // @type {type: string, descr: string}[]
+            final var x = [];
         </cfscript>
     </cffunction>
 </cfcomponent>
@@ -52,7 +52,7 @@ sourceFile.libRefs.push(stdLib);*/
 parser.setSourceFile(sourceFile);
 parser.parse();
 binder.bind(sourceFile);
-checker.check(sourceFile);
+//checker.check(sourceFile);
 
 const flatTree = flattenTree(sourceFile);
 

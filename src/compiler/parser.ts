@@ -28,8 +28,8 @@ import {
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, TypeShim } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, Mutable} from "./utils";
-import { extractCfFunctionSignature, extractScriptFunctionParam } from "./types";
-import { _Type, cfArray, cfStruct, cfTuple, cfFunctionSignature, cfTypeConstructorInvocation, cfTypeConstructorParam, cfTypeConstructor, cfIntersection, cfTypeId, cfUnion, SyntheticType, cfFunctionSignatureParam } from "./types";
+import { extractCfFunctionSignature, extractScriptFunctionParam, isUnion } from "./types";
+import { _Type, cfArray, cfStruct, cfTuple, cfFunctionSignature, cfTypeConstructorInvocation, cfTypeConstructorParam, cfTypeConstructor, cfTypeId, cfUnion, SyntheticType, cfFunctionSignatureParam } from "./types";
 
 let debugParseModule = false;
 let parseTypes = false;
@@ -3644,7 +3644,7 @@ export function Parser() {
 
         function parseTypeConstructorInvocation(left: _Type) : _Type {
             parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
-            const args = parseList(ParseContext.typeParamList, parseTypeElement);
+            const args = parseList(ParseContext.typeParamList, parseTypeListElement);
             parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia)
             return cfTypeConstructorInvocation(left, args)
         }
@@ -3666,26 +3666,16 @@ export function Parser() {
             return type;
         }
 
-        function parseTypeElement() : _Type {
+        function parseTypeListElement() : _Type {
             const type = parseType();
             parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
             return type;
         }
 
         function parseTypeStructMemberElement() {
-            // @fixme!: lexemeLikeStructKey accepts `a.b` but we don't want the dots
-            const key = scanLexemeLikeStructKey();
-            if (!key) {
+            const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ true);
+            if (!name) {
                 parseErrorAtCurrentToken("Expected a struct key.");
-            }
-
-            let name : Terminal;
-            if (key) {
-                name = Terminal(key, parseTrivia());
-            }
-            else {
-                name = NilTerminal(pos());
-                parseTrivia();
             }
 
             parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
@@ -3709,6 +3699,7 @@ export function Parser() {
                 case TokenType.LEFT_BRACKET:
                 case TokenType.LEFT_PAREN:
                 case TokenType.LEFT_BRACE:
+                case TokenType.LEFT_ANGLE:
                 case TokenType.LEXEME:
                     return true;
                 default:
@@ -3724,13 +3715,12 @@ export function Parser() {
         parseTrivia(); // only necessary if we just updated scanner state? caller can maybe guarantee that the target scanner state begins on non-trivial input?
 
         function localParseType() : _Type {
-
             let result : _Type = SyntheticType.any;
 
             switch (lookahead()) {
                 case TokenType.LEFT_BRACKET: {
                     parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
-                    const tupleTypes = parseList(ParseContext.typeTupleOrArrayElement, parseTypeElement);
+                    const tupleTypes = parseList(ParseContext.typeTupleOrArrayElement, parseTypeListElement);
                     parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
                     result = maybeParseArrayModifier(cfTuple(tupleTypes));
                     break;
@@ -3837,26 +3827,30 @@ export function Parser() {
         intersectionsAndUnions:
         while (true) {
             switch (lookahead()) {
+                /*
                 case TokenType.AMPERSAND:
                     next(), parseTrivia(); // eat ampersand and trivia; if we get the type system kinda working we can save this on the type node
                     result = cfIntersection(result, localParseType());
                     continue intersectionsAndUnions;
-                case TokenType.PIPE:
+                */
+                case TokenType.PIPE: {
                     next(), parseTrivia();
-                    result = cfUnion(result, localParseType()); // fixme, we need a list not a tree
-                    continue intersectionsAndUnions;
-                default:
+                    if (isUnion(result)) {
+                        result.types.push(localParseType());
+                    }
+                    else {
+                        result = cfUnion(result, localParseType());
+                    }
+                }
+                default: {
                     break intersectionsAndUnions;
+                }
             }
         }
 
         if (savedScannerState) {
             restoreScannerState(savedScannerState);
         }
-
-        /*if (name) {
-            result.uiName = name;
-        }*/
 
         return result;
     }

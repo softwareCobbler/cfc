@@ -30,6 +30,7 @@ export const enum TypeFlags {
     containsUndefined               = 1 << 21,
     optional                        = 1 << 22,
     spread                          = 1 << 23,
+    end
 }
 
 const TypeKindUiString : Record<TypeFlags, string> = {
@@ -50,12 +51,26 @@ const TypeKindUiString : Record<TypeFlags, string> = {
     [TypeFlags.typeConstructorInvocation]:       "type-constructor-invocation",           // typename | typename<type-list> where `typename` is shorthand for `typename<>` with 0 args
     [TypeFlags.cachedTypeConstructorInvocation]: "cached-type-constructor-invocation",    // same as a type call but we can see that is cached; sort of a "type call closure" with inital args captured
     [TypeFlags.typeConstructor]:                 "type-constructor",    // type<type-list, ...> => type
-    [TypeFlags.typeConstructorParam]:               "type-function-param", // type param in a type function
+    [TypeFlags.typeConstructorParam]:            "type-function-param", // type param in a type function
     [TypeFlags.typeId]:                          "type-id",             // name of non-builtin type, e.g, "T"
     [TypeFlags.never]:                           "never",
     [TypeFlags.final]:                           "final",
+    [TypeFlags.synthetic]:                       "synthetic",
 };
-TypeKindUiString; // @fixme: use this in a debug string
+
+function addDebugTypeInfo(type: _Type) {
+    Object.defineProperty(type, "__debugTypeInfo", {
+        get() {
+            const result : string[] = [];
+            for (let i = 0; (1 << i) < TypeFlags.end; i++) {
+                if (type.flags & (1 << i)) {
+                    result.push(TypeKindUiString[1 << i]);
+                }
+            }
+            return result.join(",");
+        }
+    })
+}
 
 export interface _Type {
     readonly flags: TypeFlags,
@@ -67,10 +82,16 @@ export interface cfArray extends _Type {
 }
 
 export function cfArray(memberType: _Type) : cfArray {
-    return {
+    const type = {
         flags: TypeFlags.array,
         memberType
+    };
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
     }
+
+    return type;
 }
 
 export function isArray(t: _Type) : t is cfArray {
@@ -82,10 +103,16 @@ export interface cfTuple extends _Type {
 }
 
 export function cfTuple(memberTypes: readonly _Type[]) : cfTuple {
-    return {
+    const type = {
         flags: TypeFlags.tuple,
         memberTypes
     }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+
+    return type;
 }
 
 export function isTuple(t: _Type) : t is cfTuple {
@@ -97,10 +124,16 @@ export interface cfStruct extends _Type {
 }
 
 export function cfStruct(members: Map<string, SymTabEntry>) : cfStruct {
-    return {
+    const type = {
         flags: TypeFlags.struct,
         members,
     }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+
+    return type;
 }
 
 export function isStruct(t: _Type) : t is cfStruct {
@@ -115,13 +148,19 @@ export interface cfFunctionSignature extends _Type {
 }
 
 export function cfFunctionSignature(uiName: string, params: cfFunctionSignatureParam[], returns: _Type) : cfFunctionSignature {
-    return {
+    const type = {
         flags: TypeFlags.functionSignature,
         uiName,
         canonicalName: uiName.toLowerCase(),
         params,
         returns,
     }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+    
+    return type;
 }
 
 export function isFunctionSignature(t: _Type) : t is cfFunctionSignature {
@@ -135,14 +174,20 @@ export interface cfFunctionSignatureParam extends _Type {
     defaultValue: _Type | null,
 }
 
-export function cfFunctionSignatureParam(type: _Type, uiName: string, defaultValue: _Type | null) : cfFunctionSignatureParam {
-    return {
+export function cfFunctionSignatureParam(paramType: _Type, uiName: string, defaultValue: _Type | null) : cfFunctionSignatureParam {
+    const type = {
         flags: TypeFlags.functionSignatureParam,
-        type,
+        type: paramType,
         uiName,
         canonicalName: uiName.toLowerCase(),
         defaultValue
     }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+    
+    return type;
 }
 
 export function isFunctionSignatureParam(t: _Type) : t is cfFunctionSignatureParam {
@@ -155,11 +200,17 @@ export interface cfTypeConstructorInvocation extends _Type {
 }
 
 export function cfTypeConstructorInvocation(left: _Type, args: _Type[]) : cfTypeConstructorInvocation {
-    return {
+    const type = {
         flags: TypeFlags.typeConstructorInvocation,
         left,
         args
     }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+    
+    return type;
 }
 
 export function isTypeConstructorInvocation(t: _Type) : t is cfTypeConstructorInvocation {
@@ -172,11 +223,17 @@ export interface cfCachedTypeConstructorInvocation extends _Type {
 }
 
 export function cfCachedTypeConstructorInvocation(left: cfTypeConstructor, args: _Type[]) : cfCachedTypeConstructorInvocation {
-    return {
+    const type = {
         flags: TypeFlags.cachedTypeConstructorInvocation,
         left,
         args
     }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+    
+    return type;
 }
 
 export function isCachedTypeConstructorInvocation(t: _Type) : t is cfCachedTypeConstructorInvocation {
@@ -190,12 +247,18 @@ export interface cfTypeConstructor extends _Type {
 }
 
 export function cfTypeConstructor(params: cfTypeConstructorParam[], body: _Type) : cfTypeConstructor {
-    return {
+    const type = {
         flags: TypeFlags.typeConstructor,
         params,
         capturedParams: new Map<string, _Type>(),
         body
     }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+    
+    return type;
 }
 
 export function isTypeConstructor(t: _Type) : t is cfTypeConstructor {
@@ -208,10 +271,16 @@ export interface cfTypeConstructorParam extends _Type {
 }
 
 export function cfTypeConstructorParam(name: string) {
-    return {
+    const type = {
         flags: TypeFlags.typeConstructorParam,
         name
     }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+    
+    return type;
 }
 
 export function isTypeConstructorParam(t: _Type) : t is cfTypeConstructorParam {
@@ -223,10 +292,16 @@ export interface cfTypeId extends _Type {
 }
 
 export function cfTypeId(name: string) : cfTypeId {
-    return {
+    const type = {
         flags: TypeFlags.typeId,
         name
     }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+    
+    return type;
 }
 
 export function isTypeId(t: _Type) : t is cfTypeId {
@@ -238,10 +313,16 @@ export interface cfIntersection extends _Type {
 }
 
 export function cfIntersection(...types: _Type[]) : cfIntersection {
-    return {
+    const type = {
         flags: TypeFlags.intersection,
         types
     }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+    
+    return type;
 }
 
 export function isIntersection(t: _Type) : t is cfIntersection {
@@ -253,10 +334,16 @@ export interface cfUnion extends _Type {
 }
 
 export function cfUnion(...types: _Type[]) {
-    return {
+    const type = {
         flags: TypeFlags.union,
         types
     }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+    
+    return type;
 }
 
 export function isUnion(t: _Type) : t is cfUnion {
@@ -312,7 +399,7 @@ export const SyntheticType = (function() {
         return v;
     };*/
 
-    return {
+    const results = {
         any,
         void_,
         string,
@@ -322,7 +409,19 @@ export const SyntheticType = (function() {
         struct,
         emptyStruct,
         never
+    } as const;
+
+    // struct is a function; and empty struct was created through a factory so it already has debug info on it
+    // the remainder need debug info explicitly added
+    const markDebug : (keyof typeof results)[] = ["any", "void_", "string", "number", "boolean", "nil", "never"];
+
+    if (debugTypeModule) {
+        for (const key of markDebug) {
+            addDebugTypeInfo(results[key] as _Type);
+        }
     }
+
+    return results;
 })();
 
 // mostly just for exposition
