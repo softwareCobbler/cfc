@@ -28,7 +28,7 @@ import {
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, TypeShim } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, Mutable} from "./utils";
-import { extractCfFunctionSignature, extractScriptFunctionParam, isUnion } from "./types";
+import { cfIndexedType, cfIntersection, cfMappedType, extractCfFunctionSignature, extractScriptFunctionParam, isIntersection, isTypeId, isUnion } from "./types";
 import { _Type, cfArray, cfStruct, cfTuple, cfFunctionSignature, cfTypeConstructorInvocation, cfTypeConstructorParam, cfTypeConstructor, cfTypeId, cfUnion, SyntheticType, cfFunctionSignatureParam } from "./types";
 
 let debugParseModule = false;
@@ -3613,7 +3613,7 @@ export function Parser() {
     function parseType() : _Type;
     function parseType(fromInclusive: number, toExclusive: number) : _Type;
     function parseType(fromInclusive?: number, toExclusive?: number) : _Type {
-        function lexemeToType(lexeme: Token) {
+        function tokenToType(lexeme: Token) {
             switch (lexeme.text) {
                 case "number":
                     return SyntheticType.number;
@@ -3638,8 +3638,16 @@ export function Parser() {
 
         function parseTypeParam() : cfTypeConstructorParam {
             const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/false, /*allowNumeric*/false);
-            parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
-            return cfTypeConstructorParam(name.token.text);
+            const equal = parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
+            if (equal) {
+                const defaultType = parseType();
+                parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+                return cfTypeConstructorParam(name.token.text, defaultType);
+            }
+            else {
+                parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+                return cfTypeConstructorParam(name.token.text);
+            }
         }
 
         function parseTypeConstructorInvocation(left: _Type) : _Type {
@@ -3650,14 +3658,30 @@ export function Parser() {
         }
 
         function maybeParseArrayModifier(type: _Type) : _Type {
+            function maybeLexeme() {
+                return isLexemeLikeToken(peek()) ? parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/false, /*allowNumeric*/ false) : null;
+            }
+
             outer:
             while (true) {
                 switch (lookahead()) {
                     case TokenType.LEFT_BRACKET:
                         parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
-                        parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
-                        type = cfArray(type);
-                        continue outer;
+                        const maybeTypeId = maybeLexeme();
+                        if (maybeTypeId) {
+                            let typeId : _Type | null = tokenToType(maybeTypeId.token);
+                            if (!isTypeId(typeId)) {
+                                typeId = null;
+                            }
+                            type = cfIndexedType(type, typeId ?? cfTypeId("<<ERROR>>"));
+                            parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
+                            continue outer;
+                        }
+                        else {
+                            parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
+                            type = cfArray(type);
+                            continue outer;
+                        }
                     default:
                         break;
                 }
@@ -3726,11 +3750,11 @@ export function Parser() {
                     break;
                 }
                 case TokenType.LEXEME: {
-                    result = lexemeToType(next());
+                    result = tokenToType(next());
                     while (lookahead() === TokenType.LEFT_ANGLE) {
                         result = parseTypeConstructorInvocation(result);
                     }
-
+                    result = maybeParseArrayModifier(result);
                     break;
                 }
                 case TokenType.LEFT_PAREN: {
@@ -3761,7 +3785,7 @@ export function Parser() {
                             return null;
                         }
 
-                        return lexemeToType(lexeme);
+                        return tokenToType(lexeme);
                     })
 
                     if (parenthesizedType) {
@@ -3779,21 +3803,58 @@ export function Parser() {
                     }
                 }
                 case TokenType.LEFT_BRACE: {
-                    parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
-                    const kvPairs = parseList(ParseContext.typeStruct, parseTypeStructMemberElement);
-                    parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
-
-                    const members = new Map<string, SymTabEntry>();
-                    for (const member of kvPairs) {
-                        members.set(member.name.token.text.toLowerCase(), {
-                            uiName: member.name.token.text,
-                            canonicalName: member.name.token.text.toLowerCase(),
-                            declarations: null,
-                            type: member.type,
-                        })
+                    function parseMappedTypeKeyExpression() : {keyBinding: cfTypeId, inKeyOf: cfTypeId} {
+                        parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
+                        const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ false);
+                        let keyBinding : _Type | null = tokenToType(name.token);
+                        if (!isTypeId(keyBinding)) { // got number or string or etc.
+                            parseErrorAtRange(name.range, "Mapped type key binding must be a valid typename.");
+                            keyBinding = null;
+                        }
+                        const contextualKwIn = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ false);
+                        const contextualKwKeyof = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ false);
+                        if (contextualKwIn.token.text !== "in" || contextualKwKeyof.token.text !== "keyof") {
+                            parseErrorAtRange(mergeRanges(contextualKwIn, contextualKwKeyof), "Expected 'in keyof'.");
+                        }
+                        const inKeyOfName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ false);
+                        let inKeyOfBinding : _Type | null = tokenToType(inKeyOfName.token);
+                        if (!isTypeId(inKeyOfBinding)) { // got number or string or etc.
+                            parseErrorAtRange(name.range, "Mapped type keyof source must be a valid typename.");
+                            inKeyOfBinding = null;
+                        }
+                        parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
+                        
+                        return {
+                            keyBinding: keyBinding ?? cfTypeId("<<ERROR>>"),
+                            inKeyOf: inKeyOfBinding ?? cfTypeId("<<ERROR>>")
+                        }
                     }
 
-                    result = cfStruct(members);
+                    parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
+
+                    if (lookahead() === TokenType.LEFT_BRACKET) {
+                        const {keyBinding, inKeyOf} = parseMappedTypeKeyExpression();
+                        parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
+                        const type = parseType();
+                        result = cfMappedType(keyBinding, inKeyOf, type);
+                    }
+                    else {
+                        const kvPairs = parseList(ParseContext.typeStruct, parseTypeStructMemberElement);
+                        parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
+
+                        const members = new Map<string, SymTabEntry>();
+                        for (const member of kvPairs) {
+                            members.set(member.name.token.text.toLowerCase(), {
+                                uiName: member.name.token.text,
+                                canonicalName: member.name.token.text.toLowerCase(),
+                                declarations: null,
+                                type: member.type,
+                            })
+                        }
+
+                        result = cfStruct(members);
+                    }
+
                     result = maybeParseArrayModifier(result);
 
                     break;
@@ -3827,12 +3888,16 @@ export function Parser() {
         intersectionsAndUnions:
         while (true) {
             switch (lookahead()) {
-                /*
-                case TokenType.AMPERSAND:
-                    next(), parseTrivia(); // eat ampersand and trivia; if we get the type system kinda working we can save this on the type node
-                    result = cfIntersection(result, localParseType());
-                    continue intersectionsAndUnions;
-                */
+                case TokenType.AMPERSAND: {
+                    next(), parseTrivia();
+                    if (isIntersection(result)) {
+                        result.types.push(localParseType());
+                    }
+                    else {
+                        result = cfIntersection(result, localParseType());
+                    }
+                    break;
+                }
                 case TokenType.PIPE: {
                     next(), parseTrivia();
                     if (isUnion(result)) {
@@ -3841,6 +3906,7 @@ export function Parser() {
                     else {
                         result = cfUnion(result, localParseType());
                     }
+                    break;
                 }
                 default: {
                     break intersectionsAndUnions;

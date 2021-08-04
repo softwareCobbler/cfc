@@ -22,7 +22,8 @@ const stdLib = SourceFile(libPath , CfFileType.dCfm, fs.readFileSync(libPath));
 
 const sourceFile = NilCfc(`
 <cfcomponent>
-    <!--- @type Query = <T> => {recordCount: number, x: T} --->
+    <!--- @type Query = <T = any> => {recordCount: number, currentRow: number} & {[key in keyof T]: T[key] & T[key][]} --->
+    <!---
     <cfset final this.lel = {
         m1: 1,
         m2: 2,
@@ -35,6 +36,7 @@ const sourceFile = NilCfc(`
             final var x = [];
         </cfscript>
     </cffunction>
+    --->
 </cfcomponent>
 `);
 

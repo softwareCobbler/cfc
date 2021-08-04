@@ -30,6 +30,8 @@ export const enum TypeFlags {
     containsUndefined               = 1 << 21,
     optional                        = 1 << 22,
     spread                          = 1 << 23,
+    mappedType                      = 1 << 24,
+    indexedType                     = 1 << 25,
     end
 }
 
@@ -56,6 +58,8 @@ const TypeKindUiString : Record<TypeFlags, string> = {
     [TypeFlags.never]:                           "never",
     [TypeFlags.final]:                           "final",
     [TypeFlags.synthetic]:                       "synthetic",
+    [TypeFlags.mappedType]:                      "mapped-type",
+    [TypeFlags.indexedType]:                     "indexed-type",
 };
 
 function addDebugTypeInfo(type: _Type) {
@@ -267,13 +271,18 @@ export function isTypeConstructor(t: _Type) : t is cfTypeConstructor {
 
 export interface cfTypeConstructorParam extends _Type {
     //extendsType: Type | null,
-    name: string
+    name: string,
+    defaultType?: _Type
 }
 
-export function cfTypeConstructorParam(name: string) {
-    const type = {
+export function cfTypeConstructorParam(name: string, defaultType?: _Type) {
+    const type : cfTypeConstructorParam = {
         flags: TypeFlags.typeConstructorParam,
         name
+    }
+
+    if (defaultType) {
+        type.defaultType = defaultType;
     }
 
     if (debugTypeModule) {
@@ -348,6 +357,53 @@ export function cfUnion(...types: _Type[]) {
 
 export function isUnion(t: _Type) : t is cfUnion {
     return !!(t.flags & TypeFlags.union);
+}
+
+export interface cfMappedType extends _Type {
+    keyBinding: cfTypeId,
+    inKeyOf: cfTypeId,
+    targetType: _Type
+}
+
+export function cfMappedType(keyBinding: cfTypeId, inKeyOf: cfTypeId, targetType: _Type) : cfMappedType {
+    const t = {
+        flags: TypeFlags.mappedType,
+        keyBinding,
+        inKeyOf,
+        targetType
+    }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(t);
+    }
+
+    return t;
+}
+
+export function isMappedType(t: _Type) : t is cfMappedType {
+    return !!(t.flags & TypeFlags.mappedType);
+}
+
+export interface cfIndexedType extends _Type {
+    type: _Type,
+    index: cfTypeId
+}
+
+export function cfIndexedType(type: _Type, index: cfTypeId) : cfIndexedType {
+    const t = {
+        flags: TypeFlags.indexedType,
+        type,
+        index
+    }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(t);
+    }
+    return t;
+}
+
+export function isIndexedType(t: _Type) : t is cfIndexedType {
+    return !!(t.flags & TypeFlags.indexedType);
 }
 
 export const SyntheticType = (function() {
