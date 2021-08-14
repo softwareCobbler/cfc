@@ -1,13 +1,15 @@
+import * as path from "path";
 import { Diagnostic, SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges } from "./node";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfStruct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStruct, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor } from "./types";
-import { filterNodeList, findAncestor, getAttributeValue, getContainingFunction, getSourceFile, getTriviallyComputableString, isHoistableFunctionDefinition, stringifyLValue } from "./utils";
+import { filterNodeList, findAncestor, getAttributeValue, getContainingFunction, getSourceFile, getTriviallyComputableString, isHoistableFunctionDefinition, Mutable, stringifyDottedPath, stringifyLValue } from "./utils";
 
 export function Checker() {
     let sourceFile!: SourceFile;
     let scanner!: Scanner;
     let diagnostics!: Diagnostic[];
     let rootScope: ScopeDisplay;
+    let cfcIncludes = new Map<string, cfStruct>();
     let noUndefinedVars = false;
 
     function check(sourceFile_: SourceFile) {
@@ -503,51 +505,56 @@ export function Checker() {
     function checkCallExpression(node: CallExpression) {
         checkNode(node.left);
         checkList(node.args);
-        const type = getCachedEvaluatedNodeType(node.left);
-        if (type) {
-            if (type.flags & TypeFlags.any) {
-                setCachedEvaluatedNodeType(node, SyntheticType.any);
-                return;
+
+        const sig = getCachedEvaluatedNodeType(node.left);
+
+        if (isFunctionSignature(sig)) {
+            checkCallLikeArguments(sig, node);
+            setCachedEvaluatedNodeType(node, sig.returns);
+        }
+    }
+
+    function checkCallLikeArguments(sig: _Type, node: CallExpression) : void {
+        if (sig.flags & TypeFlags.any) {
+            //setCachedEvaluatedNodeType(node, SyntheticType.any);
+            return;
+        }
+        if (isFunctionSignature(sig)) {
+            const minRequiredParams = sig.params.filter(param => !(param.flags & TypeFlags.optional)).length;
+            const maxParams = sig.params.length;
+            const namedArgCount = node.args.filter(arg => !!arg.equals).length;
+
+            if (namedArgCount !== node.args.length && namedArgCount !== 0) {
+                typeErrorAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), "All arguments must be named, if any are named.");
             }
-            if (isFunctionSignature(type)) {
-                setCachedEvaluatedNodeType(node, type.returns);
 
-                const minRequiredParams = type.params.filter(param => !(param.flags & TypeFlags.optional)).length;
-                const maxParams = type.params.length;
-                const namedArgCount = node.args.filter(arg => !!arg.equals).length;
+            if (node.args.length < minRequiredParams || node.args.length > maxParams) {
+                let msg;
+                if (minRequiredParams !== maxParams) msg = `Expected between ${minRequiredParams} and ${maxParams} arguments, but got ${node.args.length}`;
+                else msg = `Expected ${maxParams} arguments, but got ${node.args.length}`;
+                typeErrorAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), msg);
+            }
 
-                if (namedArgCount !== node.args.length && namedArgCount !== 0) {
-                    typeErrorAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), "All arguments must be named, if any are named.");
+            if (namedArgCount === node.args.length) {
+                // reorder args to match params ?
+            }
+
+            for (let i = 0; i < node.args.length; i++) {
+                const paramType = sig.params[i]?.type ?? null;
+                if (!paramType) break;
+                const arg = node.args[i];
+                const argType = getCachedEvaluatedNodeType(arg);
+                if (!isAssignable(/*assignThis*/ argType, /*to*/ paramType)) {
+                    // error
                 }
-
-                if (node.args.length < minRequiredParams || node.args.length > maxParams) {
-                    let msg;
-                    if (minRequiredParams !== maxParams) msg = `Expected between ${minRequiredParams} and ${maxParams} arguments, but got ${node.args.length}`;
-                    else msg = `Expected ${maxParams} arguments, but got ${node.args.length}`;
-                    typeErrorAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), msg);
-                }
-
-                if (namedArgCount === node.args.length) {
-                    // reorder args to match params ?
-                }
-
-                for (let i = 0; i < node.args.length; i++) {
-                    const paramType = type.params[i]?.type ?? null;
-                    if (!paramType) break;
-                    const arg = node.args[i];
-                    const argType = getCachedEvaluatedNodeType(arg);
-                    if (!isAssignable(/*assignThis*/ argType, /*to*/ paramType)) {
-                        // error
-                    }
-                    if (isFunctionSignature(paramType) && (arg.expr.kind === NodeType.functionDefinition || arg.expr.kind === NodeType.arrowFunctionDefinition)) {
-                        pushTypesIntoInlineFunctionDefinition(node, paramType, arg.expr);
-                        checkNode(arg.expr.body as Node /*fixme: we know this is a script function definition but can't prove it here; anyway, all function defs should have Node as a body, not Node|Node[] ?*/);
-                    }
+                if (isFunctionSignature(paramType) && (arg.expr.kind === NodeType.functionDefinition || arg.expr.kind === NodeType.arrowFunctionDefinition)) {
+                    pushTypesIntoInlineFunctionDefinition(node, paramType, arg.expr);
+                    checkNode(arg.expr.body as Node /*fixme: we know this is a script function definition but can't prove it here; anyway, all function defs should have Node as a body, not Node|Node[] ?*/);
                 }
             }
-            else {
-                // error
-            }
+        }
+        else {
+            // error
         }
     }
 
@@ -782,8 +789,14 @@ export function Checker() {
 
     // kludgy shim to take a ScopeDisplay member and wrap it in a cfStruct, so we can bridge the gap between those worlds, mostly for the 
     // sake of completions; a "scope" in CF is essentially a struct, but not quite; and vice versa; so the abstraction is not perfect but it's close
-    function structViewOfScope(scopeContents: Map<string, SymTabEntry>) : cfStruct {
+    function structViewOfScope(scopeContents: ReadonlyMap<string, SymTabEntry>) : cfStruct {
         return SyntheticType.struct(scopeContents);
+    }
+
+    function structViewOfCfc(scopeContents: ReadonlyMap<string, SymTabEntry>) : cfStruct {
+        const type = structViewOfScope(scopeContents);
+        (type.flags as Mutable<TypeFlags>) |= TypeFlags.cfc;
+        return type;
     }
 
     function checkIdentifier(node: Identifier) {
@@ -830,10 +843,10 @@ export function Checker() {
             // it's possible we don't know the symbol (inherited from parent cfc or cfinclude'd), in which case we don't want to report this
             if (resolvedSymbol) {
                 if (flowType && (flowType.flags & TypeFlags.containsUndefined)) {
-                    typeErrorAtNode(node, `'${name}' is possibly undefined.`);
+                    //typeErrorAtNode(node, `'${name}' is possibly undefined.`);
                 }
                 else if (flowType === undefined) {
-                    typeErrorAtNode(node, `'${name}' is used before its first definition.`)
+                    //typeErrorAtNode(node, `'${name}' is used before its first definition.`)
                 }
             }
             
@@ -865,7 +878,7 @@ export function Checker() {
             }
 
             if (noUndefinedVars) {
-                typeErrorAtNode(node, `Cannot find name '${name}'.`);
+                //typeErrorAtNode(node, `Cannot find name '${name}'.`);
             }
         }
     }
@@ -926,7 +939,7 @@ export function Checker() {
             return;
         }
 
-        if (node.accessType === IndexedAccessType.dot) {
+        if (node.accessType === IndexedAccessType.dot) { // @fixme: new X().y is broken
             const name = node.property.token.text;
             if (!(parentType as cfStruct).members.has(name)) {
                 if (noUndefinedVars) {
@@ -1138,7 +1151,16 @@ export function Checker() {
     }
 
     function checkNew(node: New) {
-        checkNode(node.callExpr);
+        if (node.callExpr.left.kind !== NodeType.dottedPath) return;
+        let cfcName = stringifyDottedPath(node.callExpr.left).ui;
+        let cfc = cfcResolver({resolveFrom: sourceFile.absPath, cfcName: cfcName});
+        if (!cfc) return;
+        setCachedEvaluatedNodeType(node, cfc);
+        
+        let initSig = cfc.members.get("init");
+        if (initSig && isFunctionSignature(initSig.type)) {
+            checkCallLikeArguments(initSig.type, node.callExpr)
+        }
     }
 
     function getMemberType(type: _Type, context: Node, name: string) : _Type | undefined {
@@ -1169,6 +1191,16 @@ export function Checker() {
             return sourceFile.containedScope[name];
         }
     }*/
+
+    function includeCfc(javalikeName: string, thisScope: ReadonlyMap<string, SymTabEntry>) {
+        const canonicalName = javalikeName.toLowerCase();
+        cfcIncludes.set(canonicalName, structViewOfCfc(thisScope));
+    }
+
+    let cfcResolver : (args: {resolveFrom: string, cfcName: string}) => cfStruct | undefined;
+    function installCfcResolver(resolver: CfcResolver) {
+        cfcResolver = (args: {resolveFrom: string, cfcName: string}) => resolver(cfcIncludes, args.resolveFrom, args.cfcName);
+    }
 
     //
     // type evaluation
@@ -1489,7 +1521,40 @@ export function Checker() {
         check,
         getCachedEvaluatedNodeType: getCachedEvaluatedNodeTypeImpl,
         setNoUndefinedVars,
+        includeCfc,
+        installCfcResolver,
     }
 }
 
 export type Checker = ReturnType<typeof Checker>;
+
+// closes over project roots
+export function CfcResolver(absRoots: string[]) {
+    return function(cfcIncludes: Map<string, cfStruct>, resolveFrom: string, possiblyUnqualifiedCfc: string) {
+        const isUnqualified = !/\./.test(possiblyUnqualifiedCfc);
+        for (const root of absRoots) {
+            const base = path.parse(root).base; // Z in X/Y/Z, assuming Z is some root we're interested in
+            const rel = path.relative(root, resolveFrom);
+            const {dir} = path.parse(rel); // A/B/C in X/Y/Z/A/B/C, where X/Y/Z is the root
+            // if it is unqualifed, we prepend the full path from root and lookup from that
+            // with root of "X/", a file of "X/Y/Z/foo.cfm" calling "new Bar()" looks up "X.Y.Z.Bar"
+            if (isUnqualified) {
+                const cfcName = [base, ...dir.split(path.sep), possiblyUnqualifiedCfc].join(".").toLowerCase();
+                const cfc = cfcIncludes.get(cfcName);
+                if (cfc) return cfc;
+            }
+            else {
+                // otherwise, we have a qualified CFC
+                // check that the base name matches with the current root, and then try to resolve
+                const canonicalCfcName = possiblyUnqualifiedCfc.toLowerCase();
+                const canonicalBase = base.toLowerCase();
+                if (!canonicalCfcName.startsWith(canonicalBase)) continue;
+                const cfc = cfcIncludes.get(canonicalCfcName);
+                if (cfc) return cfc;
+            }
+        }
+        return undefined;
+    }
+}
+
+type CfcResolver = ReturnType<typeof CfcResolver>;

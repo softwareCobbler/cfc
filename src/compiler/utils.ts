@@ -1,4 +1,4 @@
-import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, BlockType, CfTag, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, Node, NodeId, ScopeDisplay, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
+import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, BlockType, CfTag, DottedPath, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, Node, NodeId, ScopeDisplay, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
 import { NodeType } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature } from "./types";
@@ -947,8 +947,14 @@ export function isHoistableFunctionDefinition(node: FunctionDefinition | ArrowFu
 export function stringifyLValue(node: Identifier | IndexedAccess) : {ui: string, canonical: string} | undefined {
     if (node.kind === NodeType.identifier) return node.uiName && node.canonicalName ? {ui: node.uiName, canonical: node.canonicalName} : undefined;
     let result : {ui: string, canonical: string};
-    if (node.root.kind === NodeType.identifier && node.root.canonicalName && node.root.uiName) result = {ui: node.root.uiName, canonical: node.root.canonicalName};
-    else return undefined;
+
+    if (node.root.kind === NodeType.identifier && node.root.canonicalName && node.root.uiName) {
+        result = {ui: node.root.uiName, canonical: node.root.canonicalName};
+    }
+    else {
+        return undefined;
+    }
+
     for (let i = 0; i < node.accessElements.length; i++) {
         const element = node.accessElements[i];
         if (element.accessType === IndexedAccessType.dot) {
@@ -966,6 +972,14 @@ export function stringifyLValue(node: Identifier | IndexedAccess) : {ui: string,
         }
     }
     return result;
+}
+
+export function stringifyDottedPath(node: DottedPath) {
+    let result = node.headKey.token.text;
+    for (let next of node.rest) {
+        result += "." + next.key.token.text;
+    }
+    return {ui: result, canonical: result.toLowerCase()}
 }
 
 export function filterNodeList(node: Node | Node[] | null | undefined, cb: (node: Node) => boolean) : Node[] {

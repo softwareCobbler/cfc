@@ -25,7 +25,9 @@ import {
 	SignatureInformation,
 	ParameterInformation,
 	DidChangeConfigurationParams,
-	ConfigurationItem
+	ConfigurationItem,
+	WorkspaceFolder,
+	ProgressType,
 } from 'vscode-languageserver/node';
 
 import { SignatureHelp, Position, Location, Range } from "vscode-languageserver-types"
@@ -33,6 +35,8 @@ import { SignatureHelp, Position, Location, Range } from "vscode-languageserver-
 import {
 	TextDocument
 } from 'vscode-languageserver-textdocument';
+
+import { URI } from "vscode-uri";
 
 import * as fs from "fs";
 import * as path from "path";
@@ -42,8 +46,8 @@ import { CfTag, isStaticallyKnownScopeName, NodeType, ScopeDisplay, StaticallyKn
 import { findAncestor, findNodeInFlatSourceMap, getAttributeValue, getFunctionSignatureParamNames, getNearestConstruct, getNearestEnclosingScope, getSourceFile, isCfScriptTagBlock } from '../../../compiler/utils';
 
 import { tagNames } from "./tagnames";
-import { TokenType } from '../../../compiler/scanner';
-import { cfStruct, TypeKind } from '../../../compiler/types';
+import { isCfc, isFunctionSignature, isStruct } from '../../../compiler/types';
+import { CfcResolver } from '../../../compiler/checker';
 
 type TextDocumentUri = string;
 
@@ -57,9 +61,11 @@ interface CflsConfig {
 	x_types: boolean
 }
 
+let workspaceRoots : WorkspaceFolder[] = [];
+
 let cflsConfig! : CflsConfig;
 
-function naiveGetDiagnostics(uri: TextDocumentUri, text: string) : cfcDiagnostic[] {
+function naiveGetDiagnostics(uri: TextDocumentUri, text: string | Buffer) : cfcDiagnostic[] {
 	if (!cflsConfig) return [];
 	
 	// how to tell if we were launched in debug mode ?
@@ -78,6 +84,28 @@ function naiveGetDiagnostics(uri: TextDocumentUri, text: string) : cfcDiagnostic
     parser.setSourceFile(sourceFile).parse();
 	binder.bind(sourceFile);
 	
+	function getQualifiedCfcPathName(uri: TextDocumentUri) {
+		for (const root of workspaceRoots) {
+			if (uri.startsWith(root.uri)) {
+				const base = path.parse(root.uri).base;
+				const rel = path.relative(root.uri, uri);
+				const {dir, name} = path.parse(rel);
+				return [
+					base,
+					...dir.split(path.sep),
+					name].join(".");
+			}
+		}
+
+		return path.parse(uri).name;
+	}
+
+	if (cfFileType === CfFileType.cfc && sourceFile.containedScope.this) {
+		const cfcName = getQualifiedCfcPathName(uri);
+		cflsConfig.checker.includeCfc(cfcName, sourceFile.containedScope.this);
+		console.info("include cfc: " + cfcName);
+	}
+
 	// we need finer granularity of what the checker emits errors for
 	//if (cflsConfig.x_types) {
 		cflsConfig.checker.check(sourceFile);
@@ -105,6 +133,13 @@ let hasDiagnosticRelatedInformationCapability: boolean = false;
 
 connection.onInitialize((params: InitializeParams) => {
 	let capabilities = params.capabilities;
+
+	let roots = params.workspaceFolders;
+	if (roots) {
+		workspaceRoots = roots;
+		connection.console.info("cflsp/initialize, workspaces:")
+		connection.console.info(roots.map(e=>e.uri).join(","));
+	}
 
 	// Does the client support the `workspace/configuration` request?
 	// If not, we fall back using global settings.
@@ -218,10 +253,10 @@ connection.onDefinition((params) : Location | undefined  => {
 	}*/
 });
 
-function resetCflsp(x_types: boolean) {
-	console.info("[reset] x_types=" + x_types);
+function resetCflsp(_x_types: boolean = false) {
+	console.info("[reset]");
 	cflsConfig = {
-		parser: Parser().setDebug(true).setParseTypes(x_types),
+		parser: Parser().setDebug(true).setParseTypes(false),
 		binder: Binder().setDebug(true),
 		checker: Checker(),
 		parseCache: new Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, cfNode>}>(),
@@ -231,8 +266,9 @@ function resetCflsp(x_types: boolean) {
 				cflsConfig.parseCache.delete(uri);
 			}
 		},
-		x_types: x_types,
+		x_types: false,
 	};
+	cflsConfig.checker.installCfcResolver(CfcResolver(workspaceRoots.map(root => root.uri)));
 }
 
 function reemitDiagnostics() {
@@ -259,22 +295,23 @@ connection.onInitialized(() => {
 		// Register for all configuration changes.
 		connection.client.register(DidChangeConfigurationNotification.type, undefined);
 
-		// immediately configure ourselves as NOT using types
-		resetCflsp(/*x_types*/ false);
+		// immediately configure ourselves
+		resetCflsp();
 
 		// ok, now we can wait to ask the client for the workspace configuration; this might take a while to complete
 		// and completions requests and etc. can be arriving and getting serviced during the wait
-		connection.workspace.getConfiguration("cflsp").then((config) => {
+		/*connection.workspace.getConfiguration("cflsp").then((config) => {
 			if (config.x_types !== cflsConfig.x_types) {
 				resetCflsp(config.x_types ?? false);
 			}
-		});
+		});*/
 	}
 	else {
-		resetCflsp(/*x_types*/false);
+		//resetCflsp(/*x_types*/false);
 	}
 
 	connection.sendNotification("cflsp/libpath");
+	connection.sendNotification("cflsp/ready");
 
 	/*
 	if (hasWorkspaceFolderCapability) {
@@ -282,6 +319,8 @@ connection.onInitialized(() => {
 			connection.console.log('Workspace folder change event received.');
 		});
 	}*/
+
+	connection.console.info("cflsp server initialized");
 });
 
 // The example settings
@@ -299,7 +338,7 @@ let globalSettings: ExampleSettings = defaultSettings;
 let documentSettings: Map<string, Thenable<ExampleSettings>> = new Map();
 
 connection.onDidChangeConfiguration(async change => {
-	let x_types : boolean;
+	//let x_types : boolean;
 	if (hasConfigurationCapability) {
 		// Reset all cached document settings
 		documentSettings.clear();
@@ -476,7 +515,7 @@ connection.onCompletion(
 			const callExpr = node.parent.parent.parent as CallExpression;
 			if (!callExpr) return []; // shouldn't happen...
 			const sig = cflsConfig.checker.getCachedEvaluatedNodeType(callExpr.left, docCache.parsedSourceFile);
-			if (!sig || sig.typeKind !== TypeKind.functionSignature) return [];
+			if (!sig || !isFunctionSignature(sig)) return [];
 
 			const result : CompletionItem[] = [];
 			for (const param of sig.params) {
@@ -494,12 +533,13 @@ connection.onCompletion(
 			// get the type one level before the current
 			// x.y| -- we want the type of `x` for completions, not `y`
 			const typeinfo = cflsConfig.checker.getCachedEvaluatedNodeType(node.parent.parent, docCache.parsedSourceFile);
-			if (typeinfo.typeKind === TypeKind.struct) {
+			if (isStruct(typeinfo)) {
 				const result : CompletionItem[] = [];
-				for (const symTabEntry of typeinfo.membersMap.values()) {
+				for (const symTabEntry of typeinfo.members.values()) {
+					if (symTabEntry.canonicalName === "init" && isCfc(typeinfo)) { continue };
 					result.push({
 						label: symTabEntry.uiName,
-						kind: symTabEntry.type.typeKind === TypeKind.functionSignature
+						kind: isFunctionSignature(symTabEntry.type)
 							? CompletionItemKind.Function
 							: CompletionItemKind.Field,
 						detail: ""
@@ -522,7 +562,7 @@ connection.onCompletion(
 						const symTab = node.containedScope[searchScope];
 						if (!symTab) continue;
 						for (const symTabEntry of symTab.values()) {
-							const completionKind = symTabEntry.type.typeKind === TypeKind.functionSignature
+							const completionKind = isFunctionSignature(symTabEntry.type)
 								? CompletionItemKind.Function
 								: CompletionItemKind.Variable;
 							result.set(symTabEntry.uiName, [searchScope, completionKind, scopeDistance]);
@@ -572,6 +612,17 @@ connection.onNotification("cflsp/libpath", (libAbsPath: string) => {
 	cflsConfig.lib = sourceFile;
 	reemitDiagnostics();
 });
+
+connection.onNotification("cflsp/cache-cfcs", (cfcAbsPaths: string[]) => {
+	// we read the files without going through VS code's workspace open method, so that we don't end up emitting diagnostics for them
+	// typescript seems to do this, too; only user-opened files get diagnostic alerts
+	for (let i = 0; i < cfcAbsPaths.length; i++) {
+		const absPath = cfcAbsPaths[i];
+		const fileAsBytes = fs.readFileSync(absPath); // read as bytes to handle conversions of BOMs
+		naiveGetDiagnostics(URI.file(absPath).toString(), fileAsBytes);
+		connection.sendNotification("cflsp/cached-cfc"); // just saying "hey we're done with one more"
+	}
+})
 
 // This handler resolves additional information for the item selected in
 // the completion list.

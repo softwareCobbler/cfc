@@ -18,17 +18,20 @@ function fromFile(fname: string) {
 const libPath = path.resolve("./src/lang-server/server/src/runtimelib/lib.cf2018.d.cfm");
 const stdLib = SourceFile(libPath , CfFileType.dCfm, fs.readFileSync(libPath));
 
-//const sourceFile = fromFile("./test/mxunit/tests/framework/AssertSameTest.cfc");
+const sourceFile = fromFile("c:\\Users\\anon\\dev\\cf-ts-compiler\\mxunit\\framework\\TestDecorator.cfc");
 
-const sourceFile = NilCfc(`
+/*const sourceFile = NilCfc(`
 <cfcomponent>
     <!--- @type Query = <T = any> => {recordCount: number, currentRow: number} & {[key in keyof T]: T[key] & T[key][]} --->
-    <!---
     <cfset final this.lel = {
         m1: 1,
         m2: 2,
         m3: 3
     }>
+
+    <cffunction name="init">
+        <cfargument name="arg0" default=#0#>
+    </cffunction>
 
     <cffunction name="foo">
         <cfscript>
@@ -36,7 +39,16 @@ const sourceFile = NilCfc(`
             final var x = [];
         </cfscript>
     </cffunction>
-    --->
+</cfcomponent>
+`);*/
+
+const sourceFile2 = NilCfc(`
+<cfcomponent>
+    <cffunction name="x">
+        <cfscript>
+            final var a = new A();
+        </cfscript>
+    </cffunction>
 </cfcomponent>
 `);
 
@@ -54,7 +66,14 @@ sourceFile.libRefs.push(stdLib);*/
 parser.setSourceFile(sourceFile);
 parser.parse();
 binder.bind(sourceFile);
-//checker.check(sourceFile);
+checker.check(sourceFile);
+
+checker.includeCfc("A", sourceFile.containedScope.this!);
+
+parser.setSourceFile(sourceFile2);
+parser.parse();
+binder.bind(sourceFile2);
+checker.check(sourceFile2);
 
 const flatTree = flattenTree(sourceFile);
 

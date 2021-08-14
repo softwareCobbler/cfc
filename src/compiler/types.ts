@@ -32,6 +32,7 @@ export const enum TypeFlags {
     spread                          = 1 << 23,
     mappedType                      = 1 << 24,
     indexedType                     = 1 << 25,
+    cfc                             = 1 << 26,
     end
 }
 
@@ -60,6 +61,7 @@ const TypeKindUiString : Record<TypeFlags, string> = {
     [TypeFlags.synthetic]:                       "synthetic",
     [TypeFlags.mappedType]:                      "mapped-type",
     [TypeFlags.indexedType]:                     "indexed-type",
+    [TypeFlags.cfc]:                             "cfc",
 };
 
 function addDebugTypeInfo(type: _Type) {
@@ -124,10 +126,10 @@ export function isTuple(t: _Type) : t is cfTuple {
 }
 
 export interface cfStruct extends _Type {
-    members: Map<string, SymTabEntry>,
+    members: ReadonlyMap<string, SymTabEntry>,
 }
 
-export function cfStruct(members: Map<string, SymTabEntry>) : cfStruct {
+export function cfStruct(members: ReadonlyMap<string, SymTabEntry>) : cfStruct {
     const type = {
         flags: TypeFlags.struct,
         members,
@@ -406,6 +408,10 @@ export function isIndexedType(t: _Type) : t is cfIndexedType {
     return !!(t.flags & TypeFlags.indexedType);
 }
 
+export function isCfc(t: _Type) : boolean {
+    return !!(t.flags & TypeFlags.cfc);
+}
+
 export const SyntheticType = (function() {
     const any : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.any,
@@ -431,7 +437,7 @@ export const SyntheticType = (function() {
         flags: TypeFlags.synthetic | TypeFlags.nil,
     }
 
-    const struct = (membersMap: Map<string, SymTabEntry> = new Map()) => {
+    const struct = (membersMap: ReadonlyMap<string, SymTabEntry> = new Map()) => {
         const v = cfStruct(membersMap);
         (v.flags as TypeFlags) |= TypeFlags.synthetic;
         return v;
