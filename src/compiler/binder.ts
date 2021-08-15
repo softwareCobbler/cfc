@@ -1172,3 +1172,5 @@ export function Binder() {
 }
 
 let debugBinder = false;
+
+export type Binder = ReturnType<typeof Binder>;

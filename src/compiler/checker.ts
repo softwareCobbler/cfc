@@ -1,15 +1,15 @@
 import * as path from "path";
 import { Diagnostic, SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges } from "./node";
+import { CfcResolver } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfStruct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStruct, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor } from "./types";
-import { filterNodeList, findAncestor, getAttributeValue, getContainingFunction, getSourceFile, getTriviallyComputableString, isHoistableFunctionDefinition, Mutable, stringifyDottedPath, stringifyLValue } from "./utils";
+import { filterNodeList, getAttributeValue, getContainingFunction, getSourceFile, getTriviallyComputableString, isHoistableFunctionDefinition, Mutable, stringifyDottedPath, stringifyLValue } from "./utils";
 
 export function Checker() {
     let sourceFile!: SourceFile;
     let scanner!: Scanner;
     let diagnostics!: Diagnostic[];
     let rootScope: ScopeDisplay;
-    let cfcIncludes = new Map<string, cfStruct>();
     let noUndefinedVars = false;
 
     function check(sourceFile_: SourceFile) {
@@ -332,101 +332,107 @@ export function Checker() {
         return undefined;
     }
 
-    function determineFlowType(base: Node, canonicalName: string) : _Type | undefined {
-        let node: Node | null = base;
-        let flow: Flow | null = null;
-        while (node) {
-            if (node.flow) {
-                flow = node.flow;
-                break;
-            }
-            else {
-                node = node.parent;
-            }
-        }
+    // function determineFlowType(base: Node, canonicalName: string) : _Type | undefined {
+    //     base;
+    //     canonicalName;
+    //     getCachedEvaluatedFlowType;
 
-        if (!flow) { // we'll be defensive, but we should always get a Flow (a "root flow") from SourceFile
-            return undefined;
-        }
+    //     return SyntheticType.any;
 
-        const usageContainer : Node = findAncestor(base, (node) => node?.kind === NodeType.functionDefinition || node?.kind === NodeType.sourceFile)!;
-        const usageContainerSymbol = getScopeDisplayMember(usageContainer.containedScope!, canonicalName);
-        // if the usage container does not contain a symbol table entry for this name, then it is an "outer" variable, defined in some outer scope
-        // walk up until we find it, and use it's non-flow based type
-        if (!usageContainerSymbol) {
-            let node : Node | null = usageContainer.containedScope!.container; 
-            while (node) {
-                const symbol = getScopeDisplayMember(node.containedScope!, canonicalName);
-                if (symbol) return symbol.symTabEntry.type;
-                node = node.containedScope!.container;
-            }
-            return undefined;
-        }
+    //     // let node: Node | null = base;
+    //     // let flow: Flow | null = null;
+    //     // while (node) {
+    //     //     if (node.flow) {
+    //     //         flow = node.flow;
+    //     //         break;
+    //     //     }
+    //     //     else {
+    //     //         node = node.parent;
+    //     //     }
+    //     // }
 
-        return work(flow);
+    //     // if (!flow) { // we'll be defensive, but we should always get a Flow (a "root flow") from SourceFile
+    //     //     return undefined;
+    //     // }
 
-        function work(flow: Flow) : _Type | undefined {
-            const type = getCachedEvaluatedFlowType(flow, canonicalName);
+    //     // const usageContainer : Node = findAncestor(base, (node) => node?.kind === NodeType.functionDefinition || node?.kind === NodeType.sourceFile)!;
+    //     // const usageContainerSymbol = getScopeDisplayMember(usageContainer.containedScope!, canonicalName);
+    //     // // if the usage container does not contain a symbol table entry for this name, then it is an "outer" variable, defined in some outer scope
+    //     // // walk up until we find it, and use it's non-flow based type
+    //     // if (!usageContainerSymbol) {
+    //     //     let node : Node | null = usageContainer.containedScope!.container; 
+    //     //     while (node) {
+    //     //         const symbol = getScopeDisplayMember(node.containedScope!, canonicalName);
+    //     //         if (symbol) return symbol.symTabEntry.type;
+    //     //         node = node.containedScope!.container;
+    //     //     }
+    //     //     return undefined;
+    //     // }
 
-            // we got a type at this flow
-            if (type) {
-                return type;
-            }
-            else if (flow.node?.containedScope) {
-                const scopeMember = getScopeDisplayMember(flow.node.containedScope, canonicalName);
-                if (scopeMember) {
-                    // no type at this flow, but the name is defined on this scope;
-                    // stop walking upwards, because the current flow's node is the top-most container for this name,
-                    // even if there is a predecessor flow
+    //     // return work(flow);
 
-                    if (isFunctionSignature(scopeMember.symTabEntry.type)) { // a function definition is always defined
-                        return scopeMember.symTabEntry.type;
-                    }
+    //     // function work(flow: Flow) : _Type | undefined {
+    //     //     const type = getCachedEvaluatedFlowType(flow, canonicalName);
 
-                    if (flow.node === usageContainer) {
-                        return undefined; // it's defined on the closest containing scope, but hasn't been definitely assigned yet
-                    }
-                    else {
-                        return scopeMember.symTabEntry.type; // it's defined in an outer scope
-                    }
-                }
-                if (flow.node.kind === NodeType.functionDefinition) {
-                    // we hit a containing function, and have not yet figured out the type
-                    // check the rest of the grand-parent's body 
-                    // but before we defer, check all parent containers to see if they even contain this name
-                    if (walkupScopesToResolveSymbol(flow.node, canonicalName)) {
-                        return undefined;
-                    }
-                }
-            }
+    //     //     // we got a type at this flow
+    //     //     if (type) {
+    //     //         return type;
+    //     //     }
+    //     //     else if (flow.node?.containedScope) {
+    //     //         const scopeMember = getScopeDisplayMember(flow.node.containedScope, canonicalName);
+    //     //         if (scopeMember) {
+    //     //             // no type at this flow, but the name is defined on this scope;
+    //     //             // stop walking upwards, because the current flow's node is the top-most container for this name,
+    //     //             // even if there is a predecessor flow
 
-            // if we got to root and didn't find it, see if we can find it in stdlib (if stdlib was available)
-            if (flow.node?.kind === NodeType.sourceFile) {
-                return checkLibRefsForName(canonicalName)?.type;
-            }
+    //     //             if (isFunctionSignature(scopeMember.symTabEntry.type)) { // a function definition is always defined
+    //     //                 return scopeMember.symTabEntry.type;
+    //     //             }
 
-            if (flow.predecessor.length === 1) {
-                return work(flow.predecessor[0]);
-            }
-            else {
-                let containsUndefined = false;
-                const flowTypes : _Type[] = [];
-                for (let i = 0; i < flow.predecessor.length; i++) {
-                    const type = work(flow.predecessor[i]);
-                    if (type) flowTypes.push(type);
-                    else containsUndefined = true;
-                }
-                return flowTypes.length === 0 ? undefined : unionify(flowTypes, containsUndefined);
-            }
-        }
-    }
+    //     //             if (flow.node === usageContainer) {
+    //     //                 return undefined; // it's defined on the closest containing scope, but hasn't been definitely assigned yet
+    //     //             }
+    //     //             else {
+    //     //                 return scopeMember.symTabEntry.type; // it's defined in an outer scope
+    //     //             }
+    //     //         }
+    //     //         if (flow.node.kind === NodeType.functionDefinition) {
+    //     //             // we hit a containing function, and have not yet figured out the type
+    //     //             // check the rest of the grand-parent's body 
+    //     //             // but before we defer, check all parent containers to see if they even contain this name
+    //     //             if (walkupScopesToResolveSymbol(flow.node, canonicalName)) {
+    //     //                 return undefined;
+    //     //             }
+    //     //         }
+    //     //     }
+
+    //     //     // if we got to root and didn't find it, see if we can find it in stdlib (if stdlib was available)
+    //     //     if (flow.node?.kind === NodeType.sourceFile) {
+    //     //         return checkLibRefsForName(canonicalName)?.type;
+    //     //     }
+
+    //     //     if (flow.predecessor.length === 1) {
+    //     //         return work(flow.predecessor[0]);
+    //     //     }
+    //     //     else {
+    //     //         let containsUndefined = false;
+    //     //         const flowTypes : _Type[] = [];
+    //     //         for (let i = 0; i < flow.predecessor.length; i++) {
+    //     //             const type = work(flow.predecessor[i]);
+    //     //             if (type) flowTypes.push(type);
+    //     //             else containsUndefined = true;
+    //     //         }
+    //     //         return flowTypes.length === 0 ? undefined : unionify(flowTypes, containsUndefined);
+    //     //     }
+    //     // }
+    // }
 
     // needs to merge 2+ unions, dedup, etc.
     // union type needs to be a Set<_Type>
     // "instantiated type": {flags: TypeFlag, type: _Type} so we can share "any" and "void" and etc.
     function unionify(types: _Type[], definitelyContainsUndefined = false) : _Type {
-        let flags : TypeFlags = TypeFlags.none;
-        const membersBuilder = new Set<_Type>();
+        let flags : TypeFlags = definitelyContainsUndefined ? TypeFlags.containsUndefined : TypeFlags.none;
+        const membersBuilder : _Type[] = [];
         for (const type of types) {
             if (type.flags & TypeFlags.containsUndefined) {
                 flags |= TypeFlags.containsUndefined;
@@ -435,14 +441,13 @@ export function Checker() {
                 return type;
             }
             else {
-                membersBuilder.add(type);
+                membersBuilder.push(type);
             }
         }
 
-        let result = membersBuilder.size === 1 ? [...membersBuilder][0] : cfUnion(...membersBuilder);
-        (result.flags as TypeFlags) = flags;
-        if (definitelyContainsUndefined) (result.flags as TypeFlags) |= TypeFlags.containsUndefined;
-        return result;
+        if (membersBuilder.length === 0) return SyntheticType.any;
+
+        return cfUnion(membersBuilder, flags);
     }
 
     function checkLibRefsForName(canonicalName: string) : SymTabEntry | undefined{
@@ -520,13 +525,11 @@ export function Checker() {
             return;
         }
         if (isFunctionSignature(sig)) {
+            const isNewExpr = node.parent?.kind === NodeType.new;
+
             const minRequiredParams = sig.params.filter(param => !(param.flags & TypeFlags.optional)).length;
             const maxParams = sig.params.length;
             const namedArgCount = node.args.filter(arg => !!arg.equals).length;
-
-            if (namedArgCount !== node.args.length && namedArgCount !== 0) {
-                typeErrorAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), "All arguments must be named, if any are named.");
-            }
 
             if (node.args.length < minRequiredParams || node.args.length > maxParams) {
                 let msg;
@@ -535,8 +538,41 @@ export function Checker() {
                 typeErrorAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), msg);
             }
 
-            if (namedArgCount === node.args.length) {
-                // reorder args to match params ?
+            if (namedArgCount > 0) {
+                if (namedArgCount !== node.args.length) {
+                    typeErrorAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), "All arguments must be named, if any are named.");
+                }
+
+                const paramNames = new Map<string, string>();
+                for (const param of sig.params) {
+                    paramNames.set(param.canonicalName, param.uiName);
+                }
+                const seenArgs = new Set<string>();
+                for (const arg of node.args) {
+                    if (arg.name?.canonicalName) {
+                        if (seenArgs.has(arg.name?.canonicalName)) {
+                            const uiName = arg.name.uiName || arg.name.canonicalName;
+                            typeErrorAtNode(arg.name, `Duplicate argument '${uiName}'`);
+                        }
+                        if (!paramNames.has(arg.name.canonicalName)) {
+                            const uiName = arg.name.uiName || arg.name.canonicalName;
+                            typeErrorAtNode(arg.name, `'${uiName}' does not name a known parameter for this ${isNewExpr ? "constructor" : "function"}.`);
+                        }
+                        seenArgs.add(arg.name.canonicalName);
+                    }
+                }
+
+                const requiredNamedParams = new Map(
+                    sig.params.filter(param => !(param.flags & TypeFlags.optional) && param.canonicalName)
+                    .map(param => [param.canonicalName, param.uiName]));
+
+                for (const seenArg of seenArgs) {
+                    if (requiredNamedParams.has(seenArg)) requiredNamedParams.delete(seenArg)
+                }
+                if (requiredNamedParams.size > 0) {
+                    const missingNamedParams = [...requiredNamedParams.values()].map(uiName => "'" + uiName + "'").join(", ");
+                    typeErrorAtNode(node.left, `Required named parameters are missing: ${missingNamedParams}`);
+                }
             }
 
             for (let i = 0; i < node.args.length; i++) {
@@ -585,7 +621,7 @@ export function Checker() {
                     const lValIdent = stringifyLValue(node.left);
                     if (!lValIdent) return;
 
-                    const lhsType = determineFlowType(node.left, lValIdent.canonical);
+                    const lhsType = SyntheticType.any; //determineFlowType(node.left, lValIdent.canonical);
                     const rhsType = getCachedEvaluatedNodeType(node.right);
                     if (!lhsType) {
                         // there is no type in the current flow; so, this is the first assignment for this var in this scope
@@ -665,16 +701,19 @@ export function Checker() {
         }
     }
 
+    // unused but called
     function setCachedEvaluatedFlowType(flow: Flow, name: string, type: _Type) : void {
-        if (!sourceFile.cachedFlowTypes.has(flow.flowId)) {
-            sourceFile.cachedFlowTypes.set(flow.flowId, new Map());
-        }
-        sourceFile.cachedFlowTypes.get(flow.flowId)!.set(name, type);
+        flow; name; type;
+        return;
+        // if (!sourceFile.cachedFlowTypes.has(flow.flowId)) {
+        //     sourceFile.cachedFlowTypes.set(flow.flowId, new Map());
+        // }
+        // sourceFile.cachedFlowTypes.get(flow.flowId)!.set(name, type);
     }
 
-    function getCachedEvaluatedFlowType(flow: Flow, name: string) : _Type | undefined {
-        return sourceFile.cachedFlowTypes.get(flow.flowId)?.get(name);
-    }
+    // function getCachedEvaluatedFlowType(flow: Flow, name: string) : _Type | undefined {
+    //     return sourceFile.cachedFlowTypes.get(flow.flowId)?.get(name);
+    // }
 
     // `var x` without an initializer is valid in `for (var x in y)`;
     // otherwise it should always be `var x = ...`
@@ -770,9 +809,11 @@ export function Checker() {
             || isCachedTypeConstructorInvocation(type)) {
             typeErrorAtNode(node, "_Type is not concrete.");
             sourceFile.cachedNodeTypes.set(node.nodeId, SyntheticType.any);
+            return SyntheticType.any;
         }
         else {
             sourceFile.cachedNodeTypes.set(node.nodeId, type);
+            return type;
         }
     }
 
@@ -783,9 +824,9 @@ export function Checker() {
             || (isUnion(type) && type.types.every(type => isStructOrArray(type)))
     }
 
-    function getContainer(node: Node) {
-        return findAncestor(node, (node) => !!node?.containedScope);
-    }
+    // function getContainer(node: Node) {
+    //     return findAncestor(node, (node) => !!node?.containedScope);
+    // }
 
     // kludgy shim to take a ScopeDisplay member and wrap it in a cfStruct, so we can bridge the gap between those worlds, mostly for the 
     // sake of completions; a "scope" in CF is essentially a struct, but not quite; and vice versa; so the abstraction is not perfect but it's close
@@ -810,7 +851,7 @@ export function Checker() {
         const name = node.canonicalName;
 
         if (name !== undefined) {
-            const useContainer = getContainer(node);
+            //const useContainer = getContainer(node);
 
             if (isStaticallyKnownScopeName(name)) {
                 if (name === "local" || name === "arguments") {
@@ -827,7 +868,21 @@ export function Checker() {
                         // warn about using `this` outside of a cfc
                         return;
                     }
-                    setCachedEvaluatedNodeType(node, structViewOfScope(sourceFile.containedScope!.this!)); // need a "cached copy" of this
+
+                    if (!sourceFile.cfc?.extends) {
+                        setCachedEvaluatedNodeType(node, structViewOfScope(sourceFile.containedScope!.this!)); // need a "cached copy" of this
+                    }
+                    else {
+                        const freshMap = new Map<string, SymTabEntry>();
+                        let workingSourceFile : SourceFile | null = sourceFile;
+                        while (workingSourceFile) {
+                            for (const [k,v] of workingSourceFile.containedScope!.this!) {
+                                freshMap.set(k,v);
+                            }
+                            workingSourceFile = workingSourceFile.cfc?.extends ?? null;
+                        }
+                        setCachedEvaluatedNodeType(node, structViewOfScope(freshMap));
+                    }
                 }
                 else {
                     // @fixme
@@ -837,49 +892,52 @@ export function Checker() {
             }
 
             const resolvedSymbol = walkupScopesToResolveSymbol(node, name);
-            let flowType = determineFlowType(node, name);
-
-            // we know the symbol, but it has no flow type yet
-            // it's possible we don't know the symbol (inherited from parent cfc or cfinclude'd), in which case we don't want to report this
             if (resolvedSymbol) {
-                if (flowType && (flowType.flags & TypeFlags.containsUndefined)) {
-                    //typeErrorAtNode(node, `'${name}' is possibly undefined.`);
-                }
-                else if (flowType === undefined) {
-                    //typeErrorAtNode(node, `'${name}' is used before its first definition.`)
-                }
+                setCachedEvaluatedNodeType(node, resolvedSymbol.symTabEntry.type);
             }
+            // let flowType : _Type | undefined = undefined; determineFlowType(node, name);
+
+            // // we know the symbol, but it has no flow type yet
+            // // it's possible we don't know the symbol (inherited from parent cfc or cfinclude'd), in which case we don't want to report this
+            // if (resolvedSymbol) {
+            //     if (flowType && (flowType.flags & TypeFlags.containsUndefined)) {
+            //         //typeErrorAtNode(node, `'${name}' is possibly undefined.`);
+            //     }
+            //     else if (flowType === undefined) {
+            //         //typeErrorAtNode(node, `'${name}' is used before its first definition.`)
+            //     }
+            // }
             
-            // if we got a flow type, use that
-            if (flowType) {
-                const evaluatedType = evaluateType(node, flowType);
-                // is it necessary to cache the type on both the flow node (if it exists) *and* the node?
-                if (node.flow) setCachedEvaluatedFlowType(node.flow, name, evaluatedType);
-                setCachedEvaluatedNodeType(node, evaluatedType);
-                return;
-            }
+            // // if we got a flow type, use that
+            // if (flowType) {
+            //     const evaluatedType = evaluateType(node, flowType);
+            //     // is it necessary to cache the type on both the flow node (if it exists) *and* the node?
+            //     if (node.flow) setCachedEvaluatedFlowType(node.flow, name, evaluatedType);
+            //     setCachedEvaluatedNodeType(node, evaluatedType);
+            //     return;
+            // }
 
             // otherwise, fallback to the symbol type
-            if (resolvedSymbol) {
-                if (useContainer === resolvedSymbol.container) {
-                    // there is a symbol table entry, but we could not find a type on the flow graph
-                    // if we're toplevel 
-                    /*if (noUndefinedVars) {
-                        typeErrorAtNode(node, `Identifier '${name}' is used before its declaration.`);
-                    }*/
-                    setCachedEvaluatedNodeType(node, SyntheticType.any);
-                    return;
-                }
-                else {
-                    // identifer is declared in some outer scope, we have to assume it is ok
-                    setCachedEvaluatedNodeType(node, resolvedSymbol.symTabEntry.type);
-                    return;
-                }
-            }
+            // if (resolvedSymbol) {
+            //     if (useContainer === resolvedSymbol.container) {
+            //         // there is a symbol table entry, but we could not find a type on the flow graph
+            //         // if we're toplevel 
+            //         /*if (noUndefinedVars) {
+            //             typeErrorAtNode(node, `Identifier '${name}' is used before its declaration.`);
+            //         }*/
+            //         setCachedEvaluatedNodeType(node, SyntheticType.any);
+            //         return;
+            //     }
+            //     else {
+            //         // identifer is declared in some outer scope, we have to assume it is ok
+            //         setCachedEvaluatedNodeType(node, resolvedSymbol.symTabEntry.type);
+            //         return;
+            //     }
+            // }
 
-            if (noUndefinedVars) {
-                //typeErrorAtNode(node, `Cannot find name '${name}'.`);
-            }
+            // if (noUndefinedVars) {
+            //     //typeErrorAtNode(node, `Cannot find name '${name}'.`);
+            // }
         }
     }
 
@@ -930,7 +988,7 @@ export function Checker() {
 
     function checkIndexedAccessChainElement(node: IndexedAccessChainElement) {
         if (node.parent!.flags & NodeFlags.checkerError) {
-            setCachedEvaluatedFlowType
+            //setCachedEvaluatedFlowType
             return;
         }
 
@@ -939,13 +997,18 @@ export function Checker() {
             return;
         }
 
-        if (node.accessType === IndexedAccessType.dot) { // @fixme: new X().y is broken
-            const name = node.property.token.text;
-            if (!(parentType as cfStruct).members.has(name)) {
-                if (noUndefinedVars) {
-                    //typeErrorAtNode(node.property, `Property '${name}' does not exist on parent type.`);
+        if (node.accessType === IndexedAccessType.dot) {
+            if (isStruct(parentType)) {
+                const name = node.property.token.text;
+                if (isStruct(parentType)) {
+                    if (!parentType.members.has(name) && noUndefinedVars) {
+                        //typeErrorAtNode(node.property, `Property '${name}' does not exist on parent type.`);
+                    }
+                    node.flags |= NodeFlags.checkerError;
                 }
-                node.flags |= NodeFlags.checkerError;
+            }
+            else {
+                // error like "type 'foo' has no member 'bar'"
             }
         }
     }
@@ -1152,12 +1215,13 @@ export function Checker() {
 
     function checkNew(node: New) {
         if (node.callExpr.left.kind !== NodeType.dottedPath) return;
-        let cfcName = stringifyDottedPath(node.callExpr.left).ui;
-        let cfc = cfcResolver({resolveFrom: sourceFile.absPath, cfcName: cfcName});
+        const cfcName = stringifyDottedPath(node.callExpr.left).ui;
+        const cfc = cfcResolver({resolveFrom: sourceFile.absPath, cfcName: cfcName});
         if (!cfc) return;
-        setCachedEvaluatedNodeType(node, cfc);
+        const cfcThis = structViewOfCfc(cfc);
+        setCachedEvaluatedNodeType(node, cfcThis);
         
-        let initSig = cfc.members.get("init");
+        const initSig = cfcThis.members.get("init");
         if (initSig && isFunctionSignature(initSig.type)) {
             checkCallLikeArguments(initSig.type, node.callExpr)
         }
@@ -1192,14 +1256,9 @@ export function Checker() {
         }
     }*/
 
-    function includeCfc(javalikeName: string, thisScope: ReadonlyMap<string, SymTabEntry>) {
-        const canonicalName = javalikeName.toLowerCase();
-        cfcIncludes.set(canonicalName, structViewOfCfc(thisScope));
-    }
-
-    let cfcResolver : (args: {resolveFrom: string, cfcName: string}) => cfStruct | undefined;
+    let cfcResolver : CfcResolver;
     function installCfcResolver(resolver: CfcResolver) {
-        cfcResolver = (args: {resolveFrom: string, cfcName: string}) => resolver(cfcIncludes, args.resolveFrom, args.cfcName);
+        cfcResolver = resolver;
     }
 
     //
@@ -1410,7 +1469,7 @@ export function Checker() {
                         return evaluateIntersection(type.types);
                     }
                     if (isUnion(type)) {
-                        return cfUnion(...type.types.map(type => typeWorker(type))); // need to dedupe and etc.
+                        return cfUnion(type.types.map(type => typeWorker(type))); // need to dedupe and etc.
                     }
                     if (isStruct(type)) {
                         const evaluatedStructContents = new Map<string, SymTabEntry>();
@@ -1521,40 +1580,50 @@ export function Checker() {
         check,
         getCachedEvaluatedNodeType: getCachedEvaluatedNodeTypeImpl,
         setNoUndefinedVars,
-        includeCfc,
         installCfcResolver,
     }
 }
 
 export type Checker = ReturnType<typeof Checker>;
 
-// closes over project roots
-export function CfcResolver(absRoots: string[]) {
-    return function(cfcIncludes: Map<string, cfStruct>, resolveFrom: string, possiblyUnqualifiedCfc: string) {
-        const isUnqualified = !/\./.test(possiblyUnqualifiedCfc);
-        for (const root of absRoots) {
-            const base = path.parse(root).base; // Z in X/Y/Z, assuming Z is some root we're interested in
-            const rel = path.relative(root, resolveFrom);
-            const {dir} = path.parse(rel); // A/B/C in X/Y/Z/A/B/C, where X/Y/Z is the root
-            // if it is unqualifed, we prepend the full path from root and lookup from that
-            // with root of "X/", a file of "X/Y/Z/foo.cfm" calling "new Bar()" looks up "X.Y.Z.Bar"
-            if (isUnqualified) {
-                const cfcName = [base, ...dir.split(path.sep), possiblyUnqualifiedCfc].join(".").toLowerCase();
-                const cfc = cfcIncludes.get(cfcName);
-                if (cfc) return cfc;
-            }
-            else {
-                // otherwise, we have a qualified CFC
-                // check that the base name matches with the current root, and then try to resolve
-                const canonicalCfcName = possiblyUnqualifiedCfc.toLowerCase();
-                const canonicalBase = base.toLowerCase();
-                if (!canonicalCfcName.startsWith(canonicalBase)) continue;
-                const cfc = cfcIncludes.get(canonicalCfcName);
-                if (cfc) return cfc;
-            }
-        }
-        return undefined;
-    }
+export interface ComponentSpecifier {
+    canonical: string,
+    ui: string,
+    path: string,
 }
 
-type CfcResolver = ReturnType<typeof CfcResolver>;
+export function getQualifiedCfcPathName(absRoots: string[], resolveFrom: string, possiblyUnqualifiedCfc: string) : ComponentSpecifier | undefined {
+    const isUnqualified = !/\./.test(possiblyUnqualifiedCfc);
+    for (const root of absRoots) {
+        const base = path.parse(root).base; // Z in X/Y/Z, assuming Z is some root we're interested in
+        const rel = path.relative(root, resolveFrom);
+        const {dir} = path.parse(rel); // A/B/C in X/Y/Z/A/B/C, where X/Y/Z is the root
+        // if it is unqualifed, we prepend the full path from root and lookup from that
+        // with root of "X/", a file of "X/Y/Z/foo.cfm" calling "new Bar()" looks up "X.Y.Z.Bar"
+        if (isUnqualified) {
+            if (root.startsWith(resolveFrom)) {
+                const cfcName = [base, ...dir.split(path.sep), possiblyUnqualifiedCfc].join(".");
+                return {
+                    canonical: cfcName.toLowerCase(),
+                    ui: cfcName,
+                    path: path.join(root, rel, possiblyUnqualifiedCfc + ".cfc")
+                }
+            }
+        }
+        else {
+            // otherwise, we have a qualified CFC
+            // check that the base name matches with the current root, and then try to resolve
+            const canonicalCfcName = possiblyUnqualifiedCfc.toLowerCase();
+            const canonicalBase = base.toLowerCase();
+            if (!canonicalCfcName.startsWith(canonicalBase)) continue;
+            const cfcAsPathElidedBase = possiblyUnqualifiedCfc.split(".").slice(1);
+            if (cfcAsPathElidedBase.length > 0) cfcAsPathElidedBase[cfcAsPathElidedBase.length - 1] = cfcAsPathElidedBase[cfcAsPathElidedBase.length - 1] + ".cfc";
+            return {
+                canonical: canonicalCfcName,
+                ui: possiblyUnqualifiedCfc,
+                path: path.join(base, ...cfcAsPathElidedBase)
+            }
+        }
+    }
+    return undefined;
+}

@@ -90,6 +90,8 @@ export function activate(context: ExtensionContext) {
 				title: "cflsp: Loading CFCs",
 				cancellable: false
 			}, async (progress, _token) => {
+				//let x = "c:\\Users\\anon\\dev\\cf-ts-compiler\\mxunit\\framework\\TestSuiteRunner.cfc";
+				//let cfcAbsPaths = [x];
 				client.sendNotification("cflsp/cache-cfcs", cfcAbsPaths);
 				let i = 0;
 				const progressPerEach = 100 / cfcAbsPaths.length;

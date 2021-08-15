@@ -1,4 +1,6 @@
-import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, BlockType, CfTag, DottedPath, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, Node, NodeId, ScopeDisplay, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
+import * as path from "path";
+import * as fs from "fs";
+import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CfTag, DottedPath, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, Node, NodeId, ScopeDisplay, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
 import { NodeType } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature } from "./types";
@@ -996,3 +998,70 @@ export function filterNodeList(node: Node | Node[] | null | undefined, cb: (node
 }
 
 export type Mutable<T> = {-readonly [K in keyof T]: T[K]};
+
+export function getComponentBlock(sourceFile: SourceFile) : Block | undefined {
+    if (sourceFile.cfFileType !== CfFileType.cfc) return undefined;
+    let result : Block | undefined = undefined;
+    visit(sourceFile, (node) => {
+        if (node?.kind === NodeType.comment || node?.kind === NodeType.textSpan) {
+            return undefined;
+        }
+        else if (node?.kind === NodeType.block) {
+            if (node.subType === BlockType.fromTag && node.tagOrigin.startTag?.canonicalName === "component") {
+                result = node;
+                return "bail";
+            }
+            else if (node.subType === BlockType.scriptSugaredTagCallBlock && node.name?.token.text.toLowerCase() === "component") {
+                result = node;
+                return "bail";
+            }
+        }
+        return "bail"; // a component file should always be textspans/comments followed by a component block; if we don't match that pattern, we're not going to keep searching the entire file
+    });
+    return result;
+}
+
+export function getComponentAttrs(sourceFile: SourceFile) {
+    const componentBlock = getComponentBlock(sourceFile);
+    if (componentBlock) {
+        return componentBlock.subType === BlockType.fromTag
+            ? (componentBlock.tagOrigin.startTag as CfTag.Common).attrs
+            : componentBlock.sugaredCallStatementAttrs ?? [];
+    }
+    else {
+        return undefined;
+    }
+    /*
+    if (sourceFile.cfFileType !== CfFileType.cfc) return undefined;
+    let attrs : TagAttribute[] | undefined = undefined;
+    visit(sourceFile, (node) => {
+        if (node?.kind === NodeType.comment || node?.kind === NodeType.textSpan) {
+            return undefined;
+        }
+        else if (node?.kind === NodeType.block) {
+            if (node.subType === BlockType.fromTag && node.tagOrigin.startTag?.canonicalName === "component") {
+                attrs = (node.tagOrigin.startTag as CfTag.Common).attrs;
+                return "bail";
+            }
+            else if (node.subType === BlockType.scriptSugaredTagCallBlock && node.name?.token.text.toLowerCase() === "component") {
+                attrs = node.sugaredCallStatementAttrs ?? [];
+                return "bail";
+            }
+        }
+        return "bail"; // a component file should always be textspans/comments followed by a component block; if we don't match that pattern, we're not going to keep searching the entire file
+    });
+    return attrs;*/
+}
+
+export function recursiveGetFiles(root: string, pattern: RegExp) : string [] {
+	const result : string[] = [];
+	const fds = fs.readdirSync(root, {withFileTypes: true});
+	for (const fd of fds) {
+		if (fd.isDirectory()) result.push(...recursiveGetFiles(path.resolve(root, fd.name), pattern));
+		else if (pattern.test(fd.name)) {
+			const fspath = path.resolve(root, fd.name);
+			result.push(fspath);
+		}
+	}
+	return result;
+}

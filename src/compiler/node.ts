@@ -165,6 +165,7 @@ const staticallyKnownScopeName = [
     "server",
     "session",
     "this",
+    "super",
     "thisTag",
     "thread",
     "threadLocal",
@@ -303,6 +304,10 @@ export interface SourceFile extends NodeBase {
     scanner: Scanner,
     cachedNodeTypes: Map<NodeId, _Type>, // type of a particular node, exactly zero or one per node
     cachedFlowTypes: Map<FlowId, Map<string, _Type>>, // types for symbols as determined at particular flow nodes, zero or more per flow node
+    cfc?: {
+        extends: SourceFile | null,
+        implements: SourceFile[]
+    }
 }
 
 export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: string | Buffer) : SourceFile {
@@ -1415,7 +1420,7 @@ export function pushAccessElement(base: IndexedAccess, element: IndexedAccessCha
 
 interface FunctionParameterBase extends NodeBase {
     kind: NodeType.functionParameter,
-    required: boolean | null,
+    required: boolean,
     fromTag: boolean,
     canonicalName: string,
     uiName: string,
@@ -1478,7 +1483,7 @@ export namespace Tag {
         v.tagOrigin.startTag = tag;
         v.canonicalName = name?.toLowerCase() || "<<ERROR>>";
         v.uiName = name || "<<ERROR>>";
-        v.required = getTriviallyComputableBoolean(getAttributeValue(tag.attrs, "required")) ?? null;
+        v.required = getTriviallyComputableBoolean(getAttributeValue(tag.attrs, "required")) ?? false;
         v.type = null;
         return v;
     }

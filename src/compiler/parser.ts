@@ -32,7 +32,7 @@ import { cfIndexedType, cfIntersection, cfMappedType, extractCfFunctionSignature
 import { _Type, cfArray, cfStruct, cfTuple, cfFunctionSignature, cfTypeConstructorInvocation, cfTypeConstructorParam, cfTypeConstructor, cfTypeId, cfUnion, SyntheticType, cfFunctionSignatureParam } from "./types";
 
 let debugParseModule = false;
-let parseTypes = false;
+let parseTypes = false; // generally not yet possible
 
 const enum ParseOptions {
     none     = 0,
@@ -107,7 +107,7 @@ export function Parser() {
         sourceFile = sourceFile_;
         scanner = sourceFile.scanner;
         parseContext = ParseContext.none;
-        diagnostics = sourceFile.diagnostics;
+        diagnostics = sourceFile.diagnostics = [];
         return self_;
     }
 
@@ -3904,7 +3904,7 @@ export function Parser() {
                         result.types.push(localParseType());
                     }
                     else {
-                        result = cfUnion(result, localParseType());
+                        result = cfUnion([result, localParseType()]);
                     }
                     break;
                 }
@@ -3958,3 +3958,5 @@ export function Parser() {
         return {trivia, type};
     }
 }
+
+export type Parser = ReturnType<typeof Parser>;

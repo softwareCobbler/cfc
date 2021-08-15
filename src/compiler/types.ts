@@ -1,5 +1,5 @@
 import { ArrowFunctionDefinition, CfTag, DottedPath, FunctionDefinition, NodeType, Script, SymTabEntry, Tag, TagAttribute, } from "./node";
-import { getAttributeValue, getTriviallyComputableString } from "./utils";
+import { getAttributeValue, getTriviallyComputableString, Mutable } from "./utils";
 
 let debugTypeModule = true;
 debugTypeModule;
@@ -33,6 +33,7 @@ export const enum TypeFlags {
     mappedType                      = 1 << 24,
     indexedType                     = 1 << 25,
     cfc                             = 1 << 26,
+    derived                         = 1 << 27,
     end
 }
 
@@ -59,9 +60,11 @@ const TypeKindUiString : Record<TypeFlags, string> = {
     [TypeFlags.never]:                           "never",
     [TypeFlags.final]:                           "final",
     [TypeFlags.synthetic]:                       "synthetic",
+    [TypeFlags.containsUndefined]:               "has-undefined",
     [TypeFlags.mappedType]:                      "mapped-type",
     [TypeFlags.indexedType]:                     "indexed-type",
     [TypeFlags.cfc]:                             "cfc",
+    [TypeFlags.derived]:                         "derived",
 };
 
 function addDebugTypeInfo(type: _Type) {
@@ -81,6 +84,19 @@ function addDebugTypeInfo(type: _Type) {
 export interface _Type {
     readonly flags: TypeFlags,
     readonly name?: string,
+    readonly canonicalType?: _Type,
+    readonly types?: _Type[],
+}
+
+export function getCanonicalType(type: _Type) {
+    while (true) {
+        if (type.canonicalType && type === type.canonicalType) return type;
+        else if (type.flags & TypeFlags.derived) type = type.canonicalType!;
+        else if (!(type.flags & TypeFlags.derived)) return type;
+        else break;
+    }
+    // this is an error case; I don't beleive we should ever get here; a type should always have a canonical type
+    return SyntheticType.any;
 }
 
 export interface cfArray extends _Type {
@@ -101,6 +117,7 @@ export function cfArray(memberType: _Type) : cfArray {
 }
 
 export function isArray(t: _Type) : t is cfArray {
+    t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.array);
 }
 
@@ -122,6 +139,7 @@ export function cfTuple(memberTypes: readonly _Type[]) : cfTuple {
 }
 
 export function isTuple(t: _Type) : t is cfTuple {
+    t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.tuple);
 }
 
@@ -143,6 +161,7 @@ export function cfStruct(members: ReadonlyMap<string, SymTabEntry>) : cfStruct {
 }
 
 export function isStruct(t: _Type) : t is cfStruct {
+    t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.struct);
 }
 
@@ -170,6 +189,7 @@ export function cfFunctionSignature(uiName: string, params: cfFunctionSignatureP
 }
 
 export function isFunctionSignature(t: _Type) : t is cfFunctionSignature {
+    t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.functionSignature);
 }
 
@@ -180,9 +200,10 @@ export interface cfFunctionSignatureParam extends _Type {
     defaultValue: _Type | null,
 }
 
-export function cfFunctionSignatureParam(paramType: _Type, uiName: string, defaultValue: _Type | null) : cfFunctionSignatureParam {
+export function cfFunctionSignatureParam(required: boolean, paramType: _Type, uiName: string, defaultValue: _Type | null) : cfFunctionSignatureParam {
+    const optionalFlag = required ? TypeFlags.none : TypeFlags.optional;
     const type = {
-        flags: TypeFlags.functionSignatureParam,
+        flags: TypeFlags.functionSignatureParam | optionalFlag,
         type: paramType,
         uiName,
         canonicalName: uiName.toLowerCase(),
@@ -197,6 +218,7 @@ export function cfFunctionSignatureParam(paramType: _Type, uiName: string, defau
 }
 
 export function isFunctionSignatureParam(t: _Type) : t is cfFunctionSignatureParam {
+    t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.functionSignatureParam);
 }
 
@@ -220,6 +242,7 @@ export function cfTypeConstructorInvocation(left: _Type, args: _Type[]) : cfType
 }
 
 export function isTypeConstructorInvocation(t: _Type) : t is cfTypeConstructorInvocation {
+    t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.typeConstructorInvocation);
 }
 
@@ -243,6 +266,7 @@ export function cfCachedTypeConstructorInvocation(left: cfTypeConstructor, args:
 }
 
 export function isCachedTypeConstructorInvocation(t: _Type) : t is cfCachedTypeConstructorInvocation {
+    t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.cachedTypeConstructorInvocation);
 }
 
@@ -268,6 +292,7 @@ export function cfTypeConstructor(params: cfTypeConstructorParam[], body: _Type)
 }
 
 export function isTypeConstructor(t: _Type) : t is cfTypeConstructor {
+    t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.typeConstructor);
 }
 
@@ -295,6 +320,7 @@ export function cfTypeConstructorParam(name: string, defaultType?: _Type) {
 }
 
 export function isTypeConstructorParam(t: _Type) : t is cfTypeConstructorParam {
+    t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.typeConstructorParam);
 }
 
@@ -316,6 +342,7 @@ export function cfTypeId(name: string) : cfTypeId {
 }
 
 export function isTypeId(t: _Type) : t is cfTypeId {
+    t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.typeId);
 }
 
@@ -337,6 +364,7 @@ export function cfIntersection(...types: _Type[]) : cfIntersection {
 }
 
 export function isIntersection(t: _Type) : t is cfIntersection {
+    t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.intersection);
 }
 
@@ -344,20 +372,22 @@ export interface cfUnion extends _Type {
     types: _Type[],
 }
 
-export function cfUnion(...types: _Type[]) {
-    const type = {
-        flags: TypeFlags.union,
-        types
-    }
+export function cfUnion(types: _Type[], flags: TypeFlags = TypeFlags.none) {
+    const identityDedup = [...new Set(types)];
 
-    if (debugTypeModule) {
-        addDebugTypeInfo(type);
+    if (identityDedup.length === 1) {
+        return freshType(identityDedup[0], flags);
     }
-    
-    return type;
+    else {
+        return createType({
+            flags: TypeFlags.union | flags,
+            types: [...identityDedup],
+        });
+    }
 }
 
 export function isUnion(t: _Type) : t is cfUnion {
+    t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.union);
 }
 
@@ -383,6 +413,7 @@ export function cfMappedType(keyBinding: cfTypeId, inKeyOf: cfTypeId, targetType
 }
 
 export function isMappedType(t: _Type) : t is cfMappedType {
+    t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.mappedType);
 }
 
@@ -405,37 +436,47 @@ export function cfIndexedType(type: _Type, index: cfTypeId) : cfIndexedType {
 }
 
 export function isIndexedType(t: _Type) : t is cfIndexedType {
+    t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.indexedType);
 }
 
 export function isCfc(t: _Type) : boolean {
+    t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.cfc);
 }
 
 export const SyntheticType = (function() {
     const any : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.any,
-    }
+    } as _Type;
+    (any as Mutable<_Type>).canonicalType = any;
 
     const void_ : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.void,
-    }
+    } as _Type;
+    (void_ as Mutable<_Type>).canonicalType = void_;
 
     const string : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.string,
-    }
+    } as _Type;
+    (string as Mutable<_Type>).canonicalType = string;
+
 
     const number : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.number,
-    }
+    } as _Type;
+    (number as any).xmark = "number";
+    (number as Mutable<_Type>).canonicalType = number;
 
     const boolean : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.boolean,
-    }
+    } as _Type;
+    (boolean as Mutable<_Type>).canonicalType = boolean;
 
     const nil : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.nil,
-    }
+    } as _Type;
+    (nil as Mutable<_Type>).canonicalType = nil;
 
     const struct = (membersMap: ReadonlyMap<string, SymTabEntry> = new Map()) => {
         const v = cfStruct(membersMap);
@@ -447,7 +488,8 @@ export const SyntheticType = (function() {
 
     const never : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.never
-    }
+    } as _Type;
+    (never as Mutable<_Type>).canonicalType = never;
 
     /**
      * goal would be something like
@@ -462,29 +504,32 @@ export const SyntheticType = (function() {
     };*/
 
     const results = {
-        any,
-        void_,
-        string,
-        number,
-        boolean,
-        nil,
-        struct,
-        emptyStruct,
-        never
+        any: createType(any),
+        void_: createType(void_),
+        string: createType(string),
+        number: createType(number),
+        boolean: createType(boolean),
+        nil: createType(nil),
+        never: createType(never),
+        struct, // this is a function
+        emptyStruct, // already created via a call to cfStruct()
     } as const;
-
-    // struct is a function; and empty struct was created through a factory so it already has debug info on it
-    // the remainder need debug info explicitly added
-    const markDebug : (keyof typeof results)[] = ["any", "void_", "string", "number", "boolean", "nil", "never"];
-
-    if (debugTypeModule) {
-        for (const key of markDebug) {
-            addDebugTypeInfo(results[key] as _Type);
-        }
-    }
 
     return results;
 })();
+
+function createType(type: _Type) {
+    if (debugTypeModule) addDebugTypeInfo(type);
+    return type;
+}
+
+function freshType(type: _Type, flags: TypeFlags) : _Type {
+    if (flags === TypeFlags.none || type.flags === flags) return type;
+    else {
+        flags |= TypeFlags.derived;
+        return createType({flags, canonicalType: type});
+    }
+}
 
 // mostly just for exposition
 const staticallyKnownCfTypes : readonly string[] = [
@@ -575,7 +620,7 @@ export function extractScriptFunctionParam(params: readonly Script.FunctionParam
         //const spread = param.dotDotDot ? TypeFlags.spread : TypeFlags.none;
         const name = param.identifier.uiName || "<<ERROR>>";
         const defaultValue = null;
-        result.push(cfFunctionSignatureParam(type, name, defaultValue));
+        result.push(cfFunctionSignatureParam(param.required, type, name, defaultValue));
     }
     return result;
 }
@@ -591,7 +636,7 @@ export function extractTagFunctionParam(params: readonly Tag.FunctionParameter[]
         const name = getTriviallyComputableString(getAttributeValue((param.tagOrigin.startTag as CfTag.Common).attrs, "name")) || "<<ERROR>>";
         const defaultValue = null;
 
-        result.push(cfFunctionSignatureParam(type, name, defaultValue));
+        result.push(cfFunctionSignatureParam(param.required, type, name, defaultValue));
     }
     return result;
 }

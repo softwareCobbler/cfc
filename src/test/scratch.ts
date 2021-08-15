@@ -6,9 +6,22 @@ import { Scanner, Parser, Binder, NilDCfm, NilCfc, NilCfm, SourceFile } from "..
 import { CfFileType } from "../compiler/scanner";
 import { binarySearch, cfmOrCfc, findNodeInFlatSourceMap, flattenTree } from "../compiler/utils";
 import { Checker } from "../compiler/checker";
+import { Project } from "../compiler/project";
 
 import * as fs from "fs";
 import * as path from "path";
+
+function projectFiddle() {
+    const parser = Parser().setDebug(true);
+    const binder = Binder().setDebug(true);
+    const checker = Checker();
+    const project = Project(["c:/users/anon/dev/cf-ts-compiler/mxunit/"], /*debug*/ true);
+
+    project.addFile("C:\\Users\\anon\\dev\\cf-ts-compiler\\mxunit\\PluginDemoTests\\CompareDialogTest.cfc")
+}
+
+projectFiddle();
+process.exit();
 
 function fromFile(fname: string) {
     const absPath = path.resolve(fname);
@@ -68,8 +81,6 @@ parser.parse();
 binder.bind(sourceFile);
 checker.check(sourceFile);
 
-checker.includeCfc("A", sourceFile.containedScope.this!);
-
 parser.setSourceFile(sourceFile2);
 parser.parse();
 binder.bind(sourceFile2);
@@ -80,5 +91,5 @@ const flatTree = flattenTree(sourceFile);
 const diagnostics = sourceFile.diagnostics;
 console.log("got ", diagnostics.length + " diagnostics");
 for (const diag of diagnostics) {
-    console.log(diag);
+    //console.log(diag);
 }
