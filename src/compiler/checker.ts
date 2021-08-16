@@ -580,7 +580,7 @@ export function Checker() {
                             const uiName = arg.name.uiName || arg.name.canonicalName;
                             typeErrorAtNode(arg.name, `Duplicate argument '${uiName}'`);
                         }
-                        if (!paramNames.has(arg.name.canonicalName)) {
+                        if (!paramNames.has(arg.name.canonicalName) && arg.name.canonicalName !== "argumentcollection") {
                             const uiName = arg.name.uiName || arg.name.canonicalName;
                             typeErrorAtNode(arg.name, `'${uiName}' is not a recognized parameter for this ${isNewExpr ? "constructor" : "function"}.`);
                         }
@@ -784,17 +784,19 @@ export function Checker() {
         }
 
         // check for rebinding of final vars
-        let hasOtherFinalDecl = false;
+        // let hasOtherFinalDecl = false;
 
         const symbol = walkupScopesToResolveSymbol(node, name.canonical)?.symTabEntry;
-        if (symbol && symbol.declarations) {
-            hasOtherFinalDecl = filterNodeList(symbol.declarations, (decl) => decl.kind === NodeType.variableDeclaration && !!decl.finalModifier && decl !== node).length > 0;
-        }
+        // if (symbol && symbol.declarations) {
+        //     hasOtherFinalDecl = filterNodeList(symbol.declarations, (decl) => decl.kind === NodeType.variableDeclaration && !!decl.finalModifier && decl !== node).length > 0;
+        // }
 
-        if (hasOtherFinalDecl) {
-            typeErrorAtNode(lValue, `Cannot rebind identifier '${name.ui}', which was declared final.`);
-            return;
-        }
+        // if (hasOtherFinalDecl) {
+        //     // this would maybe work in a block scoped context but not function scoped
+        //     // we need flow analysis to get it right
+        //     //typeErrorAtNode(lValue, `Cannot rebind identifier '${name.ui}', which was declared final.`);
+        //     return;
+        // }
 
         //if (node.finalModifier) rhsType.flags |= TypeFlags.final; // need to clone the type
         
