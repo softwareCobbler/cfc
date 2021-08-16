@@ -2,25 +2,51 @@ import * as path from "path";
 import { Diagnostic, SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges } from "./node";
 import { CfcResolver } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
-import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfStruct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStruct, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor } from "./types";
+import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfStruct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStruct, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType } from "./types";
 import { filterNodeList, getAttributeValue, getContainingFunction, getSourceFile, getTriviallyComputableString, isHoistableFunctionDefinition, Mutable, stringifyDottedPath, stringifyLValue } from "./utils";
+
+type CanonicalSymbolName = string;
+type SymbolTable = ReadonlyMap<CanonicalSymbolName, SymTabEntry>;
 
 export function Checker() {
     let sourceFile!: SourceFile;
     let scanner!: Scanner;
     let diagnostics!: Diagnostic[];
-    let rootScope: ScopeDisplay;
     let noUndefinedVars = false;
+    const structViewCache = new Map<SymbolTable, cfStruct>();
 
     function check(sourceFile_: SourceFile) {
         sourceFile = sourceFile_;
         scanner = sourceFile.scanner;
         diagnostics = sourceFile.diagnostics;
+        structViewCache.clear();
 
-        rootScope = sourceFile.containedScope!;
-        rootScope; // "unused"
+        if (sourceFile.cfFileType === CfFileType.cfc) {
+            installHeritage();
+        }
 
         checkListFunctionsLast(sourceFile.content);
+    }
+
+    function installHeritage() {
+        if (!sourceFile.containedScope.this) return; // n.b. CFCs should always have a `this` scope installed during binding
+        let ancestor = sourceFile.cfc?.extends;
+
+        sourceFile.containedScope.super = new Map();
+
+        while (ancestor) {
+            if (ancestor.containedScope.this) {
+                for (const [k,v] of ancestor.containedScope.this) {
+                    if (!sourceFile.containedScope.this.has(k)) { // this has this bindings already intalled, we just add "super" symbols to it
+                        sourceFile.containedScope.this.set(k,v);
+                    }
+                    if (!sourceFile.containedScope.super.has(k)) { // super starts life in this method, and only gets "super" symbols
+                        sourceFile.containedScope.super.set(k,v);
+                    }
+                }
+            }
+            ancestor = ancestor.cfc?.extends;
+        }
     }
 
     function setNoUndefinedVars(newVal: boolean) : void {
@@ -556,7 +582,7 @@ export function Checker() {
                         }
                         if (!paramNames.has(arg.name.canonicalName)) {
                             const uiName = arg.name.uiName || arg.name.canonicalName;
-                            typeErrorAtNode(arg.name, `'${uiName}' does not name a known parameter for this ${isNewExpr ? "constructor" : "function"}.`);
+                            typeErrorAtNode(arg.name, `'${uiName}' is not a recognized parameter for this ${isNewExpr ? "constructor" : "function"}.`);
                         }
                         seenArgs.add(arg.name.canonicalName);
                     }
@@ -830,13 +856,26 @@ export function Checker() {
 
     // kludgy shim to take a ScopeDisplay member and wrap it in a cfStruct, so we can bridge the gap between those worlds, mostly for the 
     // sake of completions; a "scope" in CF is essentially a struct, but not quite; and vice versa; so the abstraction is not perfect but it's close
-    function structViewOfScope(scopeContents: ReadonlyMap<string, SymTabEntry>) : cfStruct {
-        return SyntheticType.struct(scopeContents);
+    // we cache for something like "this" which may be repeatedly wrapped as a structView type
+    function structViewOfScope(scopeContents: SymbolTable) : cfStruct {
+        const alreadyExists = structViewCache.get(scopeContents);
+        if (alreadyExists) {
+            return alreadyExists;
+        }
+        else {
+            const type = SyntheticType.struct(scopeContents);
+            structViewCache.set(scopeContents, type);
+            return type;
+        }
+        
     }
 
-    function structViewOfCfc(scopeContents: ReadonlyMap<string, SymTabEntry>) : cfStruct {
+    function structViewOfCfc(scopeContents: SymbolTable) : cfStruct {
         const type = structViewOfScope(scopeContents);
+        
+        // @unsafe
         (type.flags as Mutable<TypeFlags>) |= TypeFlags.cfc;
+
         return type;
     }
 
@@ -862,15 +901,17 @@ export function Checker() {
                     }
                     setCachedEvaluatedNodeType(node, structViewOfScope(containingFunction.containedScope![name]!));
                 }
-                else if (name === "this") {
+                else if (name === "this" || name === "super") {
                     const sourceFile = getSourceFile(node)!;
                     if (sourceFile.cfFileType !== CfFileType.cfc) {
                         // warn about using `this` outside of a cfc
                         return;
                     }
 
+                    setCachedEvaluatedNodeType(node, structViewOfScope(sourceFile.containedScope[name]!));
+                    /*
                     if (!sourceFile.cfc?.extends) {
-                        setCachedEvaluatedNodeType(node, structViewOfScope(sourceFile.containedScope!.this!)); // need a "cached copy" of this
+                        setCachedEvaluatedNodeType(node, structViewOfScope(sourceFile.containedScope.this!)); // need a "cached copy" of this
                     }
                     else {
                         const freshMap = new Map<string, SymTabEntry>();
@@ -883,6 +924,7 @@ export function Checker() {
                         }
                         setCachedEvaluatedNodeType(node, structViewOfScope(freshMap));
                     }
+                    */
                 }
                 else {
                     // @fixme
@@ -955,24 +997,30 @@ export function Checker() {
         if (isStructOrArray(type)) {
             for (let i = 0; i < node.accessElements.length; i++) {
                 const element = node.accessElements[i];
-                if (element.accessType === IndexedAccessType.dot) {
-                    type = getMemberType(type, node, element.property.token.text.toLowerCase());
-                    if (!type) {
-                        type = SyntheticType.any;
-                        
-                        if (noUndefinedVars) {
-                            typeErrorAtNode(element.property, `Property '${element.property.token.text}' does not exist on type`);
+                if ((element.accessType === IndexedAccessType.dot || element.accessType === IndexedAccessType.bracket) && isStruct(type)) {
+                    const propertyName = element.accessType === IndexedAccessType.dot
+                        ? element.property.token.text.toLowerCase()
+                        : getTriviallyComputableString(element.expr);
+                    type = propertyName ? getStructMemberType(type, node, propertyName) : undefined;
+
+                    if (!type || (type.flags & TypeFlags.any)) {
+                        type = SyntheticType.any; // subsequent access elements will also be any
+                        if (noUndefinedVars && propertyName) {
+                            const errNode = element.accessType === IndexedAccessType.dot
+                                ? element.property
+                                : element.expr;
+                            typeErrorAtNode(errNode, `Property '${propertyName}' does not exist on type`);
                         }
                     }
-                    if (type.flags & TypeFlags.any) {
-                        type = SyntheticType.any; // subsequent access elements will also be any
-                        setCachedEvaluatedNodeType(element, SyntheticType.any);
-                    }
-                    else {
-                        setCachedEvaluatedNodeType(element, type);
-                    }
                 }
+                else if (element.accessType === IndexedAccessType.bracket && type && isArray(type)) {
+                    type = getArrayMemberType(type);
+                    if (!type) type = SyntheticType.any;
+                }
+
+                setCachedEvaluatedNodeType(element, type);
             }
+
             setCachedEvaluatedNodeType(node, type); // in `a.b.c`, the whole indexedAccess expression type is typeof c
         }
         else {
@@ -1223,15 +1271,28 @@ export function Checker() {
         
         const initSig = cfcThis.members.get("init");
         if (initSig && isFunctionSignature(initSig.type)) {
+            setCachedEvaluatedNodeType(node.callExpr.left, initSig.type);
             checkCallLikeArguments(initSig.type, node.callExpr)
         }
     }
 
-    function getMemberType(type: _Type, context: Node, name: string) : _Type | undefined {
+    function getArrayMemberType(type: _Type) : _Type | undefined {
+        type = getCanonicalType(type);
+        if (isArray(type)) {
+            return type.memberType;
+        }
+        return undefined;
+    }
+
+    function getStructMemberType(type: _Type, context: Node, name: string) : _Type | undefined {
+        type = getCanonicalType(type);
         if (isIntersection(type)) {
+            return SyntheticType.any;
+            /*
             const evaluatedMembers = type.types.map(type => getMemberType(type, context, name));
             if (evaluatedMembers.includes(undefined)) return SyntheticType.never;
             return cfIntersection(...(evaluatedMembers as _Type[]));
+            */
         }
         else if (isStruct(type)) {
             const memberType = type.members.get(name);

@@ -938,7 +938,7 @@ export function Binder() {
         };
 
         for (const param of node.params) {
-            addSymbolToTable(node.containedScope.arguments!, param.canonicalName, param);
+            addSymbolToTable(node.containedScope.arguments!, param.uiName, param);
         }
 
         if (!node.fromTag && node.kind === NodeType.functionDefinition) {

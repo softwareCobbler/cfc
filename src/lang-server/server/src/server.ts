@@ -48,7 +48,7 @@ import { findAncestor, findNodeInFlatSourceMap, getAttributeValue, getComponentA
 import { tagNames } from "./tagnames";
 import { cfStruct, isCfc, isFunctionSignature, isStruct, _Type } from '../../../compiler/types';
 import { ComponentSpecifier, getQualifiedCfcPathName } from '../../../compiler/checker';
-import { Project } from "../../../compiler/project";
+import { FileSystem, Project } from "../../../compiler/project";
 import { TokenType } from '../../../compiler/scanner';
 
 type TextDocumentUri = string;
@@ -287,7 +287,7 @@ function resetCflsp(_x_types: boolean = false) {
 	};
 	//cflsConfig.checker.installCfcResolver(CfcResolver(workspaceRoots.map(root => root.uri)));
 
-	project = Project(workspaceRoots.map(v => URI.parse(v.uri).fsPath));
+	project = Project(workspaceRoots.map(v => URI.parse(v.uri).fsPath), FileSystem());
 }
 
 function reemitDiagnostics() {
@@ -493,7 +493,7 @@ connection.onCompletion(
 			: null;
 
 		// a whitespace or left-paren trigger character is only used for showing named parameters inside a call argument list
-		if (completionParams.context?.triggerCharacter === " " || completionParams.context?.triggerCharacter === "(" && !callExpr) {
+		if ((completionParams.context?.triggerCharacter === " " || completionParams.context?.triggerCharacter === "(") && !callExpr) {
 			if (!callExpr) return [];
 		}
 
@@ -549,12 +549,14 @@ connection.onCompletion(
 			const yetToBeUsedParams = new Set<string>(sig.params.map(param => param.canonicalName));
 			for (const arg of callExpr.args) if (arg.name?.canonicalName) yetToBeUsedParams.delete(arg.name?.canonicalName)
 
+			const detail = callExpr.parent?.kind === NodeType.new ? "named constructor argument" : "named function argument";
+
 			for (const param of sig.params) {
 				if (!yetToBeUsedParams.has(param.canonicalName)) continue;
 				result.push({
 					label: param.uiName + "=",
 					kind: CompletionItemKind.Variable,
-					detail: "named function argument",
+					detail: detail,
 					sortText: "000_" + param.uiName, // we'd like param name suggestions first
 				});
 			}

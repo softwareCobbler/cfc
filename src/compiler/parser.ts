@@ -3420,7 +3420,7 @@ export function Parser() {
                             if (Array.isArray(quickPeek)) {
                                 if (lookahead() === TokenType.LEFT_BRACE) {
                                     const block = parseBracedBlock();
-                                    return ScriptSugaredTagCallBlock(/*name*/quickPeek[0], /*attrs*/[], /*block*/block);
+                                    return ScriptSugaredTagCallBlock(/*name*/quickPeek[0], /*attrs*/quickPeek[1], /*block*/block);
                                 }
                                 else {
                                     return ScriptSugaredTagCallStatement(quickPeek[0], quickPeek[1], parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia))

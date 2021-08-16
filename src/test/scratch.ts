@@ -6,18 +6,23 @@ import { Scanner, Parser, Binder, NilDCfm, NilCfc, NilCfm, SourceFile } from "..
 import { CfFileType } from "../compiler/scanner";
 import { binarySearch, cfmOrCfc, findNodeInFlatSourceMap, flattenTree } from "../compiler/utils";
 import { Checker } from "../compiler/checker";
-import { Project } from "../compiler/project";
+import { DebugFileSystem, Project } from "../compiler/project";
 
 import * as fs from "fs";
 import * as path from "path";
 
 function projectFiddle() {
-    const parser = Parser().setDebug(true);
-    const binder = Binder().setDebug(true);
-    const checker = Checker();
-    const project = Project(["c:/users/anon/dev/cf-ts-compiler/mxunit/"], /*debug*/ true);
+    const debugfs = DebugFileSystem([
+        ["/a.cfc", `component extends="b" {}`],
+        ["/b.cfc", `component { function foo() {} }`]
+    ], "/");
 
-    project.addFile("C:\\Users\\anon\\dev\\cf-ts-compiler\\mxunit\\PluginDemoTests\\CompareDialogTest.cfc")
+    const project = Project(["/"], /*filesystem*/debugfs, /*debug*/ true);
+
+    const a = project.addFile("/a.cfc");
+    const b = project.addFile("/b.cfc");
+
+    project.getDiagnostics("/a.cfc");
 }
 
 projectFiddle();

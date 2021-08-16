@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+
 import { Binder } from "./binder";
 import { Checker } from "./checker";
 import { BlockType, mergeRanges, Node, NodeId, SourceFile, SymTabEntry } from "./node";
@@ -13,7 +14,41 @@ interface CachedFile {
     nodeMap: ReadonlyMap<NodeId, Node>
 }
 
-export function Project(absRoots: string[], debug = true) {
+interface FileSystem {
+    readFileSync: (path: string) => Buffer
+    existsSync: (path: string) => boolean
+    join: (...args: string[]) => string,
+    pathSep: string,
+}
+
+export function FileSystem() : FileSystem {
+    return {
+        readFileSync: fs.readFileSync,
+        existsSync: fs.existsSync,
+        join: path.join,
+        pathSep: path.sep
+    }
+}
+
+export function DebugFileSystem(files: [absPath: string, text: string][], pathSep: string) : FileSystem {
+    const fmap = new Map(files.map(([absPath, text]) => [absPath, Buffer.from(text, "utf-8")]));
+    return {
+        readFileSync: (path: string) => {
+            const file = fmap.get(path);
+            if (!file) throw "bad file lookup";
+            return file;
+        },
+        existsSync: (path: string) => !!fmap.get(path),
+        join: (...args: string[]) => {
+            // join using path.join, then replace the platform pathSep with the debug path sep
+            const t = path.join(...args);
+            return t.replace(path.sep, pathSep);
+        },
+        pathSep: pathSep
+    }
+}
+
+export function Project(absRoots: string[], fileSystem: FileSystem, debug = true) {
     type AbsPath = string;
     
     const parser = Parser();
@@ -33,7 +68,7 @@ export function Project(absRoots: string[], debug = true) {
     const files : FileCache = new Map();
 
     function tryAddFile(absPath: string) : CachedFile | undefined {
-        if (!fs.existsSync(absPath)) return undefined;
+        if (!fileSystem.existsSync(absPath)) return undefined;
         return addFile(absPath);
     }
 
@@ -65,7 +100,7 @@ export function Project(absRoots: string[], debug = true) {
         
         const fileType = cfmOrCfc(absPath);
         if (!fileType) return;
-        const bytes = fs.readFileSync(absPath);
+        const bytes = fileSystem.readFileSync(absPath);
         const sourceFile = SourceFile(absPath, fileType, bytes);
 
         parseBindCheckWorker(sourceFile);
@@ -193,6 +228,42 @@ export function Project(absRoots: string[], debug = true) {
         return getCachedFile(absPath)?.parsedSourceFile || undefined;
     }
 
+    function getCfcSpecifier(absRoots: string[], resolveFrom: string, possiblyUnqualifiedCfc: string) : ComponentSpecifier | undefined {
+        const isUnqualified = !/\./.test(possiblyUnqualifiedCfc);
+        for (const root of absRoots) {
+            const base = path.parse(root).base; // Z in X/Y/Z, assuming Z is some root we're interested in
+            const rel = path.relative(root, resolveFrom);
+            const {dir} = path.parse(rel); // A/B/C in X/Y/Z/A/B/C, where X/Y/Z is the root
+            // if it is unqualifed, we prepend the full path from root and lookup from that
+            // with root of "X/", a file of "X/Y/Z/foo.cfm" calling "new Bar()" looks up "X.Y.Z.Bar"
+            if (isUnqualified) {
+                if (resolveFrom.startsWith(root)) {
+                    const cfcName = [base, ...dir.split(fileSystem.pathSep), possiblyUnqualifiedCfc].filter(e => e !== "").join("."); // filter out possibly empty base and dirs; e.g. root is '/' so path.parse(root).base is ''
+                    return {
+                        canonicalName: cfcName.toLowerCase(),
+                        uiName: cfcName,
+                        path: fileSystem.join(root, dir, possiblyUnqualifiedCfc + ".cfc")
+                    }
+                }
+            }
+            else {
+                // otherwise, we have a qualified CFC
+                // check that the base name matches with the current root, and then try to resolve
+                const canonicalCfcName = possiblyUnqualifiedCfc.toLowerCase();
+                const canonicalBase = base.toLowerCase();
+                if (!canonicalCfcName.startsWith(canonicalBase)) continue;
+                const cfcAsPathElidedBase = possiblyUnqualifiedCfc.split(".").slice(1);
+                if (cfcAsPathElidedBase.length > 0) cfcAsPathElidedBase[cfcAsPathElidedBase.length - 1] = cfcAsPathElidedBase[cfcAsPathElidedBase.length - 1] + ".cfc";
+                return {
+                    canonicalName: canonicalCfcName,
+                    uiName: possiblyUnqualifiedCfc,
+                    path: fileSystem.join(root, ...cfcAsPathElidedBase)
+                }
+            }
+        }
+        return undefined;
+    }
+
     return {
         addFile,
         parseBindCheck,
@@ -224,40 +295,4 @@ function ComponentNode(specifier: ComponentSpecifier | undefined) : ComponentNod
         parent: null,
         children: []
     }
-}
-
-export function getCfcSpecifier(absRoots: string[], resolveFrom: string, possiblyUnqualifiedCfc: string) : ComponentSpecifier | undefined {
-    const isUnqualified = !/\./.test(possiblyUnqualifiedCfc);
-    for (const root of absRoots) {
-        const base = path.parse(root).base; // Z in X/Y/Z, assuming Z is some root we're interested in
-        const rel = path.relative(root, resolveFrom);
-        const {dir} = path.parse(rel); // A/B/C in X/Y/Z/A/B/C, where X/Y/Z is the root
-        // if it is unqualifed, we prepend the full path from root and lookup from that
-        // with root of "X/", a file of "X/Y/Z/foo.cfm" calling "new Bar()" looks up "X.Y.Z.Bar"
-        if (isUnqualified) {
-            if (resolveFrom.startsWith(root)) {
-                const cfcName = [base, ...dir.split(path.sep), possiblyUnqualifiedCfc].join(".");
-                return {
-                    canonicalName: cfcName.toLowerCase(),
-                    uiName: cfcName,
-                    path: path.join(root, dir, possiblyUnqualifiedCfc + ".cfc")
-                }
-            }
-        }
-        else {
-            // otherwise, we have a qualified CFC
-            // check that the base name matches with the current root, and then try to resolve
-            const canonicalCfcName = possiblyUnqualifiedCfc.toLowerCase();
-            const canonicalBase = base.toLowerCase();
-            if (!canonicalCfcName.startsWith(canonicalBase)) continue;
-            const cfcAsPathElidedBase = possiblyUnqualifiedCfc.split(".").slice(1);
-            if (cfcAsPathElidedBase.length > 0) cfcAsPathElidedBase[cfcAsPathElidedBase.length - 1] = cfcAsPathElidedBase[cfcAsPathElidedBase.length - 1] + ".cfc";
-            return {
-                canonicalName: canonicalCfcName,
-                uiName: possiblyUnqualifiedCfc,
-                path: path.join(root, ...cfcAsPathElidedBase)
-            }
-        }
-    }
-    return undefined;
 }

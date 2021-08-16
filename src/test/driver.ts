@@ -1,9 +1,10 @@
-import { Project } from "../compiler/project";
+import * as fs from "fs";
+import { FileSystem, Project } from "../compiler/project";
 import { recursiveGetFiles } from "../compiler/utils";
 
 const root = "C:\\Users\\anon\\dev\\cf-ts-compiler\\mxunit";
 
-const project = Project([root], true)
+const project = Project([root], FileSystem(), true)
 
 const files = recursiveGetFiles(root, /\.cfc$/i)
 
