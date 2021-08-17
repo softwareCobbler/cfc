@@ -465,7 +465,6 @@ export const SyntheticType = (function() {
     const number : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.number,
     } as _Type;
-    (number as any).xmark = "number";
     (number as Mutable<_Type>).canonicalType = number;
 
     const boolean : _Type = {
@@ -641,30 +640,37 @@ export function extractTagFunctionParam(params: readonly Tag.FunctionParameter[]
     return result;
 }
 
-/*
-export function hashType(type: Type) : string {
-    switch (type.typeKind) {
-        case TypeKind.any: return "any";
-        case TypeKind.number: return "number";
-        case TypeKind.string: return "string";
-        case TypeKind.void: return "void";
-        case TypeKind.never: return "never";
-        case TypeKind.boolean: return "boolean";
-        case TypeKind.nil: return "nil";
-        case TypeKind.typeId: return type.terminal.token.text;
-        case TypeKind.functionSignature:
-            return type.uiName +
-                "(" + type.params.map(param => param.canonicalName + ":" + hashType(param.type)).join(",") + ")" +
-                "=>" + hashType(type.returns);
-        case TypeKind.array: return "[" + hashType(type.T) + "]";
-        case TypeKind.struct: return "{" + type.members.map(member => member.propertyName + ":" + hashType(member.type)).join(",") + "}";
-        case TypeKind.union: {
-            const op = type.typeKind === TypeKind.union ? "|" : "&";
-            return type.members.length > 0 ? type.members.map(type => hashType(type)).join(op) : "never";
+export function stringifyType(type: _Type) : string {
+    if (type.flags & TypeFlags.any) return "any";
+    if (type.flags & TypeFlags.number) return "number";
+    if (type.flags & TypeFlags.string) return "string";
+    if (type.flags & TypeFlags.boolean) return "boolean";
+    if (isStruct(type)) {
+        const builder = [];
+        for (const [propName, {type: memberType}] of type.members) {
+            builder.push(propName + ": " + stringifyType(memberType));
         }
-        /*default:
-            ((_: never) => { throw "" })(type);* /
+        const result = builder.join(", ");
+        return "{" + result + "}";
     }
-    throw "unhandled hash type " + type.__debug_kind || "";
+    if (isArray(type)) {
+        return stringifyType(type.memberType) + "[]";
+    }
+    if (isUnion(type) || isIntersection(type)) {
+        const joiner = isUnion(type) ? " | " : " & ";
+        const result = type.types.map(memberType => stringifyType(memberType)).join(joiner);
+        return result;
+    }
+    if (isFunctionSignature(type)) {
+        const params = [];
+        for (const param of type.params) {
+            params.push(stringifyType(param));
+        }
+        return "(" + params.join(", ") + ")" + " => " + stringifyType(type.returns);
+    }
+    if (isFunctionSignatureParam(type)) {
+        return (!(type.flags & TypeFlags.optional) ? "required " : "") + type.uiName + ": " + stringifyType(type.type);
+    }
+
+    return "<<type>>";
 }
-*/

@@ -381,7 +381,7 @@ export function Binder() {
         }
     }
 
-    function addSymbolToTable(symTab: SymTab, uiName: string, declaringNode: Node, type: _Type | null = null) : SymTabEntry {
+    function addSymbolToTable(symTab: SymTab, uiName: string, declaringNode: Node, type: _Type | null = null, declaredType?: _Type | null) : SymTabEntry {
         const canonicalName = uiName.toLowerCase();
         let symTabEntry : SymTabEntry;
 
@@ -401,6 +401,7 @@ export function Binder() {
                 canonicalName,
                 declarations: declaringNode,
                 type: type ?? SyntheticType.any,
+                declaredType: declaredType ?? null
             };
 
             symTab.set(canonicalName, symTabEntry);
@@ -476,7 +477,7 @@ export function Binder() {
             }
 
             if (targetScope) {
-                addSymbolToTable(targetScope, uiPath[1], node, node.typeAnnotation);
+                addSymbolToTable(targetScope, uiPath[1], node, null, node.typeAnnotation);
             }
 
             return;
@@ -484,7 +485,7 @@ export function Binder() {
 
         if (node.finalModifier || node.varModifier) {
             if (getContainingFunction(node)) {
-                addSymbolToTable(currentContainer.containedScope.local!, uiPath[0], node, node.typeAnnotation);
+                addSymbolToTable(currentContainer.containedScope.local!, uiPath[0], node, null, node.typeAnnotation);
             }
             else {
                 // we're not in a function, so we must be at top-level scope
@@ -927,7 +928,8 @@ export function Binder() {
                 scopeTarget,
                 node.uiName!,
                 node,
-                sig);
+                sig,
+                node.typeAnnotation);
         }
 
         node.containedScope = {

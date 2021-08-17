@@ -2,8 +2,8 @@ import * as path from "path";
 import { Diagnostic, SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges } from "./node";
 import { CfcResolver } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
-import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfStruct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStruct, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType } from "./types";
-import { filterNodeList, getAttributeValue, getContainingFunction, getSourceFile, getTriviallyComputableString, isHoistableFunctionDefinition, Mutable, stringifyDottedPath, stringifyLValue } from "./utils";
+import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfStruct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStruct, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType, stringifyType } from "./types";
+import { getAttributeValue, getContainingFunction, getSourceFile, getTriviallyComputableString, isHoistableFunctionDefinition, Mutable, stringifyDottedPath, stringifyLValue } from "./utils";
 
 type CanonicalSymbolName = string;
 type SymbolTable = ReadonlyMap<CanonicalSymbolName, SymTabEntry>;
@@ -486,39 +486,90 @@ export function Checker() {
     function unsafeAssertTypeKind<T extends _Type>(_type: _Type) : asserts _type is T {}
 
     /**
-     * is the following legal:
-     * <to> = <assignThis>
-     * this needs alot of work
+     * `to = assignThis` is a valid assignment if `assignThis` is a subtype of `to`
      * @param assignThis 
      * @param to 
      */
-    function isAssignable(_assignThis: _Type, _to: _Type) : boolean {
-        /*
-        if (assignThis.typeKind === TypeKind.any || to.typeKind === TypeKind.any) {
+    function isAssignable(assignThis: _Type, to: _Type) : boolean {
+        return isLeftSubtypeOfRight(assignThis, to);
+    }
+
+    //
+    // `l <: r` means "left is a subtype of right"
+    // `l !<: r` means "left is NOT a subtype of right"
+    // subtype has the common meaning; however it is maybe helpful to note that "sub" also means "substitutable" in addition to "a descendant in a heirarchy"
+    // i.e. `l <: r` means l is substitutable for r (you can safely use an l in r's place)
+    // 
+    //
+    function isLeftSubtypeOfRight(l: _Type, r: _Type) : boolean {
+        // a type is a subtype of itself
+        if (l === r) return true;
+
+        // any is a subtype of every type; every type is a subtype of any
+        if (l.flags & TypeFlags.any || r.flags & TypeFlags.any) return true;
+
+        //
+        // {x: number, y: number} <: {x: number}, because L has AT LEAST all the properties of R
+        // {x: number} !<: {x: number, y: number}
+        //
+        function isLeftStructSubtypeOfRightStruct(l: cfStruct, r: cfStruct) {
+            if (l.members.size < r.members.size) return false;
+            for (const [propName, rightVal] of r.members) {
+                const leftVal = l.members.get(propName);
+                if (!leftVal || !isLeftSubtypeOfRight(leftVal.type, rightVal.type)) return false;
+            }
             return true;
         }
-        if (assignThis.typeKind !== to.typeKind) { // structs to structs, arrays to arrays, etc
+
+        if (l.flags & TypeFlags.number && r.flags & TypeFlags.number) {
+            return true;
+        }
+        if (l.flags & TypeFlags.string && r.flags & TypeFlags.string) {
+            return true;
+        }
+        if (l.flags & TypeFlags.boolean && r.flags & TypeFlags.boolean) {
+            return true;
+        }
+        if (isStruct(l) && isStruct(r)) {
+            return isLeftStructSubtypeOfRightStruct(l, r);
+        }
+        if (isArray(l) && isArray(r)) {
+            return isLeftSubtypeOfRight(l.memberType, r.memberType);
+        }
+
+        //
+        // S|T <: U     iff S <: U && T <: U   (e.g `U = S|T` is valid only if both S and T are subtypes of U)
+        // U   <: S|T   iff U <: S || U <: T   (e.g `S|T = U` is valid if U is either an S or a T)
+        //
+        // S&T <: U     iff S <: U || T <: U   (e.g `U = S&T` is valid if either S or T is a subtype of U)
+        // U   <: S&T   iff U <: S && U <: T   (e.g `S&T = U` is valid only if U is a subtype of both S and T)
+        //
+        if (isUnion(l)) {
+            for (const leftConstituent of l.types) {
+                if (!isLeftSubtypeOfRight(leftConstituent, r)) return false;
+            }
+            return true;
+        }
+        if (isUnion(r)) {
+            for (const rightConstituent of r.types) {
+                if (isLeftSubtypeOfRight(l, rightConstituent)) return true;
+            }
             return false;
         }
-        if (assignThis.typeKind === TypeKind.struct && to.typeKind === TypeKind.struct) {
-            if (assignThis.membersMap.size < to.membersMap.size) {
-                return false;
+        if (isIntersection(l)) {
+            for (const leftConstituent of l.types) {
+                if (isLeftSubtypeOfRight(leftConstituent, r)) return true;
             }
-
-            for (const key of to.membersMap.keys()) {
-                if (!assignThis.membersMap.has(key)) {
-                    return false;
-                }
-                if (!isAssignable(assignThis.membersMap.get(key)!.type, to.membersMap.get(key)!.type)) {
-                    return false;
-                }
+            return false;
+        }
+        if (isIntersection(r)) {
+            for (const rightConstituent of r.types) {
+                if (!isLeftSubtypeOfRight(l, rightConstituent)) return false;
             }
-
             return true;
-        }*/
+        }
 
-        // ah no cool handling of function assignability or etc.
-        return true;
+        return false;
     }
 
     function pushTypesIntoInlineFunctionDefinition(context: Node, signature: cfFunctionSignature, functionDef: (FunctionDefinition | ArrowFunctionDefinition)) {
@@ -647,9 +698,10 @@ export function Checker() {
                     const lValIdent = stringifyLValue(node.left);
                     if (!lValIdent) return;
 
-                    const lhsType = SyntheticType.any; //determineFlowType(node.left, lValIdent.canonical);
+                    const lhsType = walkupScopesToResolveSymbol(node, lValIdent.canonical)?.symTabEntry.declaredType; //determineFlowType(node.left, lValIdent.canonical);
                     const rhsType = getCachedEvaluatedNodeType(node.right);
                     if (!lhsType) {
+                        /*
                         // there is no type in the current flow; so, this is the first assignment for this var in this scope
                         if (node.typeAnnotation) {
                             const evaluatedTypeAnnotation = evaluateType(node, node.typeAnnotation);
@@ -660,7 +712,7 @@ export function Checker() {
                         }
                         else {
                             setCachedEvaluatedFlowType(node.left.flow!, lValIdent.canonical, rhsType);
-                        }
+                        }*/
                     }
                     else {
                         if (node.typeAnnotation) {
@@ -670,7 +722,9 @@ export function Checker() {
                             setCachedEvaluatedFlowType(node.left.flow!, lValIdent.canonical, rhsType);
                         }
                         else {
-                            //typeErrorAtNode(node.right, "RHS is not assignable to LHS.");
+                            const l = stringifyType(lhsType);
+                            const r = stringifyType(rhsType);
+                            typeErrorAtNode(node.right, `Type '${r}' is not assignable to type '${l}'`);
                         }
                     }
                 }
@@ -771,13 +825,16 @@ export function Checker() {
         }
 
         let rhsType : _Type | undefined = undefined;
+        let assignabilityErrorNode : Node;
 
         if (node.expr.kind === NodeType.binaryOperator) {
             checkNode(node.expr.right);
             rhsType = getCachedEvaluatedNodeType(node.expr.right);
+            assignabilityErrorNode = node.expr.right;
         }
         else if (isForInit && node.parent?.kind === NodeType.for && node.parent.subType === ForSubType.forIn && node === node.parent.init) {
-            rhsType = getCachedEvaluatedNodeType(node.parent.expr);
+            rhsType = getCachedEvaluatedNodeType(node.parent.expr); // `for (x in y)`, x gets its type from `y`
+            assignabilityErrorNode = node;
         }
         else {
             return; // should be unreachable; a variable delcaration is either initialized (var x = y) or a for-in expr (for x in y)
@@ -800,8 +857,12 @@ export function Checker() {
 
         //if (node.finalModifier) rhsType.flags |= TypeFlags.final; // need to clone the type
         
-        if (symbol) {
-            symbol.type = rhsType;
+        if (symbol && symbol.declaredType) {
+            if (!isAssignable(rhsType, symbol.declaredType)) {
+                const l = stringifyType(symbol.declaredType);
+                const r = stringifyType(rhsType);
+                typeErrorAtNode(assignabilityErrorNode, `Type '${r}' is not assignable to type '${l}'`);
+            }
         }
 
         setCachedEvaluatedFlowType(lValue.flow!, name.canonical, rhsType);
@@ -937,7 +998,7 @@ export function Checker() {
 
             const resolvedSymbol = walkupScopesToResolveSymbol(node, name);
             if (resolvedSymbol) {
-                setCachedEvaluatedNodeType(node, resolvedSymbol.symTabEntry.type);
+                setCachedEvaluatedNodeType(node, resolvedSymbol.symTabEntry.declaredType ?? resolvedSymbol.symTabEntry.type);
             }
             // let flowType : _Type | undefined = undefined; determineFlowType(node, name);
 
@@ -1215,7 +1276,7 @@ export function Checker() {
                     uiName: key,
                     canonicalName,
                     declarations: member,
-                    type: getCachedEvaluatedNodeType(member)
+                    type: getCachedEvaluatedNodeType(member),
                 });
             }
         }

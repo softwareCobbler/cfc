@@ -140,6 +140,7 @@ export interface SymTabEntry {
     canonicalName: string,
     declarations: Node | Node[] | null,
     type: _Type,
+    declaredType?: _Type | null,
 }
 
 export type SymTab = Map<string, SymTabEntry>;

@@ -14,6 +14,12 @@ interface CachedFile {
     nodeMap: ReadonlyMap<NodeId, Node>
 }
 
+interface DevTimingInfo {
+    parse: number,
+    bind: number,
+    check: number
+}
+
 interface FileSystem {
     readFileSync: (path: string) => Buffer
     existsSync: (path: string) => boolean
@@ -56,6 +62,8 @@ export function Project(absRoots: string[], fileSystem: FileSystem, debug = true
     const checker = Checker();
     const heritageCircularityDetector = new Set<string>();
 
+    parser.setParseTypes(true);
+
     if (debug) {
         parser.setDebug(true);
         binder.setDebug(true);
@@ -72,10 +80,14 @@ export function Project(absRoots: string[], fileSystem: FileSystem, debug = true
         return addFile(absPath);
     }
 
-    function parseBindCheckWorker(sourceFile: SourceFile) {
+    function parseBindCheckWorker(sourceFile: SourceFile) : DevTimingInfo {
         parser.setSourceFile(sourceFile);
+        const parseStart = new Date().getTime();
         parser.parse();
+        const parseElapsed = new Date().getTime() - parseStart;
+        const bindStart = new Date().getTime();
         binder.bind(sourceFile);
+        const bindElapsed = new Date().getTime() - bindStart;
 
         // (nodeMap is mapping from nodeId to node, helpful for flat list of terminal nodes back to their tree position)
         // note that if we ascend into a parent cfc, we'll run another bind, which would destroy
@@ -85,13 +97,17 @@ export function Project(absRoots: string[], fileSystem: FileSystem, debug = true
         
         maybeFollowParentComponents(sourceFile);
 
+        const checkStart = new Date().getTime();
         checker.check(sourceFile);
+        const checkElapsed = new Date().getTime() - checkStart;
 
         files.set(sourceFile.absPath, {
             parsedSourceFile: sourceFile,
             flatTree: flattenTree(sourceFile),
             nodeMap
         });
+
+        return { parse: parseElapsed, bind: bindElapsed, check: checkElapsed };
     }
 
     function addFile(absPath: string) {
@@ -186,11 +202,12 @@ export function Project(absRoots: string[], fileSystem: FileSystem, debug = true
 
     // for a file that should already be in cache;
     // if for some reason it isn't, we try to add it
-    function parseBindCheck(absPath: AbsPath, newSource: string | Buffer) {
+    // as a dev kludge, we return parse/bind/check times; this method otherwise returns void
+    function parseBindCheck(absPath: AbsPath, newSource: string | Buffer) : DevTimingInfo {
         const cache = getCachedFile(absPath);
         if (!cache) {
             tryAddFile(absPath);
-            return;
+            return {parse: -1, bind: -1, check: -1};
         }
 
         // need to formalize this; we want to reset the source file object but not move it in memory, so
@@ -204,7 +221,7 @@ export function Project(absRoots: string[], fileSystem: FileSystem, debug = true
         sourceFile.content = [];
         sourceFile.diagnostics = [];
 
-        parseBindCheckWorker(sourceFile);
+        return parseBindCheckWorker(sourceFile);
     }
 
     function getDiagnostics(absPath: string) {

@@ -74,10 +74,8 @@ function naiveGetDiagnostics(uri: TextDocumentUri, freshText: string | Buffer) :
 
 	const fsPath = URI.parse(uri).fsPath;
 
-	const start = new Date().getTime();
-	project.parseBindCheck(fsPath, freshText);
-	const elapsed = new Date().getTime() - start;
-	connection.console.info("parse/bind/check: " + elapsed);
+	const timing = project.parseBindCheck(fsPath, freshText);
+	connection.console.info(`parse ${timing.parse} // bind ${timing.bind} // check ${timing.check}`);
 	return project.getDiagnostics(fsPath) ?? [];
 
 	/*

@@ -1781,14 +1781,25 @@ export function Parser() {
             const declaration = VariableDeclaration(finalModifier, varModifier, assignmentExpr);
             if (savedLastTypeAnnotation) {
                 declaration.typeAnnotation = savedLastTypeAnnotation;
-                lastTypeAnnotation = null;
+                
+                //
+                // clear lastTypeAnnotation *if* it hasn't changed since we entered this method
+                // it may have been updated to a new annotation during descent;
+                // e.g.
+                //
+                // // @type {ok: boolean}
+                // var x = {ok: true} <--- no semicolon
+                // // @type number <--- gets consumed as trivia while parsing {ok: true}, this is now the global lastTypeAnnotation
+                // var y = 42
+                //
+                if (lastTypeAnnotation === savedLastTypeAnnotation) lastTypeAnnotation = null;
             }
             return declaration;
         }
         else {
             if (savedLastTypeAnnotation) {
                 assignmentExpr.typeAnnotation = savedLastTypeAnnotation;
-                lastTypeAnnotation = null;
+                if (lastTypeAnnotation === savedLastTypeAnnotation) lastTypeAnnotation = null;
             }
             return assignmentExpr;
         }
@@ -3059,6 +3070,7 @@ export function Parser() {
     function tryParseNamedFunctionDefinition(speculative: false, asDeclaration: boolean) : Script.FunctionDefinition;
     function tryParseNamedFunctionDefinition(speculative: true) : Script.FunctionDefinition | null;
     function tryParseNamedFunctionDefinition(speculative: boolean, asDeclaration = false) : Script.FunctionDefinition | null {
+        let savedLastTypeAnnotation = lastTypeAnnotation;
         let accessModifier: Terminal | null = null;
         let returnType    : DottedPath | null = null;
         let functionToken : Terminal | null;
@@ -3106,7 +3118,10 @@ export function Parser() {
             body          = parseBracedBlock(ScannerMode.script);
         }
 
-        return Script.FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body, returnTypeAnnotation);
+        if (lastTypeAnnotation === savedLastTypeAnnotation) lastTypeAnnotation = null;
+        const result = Script.FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body, returnTypeAnnotation);
+        result.typeAnnotation = savedLastTypeAnnotation;
+        return result;
     }
 
     function parseDo() : Do {

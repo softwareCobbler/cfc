@@ -11,22 +11,22 @@ import { DebugFileSystem, Project } from "../compiler/project";
 import * as fs from "fs";
 import * as path from "path";
 
-function projectFiddle() {
-    const debugfs = DebugFileSystem([
-        ["/a.cfc", `component extends="b" {}`],
-        ["/b.cfc", `component { function foo() {} }`]
-    ], "/");
+// function projectFiddle() {
+//     const debugfs = DebugFileSystem([
+//         ["/a.cfc", `component extends="b" {}`],
+//         ["/b.cfc", `component { function foo() {} }`]
+//     ], "/");
 
-    const project = Project(["/"], /*filesystem*/debugfs, /*debug*/ true);
+//     const project = Project(["/"], /*filesystem*/debugfs, /*debug*/ true);
 
-    const a = project.addFile("/a.cfc");
-    const b = project.addFile("/b.cfc");
+//     const a = project.addFile("/a.cfc");
+//     const b = project.addFile("/b.cfc");
 
-    project.getDiagnostics("/a.cfc");
-}
+//     project.getDiagnostics("/a.cfc");
+// }
 
-projectFiddle();
-process.exit();
+// projectFiddle();
+// process.exit();
 
 function fromFile(fname: string) {
     const absPath = path.resolve(fname);
@@ -36,38 +36,15 @@ function fromFile(fname: string) {
 const libPath = path.resolve("./src/lang-server/server/src/runtimelib/lib.cf2018.d.cfm");
 const stdLib = SourceFile(libPath , CfFileType.dCfm, fs.readFileSync(libPath));
 
-const sourceFile = fromFile("c:\\Users\\anon\\dev\\cf-ts-compiler\\mxunit\\framework\\TestDecorator.cfc");
+//const sourceFile = fromFile("c:\\Users\\anon\\dev\\cf-ts-compiler\\mxunit\\framework\\TestDecorator.cfc");
 
-/*const sourceFile = NilCfc(`
-<cfcomponent>
-    <!--- @type Query = <T = any> => {recordCount: number, currentRow: number} & {[key in keyof T]: T[key] & T[key][]} --->
-    <cfset final this.lel = {
-        m1: 1,
-        m2: 2,
-        m3: 3
-    }>
+const sourceFile = NilCfm(`
+<cfscript>
+    // @type () => {ok: boolean}
+    function foo(uxy) {}
 
-    <cffunction name="init">
-        <cfargument name="arg0" default=#0#>
-    </cffunction>
-
-    <cffunction name="foo">
-        <cfscript>
-            // @type {type: string, descr: string}[]
-            final var x = [];
-        </cfscript>
-    </cffunction>
-</cfcomponent>
-`);*/
-
-const sourceFile2 = NilCfc(`
-<cfcomponent>
-    <cffunction name="x">
-        <cfscript>
-            final var a = new A();
-        </cfscript>
-    </cffunction>
-</cfcomponent>
+    foo()
+</cfscript>
 `);
 
 const parser = Parser().setDebug(true).setParseTypes(true);
@@ -85,11 +62,6 @@ parser.setSourceFile(sourceFile);
 parser.parse();
 binder.bind(sourceFile);
 checker.check(sourceFile);
-
-parser.setSourceFile(sourceFile2);
-parser.parse();
-binder.bind(sourceFile2);
-checker.check(sourceFile2);
 
 const flatTree = flattenTree(sourceFile);
 
