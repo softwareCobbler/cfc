@@ -576,7 +576,7 @@ function typeFromStringifiedJavaLikeTypename(typename: string | null) : _Type {
         case "string": return SyntheticType.string;
         case "struct": return SyntheticType.emptyStruct;
         case "void": return SyntheticType.void_;
-        default: return SyntheticType.any;
+        default: return SyntheticType.any; // @fixme: should be CFC<typename>, which will be resolved to a CFC during checking phase (could also be a java class...)
     }
 }
 
@@ -599,19 +599,19 @@ export function extractCfFunctionSignature(def: FunctionDefinition | ArrowFuncti
         else {
             uiName     = def.nameToken?.uiName || ""; // anonymous function is OK
             returnType = typeFromJavaLikeTypename(def.returnType);
-            paramTypes = extractScriptFunctionParam(def.params);
+            paramTypes = extractScriptFunctionParams(def.params);
         }
     }
     else {
         uiName = ""; // arrow function never has a name
         returnType = SyntheticType.any;
-        paramTypes = extractScriptFunctionParam(def.params);
+        paramTypes = extractScriptFunctionParams(def.params);
     }
 
     return cfFunctionSignature(uiName, paramTypes, returnType);
 }
 
-export function extractScriptFunctionParam(params: readonly Script.FunctionParameter[]) : cfFunctionSignatureParam[] {
+export function extractScriptFunctionParams(params: readonly Script.FunctionParameter[]) : cfFunctionSignatureParam[] {
     const result : cfFunctionSignatureParam[] = [];
     for (const param of params) {
         const type = typeFromJavaLikeTypename(param.javaLikeTypename);

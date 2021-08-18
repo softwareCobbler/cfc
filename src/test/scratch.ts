@@ -40,11 +40,7 @@ const stdLib = SourceFile(libPath , CfFileType.dCfm, fs.readFileSync(libPath));
 
 const sourceFile = NilCfm(`
 <cfscript>
-    // @type () => {ok: boolean}
-    function foo(uxy) {}
-
-    foo()
-</cfscript>
+    // @type (foo_arg: string) => ({x: number})
 `);
 
 const parser = Parser().setDebug(true).setParseTypes(true);

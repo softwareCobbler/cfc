@@ -28,7 +28,7 @@ import {
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, TypeShim } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, Mutable} from "./utils";
-import { cfIndexedType, cfIntersection, cfMappedType, extractCfFunctionSignature, extractScriptFunctionParam, isIntersection, isTypeId, isUnion } from "./types";
+import { cfIndexedType, cfIntersection, cfMappedType, extractCfFunctionSignature, isIntersection, isTypeId, isUnion } from "./types";
 import { _Type, cfArray, cfStruct, cfTuple, cfFunctionSignature, cfTypeConstructorInvocation, cfTypeConstructorParam, cfTypeConstructor, cfTypeId, cfUnion, SyntheticType, cfFunctionSignatureParam } from "./types";
 
 let debugParseModule = false;
@@ -148,9 +148,9 @@ export function Parser() {
 
     const SpeculationHelper = (function() {
         //
-        // run a boolean returning worker, and always rollback changes to parser state when done
+        // run a `T` returning worker, and always rollback changes to parser state when done
         //
-        function lookahead(lookaheadWorker: () => boolean) {
+        function lookahead<T>(lookaheadWorker: () => T) {
             const saveTokenizerState = getScannerState();
             const diagnosticsLimit = diagnostics.length;
             const savedLastNonTriviaToken = lastNonTriviaToken;
@@ -692,6 +692,10 @@ export function Parser() {
                     }
                     
                     const savedMode = mode;
+                    const savedContext = parseContext;
+                    // @fixme - just return the <cfscript> tag, and then eat the script body from the caller;
+                    // then we don't need to worry about pop/restore of this context here
+                    parseContext &= ~(1 << ParseContext.insideCfTagAngles);
                     setScannerMode(ScannerMode.script);
 
                     // capture the full range of the script body, which is hard to figure out after the fact,
@@ -706,6 +710,7 @@ export function Parser() {
                     const endPos = pos();
 
                     setScannerMode(savedMode);
+                    parseContext = savedContext;
                     return CfTag.Script(tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, stmtList, new SourceRange(startPos, endPos));
                 }
                 else {
@@ -2212,9 +2217,9 @@ export function Parser() {
                             continue;
                         }
                         else {
-                            const propertyName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ true);
+                            const propertyName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ true, "Expected a property name.");
                             root = transformingPushAccessElement(root, OptionalDotAccess(questionMark, dot, propertyName)) as T;
-                            // todo -- parseError if first char of propertyName is an ascii digit
+                            // todo -- parseError if first char of propertyName is an ascii digit?
                             continue;
                         }
                     }
@@ -2324,7 +2329,6 @@ export function Parser() {
                     || isStartOfExpression();
         }
     }
-    isStartOfStatement;
 
     function isStartOfExpression() : boolean {
         switch (lookahead()) {
@@ -2355,6 +2359,19 @@ export function Parser() {
                 return true;
             default:
                 return isIdentifier();
+        }
+    }
+
+    function isStartOfType() {
+        switch (lookahead()) {
+            case TokenType.LEFT_BRACKET:
+            case TokenType.LEFT_PAREN:
+            case TokenType.LEFT_BRACE:
+            case TokenType.LEFT_ANGLE:
+            case TokenType.LEXEME:
+                return true;
+            default:
+                return false;
         }
     }
 
@@ -2442,17 +2459,18 @@ export function Parser() {
             case ParseContext.arrayLiteralBody:
             case ParseContext.structLiteralBody:
             case ParseContext.argOrParamList:
-            case ParseContext.typeStruct:
-            case ParseContext.typeTupleOrArrayElement:
-            case ParseContext.typeParamList:
                 return isStartOfExpression();
             case ParseContext.cfScriptTagBody:
             case ParseContext.blockStatements:
             case ParseContext.switchClause:
             case ParseContext.blockStatements:
                 return isStartOfStatement();
+            case ParseContext.typeStruct:
+            case ParseContext.typeTupleOrArrayElement:
+            case ParseContext.typeParamList:
+                return isStartOfType();
             default:
-                return false; // ? yeah ?
+                return false;
         }
     }
 
@@ -2763,9 +2781,15 @@ export function Parser() {
         return result;
     }
 
-    function parseFunctionDeclarationParameters() : cfFunctionSignatureParam[] {
+    // @fixme: unify the following 2 methods
+    // function parseFunctionDeclarationParameters() : cfFunctionSignatureParam[] {
+    //     const params = tryParseFunctionDefinitionParameters(/*speculative*/ false, /*asDeclaration*/ true);
+    //     return extractScriptFunctionParams(params);
+    // }
+
+    function parseFunctionTypeParameters() : cfFunctionSignatureParam[] {
         const params = tryParseFunctionDefinitionParameters(/*speculative*/ false, /*asDeclaration*/ true);
-        return extractScriptFunctionParam(params);
+        return params.map(param => cfFunctionSignatureParam(param.required, param.type ?? SyntheticType.any, param.uiName, null));
     }
 
     // speculative overload is last in overload set so speculation-forwarder can see it
@@ -2829,6 +2853,8 @@ export function Parser() {
                             type = parseType();
                         }
                         else {
+                            // @fixme: probably can get ride of this; we were gonna do like function foo(y /*: type*/)
+                            // as inline type defs but meh
                             name = parseIdentifier(/*withTrivia*/ false);
                             const triviaAndType = parseScriptTriviaWithPossibleTypeAnnotation();
                             if (!triviaAndType.type) {
@@ -3118,9 +3144,11 @@ export function Parser() {
             body          = parseBracedBlock(ScannerMode.script);
         }
 
-        if (lastTypeAnnotation === savedLastTypeAnnotation) lastTypeAnnotation = null;
         const result = Script.FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body, returnTypeAnnotation);
+
         result.typeAnnotation = savedLastTypeAnnotation;
+        if (lastTypeAnnotation === savedLastTypeAnnotation) lastTypeAnnotation = null;
+
         return result;
     }
 
@@ -3243,8 +3271,12 @@ export function Parser() {
 
     function parseErrorBasedOnContext(context: ParseContext) {
         switch (context) {
+            case ParseContext.typeTupleOrArrayElement:
+            case ParseContext.typeParamList:
+                parseErrorAtCurrentToken("Expected a type expression.");
+                return;
             case ParseContext.typeStruct:
-                parseErrorAtCurrentToken("_Type-level struct member definition expected.");
+                parseErrorAtCurrentToken("Type-level struct member definition expected.");
                 return;
             case ParseContext.argOrParamList:
                 parseErrorAtPos(lastNonTriviaToken.range.toExclusive, "Expression expected.");
@@ -3524,6 +3556,8 @@ export function Parser() {
         }
 
         const savedScannerState = getScannerState();
+        const savedParseContext = parseContext;
+        parseContext = 1 << ParseContext.typeAnnotation;
 
         for (const node of trivia) {
             if (node.kind === NodeType.comment || (node.kind === NodeType.tag && node.tagType === CfTag.TagType.comment)) {
@@ -3553,6 +3587,7 @@ export function Parser() {
         }
 
         restoreScannerState(savedScannerState);
+        parseContext = savedParseContext;
     }
 
     /**
@@ -3628,7 +3663,7 @@ export function Parser() {
     function parseType() : _Type;
     function parseType(fromInclusive: number, toExclusive: number) : _Type;
     function parseType(fromInclusive?: number, toExclusive?: number) : _Type {
-        function tokenToType(lexeme: Token) {
+        function textToType(lexeme: Token) {
             switch (lexeme.text) {
                 case "number":
                     return SyntheticType.number;
@@ -3684,7 +3719,7 @@ export function Parser() {
                         parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
                         const maybeTypeId = maybeLexeme();
                         if (maybeTypeId) {
-                            let typeId : _Type | null = tokenToType(maybeTypeId.token);
+                            let typeId : _Type | null = textToType(maybeTypeId.token);
                             if (!isTypeId(typeId)) {
                                 typeId = null;
                             }
@@ -3733,20 +3768,7 @@ export function Parser() {
             })
         }
 
-        function startsType() {
-            switch (lookahead()) {
-                case TokenType.LEFT_BRACKET:
-                case TokenType.LEFT_PAREN:
-                case TokenType.LEFT_BRACE:
-                case TokenType.LEFT_ANGLE:
-                case TokenType.LEXEME:
-                    return true;
-                default:
-                    return false;
-            }
-        }
-
-        if (!startsType()) {
+        if (!isStartOfType()) {
             parseErrorAtPos(pos(), "Expected a type expression.");
             return SyntheticType.any;
         }
@@ -3765,7 +3787,8 @@ export function Parser() {
                     break;
                 }
                 case TokenType.LEXEME: {
-                    result = tokenToType(next());
+                    result = textToType(next());
+                    parseTrivia();
                     while (lookahead() === TokenType.LEFT_ANGLE) {
                         result = parseTypeConstructorInvocation(result);
                     }
@@ -3775,45 +3798,46 @@ export function Parser() {
                 case TokenType.LEFT_PAREN: {
                     parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
                     
-                    if (lookahead() === TokenType.LEFT_PAREN) {
-                        return parseType();
-                    }
-
-                    const parenthesizedType = SpeculationHelper.speculate(() => {
+                    // this might be a parameter list to a function type, or just a parenthesized type
+                    // we need some lookahead to know which
+                    const enum TypeOrParam { type, param };
+                    const typeOrParam = SpeculationHelper.lookahead(() => {
                         const lexeme = next();
                         parseTrivia();
+                        
                         if (lookahead() === TokenType.COLON) {
                             // this is a non-type name, used to give a name to an inline function type signature parameter,
                             // i.e, (foo : any) => any
                             //       ^^^^^
-                            return null;
+                            return TypeOrParam.param;
                         }
                         else if (lexeme.text === "required") {
                             next();
                             parseTrivia();
                             if (lookahead() === TokenType.COLON) {
-                                return null;
+                                return TypeOrParam.param;
                             }
                         }
                         else if (lexeme.type === TokenType.RIGHT_PAREN && peek().type === TokenType.EQUAL_RIGHT_ANGLE) {
-                            // got something like `() => `
-                            return null;
+                            // got `() => `
+                            return TypeOrParam.param;
                         }
 
-                        return tokenToType(lexeme);
+                        return TypeOrParam.type;
                     })
 
-                    if (parenthesizedType) {
+                    if (typeOrParam === TypeOrParam.type) {
+                        result = parseType();
                         parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
-                        result = maybeParseArrayModifier(parenthesizedType);
+                        result = maybeParseArrayModifier(result);
                         break;
                     }
                     else {
-                        const params = parseFunctionDeclarationParameters();
+                        const params = parseFunctionTypeParameters();// parseFunctionDeclarationParameters();
                         parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
                         parseExpectedTerminal(TokenType.EQUAL_RIGHT_ANGLE, ParseOptions.withTrivia);
                         const returnType = parseType();
-                        result = maybeParseArrayModifier(cfFunctionSignature("", params, returnType));
+                        result = cfFunctionSignature("", params, returnType);
                         break;
                     }
                 }
@@ -3821,7 +3845,7 @@ export function Parser() {
                     function parseMappedTypeKeyExpression() : {keyBinding: cfTypeId, inKeyOf: cfTypeId} {
                         parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
                         const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ false);
-                        let keyBinding : _Type | null = tokenToType(name.token);
+                        let keyBinding : _Type | null = textToType(name.token);
                         if (!isTypeId(keyBinding)) { // got number or string or etc.
                             parseErrorAtRange(name.range, "Mapped type key binding must be a valid typename.");
                             keyBinding = null;
@@ -3832,7 +3856,7 @@ export function Parser() {
                             parseErrorAtRange(mergeRanges(contextualKwIn, contextualKwKeyof), "Expected 'in keyof'.");
                         }
                         const inKeyOfName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ false);
-                        let inKeyOfBinding : _Type | null = tokenToType(inKeyOfName.token);
+                        let inKeyOfBinding : _Type | null = textToType(inKeyOfName.token);
                         if (!isTypeId(inKeyOfBinding)) { // got number or string or etc.
                             parseErrorAtRange(name.range, "Mapped type keyof source must be a valid typename.");
                             inKeyOfBinding = null;

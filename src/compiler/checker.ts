@@ -2,8 +2,8 @@ import * as path from "path";
 import { Diagnostic, SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges } from "./node";
 import { CfcResolver } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
-import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfStruct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStruct, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType, stringifyType } from "./types";
-import { getAttributeValue, getContainingFunction, getSourceFile, getTriviallyComputableString, isHoistableFunctionDefinition, Mutable, stringifyDottedPath, stringifyLValue } from "./utils";
+import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfStruct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStruct, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType, stringifyType, cfFunctionSignatureParam } from "./types";
+import { getAttributeValue, getContainingFunction, getSourceFile, getTriviallyComputableString, Mutable, stringifyDottedPath, stringifyLValue } from "./utils";
 
 type CanonicalSymbolName = string;
 type SymbolTable = ReadonlyMap<CanonicalSymbolName, SymTabEntry>;
@@ -495,6 +495,34 @@ export function Checker() {
     }
 
     //
+    // assignability for the cf-derived function type and the annotated function type is most comfortable with a bivariant return type,
+    // and contravariant params; param list must be of the same length, and args must all have the same names
+    // actually, the return type seems to need the directions of & and | subtypes reversed...? struct foo() should be assignable to () => (number | {x:number})
+    // e.g.
+    // // @type (arg: {}) => {x: number}
+    // struct function foo(struct arg) {}
+    //
+    function isCfSyntaxFunctionSigAssignableToAnnotatedSig(cfSig: cfFunctionSignature, annotatedSig: cfFunctionSignature) {
+        // covariant in return type
+        if (!isLeftSubtypeOfRight(cfSig.returns, annotatedSig.returns) && !isLeftSubtypeOfRight(annotatedSig.returns, cfSig.returns)) return false;
+        
+        // also every parameter needs the same names...?
+        if (cfSig.params.length != annotatedSig.params.length) return false;
+
+        // contravariant in parameter types
+        // every param must have the same canonical name
+        for (let i = 0; i < cfSig.params.length; i++) {
+            const lp = cfSig.params[i];
+            const rp = annotatedSig.params[i];
+            if (lp.canonicalName !== rp.canonicalName) return false;
+            
+            // contravariant, flip left/right
+            if (!isLeftSubtypeOfRight(rp.type, lp.type)) return false;
+        }
+        return true;
+    }
+
+    //
     // `l <: r` means "left is a subtype of right"
     // `l !<: r` means "left is NOT a subtype of right"
     // subtype has the common meaning; however it is maybe helpful to note that "sub" also means "substitutable" in addition to "a descendant in a heirarchy"
@@ -535,6 +563,21 @@ export function Checker() {
         }
         if (isArray(l) && isArray(r)) {
             return isLeftSubtypeOfRight(l.memberType, r.memberType);
+        }
+        if (isFunctionSignature(l) && isFunctionSignature(r)) {
+            // covariant in return type
+            if (!isLeftSubtypeOfRight(l.returns, r.returns)) return false;
+
+            // contravariant in parameter types
+            // also every parameter needs the same names...?
+            if (l.params.length != r.params.length) return false;
+            for (let i = 0; i < l.params.length; i++) {
+                const lpt = l.params[i].type;
+                const rpt = r.params[i].type;
+                // contravariant, flip left/right
+                if (!isLeftSubtypeOfRight(rpt, lpt)) return false;
+            }
+            return true;
         }
 
         //
@@ -620,9 +663,9 @@ export function Checker() {
                     typeErrorAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), "All arguments must be named, if any are named.");
                 }
 
-                const paramNames = new Map<string, string>();
+                const paramNameMap = new Map<string, {uiName: string, param: cfFunctionSignatureParam}>();
                 for (const param of sig.params) {
-                    paramNames.set(param.canonicalName, param.uiName);
+                    paramNameMap.set(param.canonicalName, {uiName: param.uiName, param});
                 }
                 const seenArgs = new Set<string>();
                 for (const arg of node.args) {
@@ -631,10 +674,22 @@ export function Checker() {
                             const uiName = arg.name.uiName || arg.name.canonicalName;
                             typeErrorAtNode(arg.name, `Duplicate argument '${uiName}'`);
                         }
-                        if (!paramNames.has(arg.name.canonicalName) && arg.name.canonicalName !== "argumentcollection") {
-                            const uiName = arg.name.uiName || arg.name.canonicalName;
-                            typeErrorAtNode(arg.name, `'${uiName}' is not a recognized parameter for this ${isNewExpr ? "constructor" : "function"}.`);
+
+                        const paramPair = paramNameMap.get(arg.name.canonicalName);
+                        if (!paramPair) {
+                            if (arg.name.canonicalName !== "argumentcollection") {
+                                const uiName = arg.name.uiName || arg.name.canonicalName;
+                                typeErrorAtNode(arg.name, `'${uiName}' is not a recognized parameter for this ${isNewExpr ? "constructor" : "function"}.`);
+                            }
                         }
+                        else {
+                            const argType = getCachedEvaluatedNodeType(arg);
+                            const paramType = paramPair.param.type;
+                            if (!isAssignable(argType, paramType)) {
+                                typeErrorAtNode(arg, `Argument of type '${stringifyType(argType)}' is not assignable to parameter of type '${stringifyType(paramType)}'.`);
+                            }
+                        }
+                        
                         seenArgs.add(arg.name.canonicalName);
                     }
                 }
@@ -649,6 +704,16 @@ export function Checker() {
                 if (requiredNamedParams.size > 0) {
                     const missingNamedParams = [...requiredNamedParams.values()].map(uiName => "'" + uiName + "'").join(", ");
                     typeErrorAtNode(node.left, `Required named parameters are missing: ${missingNamedParams}`);
+                }
+            }
+            else {
+                const minToCheck = Math.min(node.args.length, sig.params.length);
+                for (let i = 0; i < minToCheck; i++) {
+                    const argType = getCachedEvaluatedNodeType(node.args[i]);
+                    const paramType = sig.params[i].type;
+                    if (!isAssignable(argType, paramType)) {
+                        typeErrorAtNode(node.args[i], `Argument of type '${stringifyType(argType)}' is not assignable to parameter of type '${stringifyType(paramType)}'.`);
+                    }
                 }
             }
 
@@ -672,8 +737,8 @@ export function Checker() {
     }
 
     function checkCallArgument(node: CallArgument) {
-        // should probably do this all in one go inside checkArgList or something
         checkNode(node.expr);
+        setCachedEvaluatedNodeType(node, getCachedEvaluatedNodeType(node.expr));
     }
 
     function checkUnaryOperator(node: UnaryOperator) {
@@ -996,7 +1061,8 @@ export function Checker() {
                 return;
             }
 
-            const resolvedSymbol = walkupScopesToResolveSymbol(node, name);
+            const resolvedSymbol = walkupScopesToResolveSymbol(node, name); // really we want the flow type
+
             if (resolvedSymbol) {
                 setCachedEvaluatedNodeType(node, resolvedSymbol.symTabEntry.declaredType ?? resolvedSymbol.symTabEntry.type);
             }
@@ -1087,11 +1153,11 @@ export function Checker() {
             setCachedEvaluatedNodeType(node, type); // in `a.b.c`, the whole indexedAccess expression type is typeof c
         }
         else {
-            setCachedEvaluatedNodeType(node.root, SyntheticType.any);
+            setCachedEvaluatedNodeType(node, SyntheticType.any);
             for (const element of node.accessElements) {
                 setCachedEvaluatedNodeType(element, SyntheticType.any);
             }
-            // error: some kind of indexed access error
+            typeErrorAtNode(node.root, `Type '${stringifyType(type)}' is not indexable.`)
         }
 
         checkList(node.accessElements);
@@ -1125,26 +1191,26 @@ export function Checker() {
     }
 
     function checkFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {
-        // we need the extracted cf type, and then, if there is a type annotation, make sure the types are assignable (in either direction?)
-        // the extracted cf type is in the symbol table for the scope "into which" it was hoisted; could be variables, local, or this
-        // we should maybe just extract the cf type here..., as long as we check hoistable functions first....
-        // const extracedType...
-        // if no type annotation
-        //      set type to extracted type, which in the limit will be (...any: []) => any
-        // else if node.typeAnnotation...
-        // if (!isAssignable(extractedType, typeAnnotation) || (!isAssignable(typeAnnotation, extractedType)))
-        //      error, set type to any
-        // else
-        //      set type to typeAnnotation, on the assumption it will be more specific (why'd the user type it otherwise)
-        //
+        const cfSyntaxDirectedTypeSig = extractCfFunctionSignature(node);
+        let finalType = cfSyntaxDirectedTypeSig;
 
-        if (!isHoistableFunctionDefinition(node)) {
-            setCachedEvaluatedNodeType(node, extractCfFunctionSignature(node));
+        if (node.typeAnnotation) {
+            if (isFunctionSignature(node.typeAnnotation)) {
+                if (!isCfSyntaxFunctionSigAssignableToAnnotatedSig(cfSyntaxDirectedTypeSig, node.typeAnnotation)) {
+                    typeErrorAtNode(node, `Type '${stringifyType(cfSyntaxDirectedTypeSig)}' is not assignable to the annotated type '${stringifyType(node.typeAnnotation)}'.`)
+                }
+                finalType = node.typeAnnotation;
+            }
+            else if (!(node.typeAnnotation.flags & TypeFlags.any)) {
+                typeErrorAtNode(node, `Expected a function signature as an annotated type, but got type '${stringifyType(node.typeAnnotation)}'.`)
+            }
         }
+
+        setCachedEvaluatedNodeType(node, finalType);
         
-        for (const param of node.params) {
-            setCachedEvaluatedFlowType(node.flow!, param.canonicalName, param.type || SyntheticType.any);
-        }
+        // for (const param of node.params) {
+        //     setCachedEvaluatedFlowType(node.flow!, param.canonicalName, param.type || SyntheticType.any);
+        // }
 
         if (node.kind === NodeType.functionDefinition && node.fromTag) {
             checkListFunctionsLast(node.body);

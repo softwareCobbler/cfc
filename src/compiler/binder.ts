@@ -893,6 +893,7 @@ export function Binder() {
     }
 
     function bindFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {
+        const signature = extractCfFunctionSignature(node);
         if (isHoistableFunctionDefinition(node) && typeof node.canonicalName === "string") {
             // lucee appears to not err on the following, but acf does
             // we need to model that hoistable functions are always hoisted into the root scope,
@@ -922,13 +923,11 @@ export function Binder() {
                 scopeTarget = RootNode.containedScope.variables!;
             }
             
-            const sig = extractCfFunctionSignature(node);
-
             addSymbolToTable(
                 scopeTarget,
                 node.uiName!,
                 node,
-                sig,
+                signature,
                 node.typeAnnotation);
         }
 
@@ -939,8 +938,14 @@ export function Binder() {
             arguments: new Map<string, SymTabEntry>(),
         };
 
-        for (const param of node.params) {
-            addSymbolToTable(node.containedScope.arguments!, param.uiName, param);
+        const typeAnnotatedParams = node.typeAnnotation && isFunctionSignature(node.typeAnnotation) ? node.typeAnnotation.params : null;
+
+        for (let i = 0; i < node.params.length; i++) {
+            const param = node.params[i];
+            const type = signature.params[i]?.type || null;
+            const annotatedType = typeAnnotatedParams?.[i].type || null;
+            // we also need the annotation-provided type if it exists; for now it is implicitly null
+            addSymbolToTable(node.containedScope.arguments!, param.uiName, param, type, annotatedType);
         }
 
         if (!node.fromTag && node.kind === NodeType.functionDefinition) {
