@@ -585,7 +585,7 @@ function typeFromAttribute(attrs: TagAttribute[], attrName: string) : _Type {
         getTriviallyComputableString(getAttributeValue(attrs, attrName)) || null);
 }
 
-export function extractCfFunctionSignature(def: FunctionDefinition | ArrowFunctionDefinition) {
+export function extractCfFunctionSignature(def: FunctionDefinition | ArrowFunctionDefinition, asDeclaration = false) {
     let uiName : string;
     let returnType : _Type;
     let paramTypes : cfFunctionSignatureParam[] = [];
@@ -598,8 +598,10 @@ export function extractCfFunctionSignature(def: FunctionDefinition | ArrowFuncti
         }
         else {
             uiName     = def.nameToken?.uiName || ""; // anonymous function is OK
-            returnType = typeFromJavaLikeTypename(def.returnType);
-            paramTypes = extractScriptFunctionParams(def.params);
+            returnType = asDeclaration
+                ? (def.returnTypeAnnotation ?? SyntheticType.any)
+                : typeFromJavaLikeTypename(def.returnType);
+            paramTypes = extractScriptFunctionParams(def.params, asDeclaration);
         }
     }
     else {
@@ -611,10 +613,12 @@ export function extractCfFunctionSignature(def: FunctionDefinition | ArrowFuncti
     return cfFunctionSignature(uiName, paramTypes, returnType);
 }
 
-export function extractScriptFunctionParams(params: readonly Script.FunctionParameter[]) : cfFunctionSignatureParam[] {
+export function extractScriptFunctionParams(params: readonly Script.FunctionParameter[], asDeclaration = false) : cfFunctionSignatureParam[] {
     const result : cfFunctionSignatureParam[] = [];
     for (const param of params) {
-        const type = typeFromJavaLikeTypename(param.javaLikeTypename);
+        const type = asDeclaration
+            ? (param.type ?? SyntheticType.any)
+            : typeFromJavaLikeTypename(param.javaLikeTypename);
         //const required = param.requiredTerminal ? TypeFlags.none : TypeFlags.optional;
         //const spread = param.dotDotDot ? TypeFlags.spread : TypeFlags.none;
         const name = param.identifier.uiName || "<<ERROR>>";
@@ -642,6 +646,7 @@ export function extractTagFunctionParam(params: readonly Tag.FunctionParameter[]
 
 export function stringifyType(type: _Type) : string {
     if (type.flags & TypeFlags.any) return "any";
+    if (type.flags & TypeFlags.void) return "void";
     if (type.flags & TypeFlags.number) return "number";
     if (type.flags & TypeFlags.string) return "string";
     if (type.flags & TypeFlags.boolean) return "boolean";

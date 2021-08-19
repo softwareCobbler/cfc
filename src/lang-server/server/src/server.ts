@@ -268,7 +268,7 @@ connection.onDefinition((params) : Location | undefined  => {
 	}*/
 });
 
-function resetCflsp(_x_types: boolean = false) {
+function resetCflsp(x_types: boolean = false) {
 	console.info("[reset]");
 	cflsConfig = {
 		parser: Parser().setDebug(true).setParseTypes(false),
@@ -285,7 +285,7 @@ function resetCflsp(_x_types: boolean = false) {
 	};
 	//cflsConfig.checker.installCfcResolver(CfcResolver(workspaceRoots.map(root => root.uri)));
 
-	project = Project(workspaceRoots.map(v => URI.parse(v.uri).fsPath), FileSystem());
+	project = Project(workspaceRoots.map(v => URI.parse(v.uri).fsPath), FileSystem(), {parseTypes: x_types, debug: true});
 }
 
 function reemitDiagnostics() {
@@ -317,11 +317,11 @@ connection.onInitialized(() => {
 
 		// ok, now we can wait to ask the client for the workspace configuration; this might take a while to complete
 		// and completions requests and etc. can be arriving and getting serviced during the wait
-		/*connection.workspace.getConfiguration("cflsp").then((config) => {
+		connection.workspace.getConfiguration("cflsp").then((config) => {
 			if (config.x_types !== cflsConfig.x_types) {
 				resetCflsp(config.x_types ?? false);
 			}
-		});*/
+		});
 	}
 	else {
 		//resetCflsp(/*x_types*/false);
@@ -363,10 +363,11 @@ connection.onDidChangeConfiguration(async change => {
 			resetCflsp(config.x_types ?? false);
 			documents.all().forEach(validateTextDocument);
 		});
-	} else {
-		globalSettings = <ExampleSettings>(
+	}
+	else {
+		/*globalSettings = <ExampleSettings>(
 			(change.settings.languageServerExample || defaultSettings)
-		);
+		);*/
 		resetCflsp(/*x_types*/false);
 		// Revalidate all open text documents
 		documents.all().forEach(validateTextDocument);

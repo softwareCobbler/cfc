@@ -54,7 +54,12 @@ export function DebugFileSystem(files: [absPath: string, text: string][], pathSe
     }
 }
 
-export function Project(absRoots: string[], fileSystem: FileSystem, debug = true) {
+interface ProjectOptions {
+    debug: boolean,
+    parseTypes: boolean,
+}
+
+export function Project(absRoots: string[], fileSystem: FileSystem, options: ProjectOptions) {
     type AbsPath = string;
     
     const parser = Parser();
@@ -62,9 +67,11 @@ export function Project(absRoots: string[], fileSystem: FileSystem, debug = true
     const checker = Checker();
     const heritageCircularityDetector = new Set<string>();
 
-    parser.setParseTypes(true);
+    if (options.parseTypes) {
+        parser.setParseTypes(true);
+    }
 
-    if (debug) {
+    if (options.debug) {
         parser.setDebug(true);
         binder.setDebug(true);
         // checker.setDebug(true);

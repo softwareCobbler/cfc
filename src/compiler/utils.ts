@@ -87,6 +87,8 @@ function getTagFacts(tag: CfTag) : TagFact | null {
 export function cfmOrCfc(fname: string) : CfFileType | undefined {
     return /\.cfc$/i.test(fname)
         ? CfFileType.cfc
+        : /\.d\.cfm$/.test(fname)
+        ? CfFileType.dCfm
         : /\.cfml?$/i.test(fname)
         ? CfFileType.cfm
         : undefined;

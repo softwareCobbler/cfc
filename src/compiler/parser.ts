@@ -3089,7 +3089,7 @@ export function Parser() {
         if (!decl.returnTypeAnnotation) {
             parseErrorAtRange(decl.range, "A function declaration requires a return type.");
         }
-        const sig = extractCfFunctionSignature(decl);
+        const sig = extractCfFunctionSignature(decl, /*asDeclaration*/ true);
         return sig;
     }
 

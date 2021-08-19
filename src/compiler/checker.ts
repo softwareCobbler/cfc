@@ -1,5 +1,5 @@
 import * as path from "path";
-import { Diagnostic, SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges } from "./node";
+import { Diagnostic, SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement } from "./node";
 import { CfcResolver } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfStruct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStruct, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType, stringifyType, cfFunctionSignatureParam } from "./types";
@@ -137,7 +137,7 @@ export function Checker() {
                 }
                 return;
             case NodeType.returnStatement:
-                checkNode(node.expr);
+                checkReturnStatement(node);
                 return;
             case NodeType.breakStatement:
                 return;
@@ -495,29 +495,23 @@ export function Checker() {
     }
 
     //
-    // assignability for the cf-derived function type and the annotated function type is most comfortable with a bivariant return type,
-    // and contravariant params; param list must be of the same length, and args must all have the same names
-    // actually, the return type seems to need the directions of & and | subtypes reversed...? struct foo() should be assignable to () => (number | {x:number})
-    // e.g.
-    // // @type (arg: {}) => {x: number}
+    // for an annotated function definition, the user will generally want to refine existing types
+    // e.g for something like
     // struct function foo(struct arg) {}
+    // we would probably like to specify with an annotation that we are accepting/returning some subtype of struct (which by itself is just {}, the empty interface)
+    // so we just check every param and the return type in a covariant way (i.e that the annotated type params and return type are covariant with respect to the cf types)
+    // also, because a user is forced by the CF syntax to specify the args in the actual function definition, we do not check param names
+    // (otherwise we would have to write them twice for no benefit)
     //
-    function isCfSyntaxFunctionSigAssignableToAnnotatedSig(cfSig: cfFunctionSignature, annotatedSig: cfFunctionSignature) {
+    function isAnnotatedSigCompatibleWithCfFunctionSig(annotatedSig: cfFunctionSignature, cfSig: cfFunctionSignature) {
         // covariant in return type
         if (!isLeftSubtypeOfRight(cfSig.returns, annotatedSig.returns) && !isLeftSubtypeOfRight(annotatedSig.returns, cfSig.returns)) return false;
         
-        // also every parameter needs the same names...?
         if (cfSig.params.length != annotatedSig.params.length) return false;
 
-        // contravariant in parameter types
-        // every param must have the same canonical name
         for (let i = 0; i < cfSig.params.length; i++) {
-            const lp = cfSig.params[i];
-            const rp = annotatedSig.params[i];
-            if (lp.canonicalName !== rp.canonicalName) return false;
-            
-            // contravariant, flip left/right
-            if (!isLeftSubtypeOfRight(rp.type, lp.type)) return false;
+            // covariant param check
+            if (!isAssignable(annotatedSig.params[i].type, cfSig.params[i].type)) return false;
         }
         return true;
     }
@@ -530,11 +524,14 @@ export function Checker() {
     // 
     //
     function isLeftSubtypeOfRight(l: _Type, r: _Type) : boolean {
-        // a type is a subtype of itself
+        // generally, a type is a subtype of itself
         if (l === r) return true;
 
         // any is a subtype of every type; every type is a subtype of any
         if (l.flags & TypeFlags.any || r.flags & TypeFlags.any) return true;
+
+        // void is not a subtype of anything except itself and any
+        if (l.flags & TypeFlags.void || r.flags & TypeFlags.void) return false;
 
         //
         // {x: number, y: number} <: {x: number}, because L has AT LEAST all the properties of R
@@ -860,6 +857,29 @@ export function Checker() {
     //     return sourceFile.cachedFlowTypes.get(flow.flowId)?.get(name);
     // }
 
+    function checkReturnStatement(node: ReturnStatement) {
+        checkNode(node.expr);
+        const func = getContainingFunction(node);
+        if (!func) {
+            const errNode = node.fromTag ? node.tagOrigin.startTag! : node.returnToken!;
+            typeErrorAtNode(errNode, "A return statement must be contained inside a function body.");
+            return;
+        }
+
+        const sig = getCachedEvaluatedNodeType(func);
+        if (!sig || !isFunctionSignature(sig) || sig.returns.flags & TypeFlags.any) {
+            return;
+        }
+
+        const exprType = node.expr ? getCachedEvaluatedNodeType(node.expr) : SyntheticType.void_;
+
+        if (!isAssignable(exprType, sig.returns)) {
+            // if we got an exprType, we got an expr or a just return token; if this is from tag, we definitely got a tag
+            const errNode = node.fromTag ? node.tagOrigin.startTag! : (node.expr || node.returnToken!);
+            typeErrorAtNode(errNode, `Type '${stringifyType(exprType)}' is not compatible with expected return type '${stringifyType(sig.returns)}'`);
+        }
+    }
+
     // `var x` without an initializer is valid in `for (var x in y)`;
     // otherwise it should always be `var x = ...`
     // both are variable declarations
@@ -871,7 +891,7 @@ export function Checker() {
         if (workingNode.kind === NodeType.binaryOperator) workingNode = workingNode.left;
         if (workingNode.kind === NodeType.identifier || workingNode.kind === NodeType.indexedAccess) return workingNode;
         else return undefined;
-    }
+    }    
 
     function checkVariableDeclaration(node: VariableDeclaration) : void {
         const lValue = getVariableDeclarationLValue(node);
@@ -1196,9 +1216,17 @@ export function Checker() {
 
         if (node.typeAnnotation) {
             if (isFunctionSignature(node.typeAnnotation)) {
-                if (!isCfSyntaxFunctionSigAssignableToAnnotatedSig(cfSyntaxDirectedTypeSig, node.typeAnnotation)) {
+                if (!isAnnotatedSigCompatibleWithCfFunctionSig(node.typeAnnotation, cfSyntaxDirectedTypeSig)) {
                     typeErrorAtNode(node, `Type '${stringifyType(cfSyntaxDirectedTypeSig)}' is not assignable to the annotated type '${stringifyType(node.typeAnnotation)}'.`)
                 }
+                else {
+                    // copy cf-sig param names into annotated-type param names
+                    for (let i = 0; i < cfSyntaxDirectedTypeSig.params.length; i++) {
+                        node.typeAnnotation.params[i].canonicalName = cfSyntaxDirectedTypeSig.params[i].canonicalName;
+                        node.typeAnnotation.params[i].uiName = cfSyntaxDirectedTypeSig.params[i].uiName;
+                    }
+                }
+
                 finalType = node.typeAnnotation;
             }
             else if (!(node.typeAnnotation.flags & TypeFlags.any)) {

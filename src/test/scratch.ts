@@ -11,22 +11,27 @@ import { DebugFileSystem, Project } from "../compiler/project";
 import * as fs from "fs";
 import * as path from "path";
 
-// function projectFiddle() {
-//     const debugfs = DebugFileSystem([
-//         ["/a.cfc", `component extends="b" {}`],
-//         ["/b.cfc", `component { function foo() {} }`]
-//     ], "/");
+function projectFiddle() {
+    const debugfs = DebugFileSystem([
+        ["/a.cfc", `array function foo(array foo_arg) {
+            bar(foo_arg);
+            return 42;
+        }`],
+        //["/b.cfc", `component { function foo() {} }`],
+        //["/lib.d.cfm", "@declare function foo(arg0: number[]) : string"]
+    ], "/");
 
-//     const project = Project(["/"], /*filesystem*/debugfs, /*debug*/ true);
+    const project = Project(["/"], /*filesystem*/debugfs, {debug: true, parseTypes: true});
 
-//     const a = project.addFile("/a.cfc");
-//     const b = project.addFile("/b.cfc");
+    const a = project.addFile("/a.cfc");
+    //const b = project.addFile("/b.cfc");
+    //const c = project.addFile("/lib.d.cfm");
 
-//     project.getDiagnostics("/a.cfc");
-// }
+    project.getDiagnostics("/a.cfc");
+}
 
-// projectFiddle();
-// process.exit();
+projectFiddle();
+process.exit();
 
 function fromFile(fname: string) {
     const absPath = path.resolve(fname);
