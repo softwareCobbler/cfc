@@ -500,12 +500,12 @@ export function Checker() {
     // struct function foo(struct arg) {}
     // we would probably like to specify with an annotation that we are accepting/returning some subtype of struct (which by itself is just {}, the empty interface)
     // so we just check every param and the return type in a covariant way (i.e that the annotated type params and return type are covariant with respect to the cf types)
-    // also, because a user is forced by the CF syntax to specify the args in the actual function definition, we do not check param names
+    // also, because a user is forced by the CF syntax to specify the param names in the actual function definition, we do not check annotated param names
     // (otherwise we would have to write them twice for no benefit)
     //
     function isAnnotatedSigCompatibleWithCfFunctionSig(annotatedSig: cfFunctionSignature, cfSig: cfFunctionSignature) {
         // covariant in return type
-        if (!isLeftSubtypeOfRight(cfSig.returns, annotatedSig.returns) && !isLeftSubtypeOfRight(annotatedSig.returns, cfSig.returns)) return false;
+        if (!isLeftSubtypeOfRight(annotatedSig.returns, cfSig.returns)) return false;
         
         if (cfSig.params.length != annotatedSig.params.length) return false;
 
@@ -567,8 +567,25 @@ export function Checker() {
 
             // contravariant in parameter types
             // also every parameter needs the same names...?
-            if (l.params.length != r.params.length) return false;
+
+            const hasSpread = !!(r.params.length > 0 && r.params[r.params.length-1].flags & TypeFlags.spread);
+            if (!hasSpread && l.params.length != r.params.length) return false;
+
             for (let i = 0; i < l.params.length; i++) {
+                // if the arg in the right side is a spread, just check remaining left types against the (un-array-wrapped) spread type
+                if (r.params[i].flags & TypeFlags.spread) {
+                    const rType = r.params[i].type;
+                    const spreadType = isArray(rType) ? rType.memberType : null;
+                    if (!spreadType) return false; // all spread types must be arrays, we should have caught this before getting here
+                    for (let j = i; j < l.params.length; j++) {
+                        const lpt = l.params[i].type;
+                        // contravariant, flip left/right
+                        if (!isLeftSubtypeOfRight(spreadType, lpt)) return false;
+                    }
+
+                    break;
+                }
+
                 const lpt = l.params[i].type;
                 const rpt = r.params[i].type;
                 // contravariant, flip left/right
@@ -612,6 +629,7 @@ export function Checker() {
         return false;
     }
 
+    /*
     function pushTypesIntoInlineFunctionDefinition(context: Node, signature: cfFunctionSignature, functionDef: (FunctionDefinition | ArrowFunctionDefinition)) {
         const existingArgumentsScope = functionDef.containedScope!.arguments!;
         for (let i = 0; i < signature.params.length; i++) {
@@ -623,6 +641,7 @@ export function Checker() {
             }
         }
     }
+    */
 
     function checkCallExpression(node: CallExpression) {
         checkNode(node.left);
@@ -633,6 +652,12 @@ export function Checker() {
         if (isFunctionSignature(sig)) {
             checkCallLikeArguments(sig, node);
             setCachedEvaluatedNodeType(node, sig.returns);
+        }
+        else if (sig.flags & TypeFlags.any) {
+            return;
+        }
+        else {
+            typeErrorAtNode(node.left, `Type '${stringifyType(sig)}' is not callable.`);
         }
     }
 
@@ -645,12 +670,18 @@ export function Checker() {
             const isNewExpr = node.parent?.kind === NodeType.new;
 
             const minRequiredParams = sig.params.filter(param => !(param.flags & TypeFlags.optional)).length;
-            const maxParams = sig.params.length;
+            const maxParams = sig.params.length > 0 && sig.params[sig.params.length - 1].flags & TypeFlags.spread
+                ? undefined
+                : sig.params.length;
+
             const namedArgCount = node.args.filter(arg => !!arg.equals).length;
 
-            if (node.args.length < minRequiredParams || node.args.length > maxParams) {
+            if (node.args.length < minRequiredParams || (maxParams !== undefined && node.args.length > maxParams)) {
                 let msg;
-                if (minRequiredParams !== maxParams) msg = `Expected between ${minRequiredParams} and ${maxParams} arguments, but got ${node.args.length}`;
+                if (minRequiredParams !== maxParams) {
+                    if (maxParams === undefined) msg = `Expected at least ${minRequiredParams} arguments, but got ${node.args.length}`;
+                    else msg = `Expected between ${minRequiredParams} and ${maxParams} arguments, but got ${node.args.length}`;
+                }
                 else msg = `Expected ${maxParams} arguments, but got ${node.args.length}`;
                 typeErrorAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), msg);
             }
@@ -704,7 +735,8 @@ export function Checker() {
                 }
             }
             else {
-                const minToCheck = Math.min(node.args.length, sig.params.length);
+                const spreadAdjust = maxParams === undefined ? -1 : 0; // if there was a trailing spread arg, drop the spread count by 1
+                const minToCheck = Math.min(node.args.length, sig.params.length + spreadAdjust);
                 for (let i = 0; i < minToCheck; i++) {
                     const argType = getCachedEvaluatedNodeType(node.args[i]);
                     const paramType = sig.params[i].type;
@@ -723,8 +755,8 @@ export function Checker() {
                     // error
                 }
                 if (isFunctionSignature(paramType) && (arg.expr.kind === NodeType.functionDefinition || arg.expr.kind === NodeType.arrowFunctionDefinition)) {
-                    pushTypesIntoInlineFunctionDefinition(node, paramType, arg.expr);
-                    checkNode(arg.expr.body as Node /*fixme: we know this is a script function definition but can't prove it here; anyway, all function defs should have Node as a body, not Node|Node[] ?*/);
+                    //pushTypesIntoInlineFunctionDefinition(node, paramType, arg.expr);
+                    //checkNode(arg.expr.body as Node /*fixme: we know this is a script function definition but can't prove it here; anyway, all function defs should have Node as a body, not Node|Node[] ?*/);
                 }
             }
         }

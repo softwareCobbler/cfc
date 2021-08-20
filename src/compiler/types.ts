@@ -61,6 +61,8 @@ const TypeKindUiString : Record<TypeFlags, string> = {
     [TypeFlags.final]:                           "final",
     [TypeFlags.synthetic]:                       "synthetic",
     [TypeFlags.containsUndefined]:               "has-undefined",
+    [TypeFlags.optional]:                        "optional",
+    [TypeFlags.spread]:                          "spread",
     [TypeFlags.mappedType]:                      "mapped-type",
     [TypeFlags.indexedType]:                     "indexed-type",
     [TypeFlags.cfc]:                             "cfc",
@@ -193,21 +195,20 @@ export function isFunctionSignature(t: _Type) : t is cfFunctionSignature {
     return !!(t.flags & TypeFlags.functionSignature);
 }
 
+// names are part of the type signature because a caller can specify named arguments
 export interface cfFunctionSignatureParam extends _Type {
     type: _Type,
     uiName: string,
     canonicalName: string,
-    defaultValue: _Type | null,
 }
 
-export function cfFunctionSignatureParam(required: boolean, paramType: _Type, uiName: string, defaultValue: _Type | null) : cfFunctionSignatureParam {
+export function cfFunctionSignatureParam(required: boolean, paramType: _Type, uiName: string) : cfFunctionSignatureParam {
     const optionalFlag = required ? TypeFlags.none : TypeFlags.optional;
     const type = {
         flags: TypeFlags.functionSignatureParam | optionalFlag,
         type: paramType,
         uiName,
         canonicalName: uiName.toLowerCase(),
-        defaultValue
     }
 
     if (debugTypeModule) {
@@ -451,6 +452,12 @@ export const SyntheticType = (function() {
     } as _Type;
     (any as Mutable<_Type>).canonicalType = any;
 
+    const anyFunction = (() => {
+        const spreadParam = cfFunctionSignatureParam(false, cfArray(any), "args");
+        (spreadParam as Mutable<_Type>).flags |= TypeFlags.spread;
+        return cfFunctionSignature("", [spreadParam], any);
+    })();
+
     const void_ : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.void,
     } as _Type;
@@ -490,18 +497,6 @@ export const SyntheticType = (function() {
     } as _Type;
     (never as Mutable<_Type>).canonicalType = never;
 
-    /**
-     * goal would be something like
-     * type Query = <T extends struct> => {
-     *      recordCount: number
-     * } & {[k in keyof T]: T[k] & (T[k])[]};
-     */
-    /*const query = () => {
-        const v = cfStruct(nilTerminal, [], new Map(), nilTerminal); // Query<T> should be a built-in of somesort
-        v.typeFlags |= TypeFlags.synthetic;
-        return v;
-    };*/
-
     const results = {
         any: createType(any),
         void_: createType(void_),
@@ -511,6 +506,7 @@ export const SyntheticType = (function() {
         nil: createType(nil),
         never: createType(never),
         struct, // this is a function
+        anyFunction: anyFunction, // already created via call to cfFunctionSignature
         emptyStruct, // already created via a call to cfStruct()
     } as const;
 
@@ -570,7 +566,7 @@ function typeFromStringifiedJavaLikeTypename(typename: string | null) : _Type {
     switch (typename.toLowerCase()) {
         case "array": return cfArray(SyntheticType.any);
         case "boolean": return SyntheticType.boolean;
-        case "function": return cfFunctionSignature("", [], SyntheticType.any);
+        case "function": return SyntheticType.anyFunction;
         case "numeric": return SyntheticType.number;
         case "query": return SyntheticType.emptyStruct; // @fixme: have real query type
         case "string": return SyntheticType.string;
@@ -622,8 +618,7 @@ export function extractScriptFunctionParams(params: readonly Script.FunctionPara
         //const required = param.requiredTerminal ? TypeFlags.none : TypeFlags.optional;
         //const spread = param.dotDotDot ? TypeFlags.spread : TypeFlags.none;
         const name = param.identifier.uiName || "<<ERROR>>";
-        const defaultValue = null;
-        result.push(cfFunctionSignatureParam(param.required, type, name, defaultValue));
+        result.push(cfFunctionSignatureParam(param.required, type, name));
     }
     return result;
 }
@@ -637,9 +632,8 @@ export function extractTagFunctionParam(params: readonly Tag.FunctionParameter[]
             : TypeFlags.none;
         const spread = TypeFlags.none;*/
         const name = getTriviallyComputableString(getAttributeValue((param.tagOrigin.startTag as CfTag.Common).attrs, "name")) || "<<ERROR>>";
-        const defaultValue = null;
 
-        result.push(cfFunctionSignatureParam(param.required, type, name, defaultValue));
+        result.push(cfFunctionSignatureParam(param.required, type, name));
     }
     return result;
 }
@@ -674,7 +668,7 @@ export function stringifyType(type: _Type) : string {
         return "(" + params.join(", ") + ")" + " => " + stringifyType(type.returns);
     }
     if (isFunctionSignatureParam(type)) {
-        return (!(type.flags & TypeFlags.optional) ? "required " : "") + type.uiName + ": " + stringifyType(type.type);
+        return (!(type.flags & TypeFlags.optional) ? "required " : "") + type.uiName + ": " + (type.flags & TypeFlags.spread ? "..." : "") + stringifyType(type.type);
     }
 
     return "<<type>>";

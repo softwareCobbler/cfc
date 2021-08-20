@@ -13,21 +13,27 @@ import * as path from "path";
 
 function projectFiddle() {
     const debugfs = DebugFileSystem([
-        ["/a.cfc", `array function foo(array foo_arg) {
-            bar(foo_arg);
-            return 42;
-        }`],
+        ["/a.cfm", `
+            <cfscript>
+                // @type (_: (x: string) => string) => any
+                function foo(function f) {
+                    f(a, b);
+                }
+            </cfscript>
+        `],
         //["/b.cfc", `component { function foo() {} }`],
         //["/lib.d.cfm", "@declare function foo(arg0: number[]) : string"]
     ], "/");
 
     const project = Project(["/"], /*filesystem*/debugfs, {debug: true, parseTypes: true});
 
-    const a = project.addFile("/a.cfc");
+    const a = project.addFile("/a.cfm");
     //const b = project.addFile("/b.cfc");
     //const c = project.addFile("/lib.d.cfm");
 
-    project.getDiagnostics("/a.cfc");
+    for (const diagnostic of project.getDiagnostics("/a.cfm")) {
+        console.log(diagnostic);
+    }
 }
 
 projectFiddle();

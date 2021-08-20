@@ -2789,7 +2789,7 @@ export function Parser() {
 
     function parseFunctionTypeParameters() : cfFunctionSignatureParam[] {
         const params = tryParseFunctionDefinitionParameters(/*speculative*/ false, /*asDeclaration*/ true);
-        return params.map(param => cfFunctionSignatureParam(param.required, param.type ?? SyntheticType.any, param.uiName, null));
+        return params.map(param => cfFunctionSignatureParam(param.required, param.type ?? SyntheticType.any, param.uiName));
     }
 
     // speculative overload is last in overload set so speculation-forwarder can see it

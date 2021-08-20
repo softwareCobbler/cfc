@@ -232,7 +232,7 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
     }
 
     function getDiagnostics(absPath: string) {
-        return files.get(absPath)?.parsedSourceFile.diagnostics || null;
+        return files.get(absPath)?.parsedSourceFile.diagnostics || [];
     }
 
     function CfcResolver(args: {resolveFrom: string, cfcName: string}) {
