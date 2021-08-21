@@ -1,6 +1,6 @@
-import { SourceRange, TokenType, Token, NilToken, TokenTypeUiString, CfFileType } from "./scanner";
+import { Scanner, SourceRange, TokenType, Token, NilToken, TokenTypeUiString, CfFileType } from "./scanner";
 import { getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString } from "./utils";
-import { Type as Type } from "./types";
+import { _Type } from "./types";
 
 let debug = false;
 let nextNodeId : NodeId = 0;
@@ -10,10 +10,10 @@ export function setDebug(isDebug: boolean) {
 }
 
 export const enum NodeFlags {
-    none    = 0,
-    error   = 0x00000001,
-    missing = 0x00000002,
-    checkerError = 0x00000004,
+    none         = 0,
+    error        = 1 << 0,
+    missing      = 1 << 1,
+    checkerError = 1 << 2,
 }
 
 export const enum NodeType {
@@ -24,10 +24,10 @@ export const enum NodeType {
     identifier,
     indexedAccess, indexedAccessChainElement, sliceExpression,
     functionDefinition, arrowFunctionDefinition, functionParameter,
-    dottedPath, switch, switchCase, do, while, ternary, for, structLiteral, arrayLiteral,
+    dottedPath, dottedPathRest, switch, switchCase, do, while, ternary, for, structLiteral, arrayLiteral,
     structLiteralInitializerMember, arrayLiteralInitializerMember, try, catch, finally,
     breakStatement, continueStatement, returnStatement, importStatement,
-    new, type, typeAttribute,
+    new, typeShim,
 }
 
 const NodeTypeUiString : Record<NodeType, string> = {
@@ -59,6 +59,7 @@ const NodeTypeUiString : Record<NodeType, string> = {
     [NodeType.arrowFunctionDefinition]: "arrowFunctionDefinition",
     [NodeType.functionParameter]: "functionParameter",
     [NodeType.dottedPath]: "dottedPath",
+    [NodeType.dottedPathRest]: "dottedPathRest",
     [NodeType.switch]: "switch",
     [NodeType.switchCase]: "switchCase",
     [NodeType.do]: "do",
@@ -77,8 +78,7 @@ const NodeTypeUiString : Record<NodeType, string> = {
     [NodeType.continueStatement]: "continue",
     [NodeType.importStatement]: "import",
     [NodeType.new]: "new",
-    [NodeType.type]: "type",
-    [NodeType.typeAttribute]: "type-attribute",
+    [NodeType.typeShim]: "typeshim",
 };
 
 export type Node =
@@ -111,7 +111,8 @@ export type Node =
     | FunctionParameter
     | FunctionDefinition
     | ArrowFunctionDefinition
-    | DottedPath<any> // `"x"."x"` in a struct literal, `x.x` in a function parameter declaration, maybe others 
+    | DottedPath // `"x"."x"` in a struct literal, `x.x` in a function parameter declaration, maybe others 
+    | DottedPathRest
     | Switch
     | SwitchCase
     | Do
@@ -132,30 +133,21 @@ export type Node =
     | OptionalDotAccess
     | OptionalBracketAccess
     | OptionalCall
-    | Type
-
-export interface Term {
-    type: Type,
-    name: string,
-    final: boolean,
-    var: boolean,
-    target: Node | undefined,
-}
+    | TypeShim // Node-based Type wrapper, would be nice to unify all types/nodes
 
 export interface SymTabEntry {
     uiName: string,
     canonicalName: string,
-    firstBinding: Node | null,
-    userType: Type | null,
-    inferredType: Type | null,
-    type: Type,
+    declarations: Node | Node[] | null,
+    type: _Type,
+    declaredType?: _Type | null,
 }
 
 export type SymTab = Map<string, SymTabEntry>;
 
 export type ScopeDisplay = {
     container: Node | null, // rename to parentContainer
-    typedefs: Map<string, Type>,
+    typedefs: Map<string, _Type>,
 } & {[name in StaticallyKnownScopeName]?: Map<string, SymTabEntry>}
 
 const staticallyKnownScopeName = [
@@ -174,6 +166,7 @@ const staticallyKnownScopeName = [
     "server",
     "session",
     "this",
+    "super",
     "thisTag",
     "thread",
     "threadLocal",
@@ -217,7 +210,7 @@ export interface NodeBase {
     parent: Node | null,
     range: SourceRange,
 
-    typeAnnotation: Type | null,
+    typeAnnotation: _Type | null,
 
     fromTag?: boolean,
     tagOrigin: { // todo: make this only present on particular tags, and flatten it
@@ -291,22 +284,47 @@ export function mergeRanges(...nodes : (SourceRange | Node | Node[] | undefined 
     return result;
 }
 
+export interface Diagnostic {
+    fromInclusive: number;
+    toExclusive: number;
+    msg: string;
+    __debug_from_line?: number,
+    __debug_from_col?: number,
+    __debug_to_line?: number,
+    __debug_to_col?: number,
+}
+
 export interface SourceFile extends NodeBase {
     kind: NodeType.sourceFile,
     absPath: string,
     cfFileType: CfFileType,
-    source: string | Buffer,
+    containedScope: ScopeDisplay,
     content: Node[]
     libRefs: SourceFile[],
+    diagnostics: Diagnostic[],
+    scanner: Scanner,
+    cachedNodeTypes: Map<NodeId, _Type>, // type of a particular node, exactly zero or one per node
+    cachedFlowTypes: Map<FlowId, Map<string, _Type>>, // types for symbols as determined at particular flow nodes, zero or more per flow node
+    cfc?: {
+        extends: SourceFile | null,
+        implements: SourceFile[]
+    }
 }
 
 export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: string | Buffer) : SourceFile {
     const sourceFile = NodeBase<SourceFile>(NodeType.sourceFile);
     sourceFile.absPath = absPath;
     sourceFile.cfFileType = cfFileType;
-    sourceFile.source = sourceText;
+    sourceFile.containedScope = {
+        container: null,
+        typedefs: new Map(),
+    };
     sourceFile.content = [];
     sourceFile.libRefs = [];
+    sourceFile.diagnostics = [];
+    sourceFile.scanner = Scanner(sourceText);
+    sourceFile.cachedNodeTypes = new Map<NodeId, _Type>();
+    sourceFile.cachedFlowTypes = new Map<FlowId, Map<string, _Type>>();
     return sourceFile;
 }
 
@@ -335,7 +353,7 @@ export function Terminal(token: Token, trivia: Node[] = []) : Terminal {
     return v;
 }
 
-export const NilTerminal = (pos: number) => Terminal(NilToken(pos));
+export function NilTerminal(pos: number) { return Terminal(NilToken(pos)) };
 
 export const freshFlow = (function() {
     let flowId = 0;
@@ -351,12 +369,12 @@ export const enum CommentType { tag, scriptSingleLine, scriptMultiLine };
 export interface Comment extends NodeBase {
     kind: NodeType.comment;
     commentType: CommentType;
-    typedefs?: Type[],
+    typedefs?: TypeShim[],
 }
 
 export function Comment(tagOrigin: CfTag.Comment) : Comment;
-export function Comment(commentType: CommentType, range: SourceRange, typedefs?: Type[]) : Comment;
-export function Comment(commentType: CfTag.Comment | CommentType, range?: SourceRange, typedefs?: Type[]) {
+export function Comment(commentType: CommentType, range: SourceRange, typedefs?: TypeShim[]) : Comment;
+export function Comment(commentType: CfTag.Comment | CommentType, range?: SourceRange, typedefs?: TypeShim[]) {
     if (typeof commentType === "number") { // overload 2
         const comment = NodeBase<Comment>(NodeType.comment, range);
         comment.commentType = commentType;
@@ -549,7 +567,7 @@ export namespace CfTag {
     export interface Comment extends TagBase {
         tagType: TagType.comment,
         body: TagBase[],
-        typedefs?: Type[],
+        typedefs?: TypeShim[],
     }
     export function Comment(
         tagStart: Terminal,
@@ -1238,11 +1256,13 @@ export interface Identifier extends NodeBase {
     kind: NodeType.identifier;
     source: Node; // can be e.g, `var x = 42`, `var 'x' = 42`, `var #x# = 42`; <cfargument name="#'interpolated_string_but_constant'#">`
     canonicalName: string | undefined; // undefined at least in the case of something like var '#foo#' = bar;
+    uiName: string | undefined;
 }
 
 export function Identifier(identifier: Node, name: string | undefined) {
     const v = NodeBase<Identifier>(NodeType.identifier, identifier.range);
     v.source = identifier;
+    v.uiName = name;
     v.canonicalName = name?.toLowerCase();
     return v;
 }
@@ -1401,43 +1421,37 @@ export function pushAccessElement(base: IndexedAccess, element: IndexedAccessCha
 
 interface FunctionParameterBase extends NodeBase {
     kind: NodeType.functionParameter,
-    required: boolean | null,
+    required: boolean,
     fromTag: boolean,
+    canonicalName: string,
+    uiName: string,
 }
 
 export type FunctionParameter = Script.FunctionParameter | Tag.FunctionParameter;
-
-export function copyFunctionParameterForTypePurposes(param: FunctionParameter) {
-    if (param.fromTag) {
-        return Tag.FunctionParameter(param.tagOrigin.startTag! as CfTag.Common, param.type);
-    }
-    return Script.FunctionParameter(param.requiredTerminal, param.javaLikeTypename, param.dotDotDot, param.identifier, param.equals, param.defaultValue, param.comma, param.type)
-}
 
 export namespace Script {
     export interface FunctionParameter extends FunctionParameterBase {
         kind: NodeType.functionParameter,
         fromTag: false,
         requiredTerminal: Terminal | null,
-        javaLikeTypename: DottedPath<Terminal> | null,
+        javaLikeTypename: DottedPath | null,
         dotDotDot: Terminal | null,
         identifier: Identifier,
         equals: Terminal | null,
         defaultValue: Node | null,
         comma: Terminal | null,
-        canonicalName: string,
-        type: Type | null,
+        type: _Type | null,
     }
 
     export function FunctionParameter(
         requiredTerminal : Terminal | null,
-        javaLikeTypename: DottedPath<Terminal> | null,
+        javaLikeTypename: DottedPath | null,
         dotDotDot: Terminal | null,
         identifier: Identifier,
         equals: Terminal | null,
         defaultValue: Node | null,
         comma: Terminal | null,
-        type: Type | null) : FunctionParameter {
+        type: _Type | null) : FunctionParameter {
         const v = NodeBase<FunctionParameter>(NodeType.functionParameter, mergeRanges(requiredTerminal, javaLikeTypename, identifier, defaultValue, comma));
         v.fromTag = false;
         v.requiredTerminal = requiredTerminal;
@@ -1448,6 +1462,7 @@ export namespace Script {
         v.defaultValue = defaultValue;
         v.comma = comma;
         v.canonicalName = identifier.canonicalName || "<<ERROR>>";
+        v.uiName = identifier.uiName || "<<ERROR>>";
         v.type = type;
         v.required = !!(requiredTerminal);
         return v;
@@ -1457,18 +1472,20 @@ export namespace Script {
 export namespace Tag {
     export interface FunctionParameter extends FunctionParameterBase {
         kind: NodeType.functionParameter,
-        fromTag: true,
-        canonicalName: string,
-        type: Type | null,
+        fromTag: true,        
+        type: _Type | null,
     }
 
-    export function FunctionParameter(tag: CfTag.Common, type: Type | null) : FunctionParameter {
+    export function FunctionParameter(tag: CfTag.Common) : FunctionParameter {
+        const name = getTriviallyComputableString(getAttributeValue(tag.attrs, "name"));
+
         const v = NodeBase<FunctionParameter>(NodeType.functionParameter, tag.range);
         v.fromTag = true;
         v.tagOrigin.startTag = tag;
-        v.canonicalName = getTriviallyComputableString(getAttributeValue(tag.attrs, "name"))?.toLowerCase() ?? "<<ERROR>>";
-        v.required = getTriviallyComputableBoolean(getAttributeValue(tag.attrs, "required")) ?? null;
-        v.type = type;
+        v.canonicalName = name?.toLowerCase() || "<<ERROR>>";
+        v.uiName = name || "<<ERROR>>";
+        v.required = getTriviallyComputableBoolean(getAttributeValue(tag.attrs, "required")) ?? false;
+        v.type = null;
         return v;
     }
 }
@@ -1476,6 +1493,8 @@ export namespace Tag {
 interface FunctionDefinitionBase extends NodeBase {
     kind: NodeType.functionDefinition,
     fromTag: boolean,
+    canonicalName  : string | null,
+    uiName         : string | null,
 }
 
 export type FunctionDefinition = Script.FunctionDefinition | Tag.FunctionDefinition;
@@ -1485,21 +1504,20 @@ export namespace Script {
         kind: NodeType.functionDefinition;
         fromTag        : false,
         accessModifier : Terminal | null,
-        returnType     : DottedPath<Terminal> | null,
+        returnType     : DottedPath | null,
         functionToken  : Terminal,
-        nameToken      : Identifier | null,
+        nameToken      : Identifier | null, // fixme: need to know if this null because of an error or because it's an anonymous function
         leftParen      : Terminal,
         params         : FunctionParameter[],
         rightParen     : Terminal,
         attrs          : TagAttribute[],
         body           : Block,
-        canonicalName  : string | null,
-        returnTypeAnnotation : Type | null,
+        returnTypeAnnotation : _Type | null,
     }
 
     export function FunctionDefinition(
         accessModifier: Terminal | null,
-        returnType    : DottedPath<Terminal> | null,
+        returnType    : DottedPath | null,
         functionToken : Terminal,
         nameToken     : Identifier | null,
         leftParen     : Terminal,
@@ -1507,7 +1525,7 @@ export namespace Script {
         rightParen    : Terminal,
         attrs         : TagAttribute[],
         body          : Block,
-        returnTypeAnnotation : Type | null
+        returnTypeAnnotation : _Type | null
     ) : FunctionDefinition {
         const v = NodeBase<FunctionDefinition>(NodeType.functionDefinition, mergeRanges(accessModifier, returnType, functionToken, body));
         v.fromTag        = false;
@@ -1522,6 +1540,7 @@ export namespace Script {
         v.body           = body;
         v.returnTypeAnnotation = returnTypeAnnotation;
         v.canonicalName  = nameToken?.canonicalName ?? null;
+        v.uiName         = nameToken?.uiName ?? null;
         return v;
     }
 }
@@ -1532,17 +1551,18 @@ export namespace Tag {
         fromTag        : true,
         params         : FunctionParameter[],
         body           : Node[], // fixme: block?
-        canonicalName  : string | undefined,
     }
 
     export function FunctionDefinition(startTag: CfTag.Common, params: FunctionParameter[], body: Node[], endTag: CfTag.Common) : FunctionDefinition {
+        const name = getTriviallyComputableString(getAttributeValue(startTag.attrs, "name")) ?? null;
         const v = NodeBase<FunctionDefinition>(NodeType.functionDefinition, mergeRanges(startTag, endTag));
         v.fromTag            = true;
         v.tagOrigin.startTag = startTag;
         v.tagOrigin.endTag   = endTag;
         v.params             = params;
         v.body               = body;
-        v.canonicalName      = getTriviallyComputableString(getAttributeValue(startTag.attrs, "name"))?.toLowerCase();
+        v.uiName             = name;
+        v.canonicalName      = name?.toLowerCase() ?? null;
         return v;
     }
 }
@@ -1550,12 +1570,12 @@ export namespace Tag {
 export interface ArrowFunctionDefinition extends NodeBase {
     kind: NodeType.arrowFunctionDefinition;
     parens: {left: Terminal, right: Terminal} | null,
-    params: FunctionParameter[];
+    params: Script.FunctionParameter[]; // not possible to have a tag based arrow function def
     fatArrow: Terminal,
     body: Node;
 }
 
-export function ArrowFunctionDefinition(leftParen: Terminal | null, params: FunctionParameter[], rightParen: Terminal | null, fatArrow: Terminal, body: Node) : ArrowFunctionDefinition {
+export function ArrowFunctionDefinition(leftParen: Terminal | null, params: Script.FunctionParameter[], rightParen: Terminal | null, fatArrow: Terminal, body: Node) : ArrowFunctionDefinition {
     const v = NodeBase<ArrowFunctionDefinition>(NodeType.arrowFunctionDefinition);
     v.range = mergeRanges(leftParen, body);
     v.parens = (leftParen && rightParen) ? {left: leftParen, right: rightParen} : null,
@@ -1565,17 +1585,35 @@ export function ArrowFunctionDefinition(leftParen: Terminal | null, params: Func
     return v;
 };
 
-// @fixme clean this up
-export interface DottedPath<T extends NodeBase> extends NodeBase {
-    kind: NodeType.dottedPath;
-    headKey: T;
-    rest: {dot: Terminal, key: T}[]
+export interface DottedPathRest extends NodeBase {
+    kind: NodeType.dottedPathRest,
+    dot: Terminal,
+    key: Terminal,
 }
-export function DottedPath<T extends NodeBase>(headKey: T) : DottedPath<T> {
-    const v = NodeBase<DottedPath<T>>(NodeType.dottedPath, headKey.range);
+
+export interface DottedPath extends NodeBase {
+    kind: NodeType.dottedPath;
+    headKey: Terminal;
+    rest: DottedPathRest[],
+}
+
+export function DottedPath(headKey: Terminal) : DottedPath {
+    const v = NodeBase<DottedPath>(NodeType.dottedPath, headKey.range);
     v.headKey = headKey;
     v.rest = [];
     return v;
+}
+
+export function DottedPathRest(dot: Terminal, key: Terminal) {
+    const v = NodeBase<DottedPathRest>(NodeType.dottedPathRest, mergeRanges(dot, key));
+    v.dot = dot;
+    v.key = key;
+    return v;
+}
+
+export function pushDottedPathElement(dottedPath: DottedPath, dot: Terminal, key: Terminal) {
+    dottedPath.rest.push(DottedPathRest(dot, key));
+    dottedPath.range = mergeRanges(dottedPath, dot, key);
 }
 
 interface SwitchBase extends NodeBase {
@@ -2097,7 +2135,7 @@ export namespace Script {
         fromTag: false,
         catchToken: Terminal,
         leftParen: Terminal,
-        exceptionType: DottedPath<Terminal>,
+        exceptionType: DottedPath,
         exceptionBinding: Identifier,
         rightParen: Terminal,
         leftBrace: Terminal,
@@ -2108,7 +2146,7 @@ export namespace Script {
     export function Catch(
         catchToken: Terminal,
         leftParen: Terminal,
-        exceptionType: DottedPath<Terminal>,
+        exceptionType: DottedPath,
         exceptionBinding: Identifier,
         rightParen: Terminal,
         leftBrace: Terminal,
@@ -2209,13 +2247,13 @@ export namespace Tag {
 export interface ImportStatement extends NodeBase {
     kind: NodeType.importStatement,
     importToken: Terminal,
-    path: DottedPath<Terminal>,
+    path: DottedPath,
     semicolon: Terminal | null,
 }
 
 export function ImportStatement(
     importToken: Terminal,
-    path: DottedPath<Terminal>,
+    path: DottedPath,
     semicolon: Terminal | null
 ) : ImportStatement {
     const v = NodeBase<ImportStatement>(NodeType.importStatement, mergeRanges(importToken, path, semicolon));
@@ -2238,5 +2276,18 @@ export function New(
     const v = NodeBase<New>(NodeType.new, mergeRanges(newToken, callExpr));
     v.newToken = newToken;
     v.callExpr = callExpr;
+    return v;
+}
+
+export interface TypeShim extends NodeBase {
+    kind: NodeType.typeShim,
+    what: "typedef" | "annotation"
+    type: _Type
+}
+
+export function TypeShim(what: "typedef" | "annotation", type: _Type) : TypeShim {
+    const v = NodeBase<TypeShim>(NodeType.typeShim, SourceRange.Nil());
+    v.type = type;
+    v.what = what;
     return v;
 }

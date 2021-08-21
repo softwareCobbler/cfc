@@ -10,10 +10,9 @@ const binder = Binder().setDebug(true);
 function assertDiagnosticsCount(text: string, cfFileType: CfFileType, count: number) {
     const sourceFile = SourceFile("", cfFileType, text);
     parser.setSourceFile(sourceFile).parse(cfFileType);
-    const diagnostics = parser.getDiagnostics();
-    binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
+    binder.bind(sourceFile);
     flattenTree(sourceFile); // just checking that it doesn't throw
-    assert.strictEqual(diagnostics.length, count, `${count} diagnostics emitted`);
+    assert.strictEqual(sourceFile.diagnostics.length, count, `${count} diagnostics emitted`);
 }
 
 describe("general smoke test for particular constructs", () => {
@@ -134,7 +133,7 @@ describe("general smoke test for particular constructs", () => {
 
         const sourceFile = NilCfc(completionsTestCase.sourceText);
         parser.setSourceFile(sourceFile).parse();
-        binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
+        binder.bind(sourceFile);
         const flatSourceMap = flattenTree(sourceFile);
         const nodeMap = binder.getNodeMap();
 
@@ -148,7 +147,7 @@ describe("general smoke test for particular constructs", () => {
     it("Should not throw error on tree-flatten of arrow function with missing expression after fat arrow", () => {
         const sourceFile = NilCfm("<cfscript>foo = bar((row) => )</cfscript>");
         parser.setSourceFile(sourceFile).parse();
-        binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
+        binder.bind(sourceFile);
         flattenTree(sourceFile);
     });
     it("Should accept spread args in struct/array literals, function definition parameter lists and call expresion argument lists", () => {
@@ -238,5 +237,18 @@ describe("general smoke test for particular constructs", () => {
         // expected expression, unterminated tag comment, no matching </cfif> tag
         // but! it shouldn't throw
         assertDiagnosticsCount(`<cfif <!---`, CfFileType.cfm, 3);
+    });
+    it("should bind and be able to find in the flatmap a script function definition return type", () => {
+        const completionsTestCase = TestLoader.loadCompletionAtTest("./test/sourcefiles/tree-flatten-1.cfm");
+
+        const sourceFile = NilCfm(completionsTestCase.sourceText);
+        parser.setSourceFile(sourceFile).parse();
+        binder.bind(sourceFile);
+        const flatSourceMap = flattenTree(sourceFile);
+        const nodeMap = binder.getNodeMap();
+
+        const node = findNodeInFlatSourceMap(flatSourceMap, nodeMap, completionsTestCase.index);
+        assert.strictEqual(node?.parent?.kind, NodeType.dottedPath);
+        assert.strictEqual(node?.parent?.parent?.kind, NodeType.functionDefinition);
     });
 });

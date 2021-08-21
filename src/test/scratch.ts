@@ -6,9 +6,40 @@ import { Scanner, Parser, Binder, NilDCfm, NilCfc, NilCfm, SourceFile } from "..
 import { CfFileType } from "../compiler/scanner";
 import { binarySearch, cfmOrCfc, findNodeInFlatSourceMap, flattenTree } from "../compiler/utils";
 import { Checker } from "../compiler/checker";
+import { DebugFileSystem, Project } from "../compiler/project";
 
 import * as fs from "fs";
 import * as path from "path";
+
+function projectFiddle() {
+    const debugfs = DebugFileSystem([
+        ["/a.cfm", `
+            <cfscript>
+                // @type X = (_: (x: string) => string) => any
+                
+                // @type X
+                function foo(function f) {
+                    f(a, b);
+                }
+            </cfscript>
+        `],
+        //["/b.cfc", `component { function foo() {} }`],
+        //["/lib.d.cfm", "@declare function foo(arg0: number[]) : string"]
+    ], "/");
+
+    const project = Project(["/"], /*filesystem*/debugfs, {debug: true, parseTypes: true});
+
+    const a = project.addFile("/a.cfm");
+    //const b = project.addFile("/b.cfc");
+    //const c = project.addFile("/lib.d.cfm");
+
+    for (const diagnostic of project.getDiagnostics("/a.cfm")) {
+        console.log(diagnostic);
+    }
+}
+
+projectFiddle();
+process.exit();
 
 function fromFile(fname: string) {
     const absPath = path.resolve(fname);
@@ -18,10 +49,12 @@ function fromFile(fname: string) {
 const libPath = path.resolve("./src/lang-server/server/src/runtimelib/lib.cf2018.d.cfm");
 const stdLib = SourceFile(libPath , CfFileType.dCfm, fs.readFileSync(libPath));
 
+//const sourceFile = fromFile("c:\\Users\\anon\\dev\\cf-ts-compiler\\mxunit\\framework\\TestDecorator.cfc");
 
-const sourceFile = fromFile("./test/mxunit/mxunit-TestCase-Template.cfc");
-
-//const sourceFile = NilCfm(`<cfif <!--- `);
+const sourceFile = NilCfm(`
+<cfscript>
+    // @type (foo_arg: string) => ({x: number})
+`);
 
 const parser = Parser().setDebug(true).setParseTypes(true);
 const binder = Binder().setDebug(true);
@@ -36,14 +69,13 @@ sourceFile.libRefs.push(stdLib);*/
 
 parser.setSourceFile(sourceFile);
 parser.parse();
-binder.bind(sourceFile, parser.getScanner(), parser.getDiagnostics());
+binder.bind(sourceFile);
+checker.check(sourceFile);
 
 const flatTree = flattenTree(sourceFile);
 
-checker.check(sourceFile, parser.getScanner(), parser.getDiagnostics());
-
-const diagnostics = parser.getDiagnostics();
+const diagnostics = sourceFile.diagnostics;
 console.log("got ", diagnostics.length + " diagnostics");
-for (const diag of parser.getDiagnostics()) {
-    console.log(diag);
+for (const diag of diagnostics) {
+    //console.log(diag);
 }

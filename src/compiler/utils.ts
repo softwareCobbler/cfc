@@ -1,6 +1,9 @@
-import { ArrayLiteralInitializerMemberSubtype, BlockType, CfTag, ForSubType, IndexedAccessType, Node, NodeId, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
+import * as path from "path";
+import * as fs from "fs";
+import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CfTag, DottedPath, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, Node, NodeId, ScopeDisplay, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
 import { NodeType } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
+import { cfFunctionSignature } from "./types";
 
 const enum TagFact {
     ALLOW_VOID		= 0x00000001, // tag can be void, e.g., <cfhttp> can be loose, or have a body like <cfhttp><cfhttpparam></cfhttp>
@@ -84,6 +87,8 @@ function getTagFacts(tag: CfTag) : TagFact | null {
 export function cfmOrCfc(fname: string) : CfFileType | undefined {
     return /\.cfc$/i.test(fname)
         ? CfFileType.cfc
+        : /\.d\.cfm$/.test(fname)
+        ? CfFileType.dCfm
         : /\.cfml?$/i.test(fname)
         ? CfFileType.cfm
         : undefined;
@@ -471,12 +476,11 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                 || visitor(node.fatArrow)
                 || visitor(node.body)
         case NodeType.dottedPath:
-            // @fixme dottedpath is just wrong
-            // the ...rest part of node needs to be a Node[],
-            // or we need to find the more correct abstraction of DottedPath
-            // really it is an indexed access where all elements are Dot?
             return visitor(node.headKey)
-                || false;
+                || forEachNode(node.rest, visitor);
+        case NodeType.dottedPathRest:
+            return visitor(node.dot)
+                || visitor(node.key);
         case NodeType.switch:
             if (node.fromTag) {
                 return visitor(node.tagOrigin.startTag)
@@ -613,7 +617,7 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
         case NodeType.new:
             return visitor(node.newToken)
                 || visitor(node.callExpr);
-        case NodeType.type:
+        case NodeType.typeShim:
             return;
         default:
             ((_:never) => { throw "Non-exhaustive case or unintentional fallthrough." })(node);
@@ -710,7 +714,7 @@ export function findNodeInFlatSourceMap(flatSourceMap: NodeSourceMap[], nodeMap:
         (v) => {
             //
             // can be equal to range.toExclusive because if the cursor is "on" "abc.|x"
-            //                                            single char is [3,4)  ---^^--- on pos 4
+            //                                        single char '.' is [3,4)  ---^^--- cursor is "on" pos 4
             // so cursor is right after the dot, on position 4
             // we want to say were "in" the dot
             //
@@ -718,10 +722,10 @@ export function findNodeInFlatSourceMap(flatSourceMap: NodeSourceMap[], nodeMap:
                 // match: on or in the target index
                 return 0;
             }
-            else if (v.range.toExclusive < index) {
+            else if (v.range.toExclusive < index) { // move floor up, our target is further ahead in the input
                 return -1;
             }
-            else {
+            else { // move ceiling down, our target node is before this node
                 return 1;
             }
         });
@@ -915,4 +919,151 @@ export function isInCfcPsuedoConstructor(node: Node) : boolean {
             || (node.parent.subType === BlockType.scriptSugaredTagCallBlock && node.parent.name?.token.text.toLowerCase() === "component")
         );
     })
+}
+
+export function getAllNamesOfScopeDisplay(scopeDisplay : ScopeDisplay, ...targetKeys: StaticallyKnownScopeName[]) : [StaticallyKnownScopeName, string][] {
+    const result : [StaticallyKnownScopeName, string][] = [];
+    for (const scopeName of targetKeys) {
+        if (scopeDisplay.hasOwnProperty(scopeName)) {
+            for (const symTabEntry of scopeDisplay[scopeName]!.values()) {
+                result.push([scopeName, symTabEntry.uiName]);
+            }
+        }
+    }
+
+    return result;
+}
+
+export function getFunctionSignatureParamNames(sig: cfFunctionSignature, ...omit: string[]) {
+    const result : string[] = [];
+    const omitSet = new Set(omit);
+    for (const param of sig.params) {
+        if (!omitSet.has(param.canonicalName)) result.push(param.canonicalName);
+    }
+    return result;
+}
+
+export function isHoistableFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) : node is FunctionDefinition {
+    // fixme: need a more explicit way to say "this function is anonymous", right now we imply it by saying a function has a name
+    return node.kind === NodeType.functionDefinition && (typeof node.canonicalName === "string");
+}
+
+export function stringifyLValue(node: Identifier | IndexedAccess) : {ui: string, canonical: string} | undefined {
+    if (node.kind === NodeType.identifier) return node.uiName && node.canonicalName ? {ui: node.uiName, canonical: node.canonicalName} : undefined;
+    let result : {ui: string, canonical: string};
+
+    if (node.root.kind === NodeType.identifier && node.root.canonicalName && node.root.uiName) {
+        result = {ui: node.root.uiName, canonical: node.root.canonicalName};
+    }
+    else {
+        return undefined;
+    }
+
+    for (let i = 0; i < node.accessElements.length; i++) {
+        const element = node.accessElements[i];
+        if (element.accessType === IndexedAccessType.dot) {
+            result.canonical += "." + element.property.token.text.toLowerCase();
+            result.ui += "." + element.property.token.text;
+        }
+        else if (element.accessType === IndexedAccessType.bracket) {
+            const propertyName = getTriviallyComputableString(element.expr)
+            if (!propertyName) return undefined;
+            result.canonical += "." + propertyName.toLowerCase();
+            result.ui += "." + propertyName;
+        }
+        else {
+            return undefined;
+        }
+    }
+    return result;
+}
+
+export function stringifyDottedPath(node: DottedPath) {
+    let result = node.headKey.token.text;
+    for (let next of node.rest) {
+        result += "." + next.key.token.text;
+    }
+    return {ui: result, canonical: result.toLowerCase()}
+}
+
+export function filterNodeList(node: Node | Node[] | null | undefined, cb: (node: Node) => boolean) : Node[] {
+    if (!node) return [];
+    if (Array.isArray(node)) {
+        return node.filter(cb);
+    }
+    else if (cb(node)) {
+        return [node];
+    }
+    else {
+        return [];
+    }
+}
+
+export type Mutable<T> = {-readonly [K in keyof T]: T[K]};
+
+export function getComponentBlock(sourceFile: SourceFile) : Block | undefined {
+    if (sourceFile.cfFileType !== CfFileType.cfc) return undefined;
+    let result : Block | undefined = undefined;
+    visit(sourceFile, (node) => {
+        if (node?.kind === NodeType.comment || node?.kind === NodeType.textSpan) {
+            return undefined;
+        }
+        else if (node?.kind === NodeType.block) {
+            if (node.subType === BlockType.fromTag && node.tagOrigin.startTag?.canonicalName === "component") {
+                result = node;
+                return "bail";
+            }
+            else if (node.subType === BlockType.scriptSugaredTagCallBlock && node.name?.token.text.toLowerCase() === "component") {
+                result = node;
+                return "bail";
+            }
+        }
+        return "bail"; // a component file should always be textspans/comments followed by a component block; if we don't match that pattern, we're not going to keep searching the entire file
+    });
+    return result;
+}
+
+export function getComponentAttrs(sourceFile: SourceFile) {
+    const componentBlock = getComponentBlock(sourceFile);
+    if (componentBlock) {
+        return componentBlock.subType === BlockType.fromTag
+            ? (componentBlock.tagOrigin.startTag as CfTag.Common).attrs
+            : componentBlock.sugaredCallStatementAttrs ?? [];
+    }
+    else {
+        return undefined;
+    }
+    /*
+    if (sourceFile.cfFileType !== CfFileType.cfc) return undefined;
+    let attrs : TagAttribute[] | undefined = undefined;
+    visit(sourceFile, (node) => {
+        if (node?.kind === NodeType.comment || node?.kind === NodeType.textSpan) {
+            return undefined;
+        }
+        else if (node?.kind === NodeType.block) {
+            if (node.subType === BlockType.fromTag && node.tagOrigin.startTag?.canonicalName === "component") {
+                attrs = (node.tagOrigin.startTag as CfTag.Common).attrs;
+                return "bail";
+            }
+            else if (node.subType === BlockType.scriptSugaredTagCallBlock && node.name?.token.text.toLowerCase() === "component") {
+                attrs = node.sugaredCallStatementAttrs ?? [];
+                return "bail";
+            }
+        }
+        return "bail"; // a component file should always be textspans/comments followed by a component block; if we don't match that pattern, we're not going to keep searching the entire file
+    });
+    return attrs;*/
+}
+
+export function recursiveGetFiles(root: string, pattern: RegExp) : string [] {
+	const result : string[] = [];
+	const fds = fs.readdirSync(root, {withFileTypes: true});
+	for (const fd of fds) {
+		if (fd.isDirectory()) result.push(...recursiveGetFiles(path.resolve(root, fd.name), pattern));
+		else if (pattern.test(fd.name)) {
+			const fspath = path.resolve(root, fd.name);
+			result.push(fspath);
+		}
+	}
+	return result;
 }

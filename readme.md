@@ -1,18 +1,11 @@
 # cfc
 coldfusion compiler
 
-well, really it's just a parser
-
 ## current goals
-* Parse a large subset of ColdFusion 2018+
-* Recognize common errors and emit reasonable diagnostics for them
-* Don't crash on invalid source text
-* Provide a VSCode language plugin that error-squiggles syntactic errors, with intent of working on top of [KamasamaK's excellent existing CFML plugin](https://github.com/KamasamaK/vscode-cfml) (please note that there is ZERO affiliation between this repo and the KamasamaK one)
-* Learn about good ways to collect and debug any plugin errors from opted-in end-user machines
-* Learn about the VSCode extension deployment workflow
-
-## current non-goals
-* Check for or emit diagnostics for semantic errors (`symbol X is not defined`, etc.)
+* Parse and understand a large subset of ColdFusion 2018+
+* Recognize common syntactic and semantic errors and emit reasonable diagnostics for them.
+* Don't crash on invalid source text, circular extends clauses, and etc.
+* Extract type information from source text in a gradual, unobtrusive way that permits flagging code that will fail at runtime and that supports an improved in-editor development experience.
 
 ## building
 
@@ -28,4 +21,4 @@ to run the current tests (just a quick smoke test, hopefully helps check for reg
 * `git submodule update`
 
 Now the directory `test/mxunit` should be populated, and the test can run:
-* `npm test`
+* `npm run test-all`

@@ -1,459 +1,675 @@
-import { BooleanLiteral, FunctionParameter, mergeRanges, NilTerminal, NodeBase, NodeType, NumericLiteral, SimpleStringLiteral, SymTabEntry, Terminal } from "./node";
-import { SourceRange } from "./scanner";
+import { ArrowFunctionDefinition, CfTag, DottedPath, FunctionDefinition, NodeType, Script, SymTabEntry, Tag, TagAttribute, } from "./node";
+import { getAttributeValue, getTriviallyComputableString, Mutable } from "./utils";
 
 let debugTypeModule = true;
-
-export const enum TypeKind {
-    any,
-    void,
-    string,
-    number,
-    boolean,
-    nil,
-    never,
-    array,
-    tuple,
-    struct,
-    union,
-    intersection,
-    functionSignature,
-    typeConstructor,
-    typeConstructorInvocation,
-    cachedTypeConstructorInvocation,
-    typeFunctionParam,
-    typeId,
-}
-
-const TypeKindUiString : Record<TypeKind, string> = {
-    [TypeKind.any]:                             "any",
-    [TypeKind.void]:                            "void",
-    [TypeKind.string]:                          "string",
-    [TypeKind.number]:                          "number",
-    [TypeKind.boolean]:                         "boolean",
-    [TypeKind.nil]:                             "nil",
-    [TypeKind.array]:                           "array",
-    [TypeKind.tuple]:                           "tuple",
-    [TypeKind.struct]:                          "struct",
-    [TypeKind.union]:                           "union",
-    [TypeKind.intersection]:                    "intersection",
-    [TypeKind.functionSignature]:               "function-signature",  // (name: type, ...) => type
-    [TypeKind.typeConstructorInvocation]:       "type-constructor-invocation",           // typename | typename<type-list> where `typename` is shorthand for `typename<>` with 0 args
-    [TypeKind.cachedTypeConstructorInvocation]: "cached-type-constructor-invocation",    // same as a type call but we can see that is cached; sort of a "type call closure" with inital args captured
-    [TypeKind.typeConstructor]:                 "type-constructor",    // type<type-list, ...> => type
-    [TypeKind.typeFunctionParam]:               "type-function-param", // type param in a type function
-    [TypeKind.typeId]:                          "type-id",             // name of non-builtin type, e.g, "T"
-    [TypeKind.never]:                           "never",
-}
+debugTypeModule;
 
 export const enum TypeFlags {
-    none = 0,
-    any                = 1 << 1, 
-    final              = 1 << 2, 
-    containsUndefined  = 1 << 3, 
-    optional           = 1 << 4,
-    synthetic          = 1 << 5,
-    END                = 1 << 6,
+    none                            = 0,
+    any                             = 1 << 0,
+    void                            = 1 << 1,
+    string                          = 1 << 2,
+    number                          = 1 << 3,
+    boolean                         = 1 << 4,
+    nil                             = 1 << 5,
+    never                           = 1 << 6,
+    array                           = 1 << 7,
+    tuple                           = 1 << 8,
+    struct                          = 1 << 9,
+    union                           = 1 << 10,
+    intersection                    = 1 << 11,
+    functionSignature               = 1 << 12,
+    functionSignatureParam          = 1 << 13,
+    typeConstructor                 = 1 << 14,
+    typeConstructorInvocation       = 1 << 15,
+    cachedTypeConstructorInvocation = 1 << 16,
+    typeConstructorParam            = 1 << 17,
+    typeId                          = 1 << 18,
+    final                           = 1 << 19,
+    synthetic                       = 1 << 20,
+    containsUndefined               = 1 << 21,
+    optional                        = 1 << 22,
+    spread                          = 1 << 23,
+    mappedType                      = 1 << 24,
+    indexedType                     = 1 << 25,
+    cfc                             = 1 << 26,
+    derived                         = 1 << 27,
+    end
 }
 
-const TypeFlagsUiString : Record<TypeFlags, string> = {
-    [TypeFlags.none]: "none",
-    [TypeFlags.any]: "any",
-    [TypeFlags.final]: "final",
-    [TypeFlags.containsUndefined]: "undefined",
-    [TypeFlags.optional]: "optional",
-    [TypeFlags.synthetic]: "synthetic",
-    [TypeFlags.END]: "<<end>>"
+const TypeKindUiString : Record<TypeFlags, string> = {
+    [TypeFlags.none]:                            "none",
+    [TypeFlags.any]:                             "any",
+    [TypeFlags.void]:                            "void",
+    [TypeFlags.string]:                          "string",
+    [TypeFlags.number]:                          "number",
+    [TypeFlags.boolean]:                         "boolean",
+    [TypeFlags.nil]:                             "nil",
+    [TypeFlags.array]:                           "array",
+    [TypeFlags.tuple]:                           "tuple",
+    [TypeFlags.struct]:                          "struct",
+    [TypeFlags.union]:                           "union",
+    [TypeFlags.intersection]:                    "intersection",
+    [TypeFlags.functionSignature]:               "function-signature",  // (name: type, ...) => type
+    [TypeFlags.functionSignatureParam]:          "function-signature-param",
+    [TypeFlags.typeConstructorInvocation]:       "type-constructor-invocation",           // typename | typename<type-list> where `typename` is shorthand for `typename<>` with 0 args
+    [TypeFlags.cachedTypeConstructorInvocation]: "cached-type-constructor-invocation",    // same as a type call but we can see that is cached; sort of a "type call closure" with inital args captured
+    [TypeFlags.typeConstructor]:                 "type-constructor",    // type<type-list, ...> => type
+    [TypeFlags.typeConstructorParam]:            "type-function-param", // type param in a type function
+    [TypeFlags.typeId]:                          "type-id",             // name of non-builtin type, e.g, "T"
+    [TypeFlags.never]:                           "never",
+    [TypeFlags.final]:                           "final",
+    [TypeFlags.synthetic]:                       "synthetic",
+    [TypeFlags.containsUndefined]:               "has-undefined",
+    [TypeFlags.optional]:                        "optional",
+    [TypeFlags.spread]:                          "spread",
+    [TypeFlags.mappedType]:                      "mapped-type",
+    [TypeFlags.indexedType]:                     "indexed-type",
+    [TypeFlags.cfc]:                             "cfc",
+    [TypeFlags.derived]:                         "derived",
 };
 
-export interface TypeBase extends NodeBase {
-    kind: NodeType.type,
-    typeKind: TypeKind,
-    synthetic: boolean,
-    typeFlags: TypeFlags,
-
-    name?: string,
-    __debug_kind?: string,
-}
-
-export function TypeBase<T extends Type>(typeKind: T["typeKind"], range?: SourceRange) : T {
-    const result = NodeBase<Type>(NodeType.type, range);
-    result.typeKind = typeKind;
-    result.synthetic = false;
-    result.typeFlags = TypeFlags.none;
-
-    if (debugTypeModule) {
-        result.__debug_kind = TypeKindUiString[typeKind];
-        Object.defineProperty(
-            result,
-            "__debug_typeFlags", {
-            get(this: TypeBase) {
-                const result : string[] = [];
-                for (let i = 1; (1 << i) < TypeFlags.END; i++) {
-                    if (this.typeFlags & (1 << i)) {
-                        result.push(TypeFlagsUiString[(1 << i) as TypeFlags]);
-                    }
+function addDebugTypeInfo(type: _Type) {
+    Object.defineProperty(type, "__debugTypeInfo", {
+        get() {
+            const result : string[] = [];
+            for (let i = 0; (1 << i) < TypeFlags.end; i++) {
+                if (type.flags & (1 << i)) {
+                    result.push(TypeKindUiString[1 << i]);
                 }
-                return result.join(", ");
             }
-        });
-    }
-
-    return result as T;
+            return result.join(",");
+        }
+    })
 }
 
 export interface _Type {
-    flags: TypeFlags,
-    type: Type
+    readonly flags: TypeFlags,
+    readonly name?: string,
+    readonly canonicalType?: _Type,
+    readonly types?: _Type[],
 }
 
-export type Type =
-    | cfAny | cfVoid | cfString | cfNumber | cfBoolean | cfNil | cfArray
-    | cfUnion | cfIntersection
-    | cfTypeId | cfNever
-    | cfTuple | cfStruct | cfFunctionSignature
-    | cfTypeConstructorInvocation | cfCachedTypeConstructorInvocation | cfTypeConstructor | cfTypeConstructorParam;
-
-export interface cfAny extends TypeBase {
-    typeKind: TypeKind.any;
-    terminal: Terminal
+export function getCanonicalType(type: _Type) {
+    while (true) {
+        if (type.canonicalType && type === type.canonicalType) return type;
+        else if (type.flags & TypeFlags.derived) type = type.canonicalType!;
+        else if (!(type.flags & TypeFlags.derived)) return type;
+        else break;
+    }
+    // this is an error case; I don't beleive we should ever get here; a type should always have a canonical type
+    return SyntheticType.any;
 }
 
-export function cfAny(terminal: Terminal) : cfAny {
-    const v = TypeBase<cfAny>(TypeKind.any, terminal.range);
-    v.terminal = terminal;
-    return v;
+export interface cfArray extends _Type {
+    memberType: _Type
 }
 
-export interface cfVoid extends TypeBase {
-    typeKind: TypeKind.void
-    terminal: Terminal,
+export function cfArray(memberType: _Type) : cfArray {
+    const type = {
+        flags: TypeFlags.array,
+        memberType
+    };
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+
+    return type;
 }
 
-export function cfVoid(terminal: Terminal) : cfVoid {
-    const v = TypeBase<cfVoid>(TypeKind.void, terminal.range);
-    v.terminal = terminal;
-    return v;
+export function isArray(t: _Type) : t is cfArray {
+    t = getCanonicalType(t);
+    return !!(t.flags & TypeFlags.array);
 }
 
-export interface cfString extends TypeBase {
-    typeKind: TypeKind.string,
-    terminal: Terminal | SimpleStringLiteral,
-    literal: string | null
+export interface cfTuple extends _Type {
+    readonly memberTypes: readonly _Type[]
 }
 
-export function cfString(terminal: Terminal | SimpleStringLiteral) : cfString {
-    const v = TypeBase<cfString>(TypeKind.string, terminal.range);
-    v.terminal = terminal;
-    v.literal = terminal.kind === NodeType.simpleStringLiteral ? terminal.textSpan.text : null;
-    return v;
+export function cfTuple(memberTypes: readonly _Type[]) : cfTuple {
+    const type = {
+        flags: TypeFlags.tuple,
+        memberTypes
+    }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+
+    return type;
 }
 
-export interface cfNumber extends TypeBase {
-    typeKind: TypeKind.number,
-    terminal: Terminal | NumericLiteral,
-    literal: number | null,
+export function isTuple(t: _Type) : t is cfTuple {
+    t = getCanonicalType(t);
+    return !!(t.flags & TypeFlags.tuple);
 }
 
-export function cfNumber(terminal: Terminal | NumericLiteral) : cfNumber {
-    const v = TypeBase<cfNumber>(TypeKind.number, terminal.range);
-    v.terminal = terminal;
-    v.literal = terminal.kind === NodeType.numericLiteral ? parseFloat(terminal.literal.token.text) : null;
-    return v;
+export interface cfStruct extends _Type {
+    members: ReadonlyMap<string, SymTabEntry>,
 }
 
-export interface cfBoolean extends TypeBase {
-    typeKind: TypeKind.boolean,
-    terminal: Terminal | BooleanLiteral,
-    literal: boolean | null,
+export function cfStruct(members: ReadonlyMap<string, SymTabEntry>) : cfStruct {
+    const type = {
+        flags: TypeFlags.struct,
+        members,
+    }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+
+    return type;
 }
 
-export function cfBoolean(terminal: Terminal | BooleanLiteral) : cfBoolean {
-    const v = TypeBase<cfBoolean>(TypeKind.boolean, terminal.range);
-    v.terminal = terminal;
-    v.literal = terminal.kind === NodeType.booleanLiteral ? terminal.booleanValue : null;
-    return v;
+export function isStruct(t: _Type) : t is cfStruct {
+    t = getCanonicalType(t);
+    return !!(t.flags & TypeFlags.struct);
 }
 
-export interface cfNil extends TypeBase {
-    typeKind: TypeKind.nil
+export interface cfFunctionSignature extends _Type {
+    uiName: string,
+    canonicalName: string,
+    params: cfFunctionSignatureParam[],
+    returns: _Type
 }
 
-export function cfNil(range?: SourceRange) : cfNil {
-    const v = TypeBase<cfNil>(TypeKind.nil, range);
-    return v;
+export function cfFunctionSignature(uiName: string, params: cfFunctionSignatureParam[], returns: _Type) : cfFunctionSignature {
+    const type = {
+        flags: TypeFlags.functionSignature,
+        uiName,
+        canonicalName: uiName.toLowerCase(),
+        params,
+        returns,
+    }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+    
+    return type;
 }
 
-export interface cfArray extends TypeBase {
-    typeKind: TypeKind.array
-    T: Type
+export function isFunctionSignature(t: _Type) : t is cfFunctionSignature {
+    t = getCanonicalType(t);
+    return !!(t.flags & TypeFlags.functionSignature);
 }
 
-export function cfArray(T: Type) : cfArray {
-    const v = TypeBase<cfArray>(TypeKind.array);
-    v.T = T;
-    return v;
+// names are part of the type signature because a caller can specify named arguments
+export interface cfFunctionSignatureParam extends _Type {
+    type: _Type,
+    uiName: string,
+    canonicalName: string,
 }
 
-export interface cfTuple extends TypeBase {
-    typeKind: TypeKind.tuple,
-    T: Type[]
+export function cfFunctionSignatureParam(required: boolean, paramType: _Type, uiName: string) : cfFunctionSignatureParam {
+    const optionalFlag = required ? TypeFlags.none : TypeFlags.optional;
+    const type = {
+        flags: TypeFlags.functionSignatureParam | optionalFlag,
+        type: paramType,
+        uiName,
+        canonicalName: uiName.toLowerCase(),
+    }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+    
+    return type;
 }
 
-export function cfTuple(T: Type[]) : cfTuple {
-    const v = TypeBase<cfTuple>(TypeKind.tuple);
-    v.T = T;
-    return v;
+export function isFunctionSignatureParam(t: _Type) : t is cfFunctionSignatureParam {
+    t = getCanonicalType(t);
+    return !!(t.flags & TypeFlags.functionSignatureParam);
 }
 
-export interface cfStruct extends TypeBase {
-    typeKind: TypeKind.struct,
-    leftBrace: Terminal,
-    members: cfStructMember[],
-    rightBrace: Terminal,
-    membersMap: Map<string, SymTabEntry>,
+export interface cfTypeConstructorInvocation extends _Type {
+    left: _Type,
+    args: _Type[]
 }
 
-export function cfStruct(leftBrace: Terminal, members: cfStructMember[], membersMap: Map<string, SymTabEntry>, rightBrace: Terminal) : cfStruct {
-    const v = TypeBase<cfStruct>(TypeKind.struct, mergeRanges(leftBrace, rightBrace));
-    v.leftBrace = leftBrace;
-    v.members = members;
-    v.rightBrace = rightBrace;
+export function cfTypeConstructorInvocation(left: _Type, args: _Type[]) : cfTypeConstructorInvocation {
+    const type = {
+        flags: TypeFlags.typeConstructorInvocation,
+        left,
+        args
+    }
 
-    v.membersMap = membersMap;
-    return v;
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+    
+    return type;
 }
 
-export interface cfStructMember {
-    propertyName: Terminal,
-    colon: Terminal,
-    type: Type,
-    comma: Terminal | null,
-    attributes: TypeAttribute[],
+export function isTypeConstructorInvocation(t: _Type) : t is cfTypeConstructorInvocation {
+    t = getCanonicalType(t);
+    return !!(t.flags & TypeFlags.typeConstructorInvocation);
 }
 
-export function cfStructMember(propertyName: Terminal, colon: Terminal, type: Type, comma: Terminal | null, attributes: TypeAttribute[]) : cfStructMember {
-    return {propertyName, colon, type, comma, attributes};
-}
-
-export interface cfFunctionSignature extends TypeBase {
-    typeKind: TypeKind.functionSignature,
-    name: string,
-    params: FunctionParameter[],
-    returns: Type
-}
-
-export function cfFunctionSignature(name: string, params: FunctionParameter[], returns: Type) : cfFunctionSignature {
-    const v = TypeBase<cfFunctionSignature>(TypeKind.functionSignature);
-    v.name = name;
-    v.params = params;
-    v.returns = returns;
-    return v;
-}
-
-export interface cfTypeConstructorInvocation extends TypeBase {
-    typeKind: TypeKind.typeConstructorInvocation,
-    left: Type,
-    args: Type[]
-}
-
-export function cfTypeConstructorInvocation(left: Type, args: Type[]) : cfTypeConstructorInvocation {
-    const v = TypeBase<cfTypeConstructorInvocation>(TypeKind.typeConstructorInvocation);
-    v.left = left;
-    v.args = args;
-    return v;
-}
-
-export interface cfCachedTypeConstructorInvocation extends TypeBase {
-    typeKind: TypeKind.cachedTypeConstructorInvocation,
+export interface cfCachedTypeConstructorInvocation extends _Type {
     left: cfTypeConstructor,
-    args: Type[],
+    args: _Type[],
 }
 
-export function cfCachedTypeConstructorInvocation(left: cfTypeConstructor, args: Type[]) : cfCachedTypeConstructorInvocation {
-    const v = TypeBase<cfCachedTypeConstructorInvocation>(TypeKind.cachedTypeConstructorInvocation);
-    v.left = left;
-    v.args = args;
-    return v;
+export function cfCachedTypeConstructorInvocation(left: cfTypeConstructor, args: _Type[]) : cfCachedTypeConstructorInvocation {
+    const type = {
+        flags: TypeFlags.cachedTypeConstructorInvocation,
+        left,
+        args
+    }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+    
+    return type;
 }
 
-export interface cfTypeConstructor extends TypeBase {
-    typeKind: TypeKind.typeConstructor,
-    name: string,
+export function isCachedTypeConstructorInvocation(t: _Type) : t is cfCachedTypeConstructorInvocation {
+    t = getCanonicalType(t);
+    return !!(t.flags & TypeFlags.cachedTypeConstructorInvocation);
+}
+
+export interface cfTypeConstructor extends _Type {
     params: cfTypeConstructorParam[],
-    capturedParams: Map<string, Type>, // "in context Γ extended with (T0,...,Tn)"; so @type Foo = <T> => <U> => (can see T, U here)
-    body: Type,
+    capturedParams: Map<string, _Type>, // "in context Γ extended with (T0,...,Tn)"; so @type Foo = <T> => <U> => (can see T, U here)
+    body: _Type,
 }
 
-export function cfTypeConstructor(params: cfTypeConstructorParam[], body: Type) : cfTypeConstructor {
-    const v = TypeBase<cfTypeConstructor>(TypeKind.typeConstructor);
-    v.params = params;
-    v.capturedParams = new Map();
-    v.body = body;
-    return v;
+export function cfTypeConstructor(params: cfTypeConstructorParam[], body: _Type) : cfTypeConstructor {
+    const type = {
+        flags: TypeFlags.typeConstructor,
+        params,
+        capturedParams: new Map<string, _Type>(),
+        body
+    }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+    
+    return type;
 }
 
-export interface cfTypeConstructorParam extends TypeBase {
-    typeKind: TypeKind.typeFunctionParam,
+export function isTypeConstructor(t: _Type) : t is cfTypeConstructor {
+    t = getCanonicalType(t);
+    return !!(t.flags & TypeFlags.typeConstructor);
+}
+
+export interface cfTypeConstructorParam extends _Type {
+    //extendsType: Type | null,
     name: string,
-    extendsToken: Terminal | null,
-    extendsType: Type | null,
-    comma: Terminal | null
+    defaultType?: _Type
 }
 
-export function cfTypeConstructorParam(name: string, extendsToken: Terminal | null, extendsType: Type | null, comma: Terminal | null) {
-    const v = TypeBase<cfTypeConstructorParam>(TypeKind.typeFunctionParam);
-    v.name = name;
-    v.extendsToken = extendsToken;
-    v.extendsType = extendsType;
-    v.comma = comma;
-    return v;
+export function cfTypeConstructorParam(name: string, defaultType?: _Type) {
+    const type : cfTypeConstructorParam = {
+        flags: TypeFlags.typeConstructorParam,
+        name
+    }
+
+    if (defaultType) {
+        type.defaultType = defaultType;
+    }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+    
+    return type;
 }
 
-export interface cfTypeId extends TypeBase {
-    typeKind: TypeKind.typeId,
-    terminal: Terminal,
-    name: string,
+export function isTypeConstructorParam(t: _Type) : t is cfTypeConstructorParam {
+    t = getCanonicalType(t);
+    return !!(t.flags & TypeFlags.typeConstructorParam);
 }
 
-export function cfTypeId(terminal: Terminal) : cfTypeId {
-    const v = TypeBase<cfTypeId>(TypeKind.typeId);
-    v.range = terminal.range;
-    v.terminal = terminal;
-    v.name = terminal.token.text;
-    return v;
+export interface cfTypeId extends _Type {
+    name: string
 }
 
-export interface cfIntersection extends TypeBase {
-    typeKind: TypeKind.intersection,
-    left: Type,
-    right: Type,
-    typeList: Type[], // change parser to support this, we need a top level (&|) parser, and then a lower-level (<>=>type/{}/[]/id) parser
+export function cfTypeId(name: string) : cfTypeId {
+    const type = {
+        flags: TypeFlags.typeId,
+        name
+    }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+    
+    return type;
 }
 
-export function cfIntersection(left: Type, right: Type) : cfIntersection {
-    const v = TypeBase<cfIntersection>(TypeKind.intersection);
-    v.left = left;
-    v.right = right;
-    v.typeList = [left, right];
-    return v;
+export function isTypeId(t: _Type) : t is cfTypeId {
+    t = getCanonicalType(t);
+    return !!(t.flags & TypeFlags.typeId);
 }
 
-export interface cfUnion extends TypeBase {
-    typeKind: TypeKind.union,
-    left: Type,
-    right: Type,
-    flat?: Type[]
+export interface cfIntersection extends _Type {
+    types: _Type[]
 }
 
-export function cfUnion(left: Type, right: Type) {
-    const v = TypeBase<cfUnion>(TypeKind.union);
-    v.left = left;
-    v.right = right;
-    return v;
+export function cfIntersection(...types: _Type[]) : cfIntersection {
+    const type = {
+        flags: TypeFlags.intersection,
+        types
+    }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+    
+    return type;
 }
 
-export interface cfNever extends TypeBase {
-    typeKind: TypeKind.never,
+export function isIntersection(t: _Type) : t is cfIntersection {
+    t = getCanonicalType(t);
+    return !!(t.flags & TypeFlags.intersection);
 }
 
-export function cfNever() : cfNever {
-    const v = TypeBase<cfNever>(TypeKind.never);
-    return v;
+export interface cfUnion extends _Type {
+    types: _Type[],
 }
 
-export interface TypeAttribute extends NodeBase {
-    type: NodeType.typeAttribute,
-    hash: Terminal,
-    exclamation: Terminal,
-    leftBracket: Terminal,
-    name: Terminal,
-    rightBracket: Terminal,
+export function cfUnion(types: _Type[], flags: TypeFlags = TypeFlags.none) {
+    const identityDedup = [...new Set(types)];
+
+    if (identityDedup.length === 1) {
+        return freshType(identityDedup[0], flags);
+    }
+    else {
+        return createType({
+            flags: TypeFlags.union | flags,
+            types: [...identityDedup],
+        });
+    }
 }
 
-export function TypeAttribute(
-    hash: Terminal,
-    exclamation: Terminal,
-    leftBracket: Terminal,
-    name: Terminal,
-    rightBracket: Terminal,
-) : TypeAttribute {
-    const v = NodeBase<TypeAttribute>(NodeType.typeAttribute, mergeRanges(hash, rightBracket));
-    v.hash = hash;
-    v.exclamation = exclamation;
-    v.leftBracket = leftBracket;
-    v.name = name;
-    v.rightBracket = rightBracket;
-    return v;
+export function isUnion(t: _Type) : t is cfUnion {
+    t = getCanonicalType(t);
+    return !!(t.flags & TypeFlags.union);
+}
+
+export interface cfMappedType extends _Type {
+    keyBinding: cfTypeId,
+    inKeyOf: cfTypeId,
+    targetType: _Type
+}
+
+export function cfMappedType(keyBinding: cfTypeId, inKeyOf: cfTypeId, targetType: _Type) : cfMappedType {
+    const t = {
+        flags: TypeFlags.mappedType,
+        keyBinding,
+        inKeyOf,
+        targetType
+    }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(t);
+    }
+
+    return t;
+}
+
+export function isMappedType(t: _Type) : t is cfMappedType {
+    t = getCanonicalType(t);
+    return !!(t.flags & TypeFlags.mappedType);
+}
+
+export interface cfIndexedType extends _Type {
+    type: _Type,
+    index: cfTypeId
+}
+
+export function cfIndexedType(type: _Type, index: cfTypeId) : cfIndexedType {
+    const t = {
+        flags: TypeFlags.indexedType,
+        type,
+        index
+    }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(t);
+    }
+    return t;
+}
+
+export function isIndexedType(t: _Type) : t is cfIndexedType {
+    t = getCanonicalType(t);
+    return !!(t.flags & TypeFlags.indexedType);
+}
+
+export function isCfc(t: _Type) : boolean {
+    t = getCanonicalType(t);
+    return !!(t.flags & TypeFlags.cfc);
 }
 
 export const SyntheticType = (function() {
-    const nilTerminal = NilTerminal(-1);
+    const any : _Type = {
+        flags: TypeFlags.synthetic | TypeFlags.any,
+    } as _Type;
+    (any as Mutable<_Type>).canonicalType = any;
 
-    const global_any = cfAny(nilTerminal);
-    const _any = () : _Type => {
-        return {
-            flags: TypeFlags.synthetic,
-            type: global_any,
-        }
-    }
+    const anyFunction = (() => {
+        const spreadParam = cfFunctionSignatureParam(false, cfArray(any), "args");
+        (spreadParam as Mutable<_Type>).flags |= TypeFlags.spread;
+        return cfFunctionSignature("", [spreadParam], any);
+    })();
 
-    const any = () => {
-        const any = cfAny(nilTerminal);
-        any.typeFlags |= TypeFlags.synthetic;
-        return any;
-    }
+    const void_ : _Type = {
+        flags: TypeFlags.synthetic | TypeFlags.void,
+    } as _Type;
+    (void_ as Mutable<_Type>).canonicalType = void_;
 
-    const void_ = () => {
-        const void_ = cfVoid(nilTerminal);
-        void_.typeFlags |= TypeFlags.synthetic;
-        return void_;
-    }
+    const string : _Type = {
+        flags: TypeFlags.synthetic | TypeFlags.string,
+    } as _Type;
+    (string as Mutable<_Type>).canonicalType = string;
 
-    const string = () => {
-        const string = cfString(nilTerminal);
-        string.typeFlags |= TypeFlags.synthetic;
-        return string;
-    }
 
-    const number = () => {
-        const number = cfNumber(nilTerminal);
-        number.typeFlags |= TypeFlags.synthetic;
-        return number;
-    }
+    const number : _Type = {
+        flags: TypeFlags.synthetic | TypeFlags.number,
+    } as _Type;
+    (number as Mutable<_Type>).canonicalType = number;
 
-    const boolean = () => {
-        const boolean = cfBoolean(nilTerminal);
-        boolean.typeFlags |= TypeFlags.synthetic;
-        return boolean;
-    }
+    const boolean : _Type = {
+        flags: TypeFlags.synthetic | TypeFlags.boolean,
+    } as _Type;
+    (boolean as Mutable<_Type>).canonicalType = boolean;
 
-    const nil = () => {
-        const nil = cfNil();
-        nil.typeFlags |= TypeFlags.synthetic;
-        return nil;
-    }
+    const nil : _Type = {
+        flags: TypeFlags.synthetic | TypeFlags.nil,
+    } as _Type;
+    (nil as Mutable<_Type>).canonicalType = nil;
 
-    const struct = (membersMap: Map<string, SymTabEntry> = new Map()) => {
-        const v = cfStruct(nilTerminal, [], membersMap, nilTerminal);
-        v.typeFlags |= TypeFlags.synthetic;
+    const struct = (membersMap: ReadonlyMap<string, SymTabEntry> = new Map()) => {
+        const v = cfStruct(membersMap);
+        (v.flags as TypeFlags) |= TypeFlags.synthetic;
         return v;
     }
 
-    const never = () => {
-        const never = cfNever();
-        never.typeFlags |= TypeFlags.synthetic;
-        return never;
+    const emptyStruct = struct();
+
+    const never : _Type = {
+        flags: TypeFlags.synthetic | TypeFlags.never
+    } as _Type;
+    (never as Mutable<_Type>).canonicalType = never;
+
+    const results = {
+        any: createType(any),
+        void_: createType(void_),
+        string: createType(string),
+        number: createType(number),
+        boolean: createType(boolean),
+        nil: createType(nil),
+        never: createType(never),
+        struct, // this is a function
+        anyFunction: anyFunction, // already created via call to cfFunctionSignature
+        emptyStruct, // already created via a call to cfStruct()
+    } as const;
+
+    return results;
+})();
+
+function createType(type: _Type) {
+    if (debugTypeModule) addDebugTypeInfo(type);
+    return type;
+}
+
+function freshType(type: _Type, flags: TypeFlags) : _Type {
+    if (flags === TypeFlags.none || type.flags === flags) return type;
+    else {
+        flags |= TypeFlags.derived;
+        return createType({flags, canonicalType: type});
+    }
+}
+
+// mostly just for exposition
+const staticallyKnownCfTypes : readonly string[] = [
+    "any",
+    "array",
+    "binary",
+    "boolean",
+    "date",
+    "function",
+    "guid",
+    "numeric",
+    "query",
+    "string",
+    "struct",
+    "uuid",
+    "void",
+    "xml"
+] as const;
+staticallyKnownCfTypes; // "unused"
+
+function stringifyDottedPath(dottedPath: DottedPath) {
+    return [
+        dottedPath.headKey.token.text,
+        ...dottedPath.rest.map(e => e.key.token.text)
+    ].join(".");
+
+}
+
+function typeFromJavaLikeTypename(dottedPath: DottedPath | null) : _Type {
+    if (dottedPath == null) return SyntheticType.any;
+    if (dottedPath.rest.length > 0) {
+        return SyntheticType.any;
+    }
+    return typeFromStringifiedJavaLikeTypename(stringifyDottedPath(dottedPath));
+}
+
+function typeFromStringifiedJavaLikeTypename(typename: string | null) : _Type {
+    if (typename === null) return SyntheticType.any;
+    switch (typename.toLowerCase()) {
+        case "array": return cfArray(SyntheticType.any);
+        case "boolean": return SyntheticType.boolean;
+        case "function": return SyntheticType.anyFunction;
+        case "numeric": return SyntheticType.number;
+        case "query": return SyntheticType.emptyStruct; // @fixme: have real query type
+        case "string": return SyntheticType.string;
+        case "struct": return SyntheticType.emptyStruct;
+        case "void": return SyntheticType.void_;
+        default: return SyntheticType.any; // @fixme: should be CFC<typename>, which will be resolved to a CFC during checking phase (could also be a java class...)
+    }
+}
+
+function typeFromAttribute(attrs: TagAttribute[], attrName: string) : _Type {
+    return typeFromStringifiedJavaLikeTypename(
+        getTriviallyComputableString(getAttributeValue(attrs, attrName)) || null);
+}
+
+export function extractCfFunctionSignature(def: FunctionDefinition | ArrowFunctionDefinition, asDeclaration = false) {
+    let uiName : string;
+    let returnType : _Type;
+    let paramTypes : cfFunctionSignatureParam[] = [];
+
+    if (def.kind === NodeType.functionDefinition) {
+        if (def.fromTag) {
+            uiName       = getTriviallyComputableString(getAttributeValue((def.tagOrigin.startTag as CfTag.Common).attrs, "name")) || "<<ERROR>>";
+            returnType = typeFromAttribute((def.tagOrigin.startTag as CfTag.Common).attrs, "returntype");
+            paramTypes = extractTagFunctionParam(def.params);
+        }
+        else {
+            uiName     = def.nameToken?.uiName || ""; // anonymous function is OK
+            returnType = asDeclaration
+                ? (def.returnTypeAnnotation ?? SyntheticType.any)
+                : typeFromJavaLikeTypename(def.returnType);
+            paramTypes = extractScriptFunctionParams(def.params, asDeclaration);
+        }
+    }
+    else {
+        uiName = ""; // arrow function never has a name
+        returnType = SyntheticType.any;
+        paramTypes = extractScriptFunctionParams(def.params);
     }
 
-    return {
-        _any,
-        any,
-        void_,
-        string,
-        number,
-        boolean,
-        struct,
-        never,
-        nil
+    return cfFunctionSignature(uiName, paramTypes, returnType);
+}
+
+export function extractScriptFunctionParams(params: readonly Script.FunctionParameter[], asDeclaration = false) : cfFunctionSignatureParam[] {
+    const result : cfFunctionSignatureParam[] = [];
+    for (const param of params) {
+        const type = asDeclaration
+            ? (param.type ?? SyntheticType.any)
+            : typeFromJavaLikeTypename(param.javaLikeTypename);
+        //const required = param.requiredTerminal ? TypeFlags.none : TypeFlags.optional;
+        //const spread = param.dotDotDot ? TypeFlags.spread : TypeFlags.none;
+        const name = param.identifier.uiName || "<<ERROR>>";
+        result.push(cfFunctionSignatureParam(param.required, type, name));
     }
-})();
+    return result;
+}
+
+export function extractTagFunctionParam(params: readonly Tag.FunctionParameter[]) : cfFunctionSignatureParam[] {
+    const result : cfFunctionSignatureParam[] = [];
+    for (const param of params) {
+        const type = typeFromAttribute((param.tagOrigin.startTag as CfTag.Common).attrs, "type");
+        /*const required = getTriviallyComputableBoolean(getAttributeValue((param.tagOrigin.startTag as CfTag.Common).attrs, "required"))
+            ? TypeFlags.required
+            : TypeFlags.none;
+        const spread = TypeFlags.none;*/
+        const name = getTriviallyComputableString(getAttributeValue((param.tagOrigin.startTag as CfTag.Common).attrs, "name")) || "<<ERROR>>";
+
+        result.push(cfFunctionSignatureParam(param.required, type, name));
+    }
+    return result;
+}
+
+export function stringifyType(type: _Type) : string {
+    if (type.flags & TypeFlags.any) return "any";
+    if (type.flags & TypeFlags.void) return "void";
+    if (type.flags & TypeFlags.number) return "number";
+    if (type.flags & TypeFlags.string) return "string";
+    if (type.flags & TypeFlags.boolean) return "boolean";
+    if (isStruct(type)) {
+        const builder = [];
+        for (const [propName, {type: memberType}] of type.members) {
+            builder.push(propName + ": " + stringifyType(memberType));
+        }
+        const result = builder.join(", ");
+        return "{" + result + "}";
+    }
+    if (isArray(type)) {
+        return stringifyType(type.memberType) + "[]";
+    }
+    if (isUnion(type) || isIntersection(type)) {
+        const joiner = isUnion(type) ? " | " : " & ";
+        const result = type.types.map(memberType => stringifyType(memberType)).join(joiner);
+        return result;
+    }
+    if (isFunctionSignature(type)) {
+        const params = [];
+        for (const param of type.params) {
+            params.push(stringifyType(param));
+        }
+        return "(" + params.join(", ") + ")" + " => " + stringifyType(type.returns);
+    }
+    if (isFunctionSignatureParam(type)) {
+        return (!(type.flags & TypeFlags.optional) ? "required " : "") + type.uiName + ": " + (type.flags & TypeFlags.spread ? "..." : "") + stringifyType(type.type);
+    }
+
+    return "<<type>>";
+}

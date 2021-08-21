@@ -1,10 +1,40 @@
 ## cflsp - A ColdFusion Language Plugin
 
-A small parser to see what kind of live diagnostics can reasonably be had for ColdFusion2018+. It helps me in my day-to-day in a very minimal way, mostly by pointing out illegal trailing commas in function calls and struct literals, bad top-level var decls, and other things like that.
+A language plugin to see how far we can push syntactic and semantic analysis for ColdFusion.
 
-I really recommend [KamasamaK's current plugin](https://github.com/KamasamaK/vscode-cfml) as the current best CF plugin; this is intended to work on top of that (note there is ZERO affiliation between this plugin and the KamasamaK one) as the other provides nice completions and syntax highlighting. This one just squiggle-underlines syntactic errors.
+If we are marking a tag, expression or statement as an error and you know it shouldn't (or it isn't and it should), please let me know [on github](https://github.com/softwareCobbler/cfc).
 
-If it is marking a tag, expression or statement as an error and you know it shouldn't (or it isn't and it should), please let me know [on github](https://github.com/softwareCobbler/cfc).
+1.0.24
 
-![errors from top-level var decl and function-level arguments scope shadowing](./cflsp-vscode/declaration-errors.png)
-![example diagnostics, both squiggly-underlined and in the 'problems' panel](./cflsp-vscode/cfls-diagnostics.png)
+With 1.0.24, we introduce a *very* limited notion of type checking.
+
+Type information is not generally available in ColdFusion, with the exception of in function definitions, where code
+might say an argument is a string, number, struct, array, or etc. We can leverage that information and provide a small amount of error
+checking; for example, say a function takes an argument of type string, and tries to pass it to a function that accepts an argument of type
+struct -- we can flag that as an error.
+
+For the adventurous palate, we offer a very-much-in-alpha option called "x_types", which enables experimental type annotations. This supports Typescript-esque
+type annotations for functions and variables, allowing more precise types to be applied to such constructs. A function that returns `struct` can be annotated
+so that it instead returns the more descriptive `{x: string, y: string}`. The syntax, subject to change in the future, looks like:
+
+```
+// @type (x: string) => {x: number, y: number}
+struct function(string x) { ... }
+```
+
+The above applies the nearest-preceding type annotation to its following construct, much like JS-Doc.
+
+We also now check function argument list lengths, such that a function that indicates *N* required parameters will be required at its call sites to
+accept N parameters. In the case of something like `function foo (function f) { return f(a,b,c); }` we say that `f` can accept 0 or more arguments,
+since `f` is just "a function, with unknown signature".
+
+We try to be very conservative with flagging errors; if we cannot be totally certain of a term's type, we say that it is of type "any", for which anything goes (subtract
+it, string-concat it, bake_it_in_a_pie()!)
+
+There's a long way to go before types become generally useful, but we think this is a reasonable step towards improving ColdFusion tooling in general.
+
+Usage in its current form is shown below.
+
+![current state of typechecks](./cflsp-vscode/min-type-checks.png)
+
+Big thanks to [KamasamaK](https://github.com/KamasamaK/vscode-cfml) for their plugin which offers, among plenty of other features, syntax coloring.
