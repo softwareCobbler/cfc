@@ -306,17 +306,3 @@ export interface ComponentSpecifier {
     uiName: string,
     path: string,
 }
-
-export interface ComponentNode {
-    readonly specifier: ComponentSpecifier | undefined,
-    readonly parent: ComponentNode | null,
-    readonly children: ComponentNode[],
-}
-
-function ComponentNode(specifier: ComponentSpecifier | undefined) : ComponentNode {
-    return {
-        specifier,
-        parent: null,
-        children: []
-    }
-}

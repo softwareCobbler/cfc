@@ -2281,11 +2281,13 @@ export function New(
 
 export interface TypeShim extends NodeBase {
     kind: NodeType.typeShim,
+    what: "typedef" | "annotation"
     type: _Type
 }
 
-export function TypeShim(type: _Type) : TypeShim {
+export function TypeShim(what: "typedef" | "annotation", type: _Type) : TypeShim {
     const v = NodeBase<TypeShim>(NodeType.typeShim, SourceRange.Nil());
     v.type = type;
+    v.what = what;
     return v;
 }

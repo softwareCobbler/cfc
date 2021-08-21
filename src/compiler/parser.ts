@@ -3569,12 +3569,12 @@ export function Parser() {
 
                 const types = parseTypeAnnotations(/*asDeclarationFile*/ false);
                 
-                const typedefs = types.filter(typeShim => typeShim.type.name !== undefined);
+                const typedefs = types.filter(typeShim => typeShim.what === "typedef")
                 if (typedefs.length > 0) {
                     node.typedefs = typedefs; // store the parsed type functions on the trivia node
                 }
 
-                const typeAnnotations = types.filter(typeShim => typeShim.type.name === undefined);
+                const typeAnnotations = types.filter(typeShim => typeShim.what === "annotation")
                 if (typeAnnotations.length > 1) {
                     // we need to get the type's ranges and terminals and etc.
                     parseErrorAtRange(node.range, "Only one @type annotation is permitted per comment.");
@@ -3608,7 +3608,7 @@ export function Parser() {
                     const declarationSpecifier = peek();
                     if (declarationSpecifier.text === "function") {
                         const functionDecl = parseNamedFunctionDeclaration();
-                        result.push(TypeShim(functionDecl));
+                        result.push(TypeShim("typedef", functionDecl));
                     }
                     else if (declarationSpecifier.text === "global") {
                         parseErrorAtRange(contextualKeyword.range, "Global declarations are not yet supported. This would be for the cgi and etc. scopes.");
@@ -3639,7 +3639,7 @@ export function Parser() {
                         parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
                         let type = parseType();
                         (type as Mutable<_Type>).name = nameIfIsTypeConstructorOrAlias.token.text;
-                        result.push(TypeShim(type));
+                        result.push(TypeShim("typedef", type));
                     }
                     // a non-definition is a type-to-term assignment, it will be bound to the next non-trivia/non-type production
                     // like 
@@ -3648,7 +3648,7 @@ export function Parser() {
                     //
                     else {
                         const type = parseType();
-                        result.push(TypeShim(type));
+                        result.push(TypeShim("annotation", type));
                     }
                 }
                 else {

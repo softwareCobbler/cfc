@@ -1,4 +1,3 @@
-import * as path from "path";
 import { Diagnostic, SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement } from "./node";
 import { CfcResolver } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
@@ -1247,22 +1246,23 @@ export function Checker() {
         let finalType = cfSyntaxDirectedTypeSig;
 
         if (node.typeAnnotation) {
-            if (isFunctionSignature(node.typeAnnotation)) {
-                if (!isAnnotatedSigCompatibleWithCfFunctionSig(node.typeAnnotation, cfSyntaxDirectedTypeSig)) {
+            const evaluatedType = evaluateType(node, node.typeAnnotation);
+            if (isFunctionSignature(evaluatedType)) {
+                if (!isAnnotatedSigCompatibleWithCfFunctionSig(evaluatedType, cfSyntaxDirectedTypeSig)) {
                     typeErrorAtNode(node, `Type '${stringifyType(cfSyntaxDirectedTypeSig)}' is not assignable to the annotated type '${stringifyType(node.typeAnnotation)}'.`)
                 }
                 else {
                     // copy cf-sig param names into annotated-type param names
                     for (let i = 0; i < cfSyntaxDirectedTypeSig.params.length; i++) {
-                        node.typeAnnotation.params[i].canonicalName = cfSyntaxDirectedTypeSig.params[i].canonicalName;
-                        node.typeAnnotation.params[i].uiName = cfSyntaxDirectedTypeSig.params[i].uiName;
+                        evaluatedType.params[i].canonicalName = cfSyntaxDirectedTypeSig.params[i].canonicalName;
+                        evaluatedType.params[i].uiName = cfSyntaxDirectedTypeSig.params[i].uiName;
                     }
                 }
 
-                finalType = node.typeAnnotation;
+                finalType = evaluatedType;
             }
-            else if (!(node.typeAnnotation.flags & TypeFlags.any)) {
-                typeErrorAtNode(node, `Expected a function signature as an annotated type, but got type '${stringifyType(node.typeAnnotation)}'.`)
+            else if (!(evaluatedType.flags & TypeFlags.any)) {
+                typeErrorAtNode(node, `Expected a function signature as an annotated type, but got type '${stringifyType(evaluatedType)}'.`)
             }
         }
 
@@ -1835,45 +1835,3 @@ export function Checker() {
 }
 
 export type Checker = ReturnType<typeof Checker>;
-
-export interface ComponentSpecifier {
-    canonical: string,
-    ui: string,
-    path: string,
-}
-
-export function getQualifiedCfcPathName(absRoots: string[], resolveFrom: string, possiblyUnqualifiedCfc: string) : ComponentSpecifier | undefined {
-    const isUnqualified = !/\./.test(possiblyUnqualifiedCfc);
-    for (const root of absRoots) {
-        const base = path.parse(root).base; // Z in X/Y/Z, assuming Z is some root we're interested in
-        const rel = path.relative(root, resolveFrom);
-        const {dir} = path.parse(rel); // A/B/C in X/Y/Z/A/B/C, where X/Y/Z is the root
-        // if it is unqualifed, we prepend the full path from root and lookup from that
-        // with root of "X/", a file of "X/Y/Z/foo.cfm" calling "new Bar()" looks up "X.Y.Z.Bar"
-        if (isUnqualified) {
-            if (root.startsWith(resolveFrom)) {
-                const cfcName = [base, ...dir.split(path.sep), possiblyUnqualifiedCfc].join(".");
-                return {
-                    canonical: cfcName.toLowerCase(),
-                    ui: cfcName,
-                    path: path.join(root, rel, possiblyUnqualifiedCfc + ".cfc")
-                }
-            }
-        }
-        else {
-            // otherwise, we have a qualified CFC
-            // check that the base name matches with the current root, and then try to resolve
-            const canonicalCfcName = possiblyUnqualifiedCfc.toLowerCase();
-            const canonicalBase = base.toLowerCase();
-            if (!canonicalCfcName.startsWith(canonicalBase)) continue;
-            const cfcAsPathElidedBase = possiblyUnqualifiedCfc.split(".").slice(1);
-            if (cfcAsPathElidedBase.length > 0) cfcAsPathElidedBase[cfcAsPathElidedBase.length - 1] = cfcAsPathElidedBase[cfcAsPathElidedBase.length - 1] + ".cfc";
-            return {
-                canonical: canonicalCfcName,
-                ui: possiblyUnqualifiedCfc,
-                path: path.join(base, ...cfcAsPathElidedBase)
-            }
-        }
-    }
-    return undefined;
-}

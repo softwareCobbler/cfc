@@ -15,7 +15,9 @@ function projectFiddle() {
     const debugfs = DebugFileSystem([
         ["/a.cfm", `
             <cfscript>
-                // @type (_: (x: string) => string) => any
+                // @type X = (_: (x: string) => string) => any
+                
+                // @type X
                 function foo(function f) {
                     f(a, b);
                 }

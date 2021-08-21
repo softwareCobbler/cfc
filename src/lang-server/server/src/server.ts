@@ -46,8 +46,7 @@ import { CfTag, isStaticallyKnownScopeName, NodeType, ScopeDisplay, StaticallyKn
 import { findAncestor, findNodeInFlatSourceMap, getAttributeValue, getComponentAttrs, getFunctionSignatureParamNames, getNearestConstruct, getNearestEnclosingScope, getSourceFile, isCfScriptTagBlock } from '../../../compiler/utils';
 
 import { tagNames } from "./tagnames";
-import { cfStruct, isCfc, isFunctionSignature, isStruct, _Type } from '../../../compiler/types';
-import { ComponentSpecifier, getQualifiedCfcPathName } from '../../../compiler/checker';
+import { isCfc, isFunctionSignature, isStruct, _Type } from '../../../compiler/types';
 import { FileSystem, Project } from "../../../compiler/project";
 import { TokenType } from '../../../compiler/scanner';
 
