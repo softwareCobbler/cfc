@@ -1,6 +1,6 @@
 import * as assert from "assert";
 import { Parser, Binder, CfFileType, SourceFile, NilCfm, flattenTree, NilCfc, Checker } from "../out/compiler";
-import { IndexedAccess, NodeType } from "../src/compiler/node";
+import { IndexedAccess, NodeKind } from "../src/compiler/node";
 import { findNodeInFlatSourceMap, getTriviallyComputableString } from "../src/compiler/utils";
 import * as TestLoader from "./TestLoader";
 
@@ -138,10 +138,10 @@ describe("general smoke test for particular constructs", () => {
         const nodeMap = binder.getNodeMap();
 
         const node = findNodeInFlatSourceMap(flatSourceMap, nodeMap, completionsTestCase.index);
-        assert.strictEqual(node?.kind, NodeType.terminal, "found node is a terminal");
-        assert.strictEqual(node?.parent?.kind, NodeType.indexedAccessChainElement, "found node parent is an indexedAccessChainElement");
-        assert.strictEqual(node?.parent?.parent?.kind, NodeType.identifier, "found node parent.parent is an identifier");
-        assert.strictEqual(node?.parent?.parent?.parent?.kind, NodeType.indexedAccess, "found node parent.parent.parent is an indexed access");
+        assert.strictEqual(node?.kind, NodeKind.terminal, "found node is a terminal");
+        assert.strictEqual(node?.parent?.kind, NodeKind.indexedAccessChainElement, "found node parent is an indexedAccessChainElement");
+        assert.strictEqual(node?.parent?.parent?.kind, NodeKind.identifier, "found node parent.parent is an identifier");
+        assert.strictEqual(node?.parent?.parent?.parent?.kind, NodeKind.indexedAccess, "found node parent.parent.parent is an indexed access");
         assert.strictEqual(getTriviallyComputableString((<IndexedAccess>node?.parent?.parent?.parent).root), "arguments", "indexed access root is arguments scope");
     });
     it("Should not throw error on tree-flatten of arrow function with missing expression after fat arrow", () => {
@@ -248,7 +248,7 @@ describe("general smoke test for particular constructs", () => {
         const nodeMap = binder.getNodeMap();
 
         const node = findNodeInFlatSourceMap(flatSourceMap, nodeMap, completionsTestCase.index);
-        assert.strictEqual(node?.parent?.kind, NodeType.dottedPath);
-        assert.strictEqual(node?.parent?.parent?.kind, NodeType.functionDefinition);
+        assert.strictEqual(node?.parent?.kind, NodeKind.dottedPath);
+        assert.strictEqual(node?.parent?.parent?.kind, NodeKind.functionDefinition);
     });
 });

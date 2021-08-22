@@ -1,4 +1,4 @@
-import { Diagnostic, SourceFile, Node, NodeType, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement } from "./node";
+import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement } from "./node";
 import { CfcResolver } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfStruct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStruct, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType, stringifyType, cfFunctionSignatureParam } from "./types";
@@ -87,62 +87,62 @@ export function Checker() {
     }
 
     function checkListFunctionsLast(nodes: Node[]) {
-        forEach(nodes.filter(node => node.kind !== NodeType.functionDefinition), checkNode);
-        forEach(nodes.filter(node => node.kind === NodeType.functionDefinition), checkNode);
+        forEach(nodes.filter(node => node.kind !== NodeKind.functionDefinition), checkNode);
+        forEach(nodes.filter(node => node.kind === NodeKind.functionDefinition), checkNode);
     }
 
     function checkNode(node: Node | null) {
         if (!node) return;
 
         switch (node.kind) {
-            case NodeType.sourceFile:
+            case NodeKind.sourceFile:
                 throw "Check source files by binding its content";
-            case NodeType.comment:
+            case NodeKind.comment:
                 return;
-            case NodeType.textSpan:
+            case NodeKind.textSpan:
                 return;
-            case NodeType.terminal:
+            case NodeKind.terminal:
                 return;
-            case NodeType.hashWrappedExpr: // fallthrough
-            case NodeType.parenthetical:   // fallthrough
-            case NodeType.tagAttribute:
+            case NodeKind.hashWrappedExpr: // fallthrough
+            case NodeKind.parenthetical:   // fallthrough
+            case NodeKind.tagAttribute:
                 checkNode(node.expr);
                 return;
-            case NodeType.tag:
+            case NodeKind.tag:
                 return;
-            case NodeType.callExpression:
+            case NodeKind.callExpression:
                 checkCallExpression(node);
                 return;
-            case NodeType.callArgument:
+            case NodeKind.callArgument:
                 checkCallArgument(node);
                 return;
-            case NodeType.unaryOperator:
+            case NodeKind.unaryOperator:
                 checkUnaryOperator(node);
                 return;
-            case NodeType.binaryOperator:
+            case NodeKind.binaryOperator:
                 checkBinaryOperator(node);
                 return;
-            case NodeType.conditional:
+            case NodeKind.conditional:
                 checkConditional(node);
                 return;
-            case NodeType.variableDeclaration:
+            case NodeKind.variableDeclaration:
                 checkVariableDeclaration(node);
                 return;
-            case NodeType.statement:
+            case NodeKind.statement:
                 switch (node.subType) {
                     case StatementType.expressionWrapper: {
                         checkNode(node.expr);
                     }
                 }
                 return;
-            case NodeType.returnStatement:
+            case NodeKind.returnStatement:
                 checkReturnStatement(node);
                 return;
-            case NodeType.breakStatement:
+            case NodeKind.breakStatement:
                 return;
-            case NodeType.continueStatement:
+            case NodeKind.continueStatement:
                 return;
-            case NodeType.block:
+            case NodeKind.block:
                 switch (node.subType) {
                     case BlockType.fromTag:
                         // check attrs and etc...
@@ -159,20 +159,20 @@ export function Checker() {
                         return;
                 }
                 return;
-            case NodeType.simpleStringLiteral:
+            case NodeKind.simpleStringLiteral:
                 setCachedEvaluatedNodeType(node, SyntheticType.string);
                 return;
-            case NodeType.interpolatedStringLiteral:
+            case NodeKind.interpolatedStringLiteral:
                 checkList(node.elements);
                 setCachedEvaluatedNodeType(node, SyntheticType.string);
                 return;
-            case NodeType.numericLiteral:
+            case NodeKind.numericLiteral:
                 setCachedEvaluatedNodeType(node, SyntheticType.number);
                 return;
-            case NodeType.booleanLiteral:
+            case NodeKind.booleanLiteral:
                 setCachedEvaluatedNodeType(node, SyntheticType.boolean);
                 return;
-            case NodeType.identifier:
+            case NodeKind.identifier:
                 // klude/fixme!: identifier.source can be an indexed access
                 // this was to support `a.b.c = 42`
                 // what we need to do is parse that as a "dotted path";
@@ -182,74 +182,74 @@ export function Checker() {
                 // a.b.c[1], or similar, transform it into an indexed-access
                 checkIdentifier(node);
                 return;
-            case NodeType.indexedAccess:
+            case NodeKind.indexedAccess:
                 checkIndexedAccess(node);
                 return;
-            case NodeType.indexedAccessChainElement:
+            case NodeKind.indexedAccessChainElement:
                 checkIndexedAccessChainElement(node);
                 return;
-            case NodeType.sliceExpression:
+            case NodeKind.sliceExpression:
                 if (node.from) checkNode(node.from);
                 if (node.to) checkNode(node.to);
                 if (node.stride) checkNode(node.stride);
                 return;
-            case NodeType.functionParameter:
+            case NodeKind.functionParameter:
                 if (!node.fromTag && node.defaultValue) checkNode(node.defaultValue);
                 return;
-            case NodeType.functionDefinition: // fallthrough
-            case NodeType.arrowFunctionDefinition:
+            case NodeKind.functionDefinition: // fallthrough
+            case NodeKind.arrowFunctionDefinition:
                 checkFunctionDefinition(node);
                 return;
-            case NodeType.dottedPath:
+            case NodeKind.dottedPath:
                 return;
-            case NodeType.dottedPathRest:
+            case NodeKind.dottedPathRest:
                 // no-op, taken care of by dottedPath
                 return;
-            case NodeType.switch:
+            case NodeKind.switch:
                 checkSwitch(node);
                 return;
-            case NodeType.switchCase:
+            case NodeKind.switchCase:
                 checkSwitchCase(node);
                 return;
-            case NodeType.do:
+            case NodeKind.do:
                 checkDo(node);
                 return;
-            case NodeType.while:
+            case NodeKind.while:
                 checkWhile(node);
                 return;
-            case NodeType.ternary:
+            case NodeKind.ternary:
                 checkTernary(node);
                 return;
-            case NodeType.for:
+            case NodeKind.for:
                 checkFor(node);
                 return;
-            case NodeType.structLiteral:
+            case NodeKind.structLiteral:
                 checkStructLiteral(node);
                 return;
-            case NodeType.structLiteralInitializerMember:
+            case NodeKind.structLiteralInitializerMember:
                 checkStructLiteralInitializerMember(node);
                 return;
-            case NodeType.arrayLiteral:
+            case NodeKind.arrayLiteral:
                 checkArrayLiteral(node);
                 return;
-            case NodeType.arrayLiteralInitializerMember:
+            case NodeKind.arrayLiteralInitializerMember:
                 checkArrayLiteralInitializerMember(node);
                 return;
-            case NodeType.try:
+            case NodeKind.try:
                 checkTry(node);
                 return;
-            case NodeType.catch:
+            case NodeKind.catch:
                 checkCatch(node);
                 return;
-            case NodeType.finally:
+            case NodeKind.finally:
                 checkFinally(node);
                 return;
-            case NodeType.importStatement:
+            case NodeKind.importStatement:
                 return;
-            case NodeType.new:
+            case NodeKind.new:
                 checkNew(node);
                 return;
-            case NodeType.typeShim:
+            case NodeKind.typeShim:
                 return;
             default:
                 ((_:never) => { throw "Non-exhaustive case or unintentional fallthrough." })(node);
@@ -340,7 +340,7 @@ export function Checker() {
                     return varEntry as SymbolResolution;
                 }
 
-                if (node.kind === NodeType.sourceFile) {
+                if (node.kind === NodeKind.sourceFile) {
                     const type = checkLibRefsForName(canonicalName);
                     return type ? {scopeName: "global", symTabEntry: type, container: null} : undefined;
                 }
@@ -666,7 +666,7 @@ export function Checker() {
             return;
         }
         if (isFunctionSignature(sig)) {
-            const isNewExpr = node.parent?.kind === NodeType.new;
+            const isNewExpr = node.parent?.kind === NodeKind.new;
 
             const minRequiredParams = sig.params.filter(param => !(param.flags & TypeFlags.optional)).length;
             const maxParams = sig.params.length > 0 && sig.params[sig.params.length - 1].flags & TypeFlags.spread
@@ -753,7 +753,7 @@ export function Checker() {
                 if (!isAssignable(/*assignThis*/ argType, /*to*/ paramType)) {
                     // error
                 }
-                if (isFunctionSignature(paramType) && (arg.expr.kind === NodeType.functionDefinition || arg.expr.kind === NodeType.arrowFunctionDefinition)) {
+                if (isFunctionSignature(paramType) && (arg.expr.kind === NodeKind.functionDefinition || arg.expr.kind === NodeKind.arrowFunctionDefinition)) {
                     //pushTypesIntoInlineFunctionDefinition(node, paramType, arg.expr);
                     //checkNode(arg.expr.body as Node /*fixme: we know this is a script function definition but can't prove it here; anyway, all function defs should have Node as a body, not Node|Node[] ?*/);
                 }
@@ -787,7 +787,7 @@ export function Checker() {
             case BinaryOpType.assign: {
                 // an assignment, even fv-unqualified, will always be bound to a scope
                 // `x = y` is effectively `variables.x = y`
-                if (node.left.kind === NodeType.identifier || node.left.kind === NodeType.indexedAccess) {
+                if (node.left.kind === NodeKind.identifier || node.left.kind === NodeKind.indexedAccess) {
                     const lValIdent = stringifyLValue(node.left);
                     if (!lValIdent) return;
 
@@ -919,8 +919,8 @@ export function Checker() {
     // these would effectively declare `var x = {y: ?}` 
     function getVariableDeclarationLValue(node: VariableDeclaration) : Identifier | IndexedAccess | undefined {
         let workingNode : Node = node.expr;
-        if (workingNode.kind === NodeType.binaryOperator) workingNode = workingNode.left;
-        if (workingNode.kind === NodeType.identifier || workingNode.kind === NodeType.indexedAccess) return workingNode;
+        if (workingNode.kind === NodeKind.binaryOperator) workingNode = workingNode.left;
+        if (workingNode.kind === NodeKind.identifier || workingNode.kind === NodeKind.indexedAccess) return workingNode;
         else return undefined;
     }    
 
@@ -932,7 +932,7 @@ export function Checker() {
         const canonicalPath = name.canonical.split(".");
         if (canonicalPath.length > 2) return;
 
-        const isForInit = node.parent?.kind === NodeType.for &&
+        const isForInit = node.parent?.kind === NodeKind.for &&
             ((node.parent.subType === ForSubType.forIn && node === node.parent.init) ||
              (node.parent.subType === ForSubType.for && node === node.parent.initExpr));
 
@@ -943,12 +943,12 @@ export function Checker() {
         let rhsType : _Type | undefined = undefined;
         let assignabilityErrorNode : Node;
 
-        if (node.expr.kind === NodeType.binaryOperator) {
+        if (node.expr.kind === NodeKind.binaryOperator) {
             checkNode(node.expr.right);
             rhsType = getCachedEvaluatedNodeType(node.expr.right);
             assignabilityErrorNode = node.expr.right;
         }
-        else if (isForInit && node.parent?.kind === NodeType.for && node.parent.subType === ForSubType.forIn && node === node.parent.init) {
+        else if (isForInit && node.parent?.kind === NodeKind.for && node.parent.subType === ForSubType.forIn && node === node.parent.init) {
             rhsType = getCachedEvaluatedNodeType(node.parent.expr); // `for (x in y)`, x gets its type from `y`
             assignabilityErrorNode = node;
         }
@@ -1062,7 +1062,7 @@ export function Checker() {
         // if we're on the lefthand side of a non-fv qualified assignment, we're done
         // an fv-qualified assignment is handled by checkVariableDeclaration
         // assignment should alter the type of the variable for this flow in checkBinaryOperator
-        if (node.parent?.kind === NodeType.binaryOperator && node.parent.optype === BinaryOpType.assign && node === node.parent.left) {
+        if (node.parent?.kind === NodeKind.binaryOperator && node.parent.optype === BinaryOpType.assign && node === node.parent.left) {
             return;
         }
 
@@ -1272,7 +1272,7 @@ export function Checker() {
         //     setCachedEvaluatedFlowType(node.flow!, param.canonicalName, param.type || SyntheticType.any);
         // }
 
-        if (node.kind === NodeType.functionDefinition && node.fromTag) {
+        if (node.kind === NodeKind.functionDefinition && node.fromTag) {
             checkListFunctionsLast(node.body);
         }
         else {
@@ -1344,7 +1344,7 @@ export function Checker() {
                         return node.containedScope.typedefs.get(typeName)!;
                     }
                 }
-                if (node.kind === NodeType.sourceFile) {
+                if (node.kind === NodeKind.sourceFile) {
                     break;
                 }
                 else {
@@ -1451,7 +1451,7 @@ export function Checker() {
     }
 
     function checkNew(node: New) {
-        if (node.callExpr.left.kind !== NodeType.dottedPath) return;
+        if (node.callExpr.left.kind !== NodeKind.dottedPath) return;
         const cfcName = stringifyDottedPath(node.callExpr.left).ui;
         const cfc = cfcResolver({resolveFrom: sourceFile.absPath, cfcName: cfcName});
         if (!cfc) return;

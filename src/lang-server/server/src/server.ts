@@ -42,7 +42,7 @@ import * as fs from "fs";
 import * as path from "path";
 
 import { NodeId, SourceFile, Parser, Binder, Node as cfNode, binarySearch, CfFileType, Diagnostic as cfcDiagnostic, cfmOrCfc, flattenTree, NodeSourceMap, isExpressionContext, getTriviallyComputableString, Checker } from "compiler";
-import { CfTag, isStaticallyKnownScopeName, NodeType, ScopeDisplay, StaticallyKnownScopeName, FunctionDefinition, mergeRanges, CallExpression, Terminal, SymTabEntry, IndexedAccessChainElement } from '../../../compiler/node';
+import { CfTag, isStaticallyKnownScopeName, NodeKind, ScopeDisplay, StaticallyKnownScopeName, FunctionDefinition, mergeRanges, CallExpression, Terminal, SymTabEntry, IndexedAccessChainElement } from '../../../compiler/node';
 import { findAncestor, findNodeInFlatSourceMap, getAttributeValue, getComponentAttrs, getFunctionSignatureParamNames, getNearestConstruct, getNearestEnclosingScope, getSourceFile, isCfScriptTagBlock } from '../../../compiler/utils';
 
 import { tagNames } from "./tagnames";
@@ -480,13 +480,13 @@ connection.onCompletion(
 
 		if (!parsedSourceFile || !node) return [];
 
-		let callExpr : CallExpression | null = (node.parent?.parent?.kind === NodeType.callArgument && !node.parent.parent.equals)
+		let callExpr : CallExpression | null = (node.parent?.parent?.kind === NodeKind.callArgument && !node.parent.parent.equals)
 			? node.parent.parent.parent as CallExpression // inside a named argument `foo(a|)
-			: (node.kind === NodeType.terminal && node.token.type === TokenType.LEFT_PAREN && node.parent?.kind === NodeType.callExpression)
+			: (node.kind === NodeKind.terminal && node.token.type === TokenType.LEFT_PAREN && node.parent?.kind === NodeKind.callExpression)
 			? node.parent as CallExpression // right on `foo(|`
-			: (node.parent?.kind === NodeType.terminal && node.parent.token.type === TokenType.LEFT_PAREN && node.parent.parent?.kind === NodeType.callExpression)
+			: (node.parent?.kind === NodeKind.terminal && node.parent.token.type === TokenType.LEFT_PAREN && node.parent.parent?.kind === NodeKind.callExpression)
 			? node.parent.parent // on whitespace after `foo(   |`
-			: (node.parent?.kind === NodeType.terminal && node.parent.token.type === TokenType.COMMA && node.parent.parent?.parent?.kind === NodeType.callExpression)
+			: (node.parent?.kind === NodeKind.terminal && node.parent.token.type === TokenType.COMMA && node.parent.parent?.parent?.kind === NodeKind.callExpression)
 			? node.parent.parent.parent // after a comma `foo(arg0, |`
 			: null;
 
@@ -498,7 +498,7 @@ connection.onCompletion(
 		const expressionContext = isExpressionContext(node);
 
 		if (!expressionContext) {
-			if (node.parent?.kind === NodeType.tag && (node === node.parent.tagStart || node === node.parent.tagName)) {
+			if (node.parent?.kind === NodeKind.tag && (node === node.parent.tagStart || node === node.parent.tagName)) {
 				return tagNames.map((name) : CompletionItem => {
 					return { 
 						label: "cf" + name,
@@ -513,11 +513,11 @@ connection.onCompletion(
 		if (isCfScriptTagBlock(node)) {
 			let justCfScriptCompletion = false;
 			// if we got </cf then we are in an unfinished tag node
-			if (node.parent?.kind === NodeType.tag && node.parent?.which === CfTag.Which.end) {
+			if (node.parent?.kind === NodeKind.tag && node.parent?.which === CfTag.Which.end) {
 				justCfScriptCompletion = true;
 			}
 			// if we got got an identifier but the previous text is "</" (not valid in any expression) then just provide a cfscript completion
-			else if (node.parent?.kind === NodeType.identifier && node.range.fromInclusive >= 2) {
+			else if (node.parent?.kind === NodeKind.identifier && node.range.fromInclusive >= 2) {
 				const text = document.getText();
 				if (text[node.range.fromInclusive-2] === "<" && text[node.range.fromInclusive-1] === "/") {
 					justCfScriptCompletion = true;
@@ -547,7 +547,7 @@ connection.onCompletion(
 			const yetToBeUsedParams = new Set<string>(sig.params.map(param => param.canonicalName));
 			for (const arg of callExpr.args) if (arg.name?.canonicalName) yetToBeUsedParams.delete(arg.name?.canonicalName)
 
-			const detail = callExpr.parent?.kind === NodeType.new ? "named constructor argument" : "named function argument";
+			const detail = callExpr.parent?.kind === NodeKind.new ? "named constructor argument" : "named function argument";
 
 			for (const param of sig.params) {
 				if (!yetToBeUsedParams.has(param.canonicalName)) continue;
@@ -560,7 +560,7 @@ connection.onCompletion(
 			}
 		}
 
-		if (node.parent?.kind === NodeType.indexedAccessChainElement) {
+		if (node.parent?.kind === NodeKind.indexedAccessChainElement) {
 			// get the type one level before the current
 			// x.y| -- we want the type of `x` for completions, not `y`
 
