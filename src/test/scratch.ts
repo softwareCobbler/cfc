@@ -15,11 +15,19 @@ function projectFiddle() {
     const debugfs = DebugFileSystem([
         ["/a.cfm", `
             <cfscript>
-                // @type X = (_: (x: string) => string) => any
-                
-                // @type X
-                function foo(function f) {
-                    f(a, b);
+                function foo() {
+                    if (baz) {
+                        var z = 42;
+                    }
+                    else {
+                        var z = "42";
+                    }
+
+                    bar(z);
+                }
+
+                function bar(string x) {
+
                 }
             </cfscript>
         `],

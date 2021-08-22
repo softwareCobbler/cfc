@@ -189,20 +189,27 @@ export type IdentifierId = number;
 export type NodeWithScope<N extends Node = Node, T extends (StaticallyKnownScopeName | never) = never> = N & {containedScope: ScopeDisplay & {[k in T]: SymTab}};
 
 export const enum FlowType {
-    default,
+    start,
     assignment,
+    label,
+    condition,
     postReturn
+}
+
+const FlowUiString : Record<FlowType, string> = {
+    [FlowType.start]: "start",
+    [FlowType.assignment]: "assignment",
+    [FlowType.label]: "label",
+    [FlowType.condition]: "condition",
+    [FlowType.postReturn]: "post-return",
 }
 
 export interface Flow {
     flowId: FlowId,
     flowType: FlowType,
     predecessor: Flow[],
-    successor: Flow | null,
-    node: Node | null // this effectively be null while a FlowNode is waiting on a node to attach to; but by the time we get to the checker it will have been populated or the entire flownode discarded
+    node: Node | null
 }
-
-export type ReachableFlow = Flow & {node: Node};
 
 export interface NodeBase {
     kind: NodeKind,
@@ -357,12 +364,24 @@ export function NilTerminal(pos: number) { return Terminal(NilToken(pos)) };
 
 export const freshFlow = (function() {
     let flowId = 0;
-    return (predecessor: Flow | Flow[], flowType: FlowType, node: Node | null = null) : Flow => ({
-        flowId: flowId++,
-        flowType: flowType,
-        predecessor: Array.isArray(predecessor) ? predecessor : [predecessor],
-        successor: null,
-        node});
+    return (predecessor: Flow | Flow[], flowType: FlowType, node: Node | null = null) : Flow => {
+        const flow = {
+            flowId: flowId++,
+            flowType: flowType,
+            predecessor: Array.isArray(predecessor) ? predecessor : [predecessor],
+            node
+        };
+
+        if (debug) {
+            Object.defineProperty(flow, "__debugFlowInfo", {
+                get(this: Flow) {
+                    return FlowUiString[this.flowType]
+                }
+            })
+        }
+
+        return flow;
+    }
 })();
 
 export const enum CommentType { tag, scriptSingleLine, scriptMultiLine };
