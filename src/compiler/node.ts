@@ -10,10 +10,11 @@ export function setDebug(isDebug: boolean) {
 }
 
 export const enum NodeFlags {
-    none         = 0,
-    error        = 1 << 0,
-    missing      = 1 << 1,
-    checkerError = 1 << 2,
+    none             = 0,
+    error            = 1 << 0,
+    missing          = 1 << 1,
+    checkerError     = 1 << 2,
+    flowWithNoReturn = 1 << 3, // a function that does not have all code paths with a return statement
 }
 
 export const enum NodeKind {
@@ -383,6 +384,8 @@ export const freshFlow = (function() {
         return flow;
     }
 })();
+
+export const UnreachableFlow = freshFlow([], FlowType.postReturn);
 
 export const enum CommentType { tag, scriptSingleLine, scriptMultiLine };
 export interface Comment extends NodeBase {

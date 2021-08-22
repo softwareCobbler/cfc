@@ -902,7 +902,7 @@ export function Checker() {
         if (!isAssignable(exprType, sig.returns)) {
             // if we got an exprType, we got an expr or a just return token; if this is from tag, we definitely got a tag
             const errNode = node.fromTag ? node.tagOrigin.startTag! : (node.expr || node.returnToken!);
-            typeErrorAtNode(errNode, `Type '${stringifyType(exprType)}' is not compatible with expected return type '${stringifyType(sig.returns)}'`);
+            typeErrorAtNode(errNode, `Type '${stringifyType(exprType)}' is not compatible with function return type '${stringifyType(sig.returns)}'`);
         }
     }
 
@@ -1271,6 +1271,10 @@ export function Checker() {
         }
         else {
             checkNode(node.body);
+        }
+
+        if (node.flags & NodeFlags.flowWithNoReturn && !(finalType.returns.flags & TypeFlags.any)) {
+            typeErrorAtNode(node, `Not all code paths return a value; function is expected to return type '${stringifyType(finalType.returns)}'.`);
         }
     }
 

@@ -15,20 +15,24 @@ function projectFiddle() {
     const debugfs = DebugFileSystem([
         ["/a.cfm", `
             <cfscript>
-                function foo() {
+                /*function foo() {
                     if (baz) {
                         var z = 42;
                     }
                     else {
                         var z = "42";
                     }
+                }*/
 
-                    bar(z);
+                string function bar(string x) {
+                    if (baz) {
+                        return "g";
+                    }
+                    else if (z) return "43";
+                    else return 3;
                 }
 
-                function bar(string x) {
-
-                }
+                baz = 42;
             </cfscript>
         `],
         //["/b.cfc", `component { function foo() {} }`],

@@ -1,4 +1,4 @@
-import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, FlowType, ConditionalSubtype, SymTab, TypeShim } from "./node";
+import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, FlowType, ConditionalSubtype, SymTab, TypeShim, UnreachableFlow, NodeFlags } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, getNodeLinks, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { SyntheticType, _Type, extractCfFunctionSignature, isFunctionSignature } from "./types";
@@ -55,8 +55,16 @@ export function Binder() {
         node.flow = flow;
     }
 
-    function mergeFlowsToLabel(...flows: (Flow|undefined)[]) {
-        return freshFlow(flows.filter((flow) : flow is Flow => !!flow), FlowType.label);
+    function mergeFlowsToLabel(...flows: (Flow | undefined)[]) {
+        const joinableFlows : Flow[] = [];
+        let unreachableCount = 0;
+        for (const flow of flows) {
+            if (!flow) continue;
+            if (flow === UnreachableFlow) unreachableCount++;
+            joinableFlows.push(flow);
+        }
+        if (unreachableCount === joinableFlows.length) return UnreachableFlow;
+        return freshFlow(joinableFlows, FlowType.label);
     }
 
     function bindNode(node: Node | null | undefined, parent: Node) {
@@ -491,7 +499,7 @@ export function Binder() {
             }
         }
 
-        currentFlow = freshFlow(/*predecessor*/ [], FlowType.postReturn);
+        currentFlow = UnreachableFlow;
     }
 
     function bindBreakStatement(node: BreakStatement) {
@@ -903,6 +911,12 @@ export function Binder() {
         }
         else {
             bindNode(node.body, node);
+        }
+
+        // if the end of a function is reachable, mark it as such
+        // maybe want a node.endFlow or something
+        if (currentFlow !== UnreachableFlow) {
+            node.flags |= NodeFlags.flowWithNoReturn;
         }
 
         currentFlow = savedFlow;
