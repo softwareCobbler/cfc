@@ -2358,6 +2358,7 @@ export function Parser() {
             case TokenType.KW_FALSE:
             case TokenType.KW_FUNCTION:
             case TokenType.KW_NEW:
+            case TokenType.DOT:
                 return true;
             default:
                 return isIdentifier();

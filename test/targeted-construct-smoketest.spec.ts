@@ -324,4 +324,10 @@ describe("general smoke test for particular constructs", () => {
         ], "/");
         assertDiagnosticsCountWithProject(dfs, "/a.cfc", 1);
     });
+    it("Should accept a decimal number as a function argument", () => {
+        const dfs = DebugFileSystem([
+            ["/a.cfm", `<cfset foo(.42)>`],
+        ], "/");
+        assertDiagnosticsCountWithProject(dfs, "/a.cfm", 0);
+    });
 });

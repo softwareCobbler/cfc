@@ -1,6 +1,6 @@
 ## cflsp - A ColdFusion Language Plugin
 
-A language plugin to see how far we can push syntactic and semantic analysis for ColdFusion.
+A language plugin to see how far we can push ColdFusion language tooling.
 
 If we are marking a tag, expression or statement as an error and you know it shouldn't (or it isn't and it should), please let me know [on github](https://github.com/softwareCobbler/cfc).
 
