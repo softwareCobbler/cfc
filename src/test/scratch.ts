@@ -14,12 +14,38 @@ import * as path from "path";
 function projectFiddle() {
     const debugfs = DebugFileSystem([
         ["/a.cfm", `
+            <cfset var illegal_var_decl_at_top_level = 42>
+
+            <cffunction name="foo">
+                <cfargument name="ARGNAME">
+                <cfset var ok_var_decl_inside_function = 42>
+                <cfset var argname = 42> <!--- can't re-declare a variable that is in arguments scope --->
+            </cffunction>
+
             <cfscript>
-                // @type X = (_: (x: string) => string) => any
-                
-                // @type X
-                function foo(function f) {
-                    f(a, b);
+                function foo(argName, argName2) {
+                    var argName2 = 42;
+                }
+
+                f = function(argName) {
+                    var argName = 42;
+
+                    function nested(x) {
+                        var argName = "ok because the outer arguments scope is not considered";
+                    }
+                }
+
+                f = (argName) => {
+                    var argName = 42;
+                    var argName.f.z = 42;
+
+                    argName = 42; // ok, not a redeclaration, just a reassignment
+                }
+
+                f = () => {
+                    // var x redeclaration should be OK
+                    for (var x in y) {}
+                    for (var x in y) {}
                 }
             </cfscript>
         `],

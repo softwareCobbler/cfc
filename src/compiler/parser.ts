@@ -987,14 +987,16 @@ export function Parser() {
                 return tagIndex < tagList.length;
             }
 
-            // @ts-expect-error - unused
+            // @ ts-expect-error - unused
             function next() : never { // shadow the outer next()
                 throw "use nextTag";
             }
-            // @ts-expect-error - unused
+            next;
+            // @ ts-expect-error - unused
             function peek() : never { // shadow the outer peek()
                 throw "use peekTag";
             }
+            peek;
             
             function nextTag() {
                 return tagList[tagIndex++];

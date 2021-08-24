@@ -492,17 +492,6 @@ export function Binder() {
                 // we're not in a function, so we must be at top-level scope
                 errorAtRange(mergeRanges(node.finalModifier, node.varModifier, (<BinaryOperator>node.expr)?.left), "Local variables may not be declared at top-level scope.");
             }
-        
-            const enclosingFunction = getEnclosingFunction(node);
-            if (enclosingFunction) {
-                // if name is same as a parameter definition's name, emit an error,
-                // e.g, 
-                // function foo(bar) { var bar = 42; }
-                // is an error: "bar is already defined in argument scope"
-                if (enclosingFunction.containedScope.arguments.has(canonicalPath[0])) {
-                    errorAtRange(mergeRanges(node.finalModifier, node.varModifier, node.expr), `'${uiPath[0]}' is already defined in argument scope.`);
-                }
-            }
         }
     }
 
@@ -785,16 +774,6 @@ export function Binder() {
         bindNode(node.defaultValue, node);
     }
 
-    function getEnclosingFunction(node: Node | null) : NodeWithScope<FunctionDefinition | ArrowFunctionDefinition, "arguments"> | undefined {
-        while (node) {
-            if (node.kind === NodeType.functionDefinition || node.kind === NodeType.arrowFunctionDefinition) {
-                return node as NodeWithScope<FunctionDefinition | ArrowFunctionDefinition, "arguments">;
-            }
-            node = node.parent;
-        }
-        return undefined;
-    }
-
     function getAncestorOfType(node: Node | null, nodeType: NodeType) : Node | undefined {
         while (node) {
             if (node.kind === nodeType) {
@@ -912,24 +891,26 @@ export function Binder() {
                 // }
             }
 
-            let scopeTarget : SymTab;
+            let scopeTargets : SymTab[];
 
             if (currentContainer.containedScope.local) { // it's only callable from local, but in ACF the name is taken globally
-                scopeTarget = currentContainer.containedScope.local;
+                scopeTargets = [currentContainer.containedScope.local];
             }
             else if (RootNode.cfFileType === CfFileType.cfc && isInCfcPsuedoConstructor(node)) {
-                scopeTarget = currentContainer.containedScope.this!;
+                scopeTargets = [RootNode.containedScope.this!, RootNode.containedScope.variables!];
             }
             else {
-                scopeTarget = RootNode.containedScope.variables!;
+                scopeTargets = [RootNode.containedScope.variables!];
             }
             
-            addSymbolToTable(
-                scopeTarget,
-                node.uiName!,
-                node,
-                signature,
-                node.typeAnnotation);
+            for (const scopeTarget of scopeTargets) {
+                addSymbolToTable(
+                    scopeTarget,
+                    node.uiName!,
+                    node,
+                    signature,
+                    node.typeAnnotation);
+            }
         }
 
         node.containedScope = {
@@ -939,12 +920,14 @@ export function Binder() {
             arguments: new Map<string, SymTabEntry>(),
         };
 
+        // fixme: handle the following gracefully -
+        // there is no guarantee that the annotation has the same param count as the cf signature;
         const typeAnnotatedParams = node.typeAnnotation && isFunctionSignature(node.typeAnnotation) ? node.typeAnnotation.params : null;
 
         for (let i = 0; i < node.params.length; i++) {
             const param = node.params[i];
             const type = signature.params[i]?.type || null;
-            const annotatedType = typeAnnotatedParams?.[i].type || null;
+            const annotatedType = typeAnnotatedParams ? typeAnnotatedParams[i]?.type : null;
             // we also need the annotation-provided type if it exists; for now it is implicitly null
             addSymbolToTable(node.containedScope.arguments!, param.uiName, param, type, annotatedType);
         }

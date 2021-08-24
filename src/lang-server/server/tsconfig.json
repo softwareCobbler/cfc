@@ -1,6 +1,7 @@
 {
 	"compilerOptions": {
-		"target": "es6",
+		"target": "es2020",
+		"lib": ["es2020"],
 		"module": "commonjs",
 		"moduleResolution": "node",
 		"sourceMap": true,
@@ -12,8 +13,9 @@
 			"compiler": ["../../compiler"]
 		}
 	},
-	"files": ["src/server.ts", "src/tagnames.ts"],
+	"files": ["src/server.ts"],
 	"references": [
-		{"path": "../../compiler"}
+		{"path": "../../compiler"},
+		{"path": "../../services"}
 	]
 }

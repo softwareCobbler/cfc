@@ -142,4 +142,4 @@ export const tagNames = [
     "window",
     "zip",
     "zipparam",
-];
+] as const;

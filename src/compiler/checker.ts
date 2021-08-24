@@ -940,6 +940,17 @@ export function Checker() {
             typeErrorAtRange(mergeRanges(node.finalModifier, node.expr), `final-qualified declaration in a for initializer will fail at runtime.`);
         }
 
+        if (canonicalPath.length === 1) {
+            const enclosingFunction = getContainingFunction(node);
+            if (enclosingFunction) {
+                for (const param of enclosingFunction.params) {
+                    if (param.canonicalName === name.canonical) {
+                        typeErrorAtNode(node, `Identifier '${name.ui}' is already declared in arguments scope.`)
+                    }
+                }
+            }
+        }
+
         let rhsType : _Type | undefined = undefined;
         let assignabilityErrorNode : Node;
 
@@ -1197,6 +1208,10 @@ export function Checker() {
                     type = getArrayMemberType(type);
                     if (!type) type = SyntheticType.any;
                 }
+                else {
+                    // todo - support arrays being also dot-indexable, since they have member functions
+                    type = SyntheticType.any;
+                }
 
                 setCachedEvaluatedNodeType(element, type);
             }
@@ -1380,6 +1395,7 @@ export function Checker() {
             checkNode(node.body);
             return;
         }
+
         checkNode(node.initExpr);
         checkNode(node.conditionExpr);
         checkNode(node.incrementExpr);

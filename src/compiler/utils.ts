@@ -884,8 +884,8 @@ export function findAncestor(node: Node, predicate: (node: Node | null) => true 
     return undefined;
 }
 
-export function getContainingFunction(node: Node) : Node | undefined {
-    return findAncestor(node, (node) => !!node && (node.kind === NodeType.functionDefinition || node.kind === NodeType.arrowFunctionDefinition));
+export function getContainingFunction(node: Node) : FunctionDefinition | ArrowFunctionDefinition | undefined {
+    return findAncestor(node, (node) => !!node && (node.kind === NodeType.functionDefinition || node.kind === NodeType.arrowFunctionDefinition)) as FunctionDefinition | ArrowFunctionDefinition;
 }
 
 export function getNodeLinks(node: Node) {

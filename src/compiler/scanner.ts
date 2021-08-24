@@ -961,7 +961,8 @@ export function Scanner(source_: string | Buffer) {
         scanToNextTagCommentToken,
         scanLexemeLikeStructKey,
         scanIdentifier,
-        isIdentifier
+        isIdentifier,
+        getSourceText: () => sourceText
     }
 }
 export type Scanner = ReturnType<typeof Scanner>;

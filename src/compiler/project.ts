@@ -20,7 +20,7 @@ interface DevTimingInfo {
     check: number
 }
 
-interface FileSystem {
+export interface FileSystem {
     readFileSync: (path: string) => Buffer
     existsSync: (path: string) => boolean
     join: (...args: string[]) => string,
@@ -36,7 +36,7 @@ export function FileSystem() : FileSystem {
     }
 }
 
-export function DebugFileSystem(files: [absPath: string, text: string][], pathSep: string) : FileSystem {
+export function DebugFileSystem(files: [absPath: string, text: string][], pathSepOfDebugFs: string) : FileSystem {
     const fmap = new Map(files.map(([absPath, text]) => [absPath, Buffer.from(text, "utf-8")]));
     return {
         readFileSync: (path: string) => {
@@ -48,9 +48,9 @@ export function DebugFileSystem(files: [absPath: string, text: string][], pathSe
         join: (...args: string[]) => {
             // join using path.join, then replace the platform pathSep with the debug path sep
             const t = path.join(...args);
-            return t.replace(path.sep, pathSep);
+            return t.replace(path.sep, pathSepOfDebugFs);
         },
-        pathSep: pathSep
+        pathSep: pathSepOfDebugFs
     }
 }
 

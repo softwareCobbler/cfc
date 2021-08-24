@@ -22,6 +22,7 @@
   },
   "references": [
     {"path": "./src/compiler"},
+    {"path": "./src/services"},
     {"path": "./src/lang-server/client"},
     {"path": "./src/lang-server/server"}
   ]
