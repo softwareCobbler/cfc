@@ -669,21 +669,13 @@ export function Checker() {
             const isNewExpr = node.parent?.kind === NodeType.new;
 
             const minRequiredParams = sig.params.filter(param => !(param.flags & TypeFlags.optional)).length;
+            // maxParams is undefined if there was a spread param, since it accepts any number of trailing args
             const maxParams = sig.params.length > 0 && sig.params[sig.params.length - 1].flags & TypeFlags.spread
                 ? undefined
                 : sig.params.length;
 
             const namedArgCount = node.args.filter(arg => !!arg.equals).length;
-
-            if (node.args.length < minRequiredParams || (maxParams !== undefined && node.args.length > maxParams)) {
-                let msg;
-                if (minRequiredParams !== maxParams) {
-                    if (maxParams === undefined) msg = `Expected at least ${minRequiredParams} arguments, but got ${node.args.length}`;
-                    else msg = `Expected between ${minRequiredParams} and ${maxParams} arguments, but got ${node.args.length}`;
-                }
-                else msg = `Expected ${maxParams} arguments, but got ${node.args.length}`;
-                typeErrorAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), msg);
-            }
+            let hasArgumentCollectionArg = false;
 
             if (namedArgCount > 0) {
                 if (namedArgCount !== node.args.length) {
@@ -697,6 +689,7 @@ export function Checker() {
                 const seenArgs = new Set<string>();
                 for (const arg of node.args) {
                     if (arg.name?.canonicalName) {
+                        hasArgumentCollectionArg = hasArgumentCollectionArg || (arg.name.canonicalName === "argumentcollection");
                         if (seenArgs.has(arg.name?.canonicalName)) {
                             const uiName = arg.name.uiName || arg.name.canonicalName;
                             typeErrorAtNode(arg.name, `Duplicate argument '${uiName}'`);
@@ -721,16 +714,22 @@ export function Checker() {
                     }
                 }
 
-                const requiredNamedParams = new Map(
-                    sig.params.filter(param => !(param.flags & TypeFlags.optional) && param.canonicalName)
-                    .map(param => [param.canonicalName, param.uiName]));
+                // make sure that all required named parameters have been provided
+                // this is skipped if there was an argumentCollection argument
+                // it is valid to provide both an argumentCollection argument and OTHER named arguments, but the runtime behavior will be non-sensical
+                // because it is valid to do so, we unfortunately cannot error on it; a linter could though (and also flag if a function defintion has "argumentCollection" as a parameter name)
+                if (!hasArgumentCollectionArg) {
+                    const requiredNamedParams = new Map(
+                        sig.params.filter(param => !(param.flags & TypeFlags.optional) && param.canonicalName)
+                        .map(param => [param.canonicalName, param.uiName]));
 
-                for (const seenArg of seenArgs) {
-                    if (requiredNamedParams.has(seenArg)) requiredNamedParams.delete(seenArg)
-                }
-                if (requiredNamedParams.size > 0) {
-                    const missingNamedParams = [...requiredNamedParams.values()].map(uiName => "'" + uiName + "'").join(", ");
-                    typeErrorAtNode(node.left, `Required named parameters are missing: ${missingNamedParams}`);
+                    for (const seenArg of seenArgs) {
+                        if (requiredNamedParams.has(seenArg)) requiredNamedParams.delete(seenArg)
+                    }
+                    if (requiredNamedParams.size > 0) {
+                        const missingNamedParams = [...requiredNamedParams.values()].map(uiName => "'" + uiName + "'").join(", ");
+                        typeErrorAtNode(node.left, `Required named parameters are missing: ${missingNamedParams}`);
+                    }
                 }
             }
             else {
@@ -743,6 +742,16 @@ export function Checker() {
                         typeErrorAtNode(node.args[i], `Argument of type '${stringifyType(argType)}' is not assignable to parameter of type '${stringifyType(paramType)}'.`);
                     }
                 }
+            }
+
+            if (!hasArgumentCollectionArg && (node.args.length < minRequiredParams || (maxParams !== undefined && node.args.length > maxParams))) {
+                let msg;
+                if (minRequiredParams !== maxParams) {
+                    if (maxParams === undefined) msg = `Expected at least ${minRequiredParams} arguments, but got ${node.args.length}`;
+                    else msg = `Expected between ${minRequiredParams} and ${maxParams} arguments, but got ${node.args.length}`;
+                }
+                else msg = `Expected ${maxParams} arguments, but got ${node.args.length}`;
+                typeErrorAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), msg);
             }
 
             for (let i = 0; i < node.args.length; i++) {

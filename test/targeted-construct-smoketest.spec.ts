@@ -300,4 +300,28 @@ describe("general smoke test for particular constructs", () => {
         assert.strictEqual(completions[0].label, "foo");
         assert.strictEqual(completions[1].label, "bar");
     });
+    it("Should accept argumentCollection as meeting the named argument requirements for a function call", () => {
+        const dfs = DebugFileSystem([
+            ["/a.cfc", `
+                component {
+                    function foo(required a, required b) {
+                        foo(argumentCollection=arguments);
+                    }
+                }
+            `],
+        ], "/");
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);
+    });
+    it("Should issue diagnostic on call expression with less than the required number of arguments.", () => {
+        const dfs = DebugFileSystem([
+            ["/a.cfc", `
+                component {
+                    function foo(required a, required b) {
+                        foo(42);
+                    }
+                }
+            `],
+        ], "/");
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 1);
+    });
 });

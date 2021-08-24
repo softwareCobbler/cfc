@@ -13,41 +13,12 @@ import * as path from "path";
 
 function projectFiddle() {
     const debugfs = DebugFileSystem([
-        ["/a.cfm", `
-            <cfset var illegal_var_decl_at_top_level = 42>
-
-            <cffunction name="foo">
-                <cfargument name="ARGNAME">
-                <cfset var ok_var_decl_inside_function = 42>
-                <cfset var argname = 42> <!--- can't re-declare a variable that is in arguments scope --->
-            </cffunction>
-
-            <cfscript>
-                function foo(argName, argName2) {
-                    var argName2 = 42;
+        ["/a.cfc", `
+            component {
+                function foo(required a, required b) {
+                    foo(argumentCollection=arguments);
                 }
-
-                f = function(argName) {
-                    var argName = 42;
-
-                    function nested(x) {
-                        var argName = "ok because the outer arguments scope is not considered";
-                    }
-                }
-
-                f = (argName) => {
-                    var argName = 42;
-                    var argName.f.z = 42;
-
-                    argName = 42; // ok, not a redeclaration, just a reassignment
-                }
-
-                f = () => {
-                    // var x redeclaration should be OK
-                    for (var x in y) {}
-                    for (var x in y) {}
-                }
-            </cfscript>
+            }
         `],
         //["/b.cfc", `component { function foo() {} }`],
         //["/lib.d.cfm", "@declare function foo(arg0: number[]) : string"]
@@ -55,11 +26,11 @@ function projectFiddle() {
 
     const project = Project(["/"], /*filesystem*/debugfs, {debug: true, parseTypes: true});
 
-    const a = project.addFile("/a.cfm");
+    const a = project.addFile("/a.cfc");
     //const b = project.addFile("/b.cfc");
     //const c = project.addFile("/lib.d.cfm");
 
-    for (const diagnostic of project.getDiagnostics("/a.cfm")) {
+    for (const diagnostic of project.getDiagnostics("/a.cfc")) {
         console.log(diagnostic);
     }
 }
