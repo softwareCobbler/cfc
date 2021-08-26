@@ -884,8 +884,8 @@ export function findAncestor(node: Node, predicate: (node: Node | null) => true 
     return undefined;
 }
 
-export function getContainingFunction(node: Node) : Node | undefined {
-    return findAncestor(node, (node) => !!node && (node.kind === NodeKind.functionDefinition || node.kind === NodeKind.arrowFunctionDefinition));
+export function getContainingFunction(node: Node) : FunctionDefinition | ArrowFunctionDefinition | undefined {
+    return findAncestor(node, (node) => !!node && (node.kind === NodeKind.functionDefinition || node.kind === NodeKind.arrowFunctionDefinition)) as FunctionDefinition | ArrowFunctionDefinition;
 }
 
 export function getNodeLinks(node: Node) {
@@ -1037,10 +1037,10 @@ export function getComponentAttrs(sourceFile: SourceFile) {
     if (sourceFile.cfFileType !== CfFileType.cfc) return undefined;
     let attrs : TagAttribute[] | undefined = undefined;
     visit(sourceFile, (node) => {
-        if (node?.kind === NodeType.comment || node?.kind === NodeType.textSpan) {
+        if (node?.kind === NodeKind.comment || node?.kind === NodeKind.textSpan) {
             return undefined;
         }
-        else if (node?.kind === NodeType.block) {
+        else if (node?.kind === NodeKind.block) {
             if (node.subType === BlockType.fromTag && node.tagOrigin.startTag?.canonicalName === "component") {
                 attrs = (node.tagOrigin.startTag as CfTag.Common).attrs;
                 return "bail";

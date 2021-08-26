@@ -665,21 +665,13 @@ export function Checker() {
             const isNewExpr = node.parent?.kind === NodeKind.new;
 
             const minRequiredParams = sig.params.filter(param => !(param.flags & TypeFlags.optional)).length;
+            // maxParams is undefined if there was a spread param, since it accepts any number of trailing args
             const maxParams = sig.params.length > 0 && sig.params[sig.params.length - 1].flags & TypeFlags.spread
                 ? undefined
                 : sig.params.length;
 
             const namedArgCount = node.args.filter(arg => !!arg.equals).length;
-
-            if (node.args.length < minRequiredParams || (maxParams !== undefined && node.args.length > maxParams)) {
-                let msg;
-                if (minRequiredParams !== maxParams) {
-                    if (maxParams === undefined) msg = `Expected at least ${minRequiredParams} arguments, but got ${node.args.length}`;
-                    else msg = `Expected between ${minRequiredParams} and ${maxParams} arguments, but got ${node.args.length}`;
-                }
-                else msg = `Expected ${maxParams} arguments, but got ${node.args.length}`;
-                typeErrorAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), msg);
-            }
+            let hasArgumentCollectionArg = false;
 
             if (namedArgCount > 0) {
                 if (namedArgCount !== node.args.length) {
@@ -693,6 +685,7 @@ export function Checker() {
                 const seenArgs = new Set<string>();
                 for (const arg of node.args) {
                     if (arg.name?.canonicalName) {
+                        hasArgumentCollectionArg = hasArgumentCollectionArg || (arg.name.canonicalName === "argumentcollection");
                         if (seenArgs.has(arg.name?.canonicalName)) {
                             const uiName = arg.name.uiName || arg.name.canonicalName;
                             typeErrorAtNode(arg.name, `Duplicate argument '${uiName}'`);
@@ -717,16 +710,22 @@ export function Checker() {
                     }
                 }
 
-                const requiredNamedParams = new Map(
-                    sig.params.filter(param => !(param.flags & TypeFlags.optional) && param.canonicalName)
-                    .map(param => [param.canonicalName, param.uiName]));
+                // make sure that all required named parameters have been provided
+                // this is skipped if there was an argumentCollection argument
+                // it is valid to provide both an argumentCollection argument and OTHER named arguments, but the runtime behavior will be non-sensical
+                // because it is valid to do so, we unfortunately cannot error on it; a linter could though (and also flag if a function defintion has "argumentCollection" as a parameter name)
+                if (!hasArgumentCollectionArg) {
+                    const requiredNamedParams = new Map(
+                        sig.params.filter(param => !(param.flags & TypeFlags.optional) && param.canonicalName)
+                        .map(param => [param.canonicalName, param.uiName]));
 
-                for (const seenArg of seenArgs) {
-                    if (requiredNamedParams.has(seenArg)) requiredNamedParams.delete(seenArg)
-                }
-                if (requiredNamedParams.size > 0) {
-                    const missingNamedParams = [...requiredNamedParams.values()].map(uiName => "'" + uiName + "'").join(", ");
-                    typeErrorAtNode(node.left, `Required named parameters are missing: ${missingNamedParams}`);
+                    for (const seenArg of seenArgs) {
+                        if (requiredNamedParams.has(seenArg)) requiredNamedParams.delete(seenArg)
+                    }
+                    if (requiredNamedParams.size > 0) {
+                        const missingNamedParams = [...requiredNamedParams.values()].map(uiName => "'" + uiName + "'").join(", ");
+                        typeErrorAtNode(node.left, `Required named parameters are missing: ${missingNamedParams}`);
+                    }
                 }
             }
             else {
@@ -739,6 +738,16 @@ export function Checker() {
                         typeErrorAtNode(node.args[i], `Argument of type '${stringifyType(argType)}' is not assignable to parameter of type '${stringifyType(paramType)}'.`);
                     }
                 }
+            }
+
+            if (!hasArgumentCollectionArg && (node.args.length < minRequiredParams || (maxParams !== undefined && node.args.length > maxParams))) {
+                let msg;
+                if (minRequiredParams !== maxParams) {
+                    if (maxParams === undefined) msg = `Expected at least ${minRequiredParams} arguments, but got ${node.args.length}`;
+                    else msg = `Expected between ${minRequiredParams} and ${maxParams} arguments, but got ${node.args.length}`;
+                }
+                else msg = `Expected ${maxParams} arguments, but got ${node.args.length}`;
+                typeErrorAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), msg);
             }
 
             for (let i = 0; i < node.args.length; i++) {
@@ -935,6 +944,17 @@ export function Checker() {
             typeErrorAtRange(mergeRanges(node.finalModifier, node.expr), `final-qualified declaration in a for initializer will fail at runtime.`);
         }
 
+        if (canonicalPath.length === 1) {
+            const enclosingFunction = getContainingFunction(node);
+            if (enclosingFunction) {
+                for (const param of enclosingFunction.params) {
+                    if (param.canonicalName === name.canonical) {
+                        typeErrorAtNode(node, `Identifier '${name.ui}' is already declared in arguments scope.`)
+                    }
+                }
+            }
+        }
+
         let rhsType : _Type | undefined = undefined;
         let assignabilityErrorNode : Node;
 
@@ -956,7 +976,7 @@ export function Checker() {
 
         const symbol = walkupScopesToResolveSymbol(node, name.canonical)?.symTabEntry;
         // if (symbol && symbol.declarations) {
-        //     hasOtherFinalDecl = filterNodeList(symbol.declarations, (decl) => decl.kind === NodeType.variableDeclaration && !!decl.finalModifier && decl !== node).length > 0;
+        //     hasOtherFinalDecl = filterNodeList(symbol.declarations, (decl) => decl.kind === NodeKind.variableDeclaration && !!decl.finalModifier && decl !== node).length > 0;
         // }
 
         // if (hasOtherFinalDecl) {
@@ -987,7 +1007,7 @@ export function Checker() {
 
         let targetId = node.nodeId;
 
-        /*if (node.kind === NodeType.indexedAccess) {
+        /*if (node.kind === NodeKind.indexedAccess) {
             targetId = node.accessElements[node.accessElements.length-1].nodeId;
         }*/
 
@@ -1191,6 +1211,10 @@ export function Checker() {
                     type = getArrayMemberType(type);
                     if (!type) type = SyntheticType.any;
                 }
+                else {
+                    // todo - support arrays being also dot-indexable, since they have member functions
+                    type = SyntheticType.any;
+                }
 
                 setCachedEvaluatedNodeType(element, type);
             }
@@ -1358,7 +1382,7 @@ export function Checker() {
             // find the `std` type in the libfiles, which we're just assuming will be either present or not, and if so, it is the only libfile
             /*for (const libFile of node.libRefs) {
                 for (const typedef of libFile.content) {
-                    if (typedef.kind === NodeType.type && typedef.typeKind === TypeKind.struct && typedef.uiName === "std") {
+                    if (typedef.kind === NodeKind.type && typedef.typeKind === TypeKind.struct && typedef.uiName === "std") {
                         return typedef.membersMap.get(type.uiName)?.type;
                     }
                 }
@@ -1378,6 +1402,7 @@ export function Checker() {
             checkNode(node.body);
             return;
         }
+
         checkNode(node.initExpr);
         checkNode(node.conditionExpr);
         checkNode(node.incrementExpr);

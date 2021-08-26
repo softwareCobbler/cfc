@@ -987,14 +987,16 @@ export function Parser() {
                 return tagIndex < tagList.length;
             }
 
-            // @ts-expect-error - unused
+            // @ ts-expect-error - unused
             function next() : never { // shadow the outer next()
                 throw "use nextTag";
             }
-            // @ts-expect-error - unused
+            next;
+            // @ ts-expect-error - unused
             function peek() : never { // shadow the outer peek()
                 throw "use peekTag";
             }
+            peek;
             
             function nextTag() {
                 return tagList[tagIndex++];
@@ -1742,7 +1744,7 @@ export function Parser() {
                 // a["b"]["c"] = 0 declares and inits a = {b: {c: 0}};
                 // a["b"].c = 0 is an error ("a" is not defined)
                 
-                //const identifier = root;//root.kind === NodeType.identifier ? root : Identifier(root, getTriviallyComputableString(root));
+                //const identifier = root;//root.kind === NodeKind.identifier ? root : Identifier(root, getTriviallyComputableString(root));
                 if (isInSomeContext(ParseContext.for)) {
                     return VariableDeclaration(finalModifier, varModifier, root);
                 }
@@ -2356,6 +2358,7 @@ export function Parser() {
             case TokenType.KW_FALSE:
             case TokenType.KW_FUNCTION:
             case TokenType.KW_NEW:
+            case TokenType.DOT:
                 return true;
             default:
                 return isIdentifier();

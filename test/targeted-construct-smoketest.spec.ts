@@ -1,8 +1,10 @@
 import * as assert from "assert";
-import { Parser, Binder, CfFileType, SourceFile, NilCfm, flattenTree, NilCfc, Checker } from "../out/compiler";
+
+import { Parser, Binder, CfFileType, SourceFile, NilCfm, flattenTree, NilCfc, DebugFileSystem, FileSystem, Project } from "../src/compiler";
 import { IndexedAccess, NodeKind } from "../src/compiler/node";
 import { findNodeInFlatSourceMap, getTriviallyComputableString } from "../src/compiler/utils";
 import * as TestLoader from "./TestLoader";
+import { getCompletions } from "../src/services/completions";
 
 const parser = Parser().setDebug(true);
 const binder = Binder().setDebug(true);
@@ -13,6 +15,12 @@ function assertDiagnosticsCount(text: string, cfFileType: CfFileType, count: num
     binder.bind(sourceFile);
     flattenTree(sourceFile); // just checking that it doesn't throw
     assert.strictEqual(sourceFile.diagnostics.length, count, `${count} diagnostics emitted`);
+}
+
+function assertDiagnosticsCountWithProject(fs: FileSystem, diagnosticsTargetFile: string, count: number) {
+    const project = Project(["/"], fs, {debug: true, parseTypes: true});
+    project.addFile(diagnosticsTargetFile);
+    assert.strictEqual(project.getDiagnostics(diagnosticsTargetFile).length, count, `Expected ${count} errors.`);
 }
 
 describe("general smoke test for particular constructs", () => {
@@ -62,44 +70,6 @@ describe("general smoke test for particular constructs", () => {
         assertDiagnosticsCount(`<cfscript>abort;</cfscript>`, CfFileType.cfm, 0);
         assertDiagnosticsCount(`<cfscript>abort "v"</cfscript>`, CfFileType.cfm, 0);
         assertDiagnosticsCount(`<cfscript>abort '1'</cfscript>`, CfFileType.cfm, 0);
-    });
-    it("Should flag var declaration binding-phase errors", () => {
-        assertDiagnosticsCount(`
-            <cfset var illegal_var_decl_at_top_level = 42>
-
-            <cffunction name="foo">
-                <cfargument name="ARGNAME">
-                <cfset var ok_var_decl_inside_function = 42>
-                <cfset var argname = 42> <!--- can't re-declare a variable that is in arguments scope --->
-            </cffunction>
-
-            <cfscript>
-                function foo(argName, argName2) {
-                    var argName2 = 42;
-                }
-
-                f = function(argName) {
-                    var argName = 42;
-
-                    function nested(x) {
-                        var argName = "ok because the outer arguments scope is not considered";
-                    }
-                }
-
-                f = (argName) => {
-                    var argName = 42;
-                    var argName.f.z = 42;
-
-                    argName = 42; // ok, not a redeclaration, just a reassignment
-                }
-
-                f = () => {
-                    // var x redeclaration should be OK
-                    for (var x in y) {}
-                    for (var x in y) {}
-                }
-            </cfscript>
-        `, CfFileType.cfm, 6);
     });
     it("Should not throw an error during tree flattening", () => {
         const string = `
@@ -250,5 +220,114 @@ describe("general smoke test for particular constructs", () => {
         const node = findNodeInFlatSourceMap(flatSourceMap, nodeMap, completionsTestCase.index);
         assert.strictEqual(node?.parent?.kind, NodeKind.dottedPath);
         assert.strictEqual(node?.parent?.parent?.kind, NodeKind.functionDefinition);
+    });
+    it("Should issue errors on redeclaration of variables already present in arguments scope", () => {
+        const dfs = DebugFileSystem([
+            ["/a.cfm", `
+                <cfscript>
+                    function foo(a, b, c) {
+                        for (var a in b) {}
+                        for (var b = 42; b == 42; g) {}
+                        var c = 42;
+                    }
+                    function bar(a,b,c) {
+                        function foo() {
+                            for (var a in b) {}
+                            for (var b = 42; b == 42; g) {}
+                            var c = 42;
+                        }
+                    }
+                    function outer() {
+                        var foo = (a,b,c) => {
+                            for (var a in b) {}
+                            for (var b = 42; b == 42; g) {}
+                            var c = 42;
+                        }
+                        var bar = (a,b,c) => {
+                            var inner = () => {
+                                for (var a in b) {}
+                                for (var b = 42; b == 42; g) {}
+                                var c = 42;
+                            }
+                        }
+                    }
+                </cfscript>
+            `],
+        ], "/");
+        assertDiagnosticsCountWithProject(dfs, "/a.cfm", 6);
+    });
+    // eventually we will support this but for now we can't error on what is actually valid code
+    it("Should not issue an error on an array member lookup", () => {
+        const dfs = DebugFileSystem([
+            ["/a.cfm", `
+                <cfscript>
+                    function foo(array a) {
+                        return a.len();
+                    }
+                </cfscript>
+            `],
+        ], "/");
+        assertDiagnosticsCountWithProject(dfs, "/a.cfm", 0);
+    });
+    it("Should offer completions for functions within a CFC", () => {
+        const testCase = TestLoader.loadCompletionAtTest("./test/sourcefiles/cfc_function_completion.cfc");
+
+        const fs = DebugFileSystem([["/a.cfc", testCase.sourceText]], "/");
+        const project = Project(["/"], fs, {debug: true, parseTypes: true});
+        project.addFile("/a.cfc");
+
+        const completions = getCompletions(project, "/a.cfc", testCase.index, null);
+
+        assert.strictEqual(completions.length, 2);
+        assert.strictEqual(completions[0].label, "foo");
+        assert.strictEqual(completions[1].label, "bar");
+    });
+    it("Should offer completions for functions of a CFC from a CFM", () => {
+        const cfc = TestLoader.loadCompletionAtTest("./test/sourcefiles/cfc_function_completion.cfc");
+        const cfm = TestLoader.loadCompletionAtTest("./test/sourcefiles/cfc_function_completion.cfc");
+
+        const fs = DebugFileSystem([
+            ["/cfc_function_completion.cfc", cfc.sourceText],
+            ["/cfc_function_completion.cfm", cfm.sourceText]
+        ], "/");
+        const project = Project(["/"], fs, {debug: true, parseTypes: true});
+        project.addFile("/cfc_function_completion.cfc");
+        project.addFile("/cfc_function_completion.cfm");
+
+        const completions = getCompletions(project, "/cfc_function_completion.cfm", cfm.index, null);
+
+        assert.strictEqual(completions.length, 2);
+        assert.strictEqual(completions[0].label, "foo");
+        assert.strictEqual(completions[1].label, "bar");
+    });
+    it("Should accept argumentCollection as meeting the named argument requirements for a function call", () => {
+        const dfs = DebugFileSystem([
+            ["/a.cfc", `
+                component {
+                    function foo(required a, required b) {
+                        foo(argumentCollection=arguments);
+                    }
+                }
+            `],
+        ], "/");
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);
+    });
+    it("Should issue diagnostic on call expression with less than the required number of arguments.", () => {
+        const dfs = DebugFileSystem([
+            ["/a.cfc", `
+                component {
+                    function foo(required a, required b) {
+                        foo(42);
+                    }
+                }
+            `],
+        ], "/");
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 1);
+    });
+    it("Should accept a decimal number as a function argument", () => {
+        const dfs = DebugFileSystem([
+            ["/a.cfm", `<cfset foo(.42)>`],
+        ], "/");
+        assertDiagnosticsCountWithProject(dfs, "/a.cfm", 0);
     });
 });

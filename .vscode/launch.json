@@ -9,7 +9,7 @@
 			"request": "launch",
 			"name": "test scratchpad",
 			"outFiles": ["${workspaceRoot}/out/**/*.js"],
-			"program": "${workspaceRoot}/out/test/scratch.js"
+			"program": "${workspaceRoot}/out/scratch/scratch.js"
 		},
         {
 			"type": "extensionHost",

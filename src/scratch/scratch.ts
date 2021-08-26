@@ -13,28 +13,7 @@ import * as path from "path";
 
 function projectFiddle() {
     const debugfs = DebugFileSystem([
-        ["/a.cfm", `
-            <cfscript>
-                /*function foo() {
-                    if (baz) {
-                        var z = 42;
-                    }
-                    else {
-                        var z = "42";
-                    }
-                }*/
-
-                string function bar(string x) {
-                    if (baz) {
-                        return "g";
-                    }
-                    else if (z) return "43";
-                    else return 3;
-                }
-
-                baz = 42;
-            </cfscript>
-        `],
+        ["/a.cfm", `<cfset foo(.42)>`],
         //["/b.cfc", `component { function foo() {} }`],
         //["/lib.d.cfm", "@declare function foo(arg0: number[]) : string"]
     ], "/");
