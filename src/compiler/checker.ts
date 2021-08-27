@@ -1130,7 +1130,7 @@ export function Checker() {
             const resolvedSymbol = walkupScopesToResolveSymbol(node, name); // really we want the flow type
             const flowType = determineFlowType(node, name); flowType;
 
-            if (!resolvedSymbol) {
+            if (!resolvedSymbol && noUndefinedVars) {
                 typeErrorAtNode(node, `Cannot find name '${name}'.`);
             }
 

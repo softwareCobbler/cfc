@@ -207,7 +207,7 @@ function resetCflsp(x_types: boolean = false) {
 	};
 	//cflsConfig.checker.installCfcResolver(CfcResolver(workspaceRoots.map(root => root.uri)));
 
-	project = Project(workspaceRoots.map(v => URI.parse(v.uri).fsPath), FileSystem(), {parseTypes: x_types, debug: true});
+	project = Project(workspaceRoots.map(v => URI.parse(v.uri).fsPath), FileSystem(), {parseTypes: x_types, debug: true, noUndefinedVars: false});
 }
 
 function reemitDiagnostics() {

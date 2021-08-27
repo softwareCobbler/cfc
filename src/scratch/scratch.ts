@@ -18,7 +18,7 @@ function projectFiddle() {
         //["/lib.d.cfm", "@declare function foo(arg0: number[]) : string"]
     ], "/");
 
-    const project = Project(["/"], /*filesystem*/debugfs, {debug: true, parseTypes: true});
+    const project = Project(["/"], /*filesystem*/debugfs, {debug: true, parseTypes: true, noUndefinedVars: true});
 
     const a = project.addFile("/a.cfm");
     //const b = project.addFile("/b.cfc");

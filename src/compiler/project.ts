@@ -54,9 +54,10 @@ export function DebugFileSystem(files: [absPath: string, text: string][], pathSe
     }
 }
 
-interface ProjectOptions {
+export interface ProjectOptions {
     debug: boolean,
     parseTypes: boolean,
+    noUndefinedVars: boolean,
 }
 
 export function Project(absRoots: string[], fileSystem: FileSystem, options: ProjectOptions) {
@@ -78,6 +79,7 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
     }
 
     checker.installCfcResolver(CfcResolver);
+    checker.setNoUndefinedVars(options.noUndefinedVars);
 
     type FileCache = Map<AbsPath, CachedFile>;
     const files : FileCache = new Map();
