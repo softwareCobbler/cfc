@@ -61,6 +61,7 @@ const enum ParseContext {
     typeStruct,
     awaitingRightBracket,
     typeAnnotation,
+    interface,
     END                 // sentinel for looping over ParseContexts
 }
 
@@ -771,7 +772,15 @@ export function Parser() {
         return result;
     }
 
-    function parseComponentPreamble() : "script" | "tag" | null {
+    const enum ComponentSyntaxType { tag = 1, script = 2 }; // start at non-zero
+    const enum ComponentOrInterface { component = 1, interface = 2 };
+
+    interface ComponentType {
+        primarySyntax: ComponentSyntaxType,
+        type: ComponentOrInterface
+    }
+
+    function parseComponentPreamble() : ComponentType | null {
         setScannerMode(ScannerMode.allow_both);
         const preamble : Node[] = [];
 
@@ -784,25 +793,37 @@ export function Parser() {
                 return false;
             }
             const tag = parseCfStartTag();
-            return tag.canonicalName === "component" || tag.canonicalName === "interface";
+            return tag.canonicalName === "component" 
+                ? ComponentOrInterface.component
+                : tag.canonicalName === "interface"
+                ? ComponentOrInterface.interface
+                : null;
         }
 
         function isScriptComponentOrInterfaceBlock() {
             setScannerMode(ScannerMode.script);
             const peekedText = peek().text.toLowerCase();
-            if (peekedText !== "component" && peekedText !== "interface") {
-                return false;
+            const cOrI = peekedText === "component"
+                ? ComponentOrInterface.component
+                : peekedText === "interface"
+                ? ComponentOrInterface.interface
+                : null;
+
+            if (!cOrI) {
+                return null;
             }
+
             next();
             parseTrivia();
             parseTagAttributes();
-            return peek().type === TokenType.LEFT_BRACE;
+            return peek().type === TokenType.LEFT_BRACE ? cOrI : null;
         }
 
         let gotNonComment = false;
         let gotTagComment = false;
         let gotScriptComment = false;
-        let match : "script" | "tag" | null = null;
+        let syntaxType : ComponentSyntaxType | null = null;
+        let componentOrInterface : ComponentOrInterface | null = null;
         outer:
         while (lookahead() !== TokenType.EOF) {
             switch (lookahead()) {
@@ -822,8 +843,10 @@ export function Parser() {
                     continue;
                 }
                 case TokenType.LEXEME: {
-                    if (SpeculationHelper.lookahead(isScriptComponentOrInterfaceBlock)) {
-                        match = "script";
+                    const maybeCOrI = SpeculationHelper.lookahead(isScriptComponentOrInterfaceBlock);
+                    if (maybeCOrI) {
+                        syntaxType = ComponentSyntaxType.script;
+                        componentOrInterface = maybeCOrI;
                         break outer;
                     }
                     gotNonComment = true;
@@ -831,8 +854,10 @@ export function Parser() {
                     continue;
                 }
                 case TokenType.CF_START_TAG_START: {
-                    if (SpeculationHelper.lookahead(isTagComponentOrInterfaceBlock)) {
-                        match = "tag";
+                    const maybeCOrI = SpeculationHelper.lookahead(isTagComponentOrInterfaceBlock);
+                    if (maybeCOrI) {
+                        syntaxType = ComponentSyntaxType.tag;
+                        componentOrInterface = maybeCOrI;
                         break outer;
                     }
                     gotNonComment = true;
@@ -855,28 +880,36 @@ export function Parser() {
             parseErrorAtRange(0, getIndex(), "A component preamble may only contain comments.");
         }
 
-        if (match && ((match === "tag" && gotScriptComment) || (match === "script" && gotTagComment))) {
-            parseErrorAtRange(0, getIndex(), `A ${match} component preamble may only contain ${match}-style comments.`);
+        if (syntaxType && ((syntaxType === ComponentSyntaxType.tag && gotScriptComment) || (syntaxType === ComponentSyntaxType.script && gotTagComment))) {
+            // we also need to consider "import" statements
+            //parseErrorAtRange(0, getIndex(), `A ${match} component preamble may only contain ${match}-style comments.`);
         }
-        else if (!match) {
-            parseErrorAtRange(0, getIndex(), `A CFC file must contain a component definition.`);
+        else if (!syntaxType) {
+            parseErrorAtRange(0, getIndex(), `A CFC file must contain a component or interface definition.`);
         }
 
-        return match;
+        if (syntaxType && componentOrInterface) return {primarySyntax: syntaxType, type: componentOrInterface};
+        else return null;
     }
 
     function parse(cfFileType: CfFileType = sourceFile?.cfFileType || CfFileType.cfm) : Node[] {
+        const savedContext = parseContext;
         switch (cfFileType) {
             case CfFileType.cfm:
                 sourceFile.content = parseTags();
                 break;
             case CfFileType.cfc: {
-                const componentType = parseComponentPreamble();
-                if (!componentType) {
+                const componentInfo = parseComponentPreamble();
+                if (!componentInfo) {
                     sourceFile.content = [];
                     break;
                 }
-                else if (componentType === "tag") {
+
+                if (componentInfo.type === ComponentOrInterface.interface) {
+                    updateParseContext(ParseContext.interface);
+                }
+
+                if (componentInfo.primarySyntax === ComponentSyntaxType.tag) {
                     sourceFile.content = parseTags();
                     break;
                 }
@@ -891,6 +924,7 @@ export function Parser() {
             }
         }
 
+        parseContext = savedContext;
         return sourceFile.content;
     }
 
@@ -2397,43 +2431,42 @@ export function Parser() {
             return CallArgument(null, null, dotDotDot, expr, comma);
         }
 
-        const exprOrArgName = parseAnonymousFunctionDefinitionOrExpression();
+        let namedArg : [Identifier, Terminal] | null = null;
+        if (isLexemeLikeToken(peek(), /*allowNumeric*/ false)) {
+            namedArg = SpeculationHelper.speculate(() => {
+                const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
+                const equalOrColon = parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia) ?? parseOptionalTerminal(TokenType.COLON, ParseOptions.withTrivia);
+                if (equalOrColon) return [Identifier(name, name.token.text), equalOrColon] as [Identifier, Terminal];
+                else return null;
+            });
+        }
 
-        // if we got an identifier, peek ahead to see if there is an equals or colon token
-        // if so, this is a named argument, like foo(bar=baz, qux:42)
-        // like within a struct literals, `=` and `:` share the same meaning
-        // we don't know from our current position if all of the args are named,
-        // we can check that later; if one is, all of them must be
-        if (exprOrArgName.kind === NodeType.identifier) {
-            let equalOrComma : Terminal | null;
-            if (equalOrComma =
-                    (parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia) ??
-                    (parseOptionalTerminal(TokenType.COLON, ParseOptions.withTrivia)))) {
-                const name = exprOrArgName;
-                let dotDotDot : Terminal | null = null;
-                let expr : Node;
+        if (namedArg) {
+            let dotDotDot : Terminal | null = null;
+            let expr : Node;
 
-                if (lookahead() === TokenType.DOT_DOT_DOT) {
-                    dotDotDot = parseExpectedTerminal(TokenType.DOT_DOT_DOT, ParseOptions.withTrivia);
-                    expr = parseExpression();
-                }
-                else {
-                    expr = parseAnonymousFunctionDefinitionOrExpression();
-                }
-
-                const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
-
-                if (!comma && isStartOfExpression()) {
-                    parseErrorAtRange(expr.range.toExclusive, expr.range.toExclusive + 1, "Expected ','");
-                }
-
-                // (#2 / #4): named / named spread
-                return CallArgument(name, equalOrComma, dotDotDot, expr, comma);
+            if (lookahead() === TokenType.DOT_DOT_DOT) {
+                dotDotDot = parseExpectedTerminal(TokenType.DOT_DOT_DOT, ParseOptions.withTrivia);
+                expr = parseExpression();
             }
+            else {
+                expr = parseAnonymousFunctionDefinitionOrExpression();
+            }
+
+            const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+
+            if (!comma && isStartOfExpression()) {
+                parseErrorAtRange(expr.range.toExclusive, expr.range.toExclusive + 1, "Expected ','");
+            }
+
+            const name = namedArg[0];
+            const equalOrComma = namedArg[1];
+            return CallArgument(name, equalOrComma, dotDotDot, expr, comma);
         }
 
         // there was no '=' or ':' after the expression,
         // so we have an unnamed arguments, like foo(x, y, z);
+        const exprOrArgName = parseAnonymousFunctionDefinitionOrExpression();
         const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
 
         if (!comma && isStartOfExpression()) {
