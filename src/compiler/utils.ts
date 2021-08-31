@@ -114,7 +114,7 @@ export function isLexemeLikeToken(token: Token, allowNumeric = false) : boolean 
         || (val > TokenType._FIRST_LIT && val < TokenType._LAST_LIT);
 }
 
-const sugaredTagNames = new Set<string>(["component", "interface", "savecontent", "lock", "transaction"]);
+const sugaredTagNames = new Set<string>(["component", "interface", "savecontent", "lock", "transaction", "param"]);
 export function isSugaredTagName(text: string) {
     return sugaredTagNames.has(text);
 }

@@ -330,4 +330,48 @@ describe("general smoke test for particular constructs", () => {
         ], "/");
         assertDiagnosticsCountWithProject(dfs, "/a.cfm", 0);
     });
+    it("Should accept a variable declaration as a loose statement after an if predicate", () => {
+        // really the issue we are checking for is that we parse the semicolon after `var y = z`, so that we see the 'else' following it
+        const dfs = DebugFileSystem([
+            ["/a.cfm", `
+            <cfscript>
+                function foo() {
+                    if (x) var y = z;
+                    else 42;
+                }
+            </cfscript>`],
+        ], "/");
+        assertDiagnosticsCountWithProject(dfs, "/a.cfm", 0);
+    });
+    it("Should parse param as a sugared tag expression.", () => {
+        const dfs = DebugFileSystem([
+            ["/a.cfc", `
+                component {
+                    param name="foo" default="lel";
+                }`]],
+            "/");
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);
+    });
+    it("Should parse catch bindings as either string or dotted path.", () => {
+        const dfs = DebugFileSystem([
+            ["/a.cfc", `
+                component {
+                    try {}
+                    catch ("a.b.c" e) {}
+
+                    try {}
+                    catch (a.b.c e) {}
+
+                    try {}
+                    catch ('a.b.c' e) {}
+
+                    try {}
+                    catch('#abc#' e) {}
+
+                    try {}
+                    catch(e e) {}
+                }`]],
+            "/");
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);
+    });
 });

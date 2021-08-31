@@ -2135,7 +2135,7 @@ export namespace Script {
         fromTag: false,
         catchToken: Terminal,
         leftParen: Terminal,
-        exceptionType: DottedPath,
+        exceptionType: SimpleStringLiteral | InterpolatedStringLiteral | DottedPath,
         exceptionBinding: Identifier,
         rightParen: Terminal,
         leftBrace: Terminal,
@@ -2146,7 +2146,7 @@ export namespace Script {
     export function Catch(
         catchToken: Terminal,
         leftParen: Terminal,
-        exceptionType: DottedPath,
+        exceptionType: SimpleStringLiteral | InterpolatedStringLiteral | DottedPath,
         exceptionBinding: Identifier,
         rightParen: Terminal,
         leftBrace: Terminal,

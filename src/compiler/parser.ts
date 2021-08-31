@@ -3221,7 +3221,11 @@ export function Parser() {
         while (lookahead() === TokenType.KW_CATCH) {
             const catchToken       = parseExpectedTerminal(TokenType.KW_CATCH, ParseOptions.withTrivia);
             const leftParen        = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
-            const exceptionType    = parseDottedPathTypename();
+            // an exception type can be a variable, a dotted path, a string, or an interpolated string
+            // if it is an identifier or interpolated string, at runtime it should resolve to an exception "type"
+            const exceptionType    = lookahead() === TokenType.QUOTE_SINGLE || lookahead() === TokenType.QUOTE_DOUBLE
+                ? parseStringLiteral()
+                : parseDottedPathTypename();
             const exceptionBinding = parseIdentifier();
             const rightParen       = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
             const leftBrace        = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
@@ -3322,7 +3326,13 @@ export function Parser() {
                 case TokenType.KW_NEW:
                 case TokenType.KW_FINAL:
                 case TokenType.KW_VAR: {
-                    return parseAssignmentOrLower();
+                    const stmt = parseAssignmentOrLower();
+
+                    // we may want to hold onto the semicolon later, but right now we can just discard it
+                    // it is valid in this position though so we need to parse it
+                    if (scriptMode()) parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia);
+
+                    return stmt;
                 }
                 case TokenType.LEFT_BRACE: {
                     // will we *ever* parse a block in tag mode ... ?
