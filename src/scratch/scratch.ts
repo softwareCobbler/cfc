@@ -15,7 +15,7 @@ function projectFiddle() {
     const debugfs = DebugFileSystem([
         ["/a.cfc", `
             component {
-                param("foo", "x");
+                param name="foo" default="lel";
             }
         `],
         //["/b.cfc", `component { function foo() {} }`],

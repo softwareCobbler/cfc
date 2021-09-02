@@ -2431,42 +2431,43 @@ export function Parser() {
             return CallArgument(null, null, dotDotDot, expr, comma);
         }
 
-        let namedArg : [Identifier, Terminal] | null = null;
-        if (isLexemeLikeToken(peek(), /*allowNumeric*/ false)) {
-            namedArg = SpeculationHelper.speculate(() => {
-                const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
-                const equalOrColon = parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia) ?? parseOptionalTerminal(TokenType.COLON, ParseOptions.withTrivia);
-                if (equalOrColon) return [Identifier(name, name.token.text), equalOrColon] as [Identifier, Terminal];
-                else return null;
-            });
-        }
+        const exprOrArgName = parseAnonymousFunctionDefinitionOrExpression();
 
-        if (namedArg) {
-            let dotDotDot : Terminal | null = null;
-            let expr : Node;
+        // if we got an identifier, peek ahead to see if there is an equals or colon token
+        // if so, this is a named argument, like foo(bar=baz, qux:42)
+        // like within a struct literals, `=` and `:` share the same meaning
+        // we don't know from our current position if all of the args are named,
+        // we can check that later; if one is, all of them must be
+        if (exprOrArgName.kind === NodeType.identifier) {
+            let equalOrComma : Terminal | null;
+            if (equalOrComma =
+                    (parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia) ??
+                    (parseOptionalTerminal(TokenType.COLON, ParseOptions.withTrivia)))) {
+                const name = exprOrArgName;
+                let dotDotDot : Terminal | null = null;
+                let expr : Node;
 
-            if (lookahead() === TokenType.DOT_DOT_DOT) {
-                dotDotDot = parseExpectedTerminal(TokenType.DOT_DOT_DOT, ParseOptions.withTrivia);
-                expr = parseExpression();
+                if (lookahead() === TokenType.DOT_DOT_DOT) {
+                    dotDotDot = parseExpectedTerminal(TokenType.DOT_DOT_DOT, ParseOptions.withTrivia);
+                    expr = parseExpression();
+                }
+                else {
+                    expr = parseAnonymousFunctionDefinitionOrExpression();
+                }
+
+                const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+
+                if (!comma && isStartOfExpression()) {
+                    parseErrorAtRange(expr.range.toExclusive, expr.range.toExclusive + 1, "Expected ','");
+                }
+
+                // (#2 / #4): named / named spread
+                return CallArgument(name, equalOrComma, dotDotDot, expr, comma);
             }
-            else {
-                expr = parseAnonymousFunctionDefinitionOrExpression();
-            }
-
-            const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
-
-            if (!comma && isStartOfExpression()) {
-                parseErrorAtRange(expr.range.toExclusive, expr.range.toExclusive + 1, "Expected ','");
-            }
-
-            const name = namedArg[0];
-            const equalOrComma = namedArg[1];
-            return CallArgument(name, equalOrComma, dotDotDot, expr, comma);
         }
 
         // there was no '=' or ':' after the expression,
         // so we have an unnamed arguments, like foo(x, y, z);
-        const exprOrArgName = parseAnonymousFunctionDefinitionOrExpression();
         const comma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
 
         if (!comma && isStartOfExpression()) {

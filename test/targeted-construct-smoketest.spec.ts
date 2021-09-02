@@ -348,7 +348,6 @@ describe("general smoke test for particular constructs", () => {
             ["/a.cfc", `
                 component {
                     param name="foo" default="lel";
-                    cfparam(name="foo", default="lel"); // "default" should be ok as a name here, really in any arg list
                 }`]],
             "/");
         assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);
