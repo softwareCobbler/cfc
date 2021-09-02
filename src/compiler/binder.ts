@@ -2,12 +2,14 @@ import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, getNodeLinks, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { SyntheticType, _Type, extractCfFunctionSignature, isFunctionSignature } from "./types";
+import { LanguageVersion } from "./project";
 
 export function Binder() {
     let RootNode : NodeWithScope<SourceFile>;
     let currentContainer : NodeWithScope;
     let scanner : Scanner;
     let diagnostics: Diagnostic[];
+    let langVersion : LanguageVersion = LanguageVersion.acf2018;
 
     let currentFlow : Flow;
     let detachedClosureFlows : Flow[] = [];
@@ -49,6 +51,10 @@ export function Binder() {
         currentContainer = RootNode;
         bindListFunctionsFirst(sourceFile_.content, sourceFile_);
         connectDetachedClosureFlowsToCurrentFlow();
+    }
+
+    function setLang(lv: LanguageVersion) {
+        langVersion = lv;
     }
 
     function newFlowGraphRootedAt(node: Node) : Flow {
@@ -724,6 +730,7 @@ export function Binder() {
 
     function bindIdentifier(node: Identifier) {
         bindNode(node.source, node);
+        checkIdentifierValidity(node);
     }
 
     function bindIndexedAccess(node: IndexedAccess) {
@@ -912,6 +919,8 @@ export function Binder() {
                     node.typeAnnotation);
             }
         }
+
+        checkIdentifierValidity(node);
 
         node.containedScope = {
             container: currentContainer,
@@ -1144,6 +1153,40 @@ export function Binder() {
         }
     }
 
+    function checkIdentifierValidity(node: Node) {
+        let err : {identifier: string, node: Node} | null = null;
+        switch (node.kind) {
+            case NodeType.functionDefinition: {
+                if (!node.fromTag && node.nameToken) {
+                    if (node.nameToken.canonicalName === "function") {
+                        err = {identifier: node.nameToken.uiName || node.nameToken.canonicalName, node: node.nameToken};
+                    }
+                }
+                break;
+            }
+            case NodeType.identifier: {
+                // are we in a position where the identifier is really an object property (`X` in arguments.X, or a struct literal {X: y})?
+                if ((node.parent?.kind === NodeType.callArgument && node === node.parent.name)
+                    || (node.parent?.kind === NodeType.structLiteralInitializerMember && node.parent.subType === StructLiteralInitializerMemberSubtype.keyed && node.parent.key === node)) {
+                    break;
+                }
+                switch (node.canonicalName) {
+                    case "final": {
+                        if (langVersion === LanguageVersion.acf2018) {
+                            err = {identifier: node.uiName || node.canonicalName, node: node}
+                        }
+                    }
+                }
+            }
+            default:
+                break;
+        }
+
+        if (err) {
+            errorAtRange(err.node.range, `'${err.identifier}' cannot be used as an identifier in this position.`);
+        }
+    }
+
     function errorAtRange(range: SourceRange, msg: string) : void {
         errorAtSpan(range.fromInclusive, range.toExclusive, msg);
     }
@@ -1156,6 +1199,7 @@ export function Binder() {
     const self = {
         bind,
         setDebug,
+        setLang,
         getNodeMap: () => <ReadonlyMap<NodeId, Node>>nodeMap,
     }
 

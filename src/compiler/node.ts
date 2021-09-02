@@ -1255,6 +1255,12 @@ export function BooleanLiteral(literal: Terminal, value: boolean) {
 export interface Identifier extends NodeBase {
     kind: NodeType.identifier;
     source: Node; // can be e.g, `var x = 42`, `var 'x' = 42`, `var #x# = 42`; <cfargument name="#'interpolated_string_but_constant'#">`
+    /* might be nice to do the following, to know that if canonical is not undefined, then ui is not either
+    name: {
+        canonical: string,
+        ui: string
+    } | undefined
+    */
     canonicalName: string | undefined; // undefined at least in the case of something like var '#foo#' = bar;
     uiName: string | undefined;
 }

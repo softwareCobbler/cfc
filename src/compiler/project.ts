@@ -54,9 +54,12 @@ export function DebugFileSystem(files: [absPath: string, text: string][], pathSe
     }
 }
 
+export const enum LanguageVersion { acf2018 = 1, lucee5 };
+
 interface ProjectOptions {
     debug: boolean,
     parseTypes: boolean,
+    language: LanguageVersion
 }
 
 export function Project(absRoots: string[], fileSystem: FileSystem, options: ProjectOptions) {
@@ -77,6 +80,7 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
         // checker.setDebug(true);
     }
 
+    binder.setLang(options.language);
     checker.installCfcResolver(CfcResolver);
 
     type FileCache = Map<AbsPath, CachedFile>;

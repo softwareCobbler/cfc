@@ -6,7 +6,7 @@ import { Scanner, Parser, Binder, NilDCfm, NilCfc, NilCfm, SourceFile } from "..
 import { CfFileType } from "../compiler/scanner";
 import { binarySearch, cfmOrCfc, findNodeInFlatSourceMap, flattenTree } from "../compiler/utils";
 import { Checker } from "../compiler/checker";
-import { DebugFileSystem, Project } from "../compiler/project";
+import { DebugFileSystem, FileSystem, LanguageVersion, Project } from "../compiler/project";
 
 import * as fs from "fs";
 import * as path from "path";
@@ -15,14 +15,20 @@ function projectFiddle() {
     const debugfs = DebugFileSystem([
         ["/a.cfc", `
             component {
-                param name="foo" default="lel";
+                s = {
+                    final: 42,
+                    default: 42
+                };
+                call(final=42, default=42);
             }
         `],
         //["/b.cfc", `component { function foo() {} }`],
         //["/lib.d.cfm", "@declare function foo(arg0: number[]) : string"]
     ], "/");
 
-    const project = Project(["/"], /*filesystem*/debugfs, {debug: true, parseTypes: true});
+    const project = Project(["/"], /*filesystem*/debugfs, {debug: true, parseTypes: true, language: LanguageVersion.acf2018});
+    //const project = Project([path.resolve(".")], FileSystem(), {debug: true, parseTypes: true, language: LanguageVersion.acf2018});
+    //const target = path.join(path.resolve("./test/"), "mxunit/tests/framework/RemoteFacadeObjectCacheTest.cfc");
 
     const a = project.addFile("/a.cfc");
     //const b = project.addFile("/b.cfc");

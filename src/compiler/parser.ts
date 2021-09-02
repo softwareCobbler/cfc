@@ -2684,13 +2684,6 @@ export function Parser() {
         }
     }
 
-    function isIllegalKeywordTokenAsIdentifier(tokenType: TokenType) {
-        // maybe have some versioning here; 2018+ makes final an illegal identifier? ok in 2016 or below ?
-        return tokenType > TokenType._FIRST_KW
-            && tokenType < TokenType._LAST_KW
-            && tokenType !== TokenType.KW_VAR; // `var` is a valid identifier, so `var var = expr` is OK
-    }
-
     // withTrivia is to support instances where the caller may want to manually consume trivia,
     // in order to grab type annotations that are inside comments
     function parseIdentifier(withTrivia = true) : Identifier {
@@ -2704,10 +2697,6 @@ export function Parser() {
             name = "";
         }
         else {
-            if (isIllegalKeywordTokenAsIdentifier(lookahead())) {
-                parseErrorAtRange(peek().range, `Reserved keyword \`${peek().text.toLowerCase()}\` cannot be used as an identifier.`);
-            }
-
             terminal = Terminal(scanIdentifier()!, withTrivia ? parseTrivia() : []);
             name = terminal.token.text;
         }

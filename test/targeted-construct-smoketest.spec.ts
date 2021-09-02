@@ -5,6 +5,7 @@ import { IndexedAccess, NodeType } from "../src/compiler/node";
 import { findNodeInFlatSourceMap, getTriviallyComputableString } from "../src/compiler/utils";
 import * as TestLoader from "./TestLoader";
 import { getCompletions } from "../src/services/completions";
+import { LanguageVersion } from "../src/compiler/project";
 
 const parser = Parser().setDebug(true);
 const binder = Binder().setDebug(true);
@@ -17,8 +18,8 @@ function assertDiagnosticsCount(text: string, cfFileType: CfFileType, count: num
     assert.strictEqual(sourceFile.diagnostics.length, count, `${count} diagnostics emitted`);
 }
 
-function assertDiagnosticsCountWithProject(fs: FileSystem, diagnosticsTargetFile: string, count: number) {
-    const project = Project(["/"], fs, {debug: true, parseTypes: true});
+function assertDiagnosticsCountWithProject(fs: FileSystem, diagnosticsTargetFile: string, count: number, language = LanguageVersion.acf2018) {
+    const project = Project(["/"], fs, {debug: true, parseTypes: true, language});
     project.addFile(diagnosticsTargetFile);
     assert.strictEqual(project.getDiagnostics(diagnosticsTargetFile).length, count, `Expected ${count} errors.`);
 }
@@ -273,7 +274,7 @@ describe("general smoke test for particular constructs", () => {
         const testCase = TestLoader.loadCompletionAtTest("./test/sourcefiles/cfc_function_completion.cfc");
 
         const fs = DebugFileSystem([["/a.cfc", testCase.sourceText]], "/");
-        const project = Project(["/"], fs, {debug: true, parseTypes: true});
+        const project = Project(["/"], fs, {debug: true, parseTypes: true, language: LanguageVersion.acf2018});
         project.addFile("/a.cfc");
 
         const completions = getCompletions(project, "/a.cfc", testCase.index, null);
@@ -290,7 +291,7 @@ describe("general smoke test for particular constructs", () => {
             ["/cfc_function_completion.cfc", cfc.sourceText],
             ["/cfc_function_completion.cfm", cfm.sourceText]
         ], "/");
-        const project = Project(["/"], fs, {debug: true, parseTypes: true});
+        const project = Project(["/"], fs, {debug: true, parseTypes: true, language: LanguageVersion.acf2018});
         project.addFile("/cfc_function_completion.cfc");
         project.addFile("/cfc_function_completion.cfm");
 
@@ -370,6 +371,19 @@ describe("general smoke test for particular constructs", () => {
 
                     try {}
                     catch(e e) {}
+                }`]],
+            "/");
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);
+    });
+    it("Should not error on reserved keywords when used in contextually valid positions.", () => {
+        const dfs = DebugFileSystem([
+            ["/a.cfc", `
+                component {
+                    s = {
+                        final: 42,
+                        default: 42
+                    };
+                    call(final=42, default=42);
                 }`]],
             "/");
         assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);
