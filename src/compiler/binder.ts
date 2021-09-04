@@ -471,10 +471,7 @@ export function Binder() {
 
         const [uiPath, canonicalPath] = [identifierBaseName.ui.split("."), identifierBaseName.canonical.split(".")];
 
-        if (isStaticallyKnownScopeName(canonicalPath[0]) && canonicalPath.length === 1 && node.varModifier) {
-            errorAtRange(mergeRanges(node.finalModifier, node.varModifier, (<BinaryOperator>node.expr).left), "Variable declaration shadows built-in scope `" + canonicalPath[0] + "`");
-        }
-        else if (isStaticallyKnownScopeName(canonicalPath[0]) && canonicalPath.length === 2) {
+        if (isStaticallyKnownScopeName(canonicalPath[0]) && canonicalPath.length === 2) {
             let targetScope : SymTab | undefined = undefined;
             if (canonicalPath[0] === "local") {
                 targetScope = currentContainer.containedScope.local;
