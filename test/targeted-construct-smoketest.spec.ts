@@ -408,16 +408,4 @@ describe("general smoke test for particular constructs", () => {
             "/");
         assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);
     });
-    it("Should error on a return statement for an unbraced arrow function", () => {
-        const dfs = DebugFileSystem([
-            ["/a.cfc", `
-                component {
-                    function foo() {
-                        x = () => return 42;
-                        y = () => { return 42; }
-                    }
-                }`]],
-            "/");
-        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 1);
-    });
 });
