@@ -538,6 +538,11 @@ export function Binder() {
     }
 
     function bindReturnStatement(node: ReturnStatement) {
+        const func = getContainingFunction(node);
+        if (func?.kind === NodeType.arrowFunctionDefinition && func.body.kind !== NodeType.block) {
+            errorAtRange(node.range, "'return' cannot be used to return a value from an unbraced arrow function.");
+        }
+
         if (node.tagOrigin.startTag) {
             const expr = (node.tagOrigin.startTag as CfTag.ScriptLike).expr;
             extendCurrentFlowToNode(node);

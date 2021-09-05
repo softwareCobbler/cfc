@@ -1769,7 +1769,7 @@ export function Parser(config: {language: LanguageVersion}) {
             //      ^^^^^^^^^
             // so we hope to see an `in` following this; otherwise, it *also* needs an initializer
             // but we can flag that in the antecedent `for` parser
-            if (!isInSomeContext(ParseContext.for) && varModifier) {
+            if (!isInSomeContext(ParseContext.for) && varModifier && langVersion === LanguageVersion.acf2018) {
                 parseErrorAtRange(root.range, "Variable declarations require initializers.");
             }
 
@@ -2341,10 +2341,12 @@ export function Parser(config: {language: LanguageVersion}) {
 
     function parseNewExpression() {
         const newToken       = parseExpectedTerminal(TokenType.KW_NEW, ParseOptions.withTrivia);
-        const className      = parseDottedPathTypename();
+        const className      = lookahead() === TokenType.QUOTE_SINGLE || lookahead() === TokenType.QUOTE_DOUBLE
+            ? parseStringLiteral()
+            : parseDottedPathTypename();
         const callExpression = parseCallExpression(className);
         const newExpression  = New(newToken, callExpression);
-        return parseCallExpressionOrLowerRest(newExpression); // is new foo()["some property"] ok ?
+        return parseCallExpressionOrLowerRest(newExpression);
     }
 
     function isStartOfStatement() : boolean {
@@ -2563,6 +2565,11 @@ export function Parser(config: {language: LanguageVersion}) {
     // @todo - the rules around what is and isn't a valid struct key need to be made more clear
     //
     function parseStructLiteralInitializerKey() : Node {
+        if (langVersion === LanguageVersion.lucee5) {
+            return parseExpression();
+        }
+
+        // fixme: consider dotted path
         const maybeLexemeLikeKey = scanLexemeLikeStructKey();
         if (maybeLexemeLikeKey) {
             return Identifier(
@@ -2612,7 +2619,7 @@ export function Parser(config: {language: LanguageVersion}) {
             if (!maybeComma && lookahead() !== terminator) {
                 parseErrorAtRange(value.range.toExclusive - 1, value.range.toExclusive + 1, "Expected ','");
             }
-            if (maybeComma && lookahead() === terminator) {
+            if (maybeComma && lookahead() === terminator && langVersion === LanguageVersion.acf2018) {
                 parseErrorAtRange(maybeComma.range, "Illegal trailing comma.");
             }
             return KeyedStructLiteralInitializerMember(key, colonOrEqual, value, maybeComma);
