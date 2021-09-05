@@ -16,7 +16,7 @@ export const enum NodeFlags {
     checkerError = 1 << 2,
 }
 
-export const enum NodeType {
+export const enum NodeKind {
     sourceFile,
     terminal, textSpan, comment, hashWrappedExpr, parenthetical, tagAttribute,
     tag, callExpression, callArgument, unaryOperator, binaryOperator,
@@ -30,55 +30,55 @@ export const enum NodeType {
     new, typeShim,
 }
 
-const NodeTypeUiString : Record<NodeType, string> = {
-    [NodeType.sourceFile]: "program",
-    [NodeType.terminal]: "terminal",
-    [NodeType.textSpan]: "textSpan",
-    [NodeType.comment]: "comment",
-    [NodeType.hashWrappedExpr]: "hashWrappedExpr",
-    [NodeType.parenthetical]: "parenthetical",
-    [NodeType.tagAttribute]: "tagAttribute",
-    [NodeType.tag]: "tag",
-    [NodeType.callExpression]: "callExpression",
-    [NodeType.callArgument]: "callArgument",
-    [NodeType.unaryOperator]: "unaryOperator",
-    [NodeType.binaryOperator]: "binaryOperator",
-    [NodeType.conditional]: "conditional",
-    [NodeType.variableDeclaration]: "declaration",
-    [NodeType.statement]: "statement",
-    [NodeType.block]: "block",
-    [NodeType.simpleStringLiteral]: "simpleStringLiteral",
-    [NodeType.interpolatedStringLiteral]: "interpolatedStringLiteral",
-    [NodeType.numericLiteral]: "numericLiteral",
-    [NodeType.booleanLiteral]: "booleanLiteral",
-    [NodeType.identifier]: "identifier",
-    [NodeType.indexedAccess]: "indexedAccess",
-    [NodeType.indexedAccessChainElement]: "indexedAccessChainElement",
-    [NodeType.sliceExpression]: "sliceExpression",
-    [NodeType.functionDefinition]: "functionDefinition",
-    [NodeType.arrowFunctionDefinition]: "arrowFunctionDefinition",
-    [NodeType.functionParameter]: "functionParameter",
-    [NodeType.dottedPath]: "dottedPath",
-    [NodeType.dottedPathRest]: "dottedPathRest",
-    [NodeType.switch]: "switch",
-    [NodeType.switchCase]: "switchCase",
-    [NodeType.do]: "do",
-    [NodeType.while]: "while",
-    [NodeType.ternary]: "ternary",
-    [NodeType.for]: "for",
-    [NodeType.structLiteral]: "structLiteral",
-    [NodeType.arrayLiteral]: "arrayLiteral",
-    [NodeType.structLiteralInitializerMember]: "structLiteralInitializerMember",
-    [NodeType.arrayLiteralInitializerMember]: "arrayLiteralInitializerMember",
-    [NodeType.returnStatement]: "returnStatement",
-    [NodeType.try]: "try",
-    [NodeType.catch]: "catch",
-    [NodeType.finally]: "finally",
-    [NodeType.breakStatement]: "break",
-    [NodeType.continueStatement]: "continue",
-    [NodeType.importStatement]: "import",
-    [NodeType.new]: "new",
-    [NodeType.typeShim]: "typeshim",
+const NodeTypeUiString : Record<NodeKind, string> = {
+    [NodeKind.sourceFile]: "program",
+    [NodeKind.terminal]: "terminal",
+    [NodeKind.textSpan]: "textSpan",
+    [NodeKind.comment]: "comment",
+    [NodeKind.hashWrappedExpr]: "hashWrappedExpr",
+    [NodeKind.parenthetical]: "parenthetical",
+    [NodeKind.tagAttribute]: "tagAttribute",
+    [NodeKind.tag]: "tag",
+    [NodeKind.callExpression]: "callExpression",
+    [NodeKind.callArgument]: "callArgument",
+    [NodeKind.unaryOperator]: "unaryOperator",
+    [NodeKind.binaryOperator]: "binaryOperator",
+    [NodeKind.conditional]: "conditional",
+    [NodeKind.variableDeclaration]: "declaration",
+    [NodeKind.statement]: "statement",
+    [NodeKind.block]: "block",
+    [NodeKind.simpleStringLiteral]: "simpleStringLiteral",
+    [NodeKind.interpolatedStringLiteral]: "interpolatedStringLiteral",
+    [NodeKind.numericLiteral]: "numericLiteral",
+    [NodeKind.booleanLiteral]: "booleanLiteral",
+    [NodeKind.identifier]: "identifier",
+    [NodeKind.indexedAccess]: "indexedAccess",
+    [NodeKind.indexedAccessChainElement]: "indexedAccessChainElement",
+    [NodeKind.sliceExpression]: "sliceExpression",
+    [NodeKind.functionDefinition]: "functionDefinition",
+    [NodeKind.arrowFunctionDefinition]: "arrowFunctionDefinition",
+    [NodeKind.functionParameter]: "functionParameter",
+    [NodeKind.dottedPath]: "dottedPath",
+    [NodeKind.dottedPathRest]: "dottedPathRest",
+    [NodeKind.switch]: "switch",
+    [NodeKind.switchCase]: "switchCase",
+    [NodeKind.do]: "do",
+    [NodeKind.while]: "while",
+    [NodeKind.ternary]: "ternary",
+    [NodeKind.for]: "for",
+    [NodeKind.structLiteral]: "structLiteral",
+    [NodeKind.arrayLiteral]: "arrayLiteral",
+    [NodeKind.structLiteralInitializerMember]: "structLiteralInitializerMember",
+    [NodeKind.arrayLiteralInitializerMember]: "arrayLiteralInitializerMember",
+    [NodeKind.returnStatement]: "returnStatement",
+    [NodeKind.try]: "try",
+    [NodeKind.catch]: "catch",
+    [NodeKind.finally]: "finally",
+    [NodeKind.breakStatement]: "break",
+    [NodeKind.continueStatement]: "continue",
+    [NodeKind.importStatement]: "import",
+    [NodeKind.new]: "new",
+    [NodeKind.typeShim]: "typeshim",
 };
 
 export type Node =
@@ -205,7 +205,7 @@ export interface Flow {
 export type ReachableFlow = Flow & {node: Node};
 
 export interface NodeBase {
-    kind: NodeType,
+    kind: NodeKind,
     nodeId: NodeId,
     parent: Node | null,
     range: SourceRange,
@@ -295,7 +295,7 @@ export interface Diagnostic {
 }
 
 export interface SourceFile extends NodeBase {
-    kind: NodeType.sourceFile,
+    kind: NodeKind.sourceFile,
     absPath: string,
     cfFileType: CfFileType,
     containedScope: ScopeDisplay,
@@ -312,7 +312,7 @@ export interface SourceFile extends NodeBase {
 }
 
 export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: string | Buffer) : SourceFile {
-    const sourceFile = NodeBase<SourceFile>(NodeType.sourceFile);
+    const sourceFile = NodeBase<SourceFile>(NodeKind.sourceFile);
     sourceFile.absPath = absPath;
     sourceFile.cfFileType = cfFileType;
     sourceFile.containedScope = {
@@ -333,7 +333,7 @@ export const NilCfc = (text: string) => SourceFile("nil!", CfFileType.cfc, text)
 export const NilDCfm = (text: string) => SourceFile("nil!", CfFileType.dCfm, text);
 
 export interface Terminal extends NodeBase {
-    kind: NodeType.terminal;
+    kind: NodeKind.terminal;
     rangeWithTrivia: SourceRange;
     token: Token;
     trivia: Node[];
@@ -341,7 +341,7 @@ export interface Terminal extends NodeBase {
 }
 
 export function Terminal(token: Token, trivia: Node[] = []) : Terminal {
-    const v = NodeBase<Terminal>(NodeType.terminal, token.range);
+    const v = NodeBase<Terminal>(NodeKind.terminal, token.range);
     v.rangeWithTrivia = mergeRanges(token.range, trivia);
     v.token = token;
     v.trivia = trivia;
@@ -367,7 +367,7 @@ export const freshFlow = (function() {
 
 export const enum CommentType { tag, scriptSingleLine, scriptMultiLine };
 export interface Comment extends NodeBase {
-    kind: NodeType.comment;
+    kind: NodeKind.comment;
     commentType: CommentType;
     typedefs?: TypeShim[],
 }
@@ -376,14 +376,14 @@ export function Comment(tagOrigin: CfTag.Comment) : Comment;
 export function Comment(commentType: CommentType, range: SourceRange, typedefs?: TypeShim[]) : Comment;
 export function Comment(commentType: CfTag.Comment | CommentType, range?: SourceRange, typedefs?: TypeShim[]) {
     if (typeof commentType === "number") { // overload 2
-        const comment = NodeBase<Comment>(NodeType.comment, range);
+        const comment = NodeBase<Comment>(NodeKind.comment, range);
         comment.commentType = commentType;
         if (typedefs) comment.typedefs = typedefs;
         return comment;
     }
     else { // overload 1
         const tagOrigin = commentType as CfTag.Comment;
-        const comment = NodeBase<Comment>(NodeType.comment, tagOrigin.range);
+        const comment = NodeBase<Comment>(NodeKind.comment, tagOrigin.range);
         comment.commentType = CommentType.tag;
         if (tagOrigin.typedefs) {
             comment.typedefs = tagOrigin.typedefs;
@@ -393,23 +393,23 @@ export function Comment(commentType: CfTag.Comment | CommentType, range?: Source
 }
 
 export interface TextSpan extends NodeBase {
-    kind: NodeType.textSpan;
+    kind: NodeKind.textSpan;
     text: string;
 }
 export function TextSpan(sourceRange: SourceRange, text: string) : TextSpan {
-    const textSpan = NodeBase<TextSpan>(NodeType.textSpan, sourceRange);
+    const textSpan = NodeBase<TextSpan>(NodeKind.textSpan, sourceRange);
     textSpan.text = text;
     return textSpan;
 }
 
 export interface HashWrappedExpr extends NodeBase {
-    kind: NodeType.hashWrappedExpr;
+    kind: NodeKind.hashWrappedExpr;
     leftHash: Terminal;
     expr: Node;
     rightHash: Terminal;
 }
 export function HashWrappedExpr(leftHash: Terminal, expr: Node, rightHash: Terminal) : HashWrappedExpr {
-    const hashWrappedExpr = NodeBase<HashWrappedExpr>(NodeType.hashWrappedExpr, mergeRanges(leftHash, rightHash));
+    const hashWrappedExpr = NodeBase<HashWrappedExpr>(NodeKind.hashWrappedExpr, mergeRanges(leftHash, rightHash));
     hashWrappedExpr.leftHash = leftHash;
     hashWrappedExpr.expr = expr;
     hashWrappedExpr.rightHash = rightHash;
@@ -417,13 +417,13 @@ export function HashWrappedExpr(leftHash: Terminal, expr: Node, rightHash: Termi
 }
 
 export interface Parenthetical extends NodeBase {
-    kind: NodeType.parenthetical;
+    kind: NodeKind.parenthetical;
     leftParen: Terminal;
     expr: Node;
     rightParen: Terminal;
 }
 export function Parenthetical(leftParen: Terminal, expr: Node, rightParen: Terminal) : Parenthetical {
-    const parentWrappedExpr = NodeBase<Parenthetical>(NodeType.parenthetical, mergeRanges(leftParen, rightParen));
+    const parentWrappedExpr = NodeBase<Parenthetical>(NodeKind.parenthetical, mergeRanges(leftParen, rightParen));
     parentWrappedExpr.leftParen = leftParen;
     parentWrappedExpr.expr = expr;
     parentWrappedExpr.rightParen = rightParen;
@@ -431,7 +431,7 @@ export function Parenthetical(leftParen: Terminal, expr: Node, rightParen: Termi
 }
 
 export interface TagAttribute extends NodeBase {
-    kind: NodeType.tagAttribute;
+    kind: NodeKind.tagAttribute;
     name: Terminal;
     equals: Terminal | null;
     expr: Node | null;
@@ -443,10 +443,10 @@ export function TagAttribute(name: Terminal, lcName: string, equals: Terminal, e
 export function TagAttribute(name: Terminal, lcName: string, equals?: Terminal, expr?: Node | undefined) : TagAttribute {
     let tagAttr : TagAttribute;
     if (name && equals && expr) {
-        tagAttr = NodeBase<TagAttribute>(NodeType.tagAttribute, mergeRanges(name, expr));
+        tagAttr = NodeBase<TagAttribute>(NodeKind.tagAttribute, mergeRanges(name, expr));
     }
     else {
-        tagAttr = NodeBase<TagAttribute>(NodeType.tagAttribute, name.range);
+        tagAttr = NodeBase<TagAttribute>(NodeKind.tagAttribute, name.range);
     }
 
     tagAttr.name = name;
@@ -470,7 +470,7 @@ export namespace CfTag {
     // end tags are expected to be "common" tags; they should not have attributes or etc.
     //
     export interface TagBase extends NodeBase {
-        kind: NodeType.tag;
+        kind: NodeKind.tag;
         which: Which;
         tagType: TagType;
         tagStart: Terminal;         // <cf | </cf
@@ -488,7 +488,7 @@ export namespace CfTag {
         tagEnd: Terminal,
         canonicalName: string) : T {
 
-        const tag = NodeBase<TagBase>(NodeType.tag, mergeRanges(tagStart, tagEnd));
+        const tag = NodeBase<TagBase>(NodeKind.tag, mergeRanges(tagStart, tagEnd));
         tag.which = which;
         tag.tagType = tagType;
         tag.tagStart = tagStart;
@@ -581,7 +581,7 @@ export namespace CfTag {
 }
 
 export interface CallExpression extends NodeBase {
-    kind: NodeType.callExpression;
+    kind: NodeKind.callExpression;
     left: Node;
     leftParen: Terminal;
     args: CallArgument[];
@@ -589,7 +589,7 @@ export interface CallExpression extends NodeBase {
 
 }
 export function CallExpression(left: Node, leftParen: Terminal, args: CallArgument[], rightParen: Terminal) {
-    const v = NodeBase<CallExpression>(NodeType.callExpression, mergeRanges(left, rightParen));
+    const v = NodeBase<CallExpression>(NodeKind.callExpression, mergeRanges(left, rightParen));
     v.left = left;
     v.leftParen = leftParen;
     v.args = args;
@@ -598,7 +598,7 @@ export function CallExpression(left: Node, leftParen: Terminal, args: CallArgume
 }
 
 export interface CallArgument extends NodeBase {
-    kind: NodeType.callArgument;
+    kind: NodeKind.callArgument;
     name: SimpleStringLiteral | InterpolatedStringLiteral | Identifier | null;
     equals: Terminal | null;
     dotDotDot: Terminal | null;
@@ -607,7 +607,7 @@ export interface CallArgument extends NodeBase {
 }
 
 export function CallArgument(name: SimpleStringLiteral | InterpolatedStringLiteral | Identifier | null, equals: Terminal | null, dotDotDot: Terminal | null, expr: Node, comma: Terminal | null) : CallArgument {
-    const v = NodeBase<CallArgument>(NodeType.callArgument, mergeRanges(name, expr, comma));
+    const v = NodeBase<CallArgument>(NodeKind.callArgument, mergeRanges(name, expr, comma));
     v.name = name;
     v.equals = equals;
     v.dotDotDot = dotDotDot;
@@ -619,7 +619,7 @@ export function CallArgument(name: SimpleStringLiteral | InterpolatedStringLiter
 export const enum UnaryOperatorPos { pre, post };
 export const enum UnaryOpType { inc, dec, pos, neg, not };
 export interface UnaryOperator extends NodeBase {
-    kind: NodeType.unaryOperator;
+    kind: NodeKind.unaryOperator;
     pos: UnaryOperatorPos;
     optype: UnaryOpType;
     operator: Terminal;
@@ -629,8 +629,8 @@ export interface UnaryOperator extends NodeBase {
 export function UnaryOperator(expr: Node, op: Terminal) : UnaryOperator;
 export function UnaryOperator(op: Terminal, expr: Node) : UnaryOperator;
 export function UnaryOperator(lexicallyFirst: Node, lexicallyAfter: Node) {
-    const v = NodeBase<UnaryOperator>(NodeType.unaryOperator, mergeRanges(lexicallyFirst, lexicallyAfter));
-    if (lexicallyFirst.kind === NodeType.terminal) {
+    const v = NodeBase<UnaryOperator>(NodeKind.unaryOperator, mergeRanges(lexicallyFirst, lexicallyAfter));
+    if (lexicallyFirst.kind === NodeKind.terminal) {
         v.pos = UnaryOperatorPos.pre;
         v.optype = tokenTypeToUnaryOpType(lexicallyFirst.token.type);
         v.operator = lexicallyFirst;
@@ -700,7 +700,7 @@ export const BinaryOpTypeUiString : Record<BinaryOpType, string> = {
 };
 
 export interface BinaryOperator extends NodeBase {
-    kind: NodeType.binaryOperator;
+    kind: NodeKind.binaryOperator;
     optype: BinaryOpType;
     left: Node;
     operator: Terminal;
@@ -709,7 +709,7 @@ export interface BinaryOperator extends NodeBase {
 }
 
 export function BinaryOperator(left: Node, operator: Terminal, right: Node) : BinaryOperator {
-    const v = NodeBase<BinaryOperator>(NodeType.binaryOperator, mergeRanges(left, right));
+    const v = NodeBase<BinaryOperator>(NodeKind.binaryOperator, mergeRanges(left, right));
     v.left = left;
     v.operator = operator;
     v.right = right;
@@ -783,7 +783,7 @@ export function tokenTypeToBinaryOpType(tokenType: TokenType) : BinaryOpType {
 export const enum ConditionalSubtype { if, elseif, else };
 
 interface ConditionalBase extends NodeBase {
-    kind: NodeType.conditional,
+    kind: NodeKind.conditional,
     subType: ConditionalSubtype,
     fromTag: boolean,
     consequent: Node,
@@ -795,7 +795,7 @@ export type Conditional = Script.Conditional | Tag.Conditional;
 
 export namespace Script {
     export interface Conditional extends ConditionalBase {
-        kind: NodeType.conditional,
+        kind: NodeKind.conditional,
         fromTag     : false,
         elseToken   : Terminal | null,
         ifToken     : Terminal | null,
@@ -807,7 +807,7 @@ export namespace Script {
     }
 
     export function If(ifToken: Terminal, leftParen: Terminal, expr: Node, rightParen: Terminal, consequent: Node) : Conditional {
-        const v       = NodeBase<Conditional>(NodeType.conditional, mergeRanges(ifToken, consequent));
+        const v       = NodeBase<Conditional>(NodeKind.conditional, mergeRanges(ifToken, consequent));
         v.fromTag     = false;
         v.subType     = ConditionalSubtype.if;
         v.elseToken   = null;
@@ -820,7 +820,7 @@ export namespace Script {
         return v;
     }
     export function ElseIf(elseToken: Terminal, ifToken: Terminal, leftParen: Terminal, expr: Node, rightParen: Terminal, consequent: Node) : Conditional {
-        const v       = NodeBase<Conditional>(NodeType.conditional, mergeRanges(ifToken, consequent));
+        const v       = NodeBase<Conditional>(NodeKind.conditional, mergeRanges(ifToken, consequent));
         v.fromTag     = false;
         v.subType     = ConditionalSubtype.elseif;
         v.elseToken   = elseToken;
@@ -833,7 +833,7 @@ export namespace Script {
         return v;
     }
     export function Else(elseToken: Terminal, consequent: Node) : Conditional {
-        const v       = NodeBase<Conditional>(NodeType.conditional, mergeRanges(elseToken, consequent));
+        const v       = NodeBase<Conditional>(NodeKind.conditional, mergeRanges(elseToken, consequent));
         v.fromTag     = false;
         v.subType     = ConditionalSubtype.else;
         v.elseToken   = elseToken;
@@ -849,7 +849,7 @@ export namespace Script {
 
 export namespace Tag {
     export interface Conditional extends ConditionalBase {
-        kind: NodeType.conditional,
+        kind: NodeKind.conditional,
         fromTag: true,
         tagOrigin: {startTag: CfTag.ScriptLike | CfTag.Common, endTag: CfTag.Common | null},
         consequent: Node,
@@ -857,7 +857,7 @@ export namespace Tag {
     }
 
     export function If(startTag: CfTag.ScriptLike, consequent: Block, alternative: Conditional | null, endTag: CfTag.Common) : Conditional {
-        const v = NodeBase<Conditional>(NodeType.conditional, mergeRanges(startTag, endTag));
+        const v = NodeBase<Conditional>(NodeKind.conditional, mergeRanges(startTag, endTag));
         v.fromTag            = true;
         v.subType            = ConditionalSubtype.if;
         v.tagOrigin.startTag = startTag;
@@ -868,7 +868,7 @@ export namespace Tag {
     }
 
     export function ElseIf(startTag: CfTag.ScriptLike, block: Block, alternative: Conditional | null) : Conditional {
-        const v = NodeBase<Conditional>(NodeType.conditional, mergeRanges(startTag, block));
+        const v = NodeBase<Conditional>(NodeKind.conditional, mergeRanges(startTag, block));
         v.fromTag            = true;
         v.subType            = ConditionalSubtype.elseif;
         v.tagOrigin.startTag = startTag;
@@ -879,7 +879,7 @@ export namespace Tag {
     }
 
     export function Else(startTag: CfTag.Common, block: Block) : Conditional {
-        const v = NodeBase<Conditional>(NodeType.conditional, mergeRanges(startTag, block));
+        const v = NodeBase<Conditional>(NodeKind.conditional, mergeRanges(startTag, block));
         v.fromTag            = true;
         v.subType            = ConditionalSubtype.else;
         v.tagOrigin.startTag = startTag;
@@ -891,7 +891,7 @@ export namespace Tag {
 }
 
 export interface VariableDeclaration extends NodeBase {
-    kind: NodeType.variableDeclaration,
+    kind: NodeKind.variableDeclaration,
     finalModifier: Terminal | null,
     varModifier: Terminal | null,
     expr: Node,
@@ -902,7 +902,7 @@ export function VariableDeclaration(
     varModifier: Terminal | null,
     expr: Node
 ) : VariableDeclaration {
-    const v = NodeBase<VariableDeclaration>(NodeType.variableDeclaration, mergeRanges(finalModifier, varModifier, expr));
+    const v = NodeBase<VariableDeclaration>(NodeKind.variableDeclaration, mergeRanges(finalModifier, varModifier, expr));
     v.finalModifier = finalModifier;
     v.varModifier = varModifier;
     v.expr = expr;
@@ -922,7 +922,7 @@ const StatementTypeUiString : Record<StatementType, string> = {
     [StatementType.scriptTagCallStatement]: "scriptTagCallStatement"
 }
 export interface Statement extends NodeBase {
-    kind: NodeType.statement,
+    kind: NodeKind.statement,
     subType: StatementType,
     expr: Node | null,              // null if from tag (originating node will be in tagOrigin.startTag)
     scriptSugaredTagStatement: {    // sugaredScriptTagCalls with no body become statements, and may have attributes; like `transaction action=rollback;`
@@ -939,7 +939,7 @@ export interface Statement extends NodeBase {
 
 // e.g, `transaction action="foo";`
 export function ScriptSugaredTagCallStatement(name: Terminal, attrs: TagAttribute[], semicolon: Terminal | null) : Statement {
-    const v = NodeBase<Statement>(NodeType.statement, mergeRanges(name, attrs, semicolon));
+    const v = NodeBase<Statement>(NodeKind.statement, mergeRanges(name, attrs, semicolon));
     v.subType = StatementType.scriptSugaredTagCallStatement;
     v.expr = name;
     v.scriptSugaredTagStatement = {attrs};
@@ -955,7 +955,7 @@ export function ScriptSugaredTagCallStatement(name: Terminal, attrs: TagAttribut
 
 // e.g, `cftransaction(action="foo");`
 export function ScriptTagCallStatement(name: Terminal, leftParen: Terminal, args: CallArgument[], rightParen: Terminal, semicolon: Terminal | null) : Statement {
-    const v = NodeBase<Statement>(NodeType.statement, mergeRanges(name, rightParen, semicolon));
+    const v = NodeBase<Statement>(NodeKind.statement, mergeRanges(name, rightParen, semicolon));
     v.subType = StatementType.scriptTagCallStatement;
     v.expr = name;
     v.scriptSugaredTagStatement = null;
@@ -970,7 +970,7 @@ export function ScriptTagCallStatement(name: Terminal, leftParen: Terminal, args
 }
 
 export function Statement(node: Node | null, semicolon: Terminal | null) : Statement {
-    const v = NodeBase<Statement>(NodeType.statement, mergeRanges(node, semicolon));
+    const v = NodeBase<Statement>(NodeKind.statement, mergeRanges(node, semicolon));
     v.subType = StatementType.expressionWrapper;
     v.expr = node;
     v.scriptSugaredTagStatement = null;
@@ -987,7 +987,7 @@ export function Statement(node: Node | null, semicolon: Terminal | null) : State
 export namespace FromTag {
     export function CfSetExpressionWrapper(tag: CfTag.ScriptLike) {
         let stmt : Statement;
-        stmt = NodeBase<Statement>(NodeType.statement, tag.range);
+        stmt = NodeBase<Statement>(NodeKind.statement, tag.range);
         stmt.subType = StatementType.expressionWrapper;
         stmt.expr = tag.expr;
         stmt.tagOrigin.startTag = tag;
@@ -1001,7 +1001,7 @@ export namespace FromTag {
     }
 
     export function Statement(tag: CfTag.Common) : Statement {
-        const stmt = NodeBase<Statement>(NodeType.statement, tag.range);
+        const stmt = NodeBase<Statement>(NodeKind.statement, tag.range);
         stmt.subType = StatementType.fromTag;
         stmt.expr = null;
         stmt.tagOrigin.startTag = tag;
@@ -1016,11 +1016,11 @@ export namespace FromTag {
 }
 
 export interface ReturnStatement extends Omit<Statement, "kind"> {
-    kind: NodeType.returnStatement;
+    kind: NodeKind.returnStatement;
     returnToken: Terminal | null; // null if from tag
 }
 export function ReturnStatement(returnToken: Terminal, expr: Node | null, semicolon: Terminal | null) : ReturnStatement {
-    const v = NodeBase<ReturnStatement>(NodeType.returnStatement, mergeRanges(returnToken, expr, semicolon))
+    const v = NodeBase<ReturnStatement>(NodeKind.returnStatement, mergeRanges(returnToken, expr, semicolon))
     v.returnToken = returnToken;
     v.expr = expr;
     v.semicolon;
@@ -1028,7 +1028,7 @@ export function ReturnStatement(returnToken: Terminal, expr: Node | null, semico
 }
 export namespace FromTag {
     export function ReturnStatement(tag: CfTag.ScriptLike) : ReturnStatement {
-        const v = NodeBase<ReturnStatement>(NodeType.returnStatement, tag.range);
+        const v = NodeBase<ReturnStatement>(NodeKind.returnStatement, tag.range);
         v.tagOrigin.startTag = tag;
         v.returnToken = null;
         v.expr = tag.expr;
@@ -1038,7 +1038,7 @@ export namespace FromTag {
 }
 
 export interface BreakStatement extends NodeBase {
-    kind: NodeType.breakStatement,
+    kind: NodeKind.breakStatement,
     breakToken: Terminal | null,
     semicolon: Terminal | null
 }
@@ -1046,14 +1046,14 @@ export function BreakStatement(
     breakToken: Terminal,
     semicolon: Terminal | null
 ) : BreakStatement {
-    const v = NodeBase<BreakStatement>(NodeType.breakStatement, mergeRanges(breakToken, semicolon));
+    const v = NodeBase<BreakStatement>(NodeKind.breakStatement, mergeRanges(breakToken, semicolon));
     v.breakToken = breakToken;
     v.semicolon = semicolon;
     return v;
 }
 export namespace FromTag {
     export function BreakStatement(tag: CfTag.Common) : BreakStatement {
-        const v = NodeBase<BreakStatement>(NodeType.breakStatement, tag.range);
+        const v = NodeBase<BreakStatement>(NodeKind.breakStatement, tag.range);
         v.tagOrigin.startTag = tag;
         v.breakToken = null;
         v.semicolon = null;
@@ -1062,7 +1062,7 @@ export namespace FromTag {
 }
 
 export interface ContinueStatement extends NodeBase {
-    kind: NodeType.continueStatement,
+    kind: NodeKind.continueStatement,
     continueToken: Terminal | null,
     semicolon: Terminal | null
 }
@@ -1070,14 +1070,14 @@ export function ContinueStatement(
     continueToken: Terminal,
     semicolon: Terminal | null
 ) : ContinueStatement {
-    const v = NodeBase<ContinueStatement>(NodeType.continueStatement, mergeRanges(continueToken, semicolon));
+    const v = NodeBase<ContinueStatement>(NodeKind.continueStatement, mergeRanges(continueToken, semicolon));
     v.continueToken = continueToken;
     v.semicolon = semicolon;
     return v;
 }
 export namespace FromTag {
     export function ContinueStatement(tag: CfTag.Common) : ContinueStatement {
-        const v = NodeBase<ContinueStatement>(NodeType.continueStatement, tag.range);
+        const v = NodeBase<ContinueStatement>(NodeKind.continueStatement, tag.range);
         v.tagOrigin.startTag = tag;
         v.continueToken = null;
         v.semicolon = null;
@@ -1097,7 +1097,7 @@ export const enum BlockType {
     cLike                               // a typical c-like block, just `{ ... }`
 }
 export interface Block extends NodeBase {
-    kind: NodeType.block,
+    kind: NodeKind.block,
     subType: BlockType,
     name: Terminal | null,
     sugaredCallStatementAttrs: TagAttribute[] | null,
@@ -1128,7 +1128,7 @@ export function ScriptTagCallBlock(name: Terminal, leftParen: Terminal, args: Ca
 }
 
 export function Block(leftBrace: Terminal | null, stmtList: Node[], rightBrace: Terminal | null) : Block {
-    const v                = NodeBase<Block>(NodeType.block, mergeRanges(leftBrace, rightBrace));
+    const v                = NodeBase<Block>(NodeKind.block, mergeRanges(leftBrace, rightBrace));
     v.subType              = BlockType.cLike;
     v.name                 = null;
     v.tagCallStatementArgs = null;
@@ -1141,7 +1141,7 @@ export function Block(leftBrace: Terminal | null, stmtList: Node[], rightBrace: 
 
 export namespace FromTag {
     export function looseStatementsBlock(stmtList: Node[]) {
-        const v = NodeBase<Block>(NodeType.block, mergeRanges(...stmtList));
+        const v = NodeBase<Block>(NodeKind.block, mergeRanges(...stmtList));
         v.tagOrigin.startTag   = null;
         v.tagOrigin.endTag     = null;
 
@@ -1158,7 +1158,7 @@ export namespace FromTag {
     export function Block(startTag: CfTag, stmtList: Node[], endTag: CfTag | null) : Block;             // overload 2
     export function Block(startTag: CfTag, endTagOrStmtList: CfTag | Node[], endTag?: CfTag | null) {
         if (endTag === undefined) { // overload 1
-            const v = NodeBase<Block>(NodeType.block, mergeRanges(startTag, endTagOrStmtList));
+            const v = NodeBase<Block>(NodeKind.block, mergeRanges(startTag, endTagOrStmtList));
             v.tagOrigin.startTag   = startTag;
             v.tagOrigin.endTag     = endTagOrStmtList as CfTag;
 
@@ -1172,7 +1172,7 @@ export namespace FromTag {
             return v;
         }
         else { // overload 2
-            const v = NodeBase<Block>(NodeType.block, mergeRanges(startTag, endTag));
+            const v = NodeBase<Block>(NodeKind.block, mergeRanges(startTag, endTag));
             v.tagOrigin.startTag   = startTag;
             v.tagOrigin.endTag     = endTag;
 
@@ -1189,7 +1189,7 @@ export namespace FromTag {
 }
 
 export interface SimpleStringLiteral extends NodeBase {
-    kind: NodeType.simpleStringLiteral;
+    kind: NodeKind.simpleStringLiteral;
     leftQuote : Terminal;
     textSpan : TextSpan;
     rightQuote: Terminal;
@@ -1199,7 +1199,7 @@ export function SimpleStringLiteral(
     leftQuote: Terminal,
     textSpan: TextSpan,
     rightQuote: Terminal) : SimpleStringLiteral {
-    const v = NodeBase<SimpleStringLiteral>(NodeType.simpleStringLiteral, mergeRanges(leftQuote, rightQuote));
+    const v = NodeBase<SimpleStringLiteral>(NodeKind.simpleStringLiteral, mergeRanges(leftQuote, rightQuote));
     v.leftQuote = leftQuote;
     v.textSpan = textSpan;
     v.rightQuote = rightQuote;
@@ -1207,7 +1207,7 @@ export function SimpleStringLiteral(
 }
 
 export interface InterpolatedStringLiteral extends NodeBase {
-    kind: NodeType.interpolatedStringLiteral;
+    kind: NodeKind.interpolatedStringLiteral;
     delimiter: TokenType.QUOTE_DOUBLE | TokenType.QUOTE_SINGLE;
     leftQuote: Terminal;
     elements: (TextSpan | HashWrappedExpr)[];
@@ -1220,7 +1220,7 @@ export function InterpolatedStringLiteral(
     elements: (TextSpan | HashWrappedExpr)[],
     rightQuote: Terminal) : InterpolatedStringLiteral {
 
-    const v = NodeBase<InterpolatedStringLiteral>(NodeType.interpolatedStringLiteral, mergeRanges(leftQuote, rightQuote));
+    const v = NodeBase<InterpolatedStringLiteral>(NodeKind.interpolatedStringLiteral, mergeRanges(leftQuote, rightQuote));
     v.delimiter = quoteType;
     v.leftQuote = leftQuote;
     v.elements = elements;
@@ -1229,31 +1229,31 @@ export function InterpolatedStringLiteral(
 }
 
 export interface NumericLiteral extends NodeBase {
-    kind: NodeType.numericLiteral;
+    kind: NodeKind.numericLiteral;
     literal: Terminal;
 }
 
 export function NumericLiteral(literal: Terminal) : NumericLiteral {
-    const v = NodeBase<NumericLiteral>(NodeType.numericLiteral, literal.range);
+    const v = NodeBase<NumericLiteral>(NodeKind.numericLiteral, literal.range);
     v.literal = literal;
     return v;
 }
 
 export interface BooleanLiteral extends NodeBase {
-    kind: NodeType.booleanLiteral;
+    kind: NodeKind.booleanLiteral;
     literal: Terminal;
     booleanValue: boolean;
 }
 
 export function BooleanLiteral(literal: Terminal, value: boolean) {
-    const v = NodeBase<BooleanLiteral>(NodeType.booleanLiteral, literal.range);
+    const v = NodeBase<BooleanLiteral>(NodeKind.booleanLiteral, literal.range);
     v.literal = literal;
     v.booleanValue = value;
     return v;
 }
 
 export interface Identifier extends NodeBase {
-    kind: NodeType.identifier;
+    kind: NodeKind.identifier;
     source: Node; // can be e.g, `var x = 42`, `var 'x' = 42`, `var #x# = 42`; <cfargument name="#'interpolated_string_but_constant'#">`
     /* might be nice to do the following, to know that if canonical is not undefined, then ui is not either
     name: {
@@ -1266,7 +1266,7 @@ export interface Identifier extends NodeBase {
 }
 
 export function Identifier(identifier: Node, uiName: string | undefined) {
-    const v = NodeBase<Identifier>(NodeType.identifier, identifier.range);
+    const v = NodeBase<Identifier>(NodeKind.identifier, identifier.range);
     v.source = identifier;
     v.uiName = uiName;
     v.canonicalName = uiName?.toLowerCase();
@@ -1276,7 +1276,7 @@ export function Identifier(identifier: Node, uiName: string | undefined) {
 export const enum IndexedAccessType { dot, bracket, optionalDot, optionalBracket, optionalCall };
 
 export interface DotAccess extends NodeBase {
-    kind: NodeType.indexedAccessChainElement,
+    kind: NodeKind.indexedAccessChainElement,
     accessType: IndexedAccessType.dot,
     dot: Terminal,
     property: Terminal,
@@ -1284,7 +1284,7 @@ export interface DotAccess extends NodeBase {
 }
 
 export interface BracketAccess extends NodeBase {
-    kind: NodeType.indexedAccessChainElement,
+    kind: NodeKind.indexedAccessChainElement,
     accessType: IndexedAccessType.bracket,
     leftBracket: Terminal,
     expr: Node,
@@ -1295,7 +1295,7 @@ export interface BracketAccess extends NodeBase {
 // note that for the optional accesses, like with the null coalescing operator `?:`
 // it is not one token, but two separate tokens, possibly with comments between them
 export interface OptionalDotAccess extends NodeBase {
-    kind: NodeType.indexedAccessChainElement,
+    kind: NodeKind.indexedAccessChainElement,
     accessType: IndexedAccessType.optionalDot,
     questionMark: Terminal,
     dot: Terminal,
@@ -1304,7 +1304,7 @@ export interface OptionalDotAccess extends NodeBase {
 }
 
 export interface OptionalBracketAccess extends NodeBase {
-    kind: NodeType.indexedAccessChainElement,
+    kind: NodeKind.indexedAccessChainElement,
     accessType: IndexedAccessType.optionalBracket,
     questionMark: Terminal,
     dot: Terminal,
@@ -1315,7 +1315,7 @@ export interface OptionalBracketAccess extends NodeBase {
 }
 
 export interface OptionalCall extends NodeBase {
-    kind: NodeType.indexedAccessChainElement,
+    kind: NodeKind.indexedAccessChainElement,
     accessType: IndexedAccessType.optionalCall,
     questionMark: Terminal,
     dot: Terminal,
@@ -1325,7 +1325,7 @@ export interface OptionalCall extends NodeBase {
 }
 
 export interface SliceExpression extends NodeBase {
-    kind: NodeType.sliceExpression,
+    kind: NodeKind.sliceExpression,
     from : Node | null,
     colon1: Terminal,
     to : Node | null,
@@ -1339,7 +1339,7 @@ export function SliceExpression(
     to : Node | null,
     colon2: Terminal,
     stride : Node | null) : SliceExpression {
-    const v = NodeBase<SliceExpression>(NodeType.sliceExpression, mergeRanges(from, colon1, to, colon2, stride));
+    const v = NodeBase<SliceExpression>(NodeKind.sliceExpression, mergeRanges(from, colon1, to, colon2, stride));
     v.from = from;
     v.colon1 = colon1;
     v.to = to;
@@ -1356,7 +1356,7 @@ export type IndexedAccessChainElement =
     | OptionalCall
 
 export function DotAccess(dot: Terminal, property: Terminal) : DotAccess {
-    const node = NodeBase<DotAccess>(NodeType.indexedAccessChainElement, mergeRanges(dot, property));
+    const node = NodeBase<DotAccess>(NodeKind.indexedAccessChainElement, mergeRanges(dot, property));
     node.accessType = IndexedAccessType.dot;
     node.dot = dot;
     node.property = property;
@@ -1365,7 +1365,7 @@ export function DotAccess(dot: Terminal, property: Terminal) : DotAccess {
 }
 
 export function BracketAccess(leftBracket: Terminal, expr: Node, rightBracket: Terminal) : BracketAccess {
-    const node = NodeBase<BracketAccess>(NodeType.indexedAccessChainElement, mergeRanges(leftBracket, rightBracket));
+    const node = NodeBase<BracketAccess>(NodeKind.indexedAccessChainElement, mergeRanges(leftBracket, rightBracket));
     node.accessType = IndexedAccessType.bracket;
     node.leftBracket = leftBracket;
     node.expr = expr;
@@ -1375,7 +1375,7 @@ export function BracketAccess(leftBracket: Terminal, expr: Node, rightBracket: T
 }
 
 export function OptionalDotAccess(questionMark: Terminal, dot: Terminal, property: Terminal) : OptionalDotAccess {
-    const node = NodeBase<OptionalDotAccess>(NodeType.indexedAccessChainElement, mergeRanges(questionMark, property));
+    const node = NodeBase<OptionalDotAccess>(NodeKind.indexedAccessChainElement, mergeRanges(questionMark, property));
     node.accessType = IndexedAccessType.optionalDot;
     node.questionMark = questionMark;
     node.dot = dot;
@@ -1385,7 +1385,7 @@ export function OptionalDotAccess(questionMark: Terminal, dot: Terminal, propert
 }
 
 export function OptionalBracketAccess(questionMark: Terminal, dot: Terminal, leftBracket: Terminal, expr: Node, rightBracket: Terminal) : OptionalBracketAccess {
-    const node = NodeBase<OptionalBracketAccess>(NodeType.indexedAccessChainElement, mergeRanges(questionMark, rightBracket));
+    const node = NodeBase<OptionalBracketAccess>(NodeKind.indexedAccessChainElement, mergeRanges(questionMark, rightBracket));
     node.accessType = IndexedAccessType.optionalBracket;
     node.questionMark = questionMark;
     node.dot = dot;
@@ -1397,7 +1397,7 @@ export function OptionalBracketAccess(questionMark: Terminal, dot: Terminal, lef
 }
 
 export function OptionalCall(questionMark: Terminal, dot: Terminal) : OptionalCall {
-    const node = NodeBase<OptionalCall>(NodeType.indexedAccessChainElement, mergeRanges(questionMark, dot));
+    const node = NodeBase<OptionalCall>(NodeKind.indexedAccessChainElement, mergeRanges(questionMark, dot));
     node.accessType = IndexedAccessType.optionalCall;
     node.questionMark = questionMark;
     node.dot = dot;
@@ -1406,7 +1406,7 @@ export function OptionalCall(questionMark: Terminal, dot: Terminal) : OptionalCa
 }
 
 export interface IndexedAccess extends NodeBase {
-    kind: NodeType.indexedAccess,
+    kind: NodeKind.indexedAccess,
     root: Node,
     accessElements: IndexedAccessChainElement[],
 }
@@ -1414,7 +1414,7 @@ export interface IndexedAccess extends NodeBase {
 export function IndexedAccess(root: Node) : IndexedAccess {
     // make a copy of the source range, so that we can update the range of the full indexed access expression without mutating
     // the root's original range
-    const v = NodeBase<IndexedAccess>(NodeType.indexedAccess, new SourceRange(root.range.fromInclusive, root.range.toExclusive));
+    const v = NodeBase<IndexedAccess>(NodeKind.indexedAccess, new SourceRange(root.range.fromInclusive, root.range.toExclusive));
     v.root = root;
     v.accessElements = [];
     return v;
@@ -1426,7 +1426,7 @@ export function pushAccessElement(base: IndexedAccess, element: IndexedAccessCha
 }
 
 interface FunctionParameterBase extends NodeBase {
-    kind: NodeType.functionParameter,
+    kind: NodeKind.functionParameter,
     required: boolean,
     defaultValue: Node | null,
     fromTag: boolean,
@@ -1438,7 +1438,7 @@ export type FunctionParameter = Script.FunctionParameter | Tag.FunctionParameter
 
 export namespace Script {
     export interface FunctionParameter extends FunctionParameterBase {
-        kind: NodeType.functionParameter,
+        kind: NodeKind.functionParameter,
         fromTag: false,
         requiredTerminal: Terminal | null,
         javaLikeTypename: DottedPath | null,
@@ -1458,7 +1458,7 @@ export namespace Script {
         defaultValue: Node | null,
         comma: Terminal | null,
         type: _Type | null) : FunctionParameter {
-        const v = NodeBase<FunctionParameter>(NodeType.functionParameter, mergeRanges(requiredTerminal, javaLikeTypename, identifier, defaultValue, comma));
+        const v = NodeBase<FunctionParameter>(NodeKind.functionParameter, mergeRanges(requiredTerminal, javaLikeTypename, identifier, defaultValue, comma));
         v.fromTag = false;
         v.requiredTerminal = requiredTerminal;
         v.javaLikeTypename = javaLikeTypename;
@@ -1478,7 +1478,7 @@ export namespace Script {
 
 export namespace Tag {
     export interface FunctionParameter extends FunctionParameterBase {
-        kind: NodeType.functionParameter,
+        kind: NodeKind.functionParameter,
         fromTag: true,        
         type: _Type | null,
     }
@@ -1486,7 +1486,7 @@ export namespace Tag {
     export function FunctionParameter(tag: CfTag.Common) : FunctionParameter {
         const name = getTriviallyComputableString(getAttributeValue(tag.attrs, "name"));
 
-        const v = NodeBase<FunctionParameter>(NodeType.functionParameter, tag.range);
+        const v = NodeBase<FunctionParameter>(NodeKind.functionParameter, tag.range);
         v.fromTag = true;
         v.tagOrigin.startTag = tag;
         v.canonicalName = name?.toLowerCase() || "<<ERROR>>";
@@ -1500,7 +1500,7 @@ export namespace Tag {
 }
 
 interface FunctionDefinitionBase extends NodeBase {
-    kind: NodeType.functionDefinition,
+    kind: NodeKind.functionDefinition,
     fromTag: boolean,
     canonicalName  : string | null,
     uiName         : string | null,
@@ -1510,7 +1510,7 @@ export type FunctionDefinition = Script.FunctionDefinition | Tag.FunctionDefinit
 
 export namespace Script {
     export interface FunctionDefinition extends FunctionDefinitionBase {
-        kind: NodeType.functionDefinition;
+        kind: NodeKind.functionDefinition;
         fromTag        : false,
         accessModifier : Terminal | null,
         returnType     : DottedPath | null,
@@ -1536,7 +1536,7 @@ export namespace Script {
         body          : Block,
         returnTypeAnnotation : _Type | null
     ) : FunctionDefinition {
-        const v = NodeBase<FunctionDefinition>(NodeType.functionDefinition, mergeRanges(accessModifier, returnType, functionToken, body));
+        const v = NodeBase<FunctionDefinition>(NodeKind.functionDefinition, mergeRanges(accessModifier, returnType, functionToken, body));
         v.fromTag        = false;
         v.accessModifier = accessModifier;
         v.returnType     = returnType;
@@ -1556,7 +1556,7 @@ export namespace Script {
 
 export namespace Tag {
     export interface FunctionDefinition extends FunctionDefinitionBase {
-        kind: NodeType.functionDefinition;
+        kind: NodeKind.functionDefinition;
         fromTag        : true,
         params         : FunctionParameter[],
         body           : Node[], // fixme: block?
@@ -1564,7 +1564,7 @@ export namespace Tag {
 
     export function FunctionDefinition(startTag: CfTag.Common, params: FunctionParameter[], body: Node[], endTag: CfTag.Common) : FunctionDefinition {
         const name = getTriviallyComputableString(getAttributeValue(startTag.attrs, "name")) ?? null;
-        const v = NodeBase<FunctionDefinition>(NodeType.functionDefinition, mergeRanges(startTag, endTag));
+        const v = NodeBase<FunctionDefinition>(NodeKind.functionDefinition, mergeRanges(startTag, endTag));
         v.fromTag            = true;
         v.tagOrigin.startTag = startTag;
         v.tagOrigin.endTag   = endTag;
@@ -1577,7 +1577,7 @@ export namespace Tag {
 }
 
 export interface ArrowFunctionDefinition extends NodeBase {
-    kind: NodeType.arrowFunctionDefinition;
+    kind: NodeKind.arrowFunctionDefinition;
     parens: {left: Terminal, right: Terminal} | null,
     params: Script.FunctionParameter[]; // not possible to have a tag based arrow function def
     fatArrow: Terminal,
@@ -1585,7 +1585,7 @@ export interface ArrowFunctionDefinition extends NodeBase {
 }
 
 export function ArrowFunctionDefinition(leftParen: Terminal | null, params: Script.FunctionParameter[], rightParen: Terminal | null, fatArrow: Terminal, body: Node) : ArrowFunctionDefinition {
-    const v = NodeBase<ArrowFunctionDefinition>(NodeType.arrowFunctionDefinition);
+    const v = NodeBase<ArrowFunctionDefinition>(NodeKind.arrowFunctionDefinition);
     v.range = mergeRanges(leftParen, body);
     v.parens = (leftParen && rightParen) ? {left: leftParen, right: rightParen} : null,
     v.params = params;
@@ -1595,26 +1595,26 @@ export function ArrowFunctionDefinition(leftParen: Terminal | null, params: Scri
 };
 
 export interface DottedPathRest extends NodeBase {
-    kind: NodeType.dottedPathRest,
+    kind: NodeKind.dottedPathRest,
     dot: Terminal,
     key: Terminal,
 }
 
 export interface DottedPath extends NodeBase {
-    kind: NodeType.dottedPath;
+    kind: NodeKind.dottedPath;
     headKey: Terminal;
     rest: DottedPathRest[],
 }
 
 export function DottedPath(headKey: Terminal) : DottedPath {
-    const v = NodeBase<DottedPath>(NodeType.dottedPath, headKey.range);
+    const v = NodeBase<DottedPath>(NodeKind.dottedPath, headKey.range);
     v.headKey = headKey;
     v.rest = [];
     return v;
 }
 
 export function DottedPathRest(dot: Terminal, key: Terminal) {
-    const v = NodeBase<DottedPathRest>(NodeType.dottedPathRest, mergeRanges(dot, key));
+    const v = NodeBase<DottedPathRest>(NodeKind.dottedPathRest, mergeRanges(dot, key));
     v.dot = dot;
     v.key = key;
     return v;
@@ -1626,7 +1626,7 @@ export function pushDottedPathElement(dottedPath: DottedPath, dot: Terminal, key
 }
 
 interface SwitchBase extends NodeBase {
-    kind: NodeType.switch;
+    kind: NodeKind.switch;
     fromTag: boolean,
     cases: SwitchCaseBase[],
 }
@@ -1635,7 +1635,7 @@ export type Switch = Script.Switch | Tag.Switch;
 
 export namespace Script {
     export interface Switch extends SwitchBase {
-        kind: NodeType.switch;
+        kind: NodeKind.switch;
         fromTag: false,
         switchToken: Terminal;
         leftParen: Terminal;
@@ -1654,7 +1654,7 @@ export namespace Script {
         leftBrace: Terminal,
         cases: Script.SwitchCase[],
         rightBrace: Terminal) : Switch {
-        const v = NodeBase<Switch>(NodeType.switch, mergeRanges(switchToken, rightBrace));
+        const v = NodeBase<Switch>(NodeKind.switch, mergeRanges(switchToken, rightBrace));
         v.fromTag = false;
         v.switchToken = switchToken;
         v.leftParen = leftParen;
@@ -1669,12 +1669,12 @@ export namespace Script {
 
 export namespace Tag {
     export interface Switch extends SwitchBase {
-        kind: NodeType.switch,
+        kind: NodeKind.switch,
         fromTag: true,
         cases: Tag.SwitchCase[],
     }
     export function Switch(startTag: CfTag.Common, cases: Tag.SwitchCase[], endTag: CfTag.Common) : Tag.Switch{
-        const v = NodeBase<Switch>(NodeType.switch, mergeRanges(startTag, endTag));
+        const v = NodeBase<Switch>(NodeKind.switch, mergeRanges(startTag, endTag));
         v.fromTag = true;
         v.tagOrigin.startTag = startTag;
         v.tagOrigin.endTag = endTag;
@@ -1684,7 +1684,7 @@ export namespace Tag {
 }
 
 interface SwitchCaseBase extends NodeBase {
-    kind: NodeType.switchCase;
+    kind: NodeKind.switchCase;
     fromTag: boolean,
     caseType: SwitchCaseType;
     body: Node[];
@@ -1696,7 +1696,7 @@ export const enum SwitchCaseType { case, default };
 
 export namespace Script {
     export interface SwitchCase extends SwitchCaseBase {
-        kind: NodeType.switchCase,
+        kind: NodeKind.switchCase,
         fromTag: false,
         caseType: SwitchCaseType,
         caseOrDefaultToken: Terminal,
@@ -1706,7 +1706,7 @@ export namespace Script {
     }
 
     export function SwitchCase(caseToken: Terminal, expr: Node, colon: Terminal, body: Node[]) : SwitchCase {
-        const v = NodeBase<SwitchCase>(NodeType.switchCase, mergeRanges(caseToken, body));
+        const v = NodeBase<SwitchCase>(NodeKind.switchCase, mergeRanges(caseToken, body));
         v.fromTag = false;
         v.caseType = SwitchCaseType.case
         v.caseOrDefaultToken = caseToken;
@@ -1716,7 +1716,7 @@ export namespace Script {
         return v;
     }
     export function SwitchDefault(defaultToken: Terminal, colon: Terminal, body: Node[]) : SwitchCase {
-        const v = NodeBase<SwitchCase>(NodeType.switchCase, mergeRanges(defaultToken, body));
+        const v = NodeBase<SwitchCase>(NodeKind.switchCase, mergeRanges(defaultToken, body));
         v.fromTag = false;
         v.caseType = SwitchCaseType.default;
         v.caseOrDefaultToken = defaultToken;
@@ -1729,14 +1729,14 @@ export namespace Script {
 
 export namespace Tag {
     export interface SwitchCase extends SwitchCaseBase {
-        kind: NodeType.switchCase,
+        kind: NodeKind.switchCase,
         fromTag: true,
         caseType: SwitchCaseType,
         body: Node[],
     }
 
     export function SwitchCase(startTag: CfTag.Common, body: Node[], endTag: CfTag.Common) : SwitchCase {
-        const v = NodeBase<SwitchCase>(NodeType.switchCase, mergeRanges(startTag, endTag));
+        const v = NodeBase<SwitchCase>(NodeKind.switchCase, mergeRanges(startTag, endTag));
         v.fromTag = true;
         v.tagOrigin.startTag = startTag;
         v.tagOrigin.endTag = endTag;
@@ -1745,7 +1745,7 @@ export namespace Tag {
         return v;
     }
     export function SwitchDefault(startTag: CfTag.Common, body: Node[], endTag: CfTag.Common) : SwitchCase {
-        const v = NodeBase<SwitchCase>(NodeType.switchCase, mergeRanges(startTag, endTag));
+        const v = NodeBase<SwitchCase>(NodeKind.switchCase, mergeRanges(startTag, endTag));
         v.fromTag = true;
         v.tagOrigin.startTag = startTag;
         v.tagOrigin.endTag = endTag;
@@ -1756,7 +1756,7 @@ export namespace Tag {
 }
 
 export interface Do extends NodeBase {
-    kind: NodeType.do;
+    kind: NodeKind.do;
     doToken: Terminal;
     body: Node;
     whileToken: Terminal;
@@ -1774,7 +1774,7 @@ export function Do(
     expr: Node,
     rightParen: Terminal) : Do
 {
-    const v = NodeBase<Do>(NodeType.do, mergeRanges(doToken, rightParen));
+    const v = NodeBase<Do>(NodeKind.do, mergeRanges(doToken, rightParen));
     v.doToken    = doToken;
     v.body       = body;
     v.whileToken = whileToken;
@@ -1785,7 +1785,7 @@ export function Do(
 }
 
 export interface While extends NodeBase {
-    kind: NodeType.while;
+    kind: NodeKind.while;
     whileToken: Terminal;
     leftParen: Terminal;
     expr: Node;
@@ -1800,7 +1800,7 @@ export function While(
     rightParen: Terminal,
     body: Node) : While
 {
-    const v = NodeBase<While>(NodeType.while, mergeRanges(whileToken, body));
+    const v = NodeBase<While>(NodeKind.while, mergeRanges(whileToken, body));
     v.whileToken = whileToken;
     v.leftParen  = leftParen;
     v.expr       = expr;
@@ -1810,7 +1810,7 @@ export function While(
 }
 
 export interface Ternary extends NodeBase {
-    kind: NodeType.ternary;
+    kind: NodeKind.ternary;
     expr: Node;
     questionMark: Terminal;
     ifTrue: Node;
@@ -1825,7 +1825,7 @@ export function Ternary(
     colon: Terminal,
     ifFalse: Node,
 ) {
-    const v = NodeBase<Ternary>(NodeType.ternary, mergeRanges(expr, ifFalse));
+    const v = NodeBase<Ternary>(NodeKind.ternary, mergeRanges(expr, ifFalse));
     v.questionMark = questionMark;
     v.ifTrue = ifTrue;
     v.colon = colon;
@@ -1837,7 +1837,7 @@ export const enum ForSubType { for, forIn}
 export type For = ForExpr | ForIn;
 
 interface ForBase extends NodeBase {
-    kind: NodeType.for;
+    kind: NodeKind.for;
     subType: ForSubType;
     forToken: Terminal;
     leftParen: Terminal;
@@ -1872,7 +1872,7 @@ export namespace For {
         incrementExpr: Node | null,
         rightParen: Terminal,
         body: Node) : ForExpr {
-        const v = NodeBase<ForExpr>(NodeType.for, mergeRanges(forToken, body));
+        const v = NodeBase<ForExpr>(NodeKind.for, mergeRanges(forToken, body));
         v.subType = ForSubType.for;
         v.forToken = forToken;
         v.leftParen = leftParen;
@@ -1893,7 +1893,7 @@ export namespace For {
         expr: Node,
         rightParen: Terminal,
         body: Node) : ForIn {
-        const v = NodeBase<ForIn>(NodeType.for, mergeRanges(forToken, body));
+        const v = NodeBase<ForIn>(NodeKind.for, mergeRanges(forToken, body));
         v.subType = ForSubType.forIn;
         v.forToken = forToken;
         v.leftParen = leftParen;
@@ -1907,7 +1907,7 @@ export namespace For {
 }
 
 export interface StructLiteral extends NodeBase {
-    kind: NodeType.structLiteral,
+    kind: NodeKind.structLiteral,
     ordered: boolean,
     leftDelimiter: Terminal,
     members: StructLiteralInitializerMember[],
@@ -1920,7 +1920,7 @@ export function StructLiteral(
     members: StructLiteralInitializerMember[],
     rightDelimiter: Terminal,
 ) : StructLiteral {
-    const v = NodeBase<StructLiteral>(NodeType.structLiteral, mergeRanges(leftDelimiter, rightDelimiter));
+    const v = NodeBase<StructLiteral>(NodeKind.structLiteral, mergeRanges(leftDelimiter, rightDelimiter));
     v.ordered = false;
     v.leftDelimiter = leftDelimiter;
     v.members = members;
@@ -1933,7 +1933,7 @@ export function OrderedStructLiteral(
     members: StructLiteralInitializerMember[],
     rightBracket: Terminal,
 ) : StructLiteral {
-    const v = NodeBase<StructLiteral>(NodeType.structLiteral, mergeRanges(leftBracket, rightBracket));
+    const v = NodeBase<StructLiteral>(NodeKind.structLiteral, mergeRanges(leftBracket, rightBracket));
     v.ordered = true;
     v.leftDelimiter = leftBracket;
     v.members = members;
@@ -1946,7 +1946,7 @@ export function EmptyOrderedStructLiteral(
     colon: Terminal,
     rightBracket: Terminal,
 ) : StructLiteral {
-    const v = NodeBase<StructLiteral>(NodeType.structLiteral, mergeRanges(leftBracket, rightBracket));
+    const v = NodeBase<StructLiteral>(NodeKind.structLiteral, mergeRanges(leftBracket, rightBracket));
     v.ordered = true;
     v.leftDelimiter = leftBracket;
     v.members = [];
@@ -1960,12 +1960,12 @@ export type StructLiteralInitializerMember = KeyedStructLiteralInitializerMember
 export const enum StructLiteralInitializerMemberSubtype { keyed, spread };
 
 interface StructLiteralInitializerMemberBase extends NodeBase {
-    kind: NodeType.structLiteralInitializerMember;
+    kind: NodeKind.structLiteralInitializerMember;
     subType: StructLiteralInitializerMemberSubtype,
 }
 
 export interface KeyedStructLiteralInitializerMember extends StructLiteralInitializerMemberBase {
-    kind: NodeType.structLiteralInitializerMember;
+    kind: NodeKind.structLiteralInitializerMember;
     subType: StructLiteralInitializerMemberSubtype.keyed,
     key: Node,
     colon: Terminal,
@@ -1978,7 +1978,7 @@ export function KeyedStructLiteralInitializerMember(
     colon: Terminal,
     expr: Node,
     comma: Terminal | null) : KeyedStructLiteralInitializerMember {
-    const v = NodeBase<KeyedStructLiteralInitializerMember>(NodeType.structLiteralInitializerMember, mergeRanges(key, expr, comma));
+    const v = NodeBase<KeyedStructLiteralInitializerMember>(NodeKind.structLiteralInitializerMember, mergeRanges(key, expr, comma));
     v.subType = StructLiteralInitializerMemberSubtype.keyed;
     v.key = key;
     v.colon = colon;
@@ -1988,7 +1988,7 @@ export function KeyedStructLiteralInitializerMember(
 }
 
 export interface SpreadStructLiteralInitializerMember extends StructLiteralInitializerMemberBase {
-    kind: NodeType.structLiteralInitializerMember;
+    kind: NodeKind.structLiteralInitializerMember;
     subType: StructLiteralInitializerMemberSubtype.spread,
     dotDotDot: Terminal,
     expr: Node,
@@ -1999,7 +1999,7 @@ export function SpreadStructLiteralInitializerMember(
     dotDotDot: Terminal,
     expr: Node,
     comma: Terminal | null) : SpreadStructLiteralInitializerMember {
-    const v = NodeBase<SpreadStructLiteralInitializerMember>(NodeType.structLiteralInitializerMember, mergeRanges(dotDotDot, expr, comma));
+    const v = NodeBase<SpreadStructLiteralInitializerMember>(NodeKind.structLiteralInitializerMember, mergeRanges(dotDotDot, expr, comma));
     v.subType = StructLiteralInitializerMemberSubtype.spread;
     v.dotDotDot = dotDotDot;
     v.expr = expr;
@@ -2008,7 +2008,7 @@ export function SpreadStructLiteralInitializerMember(
 }
 
 export interface ArrayLiteral extends NodeBase {
-    kind: NodeType.arrayLiteral,
+    kind: NodeKind.arrayLiteral,
     leftBracket: Terminal;
     members: ArrayLiteralInitializerMember[];
     rightBracket: Terminal;
@@ -2019,7 +2019,7 @@ export function ArrayLiteral(
     members: ArrayLiteralInitializerMember[],
     rightBracket: Terminal
 ) : ArrayLiteral {
-    const v = NodeBase<ArrayLiteral>(NodeType.arrayLiteral, mergeRanges(leftBracket, rightBracket));
+    const v = NodeBase<ArrayLiteral>(NodeKind.arrayLiteral, mergeRanges(leftBracket, rightBracket));
     v.leftBracket = leftBracket
     v.members = members;
     v.rightBracket = rightBracket;
@@ -2031,7 +2031,7 @@ export type ArrayLiteralInitializerMember = SimpleArrayLiteralInitializerMember 
 export const enum ArrayLiteralInitializerMemberSubtype { simple, spread }
 
 export interface SimpleArrayLiteralInitializerMember extends NodeBase {
-    kind: NodeType.arrayLiteralInitializerMember,
+    kind: NodeKind.arrayLiteralInitializerMember,
     subType: ArrayLiteralInitializerMemberSubtype.simple,
     expr: Node,
     comma: Terminal | null
@@ -2041,7 +2041,7 @@ export function SimpleArrayLiteralInitializerMember(
     expr: Node,
     comma: Terminal | null
 ) : SimpleArrayLiteralInitializerMember {
-    const v = NodeBase<SimpleArrayLiteralInitializerMember>(NodeType.arrayLiteralInitializerMember, mergeRanges(expr, comma));
+    const v = NodeBase<SimpleArrayLiteralInitializerMember>(NodeKind.arrayLiteralInitializerMember, mergeRanges(expr, comma));
     v.subType = ArrayLiteralInitializerMemberSubtype.simple;
     v.expr = expr;
     v.comma = comma;
@@ -2049,7 +2049,7 @@ export function SimpleArrayLiteralInitializerMember(
 }
 
 export interface SpreadArrayLiteralInitializerMember extends NodeBase {
-    kind: NodeType.arrayLiteralInitializerMember,
+    kind: NodeKind.arrayLiteralInitializerMember,
     subType: ArrayLiteralInitializerMemberSubtype.spread,
     dotDotDot: Terminal,
     expr: Node,
@@ -2061,7 +2061,7 @@ export function SpreadArrayLiteralInitializerMember(
     expr: Node,
     comma: Terminal | null
 ) : SpreadArrayLiteralInitializerMember {
-    const v = NodeBase<SpreadArrayLiteralInitializerMember>(NodeType.arrayLiteralInitializerMember, mergeRanges(expr, comma));
+    const v = NodeBase<SpreadArrayLiteralInitializerMember>(NodeKind.arrayLiteralInitializerMember, mergeRanges(expr, comma));
     v.subType = ArrayLiteralInitializerMemberSubtype.spread;
     v.dotDotDot = dotDotDot;
     v.expr = expr;
@@ -2070,7 +2070,7 @@ export function SpreadArrayLiteralInitializerMember(
 }
 
 interface TryBase extends NodeBase {
-    kind: NodeType.try,
+    kind: NodeKind.try,
     fromTag: boolean,
     body: Node[],
     catchBlocks: Catch[],
@@ -2081,7 +2081,7 @@ export type Try = Script.Try | Tag.Try;
 
 export namespace Script {
     export interface Try extends TryBase {
-        kind: NodeType.try,
+        kind: NodeKind.try,
         fromTag: false,
         tryToken: Terminal,
         leftBrace: Terminal,
@@ -2098,7 +2098,7 @@ export namespace Script {
         catchBlocks: Script.Catch[],
         finallyBlock: Script.Finally | null
     ) : Try {
-        const v = NodeBase<Try>(NodeType.try, mergeRanges(tryToken, finallyBlock));
+        const v = NodeBase<Try>(NodeKind.try, mergeRanges(tryToken, finallyBlock));
         v.fromTag = false;
         v.tryToken = tryToken;
         v.leftBrace = leftBrace;
@@ -2112,14 +2112,14 @@ export namespace Script {
 
 export namespace Tag {
     export interface Try extends TryBase {
-        kind: NodeType.try,
+        kind: NodeKind.try,
         fromTag: true,
         body: Node[],
         catchBlocks: Tag.Catch[],
         finallyBlock: Tag.Finally | null
     }
     export function Try(startTag: CfTag.Common, body: Node[], catchBlocks: Tag.Catch[], finallyBlock: Tag.Finally | null, endTag: CfTag.Common) : Try {
-        const v = NodeBase<Try>(NodeType.try, mergeRanges(startTag, endTag));
+        const v = NodeBase<Try>(NodeKind.try, mergeRanges(startTag, endTag));
         v.fromTag = true;
         v.tagOrigin.startTag = startTag
         v.tagOrigin.endTag = endTag;
@@ -2131,7 +2131,7 @@ export namespace Tag {
 }
 
 interface CatchBase extends NodeBase {
-    kind: NodeType.catch,
+    kind: NodeKind.catch,
     fromTag: boolean,
     body: Node[],
 }
@@ -2140,7 +2140,7 @@ export type Catch = Script.Catch | Tag.Catch;
 
 export namespace Script {
     export interface Catch extends CatchBase {
-        kind: NodeType.catch
+        kind: NodeKind.catch
         fromTag: false,
         catchToken: Terminal,
         leftParen: Terminal,
@@ -2162,7 +2162,7 @@ export namespace Script {
         body: Node[],
         rightBrace: Terminal
     ) : Catch {
-        const v = NodeBase<Catch>(NodeType.catch, mergeRanges(leftParen, rightBrace));
+        const v = NodeBase<Catch>(NodeKind.catch, mergeRanges(leftParen, rightBrace));
         v.fromTag = false;
         v.catchToken = catchToken;
         v.leftParen = leftParen;
@@ -2178,7 +2178,7 @@ export namespace Script {
 
 export namespace Tag {
     export interface Catch extends CatchBase {
-        kind: NodeType.catch
+        kind: NodeKind.catch
         fromTag: true,
         body: Node[],
     }
@@ -2187,14 +2187,14 @@ export namespace Tag {
     export function Catch(tag: CfTag.Common, body: Node[], endTag: CfTag.Common) : Catch;
     export function Catch(tag: CfTag.Common, body?: Node[], endTag?: CfTag.Common) {
         if (!body) {
-            const v = NodeBase<Catch>(NodeType.catch, tag.range);
+            const v = NodeBase<Catch>(NodeKind.catch, tag.range);
             v.fromTag = true;
             v.tagOrigin.startTag = tag;
             v.body = [];
             return v;
         }
         else {
-            const v = NodeBase<Catch>(NodeType.catch, mergeRanges(tag, endTag));
+            const v = NodeBase<Catch>(NodeKind.catch, mergeRanges(tag, endTag));
             v.fromTag = true;
             v.tagOrigin.startTag = tag;
             v.tagOrigin.endTag = endTag!;
@@ -2205,7 +2205,7 @@ export namespace Tag {
 }
 
 interface FinallyBase extends NodeBase {
-    kind: NodeType.finally,
+    kind: NodeKind.finally,
     fromTag: boolean,
     body: Node[],
 }
@@ -2214,7 +2214,7 @@ export type Finally = Script.Finally | Tag.Finally;
 
 export namespace Script {
     export interface Finally extends FinallyBase {
-        kind: NodeType.finally,
+        kind: NodeKind.finally,
         fromTag: false,
         finallyToken: Terminal,
         leftBrace: Terminal,
@@ -2227,7 +2227,7 @@ export namespace Script {
         body: Node[],
         rightBrace: Terminal
     ) : Finally {
-        const v = NodeBase<Finally>(NodeType.finally, mergeRanges(finallyToken, rightBrace));
+        const v = NodeBase<Finally>(NodeKind.finally, mergeRanges(finallyToken, rightBrace));
         v.fromTag = false;
         v.finallyToken = finallyToken;
         v.leftBrace = leftBrace;
@@ -2239,12 +2239,12 @@ export namespace Script {
 
 export namespace Tag {
     export interface Finally extends FinallyBase {
-        kind: NodeType.finally,
+        kind: NodeKind.finally,
         fromTag: true,
         body: Node[],
     }
     export function Finally(startTag: CfTag.Common, body: Node[], endTag: CfTag.Common) {
-        const v = NodeBase<Finally>(NodeType.finally, mergeRanges(startTag, endTag));
+        const v = NodeBase<Finally>(NodeKind.finally, mergeRanges(startTag, endTag));
         v.fromTag = true;
         v.tagOrigin.startTag = startTag;
         v.tagOrigin.endTag = endTag;
@@ -2254,7 +2254,7 @@ export namespace Tag {
 }
 
 export interface ImportStatement extends NodeBase {
-    kind: NodeType.importStatement,
+    kind: NodeKind.importStatement,
     importToken: Terminal,
     path: DottedPath,
     semicolon: Terminal | null,
@@ -2265,7 +2265,7 @@ export function ImportStatement(
     path: DottedPath,
     semicolon: Terminal | null
 ) : ImportStatement {
-    const v = NodeBase<ImportStatement>(NodeType.importStatement, mergeRanges(importToken, path, semicolon));
+    const v = NodeBase<ImportStatement>(NodeKind.importStatement, mergeRanges(importToken, path, semicolon));
     v.importToken = importToken;
     v.path = path;
     v.semicolon = semicolon;
@@ -2273,7 +2273,7 @@ export function ImportStatement(
 }
 
 export interface New extends NodeBase {
-    kind: NodeType.new,
+    kind: NodeKind.new,
     newToken: Terminal,
     callExpr: CallExpression
 }
@@ -2282,20 +2282,20 @@ export function New(
     newToken: Terminal,
     callExpr: CallExpression
 ) : New {
-    const v = NodeBase<New>(NodeType.new, mergeRanges(newToken, callExpr));
+    const v = NodeBase<New>(NodeKind.new, mergeRanges(newToken, callExpr));
     v.newToken = newToken;
     v.callExpr = callExpr;
     return v;
 }
 
 export interface TypeShim extends NodeBase {
-    kind: NodeType.typeShim,
+    kind: NodeKind.typeShim,
     what: "typedef" | "annotation"
     type: _Type
 }
 
 export function TypeShim(what: "typedef" | "annotation", type: _Type) : TypeShim {
-    const v = NodeBase<TypeShim>(NodeType.typeShim, SourceRange.Nil());
+    const v = NodeBase<TypeShim>(NodeKind.typeShim, SourceRange.Nil());
     v.type = type;
     v.what = what;
     return v;

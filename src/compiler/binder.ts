@@ -1,4 +1,4 @@
-import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeType, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, ConditionalSubtype, SymTab, TypeShim } from "./node";
+import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, ConditionalSubtype, SymTab, TypeShim } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { SyntheticType, _Type, extractCfFunctionSignature, isFunctionSignature } from "./types";
@@ -125,140 +125,140 @@ export function Binder() {
         node.parent = parent;
 
         switch (node.kind) {
-            case NodeType.sourceFile:
+            case NodeKind.sourceFile:
                 throw "Bind source files by binding its content";
-            case NodeType.comment:
+            case NodeKind.comment:
                 if (node.typedefs) {
                     bindList(node.typedefs, node);
                 }
                 return;
-            case NodeType.textSpan:
+            case NodeKind.textSpan:
                 return;
-            case NodeType.terminal:
+            case NodeKind.terminal:
                 bindList(node.trivia, node);
                 return;
-            case NodeType.hashWrappedExpr: // fallthrough
-            case NodeType.parenthetical:   // fallthrough
-            case NodeType.tagAttribute:
+            case NodeKind.hashWrappedExpr: // fallthrough
+            case NodeKind.parenthetical:   // fallthrough
+            case NodeKind.tagAttribute:
                 bindNode(node.expr, node);
                 return;
-            case NodeType.tag:
+            case NodeKind.tag:
                 bindTag(node);
                 return;
-            case NodeType.callExpression:
+            case NodeKind.callExpression:
                 bindCallExpression(node);
                 return;
-            case NodeType.callArgument:
+            case NodeKind.callArgument:
                 bindCallArgument(node);
                 return;
-            case NodeType.unaryOperator:
+            case NodeKind.unaryOperator:
                 bindUnaryOperator(node);
                 return;
-            case NodeType.binaryOperator:
+            case NodeKind.binaryOperator:
                 bindBinaryOperator(node);
                 return;
-            case NodeType.conditional:
+            case NodeKind.conditional:
                 bindConditional(node);
                 return;
-            case NodeType.variableDeclaration:
+            case NodeKind.variableDeclaration:
                 bindVariableDeclaration(node);
                 return;
-            case NodeType.statement:
+            case NodeKind.statement:
                 bindStatement(node);
                 return;
-            case NodeType.returnStatement:
+            case NodeKind.returnStatement:
                 bindReturnStatement(node);
                 return;
-            case NodeType.breakStatement:
+            case NodeKind.breakStatement:
                 bindBreakStatement(node);
                 return;
-            case NodeType.continueStatement:
+            case NodeKind.continueStatement:
                 bindContinueStatement(node);
                 return;
-            case NodeType.block:
+            case NodeKind.block:
                 bindBlock(node);
                 return;
-            case NodeType.simpleStringLiteral:
+            case NodeKind.simpleStringLiteral:
                 bindSimpleStringLiteral(node);
                 return;
-            case NodeType.interpolatedStringLiteral:
+            case NodeKind.interpolatedStringLiteral:
                 bindInterpolatedStringLiteral(node);
                 return;
-            case NodeType.numericLiteral: // fallthrough
-            case NodeType.booleanLiteral:
+            case NodeKind.numericLiteral: // fallthrough
+            case NodeKind.booleanLiteral:
                 // no-op, just a terminal
                 return;
-            case NodeType.identifier:
+            case NodeKind.identifier:
                 bindIdentifier(node);
                 return;
-            case NodeType.indexedAccess:
+            case NodeKind.indexedAccess:
                 bindIndexedAccess(node);
                 return;
-            case NodeType.indexedAccessChainElement:
+            case NodeKind.indexedAccessChainElement:
                 bindIndexedAccessChainElement(node);
                 return;
-            case NodeType.sliceExpression:
+            case NodeKind.sliceExpression:
                 bindSliceExpression(node);
                 return;
-            case NodeType.functionParameter:
+            case NodeKind.functionParameter:
                 bindFunctionParameter(node);
                 return;
-            case NodeType.functionDefinition: // fallthrough
-            case NodeType.arrowFunctionDefinition:
+            case NodeKind.functionDefinition: // fallthrough
+            case NodeKind.arrowFunctionDefinition:
                 bindFunctionDefinition(node);
                 return;
-            case NodeType.dottedPath:
+            case NodeKind.dottedPath:
                 // ?
                 return;
-            case NodeType.dottedPathRest:
+            case NodeKind.dottedPathRest:
                 // no-op, taken care of by dottedpath
                 return;
-            case NodeType.switch:
+            case NodeKind.switch:
                 bindSwitch(node);
                 return;
-            case NodeType.switchCase:
+            case NodeKind.switchCase:
                 bindSwitchCase(node);
                 return;
-            case NodeType.do:
+            case NodeKind.do:
                 bindDo(node);
                 return;
-            case NodeType.while:
+            case NodeKind.while:
                 bindWhile(node);
                 return;
-            case NodeType.ternary:
+            case NodeKind.ternary:
                 bindTernary(node);
                 return;
-            case NodeType.for:
+            case NodeKind.for:
                 bindFor(node);
                 return;
-            case NodeType.structLiteral:
+            case NodeKind.structLiteral:
                 bindStructLiteral(node);
                 return;
-            case NodeType.structLiteralInitializerMember:
+            case NodeKind.structLiteralInitializerMember:
                 bindStructLiteralInitializerMember(node);
                 return;
-            case NodeType.arrayLiteral:
+            case NodeKind.arrayLiteral:
                 bindArrayLiteral(node);
                 return;
-            case NodeType.arrayLiteralInitializerMember:
+            case NodeKind.arrayLiteralInitializerMember:
                 bindArrayLiteralInitializerMember(node);
                 return;
-            case NodeType.try:
+            case NodeKind.try:
                 bindTry(node);
                 return;
-            case NodeType.catch:
+            case NodeKind.catch:
                 bindCatch(node);
                 return;
-            case NodeType.finally:
+            case NodeKind.finally:
                 bindFinally(node);
                 return;
-            case NodeType.importStatement:
+            case NodeKind.importStatement:
                 bindImportStatement(node);
                 return;
-            case NodeType.new:
+            case NodeKind.new:
                 bindNew(node);
                 return;
-            case NodeType.typeShim:
+            case NodeKind.typeShim:
                 bindTypeShim(node);
                 return;
             default:
@@ -268,7 +268,7 @@ export function Binder() {
 
     function bindDirectTerminals(node: Node) {
         visit(node, function(visitedNode: Node | null | undefined) {
-            if (visitedNode?.kind === NodeType.terminal) {
+            if (visitedNode?.kind === NodeKind.terminal) {
                 nodeMap.set(visitedNode.nodeId, visitedNode);
                 visitedNode.parent = node;
                 bindList(visitedNode.trivia, visitedNode);
@@ -283,8 +283,8 @@ export function Binder() {
     }
 
     function bindListFunctionsFirst(nodes: Node[], parent: Node) {
-        bindList(nodes.filter(node => node.kind === NodeType.functionDefinition), parent);
-        bindList(nodes.filter(node => node.kind !== NodeType.functionDefinition), parent);
+        bindList(nodes.filter(node => node.kind === NodeKind.functionDefinition), parent);
+        bindList(nodes.filter(node => node.kind !== NodeKind.functionDefinition), parent);
     }
 
     function bindTypeShim(node: TypeShim) {
@@ -428,14 +428,14 @@ export function Binder() {
             targetScope = containingFunction.containedScope?.local!;
         }
 
-        if (node.expr.kind === NodeType.identifier) {
+        if (node.expr.kind === NodeKind.identifier) {
             bindNode(node.expr, node);
 
             const name = getTriviallyComputableString(node.expr);
             if (!name) return;
             addSymbolToTable(targetScope, name, node);
         }
-        else if (node.expr.kind === NodeType.indexedAccess) {
+        else if (node.expr.kind === NodeKind.indexedAccess) {
             // need a dot/bracket "path creation" mechanism, e.g., for (local.foo in bar) {}
         }
     }
@@ -443,13 +443,13 @@ export function Binder() {
     function bindVariableDeclaration(node: VariableDeclaration) {
         if (!node.flow) extendCurrentFlowToNode(node); // for-in declarations will already have flows
         
-        if (node.parent?.kind === NodeType.for && node.parent.subType === ForSubType.forIn && node.parent.init === node) {
+        if (node.parent?.kind === NodeKind.for && node.parent.subType === ForSubType.forIn && node.parent.init === node) {
             extendCurrentFlowToNode(node.expr);
             bindForInInit(node);
             return;
         }
 
-        if (node.expr.kind === NodeType.binaryOperator) {
+        if (node.expr.kind === NodeKind.binaryOperator) {
             bindAssignmentFlow(node.expr.left, node.expr.right);
             bindNode(node.expr.left, node);
 
@@ -461,8 +461,8 @@ export function Binder() {
 
         let identifierBaseName : ReturnType<typeof stringifyLValue> | undefined = undefined;
         
-        if (node.expr.kind === NodeType.binaryOperator && node.expr.optype === BinaryOpType.assign &&
-            (node.expr.left.kind === NodeType.indexedAccess || node.expr.left.kind === NodeType.identifier)) {
+        if (node.expr.kind === NodeKind.binaryOperator && node.expr.optype === BinaryOpType.assign &&
+            (node.expr.left.kind === NodeKind.indexedAccess || node.expr.left.kind === NodeKind.identifier)) {
             identifierBaseName = stringifyLValue(node.expr.left);
         }
 
@@ -780,7 +780,7 @@ export function Binder() {
         bindNode(node.defaultValue, node);
     }
 
-    function getAncestorOfType(node: Node | null, nodeType: NodeType) : Node | undefined {
+    function getAncestorOfType(node: Node | null, nodeType: NodeKind) : Node | undefined {
         while (node) {
             if (node.kind === nodeType) {
                 return node;
@@ -815,7 +815,7 @@ export function Binder() {
 
         const target = node.left;
 
-        if (target.kind === NodeType.indexedAccess) {
+        if (target.kind === NodeKind.indexedAccess) {
             const targetBaseName = getTriviallyComputableString(target.root)?.toLowerCase();
 
             if (!targetBaseName) {
@@ -938,7 +938,7 @@ export function Binder() {
             addSymbolToTable(node.containedScope.arguments!, param.uiName, param, type, annotatedType);
         }
 
-        if (!node.fromTag && node.kind === NodeType.functionDefinition) {
+        if (!node.fromTag && node.kind === NodeKind.functionDefinition) {
             // access modifier is a terminal which gets autobound in bindDirectTerminals, otherwise we would bind that here, too
             bindNode(node.returnType, node);
             bindNode(node.nameToken, node);
@@ -957,7 +957,7 @@ export function Binder() {
 
         bindList(node.params, node);
 
-        if (node.kind === NodeType.functionDefinition && node.fromTag) {
+        if (node.kind === NodeKind.functionDefinition && node.fromTag) {
             bindList(node.body, node);
         }
         else {
@@ -1079,7 +1079,7 @@ export function Binder() {
             bindNode(node.tagOrigin.startTag, node);
             bindList(node.body, node);
             bindNode(node.tagOrigin.endTag, node);
-            if (!getAncestorOfType(node, NodeType.try)) {
+            if (!getAncestorOfType(node, NodeKind.try)) {
                 if (node.tagOrigin.startTag) {
                     errorAtRange(node.tagOrigin.startTag.range, "A catch tag must be contained within a try tag-block.");
                 }
@@ -1097,7 +1097,7 @@ export function Binder() {
             bindNode(node.tagOrigin.startTag, node);
             bindList(node.body, node);
             bindNode(node.tagOrigin.endTag, node);
-            if (!getAncestorOfType(node, NodeType.try)) {
+            if (!getAncestorOfType(node, NodeKind.try)) {
                 errorAtRange(node.tagOrigin.startTag.range, "A finally tag must be contained within a try tag-block.");
             }
             return;
@@ -1138,7 +1138,7 @@ export function Binder() {
         };
 
         for (const node of sourceFile.content) {
-            if (node.kind === NodeType.typeShim) {
+            if (node.kind === NodeKind.typeShim) {
                 if (isFunctionSignature(node.type)) {
                     addSymbolToTable(sourceFile.containedScope!.global!, node.type.uiName, node);
                 }
@@ -1155,7 +1155,7 @@ export function Binder() {
     function checkIdentifierValidity(node: Node) : void {
         const defaultMsg = (nameLike: {uiName: string | undefined, canonicalName: string | undefined}) => `'${nameLike.uiName || nameLike.canonicalName}' cannot be used as an identifier in this position.`;
         switch (node.kind) {
-            case NodeType.identifier: {
+            case NodeKind.identifier: {
                 switch (node.canonicalName) {
                     case "final": {
                         if (isNamedFunctionArgumentName(node) || isObjectLiteralPropertyName(node)) {
@@ -1201,7 +1201,7 @@ export function Binder() {
                     case "try":
                     case "var":
                     case "while": {
-                        if (node.canonicalName === "function" && node.parent?.kind === NodeType.functionDefinition) {
+                        if (node.canonicalName === "function" && node.parent?.kind === NodeKind.functionDefinition) {
                             errorAtRange(node.range, defaultMsg(node));
                             break;
                         }

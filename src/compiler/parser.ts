@@ -1,7 +1,7 @@
 import {
     Diagnostic,
     setDebug as setNodeFactoryDebug,
-    CfTag, Node, NodeType, TagAttribute, NodeFlags, Terminal, Comment, TextSpan, NilTerminal,
+    CfTag, Node, NodeKind, TagAttribute, NodeFlags, Terminal, Comment, TextSpan, NilTerminal,
     Conditional, FromTag, CommentType,
     HashWrappedExpr, BinaryOperator, Parenthetical, UnaryOperator, BooleanLiteral,
     CallExpression, IndexedAccess, pushAccessElement, CallArgument, Identifier, SimpleStringLiteral, InterpolatedStringLiteral,
@@ -1044,7 +1044,7 @@ export function Parser(config: {language: LanguageVersion}) {
             function parseOptionalTag(which: CfTag.Which, canonicalName: string) : CfTag | null {
                 if (!hasNextTag()) return null;
                 const tag = peekTag()!;
-                if (tag.kind === NodeType.hashWrappedExpr) return null;
+                if (tag.kind === NodeKind.hashWrappedExpr) return null;
 
                 if (tag.which === which && tag.canonicalName === canonicalName) {
                     nextTag();
@@ -1068,7 +1068,7 @@ export function Parser(config: {language: LanguageVersion}) {
                     const lastTag = tagList[tagList.length-1];
 
                     // a <cfscript> tag as last tag means the script body consumed to EOF
-                    if (lastTag.kind === NodeType.tag && lastTag.tagType === CfTag.TagType.script) {
+                    if (lastTag.kind === NodeKind.tag && lastTag.tagType === CfTag.TagType.script) {
                         return lastTag.scriptRange.toExclusive;
                     }
                     else {
@@ -1169,12 +1169,12 @@ export function Parser(config: {language: LanguageVersion}) {
                 let i = 0;
                 while (i < body.length) {
                     const node = body[i];
-                    if (node.kind === NodeType.textSpan || node.kind === NodeType.comment) {
+                    if (node.kind === NodeKind.textSpan || node.kind === NodeKind.comment) {
                         getTriviaOwner().push(node);
                         i++;
                         continue;
                     }
-                    if (node.kind === NodeType.tag && node.canonicalName === "argument") {
+                    if (node.kind === NodeKind.tag && node.canonicalName === "argument") {
                         params.push(Tag.FunctionParameter(node as CfTag.Common));
                         i++;
                         continue;
@@ -1184,7 +1184,7 @@ export function Parser(config: {language: LanguageVersion}) {
 
                 body = body.splice(i);
                 for (const node of body) {
-                    if (node.kind === NodeType.tag && node.which === CfTag.Which.start && node.canonicalName === "argument") {
+                    if (node.kind === NodeKind.tag && node.which === CfTag.Which.start && node.canonicalName === "argument") {
                         parseErrorAtRange(node.range, "<cfargument> tags should precede any other tags within a <cffunction> body.");
                     }
                 }
@@ -1205,11 +1205,11 @@ export function Parser(config: {language: LanguageVersion}) {
 
                 while (index < body.length) {
                     const node = body[index];
-                    if ((node.kind === NodeType.catch)) {
+                    if ((node.kind === NodeKind.catch)) {
                         gotCatch = true;
                         break;
                     }
-                    else if (node.kind === NodeType.finally) {
+                    else if (node.kind === NodeKind.finally) {
                         gotFinally = true;
                         break;
                     }
@@ -1236,15 +1236,15 @@ export function Parser(config: {language: LanguageVersion}) {
                 if (gotCatch) {
                     while (index < body.length) {
                         const node = body[index];
-                        if (node.kind === NodeType.finally) {
+                        if (node.kind === NodeKind.finally) {
                             gotFinally = true;
                             break;
                         }
 
-                        if (node.kind === NodeType.catch) {
+                        if (node.kind === NodeKind.catch) {
                             catchBlocks.push(node as Tag.Catch);
                         }
-                        else if (node.kind !== NodeType.textSpan && node.kind !== NodeType.comment) {
+                        else if (node.kind !== NodeKind.textSpan && node.kind !== NodeKind.comment) {
                             parseErrorAtRange(node.range, "Only comments and whitespace are valid between <cfcatch> and <cffinally> blocks.")
                             node.flags |= NodeFlags.error; // maybe invalidTagPosition or similar? also maybe mark the whole try block an error?
                             getTriviaOwner().push(node);
@@ -1269,7 +1269,7 @@ export function Parser(config: {language: LanguageVersion}) {
 
                     while (index < body.length) {
                         const node = body[index];
-                        if (node.kind !== NodeType.textSpan && node.kind !== NodeType.comment) {
+                        if (node.kind !== NodeKind.textSpan && node.kind !== NodeKind.comment) {
                             parseErrorAtRange(node.range, "Only comments and whitespace are valid between <cfcatch> and <cffinally> blocks.")
                         }
                         getTriviaOwner().push(node);
@@ -1294,11 +1294,11 @@ export function Parser(config: {language: LanguageVersion}) {
 
                 for (let i = 0; i < body.length; i++) {
                     const node = body[i];
-                    if (node.kind === NodeType.switchCase) {
+                    if (node.kind === NodeKind.switchCase) {
                         cases.push(node as Tag.SwitchCase);
                         continue;
                     }
-                    else if (node.kind !== NodeType.textSpan && node.kind !== NodeType.comment) {
+                    else if (node.kind !== NodeKind.textSpan && node.kind !== NodeKind.comment) {
                         parseErrorAtRange(node.range, "Only comments and whitespace are valid outside of <cfcase> & <cfdefaultcase> blocks inside a <cfswitch> block.");
                     }
                     // push non-case blocks as trivia
@@ -1311,7 +1311,7 @@ export function Parser(config: {language: LanguageVersion}) {
             function looseTagsToStatements(nodeList: Node[]) {
                 for (let i = 0; i < nodeList.length; i++) {
                     const node = nodeList[i];
-                    if (node.kind === NodeType.tag) {
+                    if (node.kind === NodeKind.tag) {
                         if (node.tagType !== CfTag.TagType.common) throw "should have been a common tag";
                         nodeList[i] = FromTag.Statement(node);
                     }
@@ -1324,7 +1324,7 @@ export function Parser(config: {language: LanguageVersion}) {
 
                 function localStackFindMatchingStartTag(tag: CfTag) : number | null {
                     for (let i = result.length - 1; i >= 0; i--) {
-                        if (result[i].kind === NodeType.tag) {
+                        if (result[i].kind === NodeKind.tag) {
                             const stackTag = result[i] as CfTag;
                             if (stackTag.which === CfTag.Which.start && stackTag.canonicalName === tag.canonicalName) {
                                 return i;
@@ -1353,7 +1353,7 @@ export function Parser(config: {language: LanguageVersion}) {
 
                     // we can have tags | HashWrappedExpr in our tag list, since when doing our tag pre-parse, we've scanned
                     // out all the text-spans and interpolated-text contexts (which may contain hash-wrapped expressions)
-                    if (tag.kind === NodeType.hashWrappedExpr) {
+                    if (tag.kind === NodeKind.hashWrappedExpr) {
                         result.push(tag);
                         nextTag();
                         continue;
@@ -1730,12 +1730,12 @@ export function Parser(config: {language: LanguageVersion}) {
     function isAssignmentTarget(node: Node) : boolean {
         // @fixme: in script mode, it may not be possible to assign to a string
         switch (node.kind) {
-            case NodeType.indexedAccess:
-            case NodeType.identifier:
-            case NodeType.simpleStringLiteral:          // <cfset "x" = "y">
-            case NodeType.interpolatedStringLiteral:    // <cfset "#x#" = 42> <!--- same as <cfset y = 42>
+            case NodeKind.indexedAccess:
+            case NodeKind.identifier:
+            case NodeKind.simpleStringLiteral:          // <cfset "x" = "y">
+            case NodeKind.interpolatedStringLiteral:    // <cfset "#x#" = 42> <!--- same as <cfset y = 42>
                 return true;
-            case NodeType.hashWrappedExpr:
+            case NodeKind.hashWrappedExpr:
                 return isAssignmentTarget(node.expr);
             default:
                 return false;
@@ -1773,8 +1773,8 @@ export function Parser(config: {language: LanguageVersion}) {
                 parseErrorAtRange(root.range, "Variable declarations require initializers.");
             }
 
-            if (root.kind === NodeType.identifier
-                || root.kind === NodeType.indexedAccess
+            if (root.kind === NodeKind.identifier
+                || root.kind === NodeKind.indexedAccess
                 && root.accessElements.every(e => e.accessType === IndexedAccessType.dot || e.accessType === IndexedAccessType.bracket)) {
                 // @todo - if the access type is not homogenous cf will error, at least at the top-most scope
                 // a["b"]["c"] = 0 declares and inits a = {b: {c: 0}};
@@ -2080,10 +2080,10 @@ export function Parser(config: {language: LanguageVersion}) {
                 // anyway, at least its flagged
                 //
                 switch (stripOuterParens(root).kind) {
-                    case NodeType.arrayLiteral:
+                    case NodeKind.arrayLiteral:
                         parseErrorAtRange(root.range, "Parenthesized array literals are illegal. Consider removing the parentheses.");
                         break;
-                    case NodeType.structLiteral:
+                    case NodeKind.structLiteral:
                         parseErrorAtRange(root.range, "Parenthesized struct literals are illegal. Consider removing the parentheses.");
                         break;
                 }
@@ -2097,9 +2097,9 @@ export function Parser(config: {language: LanguageVersion}) {
                 // ({x:1}).x              invalid
                 // ({x:1})["x"]           invalid
                 //
-                if ((root.kind === NodeType.indexedAccess) ||
-                    (root.kind === NodeType.unaryOperator && root.expr.kind === NodeType.indexedAccess) ||
-                    (root.kind === NodeType.callExpression && root.left.kind === NodeType.indexedAccess)) {
+                if ((root.kind === NodeKind.indexedAccess) ||
+                    (root.kind === NodeKind.unaryOperator && root.expr.kind === NodeKind.indexedAccess) ||
+                    (root.kind === NodeKind.callExpression && root.left.kind === NodeKind.indexedAccess)) {
                     parseErrorAtRange(root.range, "Illegal indexed access expression; consider removing the parentheses from the left-most expression.");
                 }
                 return root;
@@ -2217,7 +2217,7 @@ export function Parser(config: {language: LanguageVersion}) {
      * if it is not already an IndexedAccess node, convert it to one, and then push the access element into it
      */
     function transformingPushAccessElement(root: Node, accessElement: IndexedAccessChainElement) : IndexedAccess {
-        if (root.kind !== NodeType.indexedAccess) {
+        if (root.kind !== NodeKind.indexedAccess) {
             root = IndexedAccess(root);
         }
         pushAccessElement(root, accessElement);
@@ -2305,13 +2305,13 @@ export function Parser(config: {language: LanguageVersion}) {
             
             // we got an expression and the next token is not a colon -- so this is just a basic index expression
             // like `x[e]`
-            if (first.kind !== NodeType.terminal && lookahead() !== TokenType.COLON) {
+            if (first.kind !== NodeKind.terminal && lookahead() !== TokenType.COLON) {
                 return first;
             }
 
             // otherwise, we got a slice expression
-            let from : Node | null = first.kind === NodeType.terminal ? null : first;
-            let colon1: Terminal = first.kind === NodeType.terminal ? first : parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
+            let from : Node | null = first.kind === NodeKind.terminal ? null : first;
+            let colon1: Terminal = first.kind === NodeKind.terminal ? first : parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
             let to : Node | null = isStartOfExpression() ? parseExpression() : null;
             let colon2: Terminal = parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
             let stride : Node | null = isStartOfExpression() ? parseExpression() : null;
@@ -2319,7 +2319,7 @@ export function Parser(config: {language: LanguageVersion}) {
         }
 
         function previousElement() : T | IndexedAccessChainElement {
-            if (root.kind !== NodeType.indexedAccess) {
+            if (root.kind !== NodeKind.indexedAccess) {
                 return root;
             }
             else {
@@ -2329,8 +2329,8 @@ export function Parser(config: {language: LanguageVersion}) {
         }
 
         function previousElementIsIdentifier() {
-            if (root.kind !== NodeType.indexedAccess) {
-                return root.kind === NodeType.identifier;
+            if (root.kind !== NodeKind.indexedAccess) {
+                return root.kind === NodeKind.identifier;
             }
 
             // if root is an IndexedAccess node, it is because there is at least one contained access element
@@ -2442,7 +2442,7 @@ export function Parser(config: {language: LanguageVersion}) {
         // like within a struct literals, `=` and `:` share the same meaning
         // we don't know from our current position if all of the args are named,
         // we can check that later; if one is, all of them must be
-        if (exprOrArgName.kind === NodeType.identifier || isSimpleOrInterpolatedStringLiteral(exprOrArgName)) {
+        if (exprOrArgName.kind === NodeKind.identifier || isSimpleOrInterpolatedStringLiteral(exprOrArgName)) {
             if (langVersion === LanguageVersion.acf2018 && isSimpleOrInterpolatedStringLiteral(exprOrArgName)) {
                 parseErrorAtRange(exprOrArgName.range, "String literals cannot be used as argument names.");
             }
@@ -2579,9 +2579,9 @@ export function Parser(config: {language: LanguageVersion}) {
 
         let result = parseExpression();
         switch (result.kind) {
-            case NodeType.hashWrappedExpr:
-            case NodeType.simpleStringLiteral:
-            case NodeType.interpolatedStringLiteral:
+            case NodeKind.hashWrappedExpr:
+            case NodeKind.simpleStringLiteral:
+            case NodeKind.interpolatedStringLiteral:
                 return result;
             default: {
                 parseErrorAtRange(result.range, "Invalid struct initializer key.");
@@ -2733,7 +2733,7 @@ export function Parser(config: {language: LanguageVersion}) {
 
         if (stringElements.length === 1) {
             const onlyElement = stringElements[0];
-            if (onlyElement.kind === NodeType.textSpan) {
+            if (onlyElement.kind === NodeKind.textSpan) {
                 return SimpleStringLiteral(leftQuote, onlyElement, rightQuote);
             }
         }
@@ -3022,7 +3022,7 @@ export function Parser(config: {language: LanguageVersion}) {
     }
 
     function stripOuterParens(node: Node) {
-        while (node.kind === NodeType.parenthetical) {
+        while (node.kind === NodeKind.parenthetical) {
             node = node.expr;
         }
         return node;
@@ -3222,7 +3222,7 @@ export function Parser(config: {language: LanguageVersion}) {
             : null;
 
         if (peek().text.toLowerCase() === "in") {
-            if (!init || init.kind !== NodeType.variableDeclaration) {
+            if (!init || init.kind !== NodeKind.variableDeclaration) {
                 init = createMissingNode(Identifier(NilTerminal(pos()), ""));
                 parseErrorAtRange(leftParen.range.fromInclusive+1, leftParen.range.toExclusive+1, "Declaration expected.");
             }
@@ -3472,8 +3472,8 @@ export function Parser(config: {language: LanguageVersion}) {
                             // we parsed a statement, so any string literal will be wrapped in it
                             // if we got a trivial string value, we are OK
                             // otherwise, emit a diagnostic
-                            if (statement.kind === NodeType.statement
-                                && (statement.expr!.kind === NodeType.simpleStringLiteral || statement.expr!.kind === NodeType.interpolatedStringLiteral)) {
+                            if (statement.kind === NodeKind.statement
+                                && (statement.expr!.kind === NodeKind.simpleStringLiteral || statement.expr!.kind === NodeKind.interpolatedStringLiteral)) {
                                     if (getTriviallyComputableString(statement.expr) !== undefined) {
                                         return ScriptSugaredTagCallStatement(
                                             terminal,
@@ -3611,7 +3611,7 @@ export function Parser(config: {language: LanguageVersion}) {
         parseContext = 1 << ParseContext.typeAnnotation;
 
         for (const node of trivia) {
-            if (node.kind === NodeType.comment || (node.kind === NodeType.tag && node.tagType === CfTag.TagType.comment)) {
+            if (node.kind === NodeKind.comment || (node.kind === NodeKind.tag && node.tagType === CfTag.TagType.comment)) {
                 restoreScannerState({
                     index: node.range.fromInclusive,
                     artificialEndLimit: node.range.toExclusive,
@@ -3961,7 +3961,7 @@ export function Parser(config: {language: LanguageVersion}) {
                 case TokenType.QUOTE_SINGLE:
                 case TokenType.QUOTE_DOUBLE: {
                     const s = parseStringLiteral(/*allowInterpolations*/false);
-                    if (s.kind === NodeType.simpleStringLiteral) {
+                    if (s.kind === NodeKind.simpleStringLiteral) {
                         result = SyntheticType.string;//cfString(s);
                     }
                     else {

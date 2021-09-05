@@ -1,4 +1,4 @@
-import { ArrowFunctionDefinition, CfTag, DottedPath, FunctionDefinition, NodeType, Script, SymTabEntry, Tag, TagAttribute, } from "./node";
+import { ArrowFunctionDefinition, CfTag, DottedPath, FunctionDefinition, NodeKind, Script, SymTabEntry, Tag, TagAttribute, } from "./node";
 import { getAttributeValue, getTriviallyComputableString, Mutable } from "./utils";
 
 let debugTypeModule = true;
@@ -586,7 +586,7 @@ export function extractCfFunctionSignature(def: FunctionDefinition | ArrowFuncti
     let returnType : _Type;
     let paramTypes : cfFunctionSignatureParam[] = [];
 
-    if (def.kind === NodeType.functionDefinition) {
+    if (def.kind === NodeKind.functionDefinition) {
         if (def.fromTag) {
             uiName       = getTriviallyComputableString(getAttributeValue((def.tagOrigin.startTag as CfTag.Common).attrs, "name")) || "<<ERROR>>";
             returnType = typeFromAttribute((def.tagOrigin.startTag as CfTag.Common).attrs, "returntype");

@@ -1,7 +1,7 @@
 import * as path from "path";
 import * as fs from "fs";
 import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CfTag, DottedPath, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, Node, NodeId, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
-import { NodeType } from "./node";
+import { NodeKind } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature } from "./types";
 
@@ -134,19 +134,19 @@ export function isIllegalIdentifierName(text: string) {
  export function getTriviallyComputableString(node: Node | undefined | null) : string | undefined {
     if (!node) return undefined;
 
-    if (node.kind === NodeType.simpleStringLiteral) {
+    if (node.kind === NodeKind.simpleStringLiteral) {
         return node.textSpan.text;
     }
-    else if (node.kind === NodeType.terminal) {
+    else if (node.kind === NodeKind.terminal) {
         return node.token.text;
     }
-    else if (node.kind === NodeType.numericLiteral) {
+    else if (node.kind === NodeKind.numericLiteral) {
         return node.literal.token.text;
     }
-    else if (node.kind === NodeType.hashWrappedExpr || node.kind === NodeType.parenthetical) {
+    else if (node.kind === NodeKind.hashWrappedExpr || node.kind === NodeKind.parenthetical) {
         return getTriviallyComputableString(node.expr);
     }
-    else if (node.kind === NodeType.interpolatedStringLiteral) {
+    else if (node.kind === NodeKind.interpolatedStringLiteral) {
         let result = "";
         for (let i = 0; i < node.elements.length; i++) {
             let trivialElement = getTriviallyComputableString(node.elements[0]);
@@ -159,7 +159,7 @@ export function isIllegalIdentifierName(text: string) {
         }
         return result;
     }
-    else if (node.kind === NodeType.identifier) {
+    else if (node.kind === NodeKind.identifier) {
         return getTriviallyComputableString(node.source);
     }
 
@@ -174,13 +174,13 @@ export function getTriviallyComputableBoolean(node: Node | undefined | null) : b
         return castCfStringAsCfBoolean(trivialString);
     }
 
-    if (node.kind === NodeType.booleanLiteral) {
+    if (node.kind === NodeKind.booleanLiteral) {
         return node.literal.token.type === TokenType.KW_TRUE;
     }
-    else if (node.kind === NodeType.numericLiteral) {
+    else if (node.kind === NodeKind.numericLiteral) {
         return castCfNumericLiteralAsCfBoolean(node.literal.token.text);
     }
-    else if (node.kind === NodeType.hashWrappedExpr || node.kind === NodeType.parenthetical) {
+    else if (node.kind === NodeKind.hashWrappedExpr || node.kind === NodeKind.parenthetical) {
         return getTriviallyComputableBoolean(node.expr);
     }
 
@@ -252,29 +252,29 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
         return forEachNode(node, visitor);
     }
     switch (node.kind) {
-        case NodeType.comment:
-        case NodeType.textSpan:
+        case NodeKind.comment:
+        case NodeKind.textSpan:
             // bottomed out
             return;
-        case NodeType.terminal:
+        case NodeKind.terminal:
             // trivia is generally expected to be text/comments,
             // but it can be anything; for example, an incorrectly placed tag between </cfcatch> ... </cftry>
             return forEachNode(node.trivia, visitor);
-        case NodeType.sourceFile:
+        case NodeKind.sourceFile:
             return forEachNode(node.content, visitor);
-        case NodeType.hashWrappedExpr:
+        case NodeKind.hashWrappedExpr:
             return visitor(node.leftHash)
                 || visitor(node.expr)
                 || visitor(node.rightHash);
-        case NodeType.parenthetical:
+        case NodeKind.parenthetical:
             return visitor(node.leftParen)
                 || visitor(node.expr)
                 || visitor(node.rightParen);
-        case NodeType.tagAttribute:
+        case NodeKind.tagAttribute:
             return visitor(node.name)
                 || visitor(node.equals)
                 || visitor(node.expr);
-        case NodeType.tag:
+        case NodeKind.tag:
             switch (node.tagType) {
                 case CfTag.TagType.common:
                     return visitor(node.tagStart)
@@ -295,17 +295,17 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                         || visitor(node.tagEnd);
                 default: return;
             }
-        case NodeType.callExpression:
+        case NodeKind.callExpression:
             return visitor(node.left)
                 || visitor(node.leftParen)
                 || forEachNode(node.args, visitor)
                 || visitor(node.rightParen);
-        case NodeType.callArgument:
+        case NodeKind.callArgument:
             return visitor(node.name)
                 || visitor(node.equals)
                 || visitor(node.expr)
                 || visitor(node.comma);
-        case NodeType.unaryOperator:
+        case NodeKind.unaryOperator:
             if (node.pos === UnaryOperatorPos.pre) {
                 return visitor(node.operator)
                     || visitor(node.expr);
@@ -314,11 +314,11 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                 return visitor(node.expr)
                     || visitor(node.operator);
             }
-        case NodeType.binaryOperator:
+        case NodeKind.binaryOperator:
             return visitor(node.left)
                 || visitor(node.operator)
                 || visitor(node.right);
-        case NodeType.conditional:
+        case NodeKind.conditional:
             if (node.fromTag) {
                 return visitor(node.tagOrigin.startTag)
                     || visitor(node.consequent)
@@ -334,11 +334,11 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                     || visitor(node.consequent)
                     || visitor(node.alternative);
             }
-        case NodeType.variableDeclaration:
+        case NodeKind.variableDeclaration:
             return visitor(node.finalModifier)
                 || visitor(node.varModifier)
                 || visitor(node.expr);
-        case NodeType.statement:
+        case NodeKind.statement:
             switch (node.subType) {
                 case StatementType.expressionWrapper:
                     // we have a <cfset> tag wrapped in a statement
@@ -359,17 +359,17 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                 case StatementType.scriptTagCallStatement:
                 default: return;
             }
-        case NodeType.returnStatement:
+        case NodeKind.returnStatement:
             return visitor(node.returnToken)
                 || visitor(node.expr)
                 || visitor(node.semicolon);
-        case NodeType.breakStatement:
+        case NodeKind.breakStatement:
             return visitor(node.breakToken)
                 || visitor(node.semicolon);
-        case NodeType.continueStatement:
+        case NodeKind.continueStatement:
             return visitor(node.continueToken)
                 || visitor(node.semicolon);
-        case NodeType.block:
+        case NodeKind.block:
             switch (node.subType) {
                 case BlockType.fromTag:
                     return visitor(node.tagOrigin.startTag)
@@ -397,24 +397,24 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                         || visitor(node.rightBrace);
                 }
             }
-        case NodeType.simpleStringLiteral:
+        case NodeKind.simpleStringLiteral:
             return visitor(node.leftQuote)
                 || visitor(node.textSpan)
                 || visitor(node.rightQuote);
-        case NodeType.interpolatedStringLiteral:
+        case NodeKind.interpolatedStringLiteral:
             return visitor(node.leftQuote)
                 || forEachNode(node.elements, visitor)
                 || visitor(node.rightQuote);
-        case NodeType.numericLiteral:
+        case NodeKind.numericLiteral:
             return visitor(node.literal);
-        case NodeType.booleanLiteral:
+        case NodeKind.booleanLiteral:
             return visitor(node.literal);
-        case NodeType.identifier:
+        case NodeKind.identifier:
             return visitor(node.source);
-        case NodeType.indexedAccess:
+        case NodeKind.indexedAccess:
             return visitor(node.root)
             || forEachNode(node.accessElements, visitor);
-        case NodeType.indexedAccessChainElement:
+        case NodeKind.indexedAccessChainElement:
             switch (node.accessType) {
                 case IndexedAccessType.dot:
                     return visitor(node.dot)
@@ -436,13 +436,13 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                     return visitor(node.questionMark)
                         || visitor(node.dot);
             }
-        case NodeType.sliceExpression:
+        case NodeKind.sliceExpression:
             return visitor(node.from)
                 || visitor(node.colon1)
                 || visitor(node.to)
                 || visitor(node.colon2)
                 || visitor(node.stride);
-        case NodeType.functionParameter:
+        case NodeKind.functionParameter:
             if (node.fromTag) {
                 return visitor(node.tagOrigin.startTag);
             }
@@ -453,7 +453,7 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                 || visitor(node.equals)
                 || visitor(node.defaultValue)
                 || visitor(node.comma)
-        case NodeType.functionDefinition:
+        case NodeKind.functionDefinition:
             if (node.fromTag) {
                 return visitor(node.tagOrigin.startTag)
                     || forEachNode(node.params, visitor)
@@ -469,19 +469,19 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                 || visitor(node.rightParen)
                 || forEachNode(node.attrs, visitor)
                 || visitor(node.body);
-        case NodeType.arrowFunctionDefinition:
+        case NodeKind.arrowFunctionDefinition:
             return visitor(node.parens?.left)
                 || forEachNode(node.params, visitor)
                 || visitor(node.parens?.right)
                 || visitor(node.fatArrow)
                 || visitor(node.body)
-        case NodeType.dottedPath:
+        case NodeKind.dottedPath:
             return visitor(node.headKey)
                 || forEachNode(node.rest, visitor);
-        case NodeType.dottedPathRest:
+        case NodeKind.dottedPathRest:
             return visitor(node.dot)
                 || visitor(node.key);
-        case NodeType.switch:
+        case NodeKind.switch:
             if (node.fromTag) {
                 return visitor(node.tagOrigin.startTag)
                     || forEachNode(node.cases, visitor)
@@ -494,7 +494,7 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                 || visitor(node.leftBrace)
                 || forEachNode(node.cases, visitor)
                 || visitor(node.rightBrace);
-        case NodeType.switchCase:
+        case NodeKind.switchCase:
             if (node.fromTag) {
                 return visitor(node.tagOrigin.startTag)
                     || forEachNode(node.body, visitor)
@@ -504,26 +504,26 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                 || visitor(node.expr)
                 || visitor(node.colon)
                 || forEachNode(node.body, visitor)
-        case NodeType.do:
+        case NodeKind.do:
             return visitor(node.doToken)
                 || visitor(node.body)
                 || visitor(node.whileToken)
                 || visitor(node.leftParen)
                 || visitor(node.expr)
                 || visitor(node.rightParen);
-        case NodeType.while:
+        case NodeKind.while:
             return visitor(node.whileToken)
                 || visitor(node.leftParen)
                 || visitor(node.expr)
                 || visitor(node.rightParen)
                 || visitor(node.body)
-        case NodeType.ternary:
+        case NodeKind.ternary:
             return visitor(node.expr)
                 || visitor(node.questionMark)
                 || visitor(node.ifTrue)
                 || visitor(node.colon)
                 || visitor(node.ifFalse);
-        case NodeType.for:
+        case NodeKind.for:
             if (node.subType === ForSubType.forIn) {
                 return visitor(node.forToken)
                     || visitor(node.leftParen)
@@ -542,11 +542,11 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                 || visitor(node.incrementExpr)
                 || visitor(node.rightParen)
                 || visitor(node.body);
-        case NodeType.structLiteral:
+        case NodeKind.structLiteral:
             return visitor(node.leftDelimiter)
                 || forEachNode(node.members, visitor)
                 || visitor(node.rightDelimiter);
-        case NodeType.structLiteralInitializerMember:
+        case NodeKind.structLiteralInitializerMember:
             if (node.subType === StructLiteralInitializerMemberSubtype.keyed) {
                 return visitor(node.key)
                     || visitor(node.colon)
@@ -557,11 +557,11 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                 return visitor(node.dotDotDot)
                     || visitor(node.expr);
             }
-        case NodeType.arrayLiteral:
+        case NodeKind.arrayLiteral:
             return visitor(node.leftBracket)
                 || forEachNode(node.members, visitor)
                 || visitor(node.rightBracket)
-        case NodeType.arrayLiteralInitializerMember:
+        case NodeKind.arrayLiteralInitializerMember:
             if (node.subType === ArrayLiteralInitializerMemberSubtype.simple) {
                 return visitor(node.expr)
                     || visitor(node.comma);
@@ -571,7 +571,7 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                     || visitor(node.expr)
                     || visitor(node.comma);
             }
-        case NodeType.try:
+        case NodeKind.try:
             if (node.fromTag) {
                 return visitor(node.tagOrigin.startTag)
                     || forEachNode(node.body, visitor)
@@ -585,7 +585,7 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                 || visitor(node.rightBrace)
                 || forEachNode(node.catchBlocks, visitor)
                 || visitor(node.finallyBlock);
-        case NodeType.catch:
+        case NodeKind.catch:
             if (node.fromTag) {
                 return visitor(node.tagOrigin.startTag)
                     || forEachNode(node.body, visitor)
@@ -600,7 +600,7 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                 || visitor(node.leftBrace)
                 || forEachNode(node.body, visitor)
                 || visitor(node.rightBrace);
-        case NodeType.finally:
+        case NodeKind.finally:
             if (node.fromTag) {
                 return visitor(node.tagOrigin.startTag)
                     || forEachNode(node.body, visitor)
@@ -610,14 +610,14 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                 || visitor(node.leftBrace)
                 || forEachNode(node.body, visitor)
                 || visitor(node.rightBrace);
-        case NodeType.importStatement:
+        case NodeKind.importStatement:
             return visitor(node.importToken)
                 || visitor(node.path)
                 || visitor(node.semicolon);
-        case NodeType.new:
+        case NodeKind.new:
             return visitor(node.newToken)
                 || visitor(node.callExpr);
-        case NodeType.typeShim:
+        case NodeKind.typeShim:
             return;
         default:
             ((_:never) => { throw "Non-exhaustive case or unintentional fallthrough." })(node);
@@ -646,7 +646,7 @@ export function flattenTree(tree: Node | Node[]) : NodeSourceMap[] {
 
     function visitor(node: Node | undefined | null) {
         if (node) {
-            if (node.kind === NodeType.terminal || node.kind === NodeType.comment || node.kind === NodeType.textSpan) {
+            if (node.kind === NodeKind.terminal || node.kind === NodeKind.comment || node.kind === NodeKind.textSpan) {
                 pushNode(node);
             }
 
@@ -739,25 +739,25 @@ export function isExpressionContext(node: Node | null) : boolean {
     outer:
     while (node) {
         switch (node.kind) {
-            case NodeType.sourceFile: // fallthough
-            case NodeType.comment:
+            case NodeKind.sourceFile: // fallthough
+            case NodeKind.comment:
                 return false;
-            case NodeType.terminal: // fallthrough
-            case NodeType.identifier:
-            case NodeType.textSpan:
+            case NodeKind.terminal: // fallthrough
+            case NodeKind.identifier:
+            case NodeKind.textSpan:
                 node = node.parent;
                 continue outer;
-            case NodeType.hashWrappedExpr:
+            case NodeKind.hashWrappedExpr:
                 return true;
-            case NodeType.try:
-            case NodeType.catch:
-            case NodeType.finally:
-            case NodeType.switch:
-            case NodeType.functionDefinition:
+            case NodeKind.try:
+            case NodeKind.catch:
+            case NodeKind.finally:
+            case NodeKind.switch:
+            case NodeKind.functionDefinition:
                 return !node.fromTag;
-            case NodeType.tag:
+            case NodeKind.tag:
                 return node.canonicalName === "if" || node.canonicalName === "elseif" || node.canonicalName === "return" || node.canonicalName === "set";
-            case NodeType.statement:
+            case NodeKind.statement:
                 switch (node.subType) {
                     case StatementType.fromTag:
                         return false;
@@ -769,7 +769,7 @@ export function isExpressionContext(node: Node | null) : boolean {
                         // fixme: clean up union so we can detect we've exhaustively checked
                         return false;
                 }
-            case NodeType.block:
+            case NodeKind.block:
                 switch (node.subType) {
                     case BlockType.fromTag:
                         // startTag might be undefined if this is a "loose" tag block like `<cfif> [here] <cfelseif> ... </cfif>`
@@ -793,7 +793,7 @@ export function isExpressionContext(node: Node | null) : boolean {
 
 export function isCfScriptTagBlock(node: Node | null) : boolean {
     while (node) {
-        if (node.kind === NodeType.block && node.subType === BlockType.fromTag) {
+        if (node.kind === NodeKind.block && node.subType === BlockType.fromTag) {
             if (node.tagOrigin.startTag?.canonicalName === "script") {
                 return true;
             }
@@ -890,7 +890,7 @@ export function findAncestor(node: Node, predicate: (node: Node) => true | false
 }
 
 export function getContainingFunction(node: Node) : FunctionDefinition | ArrowFunctionDefinition | undefined {
-    return findAncestor(node, (node) => !!node && (node.kind === NodeType.functionDefinition || node.kind === NodeType.arrowFunctionDefinition)) as FunctionDefinition | ArrowFunctionDefinition;
+    return findAncestor(node, (node) => !!node && (node.kind === NodeKind.functionDefinition || node.kind === NodeKind.arrowFunctionDefinition)) as FunctionDefinition | ArrowFunctionDefinition;
 }
 
 export function getNodeLinks(node: Node) {
@@ -898,14 +898,14 @@ export function getNodeLinks(node: Node) {
 }
 
 export function getSourceFile(node: Node) : SourceFile | undefined {
-    return findAncestor(node, (node) => node?.kind === NodeType.sourceFile) as SourceFile | undefined;
+    return findAncestor(node, (node) => node?.kind === NodeKind.sourceFile) as SourceFile | undefined;
 }
 
 export function getNearestConstruct(node: Node) : Node | undefined {
     return findAncestor(node, (node) => {
         return !!node
-            && node.kind !== NodeType.terminal
-            && node.kind !== NodeType.textSpan;
+            && node.kind !== NodeKind.terminal
+            && node.kind !== NodeKind.textSpan;
     });
 }
 
@@ -913,13 +913,13 @@ export function isInCfcPsuedoConstructor(node: Node) : boolean {
     return !!findAncestor(node, (node) => {
         if (!node) return false;
         // if we have an ancestor of a function definition, we weren't in a psuedo constructor
-        if (node.parent?.kind === NodeType.functionDefinition) return "bail";
+        if (node.parent?.kind === NodeKind.functionDefinition) return "bail";
         // otherwise, if this is a block, check if the block is:
         // 1) a component tag block (i.e., `<cfcomponent>...</cfcomponent>`)
         // 2) a script sugared component block (i.e., `component { ... }`)
         // if it is, then OK, we are in a psuedo constructor
         // otherwise, keep climbing
-        return node.parent?.kind === NodeType.block && (
+        return node.parent?.kind === NodeKind.block && (
             (node.parent.subType === BlockType.fromTag && node.parent.tagOrigin.startTag?.canonicalName === "component")
             || (node.parent.subType === BlockType.scriptSugaredTagCallBlock && node.parent.name?.token.text.toLowerCase() === "component")
         );
@@ -950,7 +950,7 @@ export function getFunctionSignatureParamNames(sig: cfFunctionSignature, ...omit
 
 export function isHoistableFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) : node is FunctionDefinition {
     // fixme: need a more explicit way to say "this function is anonymous", right now we imply it by saying a function has a name
-    return node.kind === NodeType.functionDefinition && (typeof node.canonicalName === "string");
+    return node.kind === NodeKind.functionDefinition && (typeof node.canonicalName === "string");
 }
 
 export interface CanonicalizedName {
@@ -959,10 +959,10 @@ export interface CanonicalizedName {
 }
 
 export function stringifyLValue(node: Identifier | IndexedAccess) : CanonicalizedName | undefined {
-    if (node.kind === NodeType.identifier) return node.uiName && node.canonicalName ? {ui: node.uiName, canonical: node.canonicalName} : undefined;
+    if (node.kind === NodeKind.identifier) return node.uiName && node.canonicalName ? {ui: node.uiName, canonical: node.canonicalName} : undefined;
     let result : {ui: string, canonical: string};
 
-    if (node.root.kind === NodeType.identifier && node.root.canonicalName && node.root.uiName) {
+    if (node.root.kind === NodeKind.identifier && node.root.canonicalName && node.root.uiName) {
         result = {ui: node.root.uiName, canonical: node.root.canonicalName};
     }
     else {
@@ -998,7 +998,7 @@ export function stringifyStringAsLValue(node: SimpleStringLiteral | Interpolated
  */
 export function stringifyCallExprArgName(node: CallArgument) : CanonicalizedName | undefined {
     return node.name
-        ? node.name.kind === NodeType.identifier
+        ? node.name.kind === NodeKind.identifier
             ? stringifyLValue(node.name)
             : stringifyStringAsLValue(node.name)
         : undefined;
@@ -1031,10 +1031,10 @@ export function getComponentBlock(sourceFile: SourceFile) : Block | undefined {
     if (sourceFile.cfFileType !== CfFileType.cfc) return undefined;
     let result : Block | undefined = undefined;
     visit(sourceFile, (node) => {
-        if (node?.kind === NodeType.comment || node?.kind === NodeType.textSpan) {
+        if (node?.kind === NodeKind.comment || node?.kind === NodeKind.textSpan) {
             return undefined;
         }
-        else if (node?.kind === NodeType.block) {
+        else if (node?.kind === NodeKind.block) {
             if (node.subType === BlockType.fromTag && node.tagOrigin.startTag?.canonicalName === "component") {
                 result = node;
                 return "bail";
@@ -1095,15 +1095,15 @@ export function recursiveGetFiles(root: string, pattern: RegExp) : string [] {
 }
 
 export function isSimpleOrInterpolatedStringLiteral(node: Node | null) : node is SimpleStringLiteral | InterpolatedStringLiteral {
-    return node?.kind === NodeType.simpleStringLiteral || node?.kind === NodeType.interpolatedStringLiteral;
+    return node?.kind === NodeKind.simpleStringLiteral || node?.kind === NodeKind.interpolatedStringLiteral;
 }
 
 export function isNamedFunctionArgumentName(node: Node) {
-    return node.parent?.kind === NodeType.callArgument && node === node.parent.name
+    return node.parent?.kind === NodeKind.callArgument && node === node.parent.name
 }
 
 export function isObjectLiteralPropertyName(node: Node) {
-    return node.parent?.kind === NodeType.structLiteralInitializerMember
+    return node.parent?.kind === NodeKind.structLiteralInitializerMember
         && node.parent.subType === StructLiteralInitializerMemberSubtype.keyed
         && node.parent.key === node;
 }
@@ -1112,9 +1112,9 @@ export function isInScriptBlock(node: Node) {
     // @fixme perhaps better to just mark script nodes as such with a flag, during parse node finalization
     // `return !!(node.flags & NodeFlags.script)` would be way faster than a tree walk
     return !!findAncestor(node, (node) => {
-        if (node.kind === NodeType.functionDefinition && node.fromTag) return "bail";
-        if (node.kind === NodeType.block && node.subType === BlockType.fromTag && node.tagOrigin.startTag?.canonicalName === "script") return true;
-        if (node.kind === NodeType.block && node.subType === BlockType.scriptSugaredTagCallBlock && (node.name?.token.text === "component" || node.name?.token.text === "interface")) return true;
+        if (node.kind === NodeKind.functionDefinition && node.fromTag) return "bail";
+        if (node.kind === NodeKind.block && node.subType === BlockType.fromTag && node.tagOrigin.startTag?.canonicalName === "script") return true;
+        if (node.kind === NodeKind.block && node.subType === BlockType.scriptSugaredTagCallBlock && (node.name?.token.text === "component" || node.name?.token.text === "interface")) return true;
         return false;
     })
 }
