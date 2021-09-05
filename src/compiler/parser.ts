@@ -27,9 +27,10 @@ import {
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, TypeShim } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
-import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, Mutable} from "./utils";
+import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, Mutable, isSimpleOrInterpolatedStringLiteral} from "./utils";
 import { cfIndexedType, cfIntersection, cfMappedType, extractCfFunctionSignature, isIntersection, isTypeId, isUnion } from "./types";
 import { _Type, cfArray, cfStruct, cfTuple, cfFunctionSignature, cfTypeConstructorInvocation, cfTypeConstructorParam, cfTypeConstructor, cfTypeId, cfUnion, SyntheticType, cfFunctionSignatureParam } from "./types";
+import { LanguageVersion } from "./project";
 
 let debugParseModule = false;
 let parseTypes = false; // generally not yet possible
@@ -103,7 +104,7 @@ interface ScannerState {
     artificialEndLimit: number | undefined;
 }
 
-export function Parser() {
+export function Parser(config: {language: LanguageVersion}) {
     function setSourceFile(sourceFile_: SourceFile) {
         sourceFile = sourceFile_;
         scanner = sourceFile.scanner;
@@ -142,6 +143,7 @@ export function Parser() {
     let token_ : Token;
     let lastNonTriviaToken : Token;
     let diagnostics : Diagnostic[] = [];
+    const langVersion = config.language;
 
     let lastTypeAnnotation : _Type | null = null;
     
@@ -2438,7 +2440,11 @@ export function Parser() {
         // like within a struct literals, `=` and `:` share the same meaning
         // we don't know from our current position if all of the args are named,
         // we can check that later; if one is, all of them must be
-        if (exprOrArgName.kind === NodeType.identifier) {
+        if (exprOrArgName.kind === NodeType.identifier || isSimpleOrInterpolatedStringLiteral(exprOrArgName)) {
+            if (langVersion === LanguageVersion.acf2018 && isSimpleOrInterpolatedStringLiteral(exprOrArgName)) {
+                parseErrorAtRange(exprOrArgName.range, "String literals cannot be used as argument names.");
+            }
+
             let equalOrComma : Terminal | null;
             if (equalOrComma =
                     (parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia) ??
@@ -2559,7 +2565,9 @@ export function Parser() {
     function parseStructLiteralInitializerKey() : Node {
         const maybeLexemeLikeKey = scanLexemeLikeStructKey();
         if (maybeLexemeLikeKey) {
-            return Terminal(maybeLexemeLikeKey, parseTrivia());
+            return Identifier(
+                Terminal(maybeLexemeLikeKey, parseTrivia()),
+                maybeLexemeLikeKey.text);
         }
 
         let result = parseExpression();

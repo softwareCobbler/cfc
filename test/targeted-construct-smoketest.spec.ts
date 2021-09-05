@@ -7,7 +7,7 @@ import * as TestLoader from "./TestLoader";
 import { getCompletions } from "../src/services/completions";
 import { LanguageVersion } from "../src/compiler/project";
 
-const parser = Parser().setDebug(true);
+const parser = Parser({language: LanguageVersion.acf2018}).setDebug(true);
 const binder = Binder().setDebug(true);
 
 function assertDiagnosticsCount(text: string, cfFileType: CfFileType, count: number) {
@@ -384,6 +384,26 @@ describe("general smoke test for particular constructs", () => {
                         default: 42
                     };
                     call(final=42, default=42);
+                }`]],
+            "/");
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);
+    });
+    it("Should error on quoted named call argument names in Adobe; in Lucee it is OK", () => {
+        const dfs = DebugFileSystem([
+            ["/a.cfc", `
+                component {
+                    someCall("quotedArgName" = 42);
+                }`]],
+            "/");
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 1, LanguageVersion.acf2018);
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0, LanguageVersion.lucee5);
+    });
+    it("Should not require a required && defaulted parameter", () => {
+        const dfs = DebugFileSystem([
+            ["/a.cfc", `
+                component {
+                    function foo(required arg = 0) {}
+                    foo();
                 }`]],
             "/");
         assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);

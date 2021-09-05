@@ -65,7 +65,7 @@ interface ProjectOptions {
 export function Project(absRoots: string[], fileSystem: FileSystem, options: ProjectOptions) {
     type AbsPath = string;
     
-    const parser = Parser();
+    const parser = Parser(options);
     const binder = Binder();
     const checker = Checker();
     const heritageCircularityDetector = new Set<string>();

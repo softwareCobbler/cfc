@@ -599,14 +599,14 @@ export function CallExpression(left: Node, leftParen: Terminal, args: CallArgume
 
 export interface CallArgument extends NodeBase {
     kind: NodeType.callArgument;
-    name: Identifier | null;
+    name: SimpleStringLiteral | InterpolatedStringLiteral | Identifier | null;
     equals: Terminal | null;
     dotDotDot: Terminal | null;
     expr: Node;
     comma: Terminal | null;
 }
 
-export function CallArgument(name: Identifier | null, equals: Terminal | null, dotDotDot: Terminal | null, expr: Node, comma: Terminal | null) : CallArgument {
+export function CallArgument(name: SimpleStringLiteral | InterpolatedStringLiteral | Identifier | null, equals: Terminal | null, dotDotDot: Terminal | null, expr: Node, comma: Terminal | null) : CallArgument {
     const v = NodeBase<CallArgument>(NodeType.callArgument, mergeRanges(name, expr, comma));
     v.name = name;
     v.equals = equals;
@@ -1265,11 +1265,11 @@ export interface Identifier extends NodeBase {
     uiName: string | undefined;
 }
 
-export function Identifier(identifier: Node, name: string | undefined) {
+export function Identifier(identifier: Node, uiName: string | undefined) {
     const v = NodeBase<Identifier>(NodeType.identifier, identifier.range);
     v.source = identifier;
-    v.uiName = name;
-    v.canonicalName = name?.toLowerCase();
+    v.uiName = uiName;
+    v.canonicalName = uiName?.toLowerCase();
     return v;
 }
 
@@ -1428,6 +1428,7 @@ export function pushAccessElement(base: IndexedAccess, element: IndexedAccessCha
 interface FunctionParameterBase extends NodeBase {
     kind: NodeType.functionParameter,
     required: boolean,
+    defaultValue: Node | null,
     fromTag: boolean,
     canonicalName: string,
     uiName: string,
@@ -1444,7 +1445,6 @@ export namespace Script {
         dotDotDot: Terminal | null,
         identifier: Identifier,
         equals: Terminal | null,
-        defaultValue: Node | null,
         comma: Terminal | null,
         type: _Type | null,
     }
@@ -1470,7 +1470,8 @@ export namespace Script {
         v.canonicalName = identifier.canonicalName || "<<ERROR>>";
         v.uiName = identifier.uiName || "<<ERROR>>";
         v.type = type;
-        v.required = !!(requiredTerminal);
+        // it is legal to say something is required and give it a default; however, a required parameter with a default is not really required
+        v.required = !!(requiredTerminal) && !defaultValue;
         return v;
     }
 }
@@ -1490,7 +1491,9 @@ export namespace Tag {
         v.tagOrigin.startTag = tag;
         v.canonicalName = name?.toLowerCase() || "<<ERROR>>";
         v.uiName = name || "<<ERROR>>";
-        v.required = getTriviallyComputableBoolean(getAttributeValue(tag.attrs, "required")) ?? false;
+        v.defaultValue = getAttributeValue(tag.attrs, "default") ?? null;
+        // it is legal to say something is required and give it a default; however, a required parameter with a default is not really required
+        v.required = !v.defaultValue && (getTriviallyComputableBoolean(getAttributeValue(tag.attrs, "required")) ?? false);
         v.type = null;
         return v;
     }

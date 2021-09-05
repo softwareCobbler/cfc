@@ -1,7 +1,8 @@
 import * as assert from "assert";
 import * as fs from "fs";
 import * as path from "path";
-import { Parser, Binder, cfmOrCfc, SourceFile, flattenTree, Checker, CfFileType } from "../out/compiler";
+import { Parser, Binder, cfmOrCfc, SourceFile, flattenTree, Checker, CfFileType } from "../src/compiler";
+import { LanguageVersion } from "../src/compiler/project";
 
 const expectedDiagnosticCountByFile : Record<string, number> = {
     "./mxunit/mxunit-TestCase-Template.cfc": 0,
@@ -248,7 +249,7 @@ const expectedDiagnosticCountByFile : Record<string, number> = {
 };
 
 describe("MX-Unit smoke test", () => {
-    const parser = Parser().setDebug(true);
+    const parser = Parser({language: LanguageVersion.lucee5}).setDebug(true); // mxunit looks like it was intended to target lucee
     const binder = Binder().setDebug(true);
     const checker = Checker();
 

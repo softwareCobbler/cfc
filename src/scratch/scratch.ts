@@ -14,13 +14,13 @@ import * as path from "path";
 function projectFiddle() {
     const debugfs = DebugFileSystem([
         ["/a.cfc", `
-            component {
-                s = {
-                    final: 42,
-                    default: 42
-                };
-                call(final=42, default=42);
-            }
+            <cfcomponent>
+                <cfscript>
+                    // function returns a function taking a function -- that's ok
+                    // function as the function name -- no good
+                    function function function(function f) {};
+                </cfscript>
+            </cfcomponent>
         `],
         //["/b.cfc", `component { function foo() {} }`],
         //["/lib.d.cfm", "@declare function foo(arg0: number[]) : string"]
@@ -34,7 +34,9 @@ function projectFiddle() {
     //const b = project.addFile("/b.cfc");
     //const c = project.addFile("/lib.d.cfm");
 
-    for (const diagnostic of project.getDiagnostics("/a.cfc")) {
+    const diagnostics = project.getDiagnostics("/a.cfc")
+
+    for (const diagnostic of diagnostics) {
         console.log(diagnostic);
     }
 }
@@ -57,7 +59,7 @@ const sourceFile = NilCfm(`
     // @type (foo_arg: string) => ({x: number})
 `);
 
-const parser = Parser().setDebug(true).setParseTypes(true);
+const parser = Parser({language: LanguageVersion.acf2018}).setDebug(true).setParseTypes(true);
 const binder = Binder().setDebug(true);
 const checker = Checker();
 

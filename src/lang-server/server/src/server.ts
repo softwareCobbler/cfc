@@ -53,7 +53,8 @@ interface CflsConfig {
 	parseCache: Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, Node>}>,
 	evictFile: (uri: TextDocumentUri) => void,
 	lib: SourceFile | null,
-	x_types: boolean
+	x_types: boolean,
+	languageVersion: LanguageVersion
 }
 
 let project : Project; // init this before using it
@@ -190,10 +191,10 @@ connection.onDefinition((params) : Location | undefined  => {
 	}*/
 });
 
-function resetCflsp(x_types: boolean = false) {
+function resetCflsp(language: LanguageVersion, x_types: boolean = false) {
 	console.info("[reset]");
 	cflsConfig = {
-		parser: Parser().setDebug(true).setParseTypes(false),
+		parser: Parser({language}).setDebug(true).setParseTypes(false),
 		binder: Binder().setDebug(true),
 		checker: Checker(),
 		parseCache: new Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, Node>}>(),
@@ -204,10 +205,11 @@ function resetCflsp(x_types: boolean = false) {
 			}
 		},
 		x_types: false,
+		languageVersion: language
 	};
 	//cflsConfig.checker.installCfcResolver(CfcResolver(workspaceRoots.map(root => root.uri)));
 
-	project = Project(workspaceRoots.map(v => URI.parse(v.uri).fsPath), FileSystem(), {parseTypes: x_types, debug: true, language: LanguageVersion.acf2018});
+	project = Project(workspaceRoots.map(v => URI.parse(v.uri).fsPath), FileSystem(), {parseTypes: x_types, debug: true, language});
 }
 
 function reemitDiagnostics() {
@@ -235,13 +237,14 @@ connection.onInitialized(() => {
 		connection.client.register(DidChangeConfigurationNotification.type, undefined);
 
 		// immediately configure ourselves
-		resetCflsp();
+		resetCflsp(LanguageVersion.lucee5); // how to get init'd value instead of waiting on it below ?
 
 		// ok, now we can wait to ask the client for the workspace configuration; this might take a while to complete
 		// and completions requests and etc. can be arriving and getting serviced during the wait
 		connection.workspace.getConfiguration("cflsp").then((config) => {
-			if (config.x_types !== cflsConfig.x_types) {
-				resetCflsp(config.x_types ?? false);
+			const languageVersion = languageConfigToEnum(config.languageVersion);
+			if (languageVersion !== cflsConfig.languageVersion || config.x_types !== cflsConfig.x_types) {
+				resetCflsp(config.languageVersion, config.x_types ?? false);
 			}
 		});
 	}
@@ -276,13 +279,21 @@ let globalSettings: ExampleSettings = defaultSettings;
 // Cache the settings of all open documents
 let documentSettings: Map<string, Thenable<ExampleSettings>> = new Map();
 
+function languageConfigToEnum(s: string) {
+	switch (s) {
+		case "Adobe": return LanguageVersion.acf2018;
+		case "Lucee": return LanguageVersion.lucee5;
+		default: return LanguageVersion.lucee5; // shouldn't hit this
+	}
+}
+
 connection.onDidChangeConfiguration(async change => {
 	//let x_types : boolean;
 	if (hasConfigurationCapability) {
 		// Reset all cached document settings
 		documentSettings.clear();
 		connection.workspace.getConfiguration("cflsp").then((config) => {
-			resetCflsp(config.x_types ?? false);
+			resetCflsp(languageConfigToEnum(config.languageVersion), config.x_types ?? false);
 			documents.all().forEach(validateTextDocument);
 		});
 	}
@@ -290,7 +301,7 @@ connection.onDidChangeConfiguration(async change => {
 		/*globalSettings = <ExampleSettings>(
 			(change.settings.languageServerExample || defaultSettings)
 		);*/
-		resetCflsp(/*x_types*/false);
+		resetCflsp(LanguageVersion.lucee5, /*x_types*/false);
 		// Revalidate all open text documents
 		documents.all().forEach(validateTextDocument);
 	}

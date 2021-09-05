@@ -590,7 +590,7 @@ export function extractCfFunctionSignature(def: FunctionDefinition | ArrowFuncti
         if (def.fromTag) {
             uiName       = getTriviallyComputableString(getAttributeValue((def.tagOrigin.startTag as CfTag.Common).attrs, "name")) || "<<ERROR>>";
             returnType = typeFromAttribute((def.tagOrigin.startTag as CfTag.Common).attrs, "returntype");
-            paramTypes = extractTagFunctionParam(def.params);
+            paramTypes = extractTagFunctionParams(def.params);
         }
         else {
             uiName     = def.nameToken?.uiName || ""; // anonymous function is OK
@@ -609,31 +609,24 @@ export function extractCfFunctionSignature(def: FunctionDefinition | ArrowFuncti
     return cfFunctionSignature(uiName, paramTypes, returnType);
 }
 
-export function extractScriptFunctionParams(params: readonly Script.FunctionParameter[], asDeclaration = false) : cfFunctionSignatureParam[] {
+function extractScriptFunctionParams(params: readonly Script.FunctionParameter[], asDeclaration = false) : cfFunctionSignatureParam[] {
     const result : cfFunctionSignatureParam[] = [];
     for (const param of params) {
         const type = asDeclaration
             ? (param.type ?? SyntheticType.any)
             : typeFromJavaLikeTypename(param.javaLikeTypename);
-        //const required = param.requiredTerminal ? TypeFlags.none : TypeFlags.optional;
-        //const spread = param.dotDotDot ? TypeFlags.spread : TypeFlags.none;
         const name = param.identifier.uiName || "<<ERROR>>";
-        result.push(cfFunctionSignatureParam(param.required, type, name));
+        result.push(cfFunctionSignatureParam(param.required && !param.defaultValue, type, name));
     }
     return result;
 }
 
-export function extractTagFunctionParam(params: readonly Tag.FunctionParameter[]) : cfFunctionSignatureParam[] {
+function extractTagFunctionParams(params: readonly Tag.FunctionParameter[]) : cfFunctionSignatureParam[] {
     const result : cfFunctionSignatureParam[] = [];
     for (const param of params) {
         const type = typeFromAttribute((param.tagOrigin.startTag as CfTag.Common).attrs, "type");
-        /*const required = getTriviallyComputableBoolean(getAttributeValue((param.tagOrigin.startTag as CfTag.Common).attrs, "required"))
-            ? TypeFlags.required
-            : TypeFlags.none;
-        const spread = TypeFlags.none;*/
         const name = getTriviallyComputableString(getAttributeValue((param.tagOrigin.startTag as CfTag.Common).attrs, "name")) || "<<ERROR>>";
-
-        result.push(cfFunctionSignatureParam(param.required, type, name));
+        result.push(cfFunctionSignatureParam(param.required && !param.defaultValue, type, name));
     }
     return result;
 }
