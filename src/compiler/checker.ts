@@ -2,7 +2,7 @@ import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, State
 import { CfcResolver } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfStruct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStruct, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType, stringifyType, cfFunctionSignatureParam } from "./types";
-import { findAncestor, getAttributeValue, getContainingFunction, getSourceFile, getTriviallyComputableString, Mutable, stringifyDottedPath, stringifyLValue } from "./utils";
+import { findAncestor, getAttributeValue, getContainingFunction, getSourceFile, getTriviallyComputableString, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
 
 type CanonicalSymbolName = string;
 type SymbolTable = ReadonlyMap<CanonicalSymbolName, SymTabEntry>;
@@ -658,7 +658,6 @@ export function Checker() {
 
     function checkCallLikeArguments(sig: _Type, node: CallExpression) : void {
         if (sig.flags & TypeFlags.any) {
-            //setCachedEvaluatedNodeType(node, SyntheticType.any);
             return;
         }
         if (isFunctionSignature(sig)) {
@@ -684,17 +683,22 @@ export function Checker() {
                 }
                 const seenArgs = new Set<string>();
                 for (const arg of node.args) {
-                    if (arg.name?.canonicalName) {
-                        hasArgumentCollectionArg = hasArgumentCollectionArg || (arg.name.canonicalName === "argumentcollection");
-                        if (seenArgs.has(arg.name?.canonicalName)) {
-                            const uiName = arg.name.uiName || arg.name.canonicalName;
+                    const argName = arg.name?.kind === NodeKind.identifier
+                        ? stringifyLValue(arg.name)
+                        : isSimpleOrInterpolatedStringLiteral(arg.name)
+                        ? stringifyStringAsLValue(arg.name)
+                        : undefined;
+                    if (arg.name && argName) {
+                        hasArgumentCollectionArg = hasArgumentCollectionArg || (argName.canonical === "argumentcollection");
+                        if (seenArgs.has(argName?.canonical)) {
+                            const uiName = argName.ui || argName.canonical;
                             typeErrorAtNode(arg.name, `Duplicate argument '${uiName}'`);
                         }
 
-                        const paramPair = paramNameMap.get(arg.name.canonicalName);
+                        const paramPair = paramNameMap.get(argName.canonical);
                         if (!paramPair) {
-                            if (arg.name.canonicalName !== "argumentcollection") {
-                                const uiName = arg.name.uiName || arg.name.canonicalName;
+                            if (argName.canonical !== "argumentcollection") {
+                                const uiName = argName.ui || argName.canonical;
                                 typeErrorAtNode(arg.name, `'${uiName}' is not a recognized parameter for this ${isNewExpr ? "constructor" : "function"}.`);
                             }
                         }
@@ -706,7 +710,7 @@ export function Checker() {
                             }
                         }
                         
-                        seenArgs.add(arg.name.canonicalName);
+                        seenArgs.add(argName.canonical);
                     }
                 }
 

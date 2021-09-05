@@ -1,13 +1,15 @@
-import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, FlowType, ConditionalSubtype, SymTab, TypeShim, UnreachableFlow, NodeFlags } from "./node";
-import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, getNodeLinks, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue } from "./utils";
+import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, UnreachableFlow, FlowType, ConditionalSubtype, SymTab, TypeShim, NodeFlags } from "./node";
+import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { SyntheticType, _Type, extractCfFunctionSignature, isFunctionSignature } from "./types";
+import { LanguageVersion } from "./project";
 
 export function Binder() {
     let RootNode : NodeWithScope<SourceFile>;
     let currentContainer : NodeWithScope;
     let scanner : Scanner;
     let diagnostics: Diagnostic[];
+    let langVersion : LanguageVersion = LanguageVersion.acf2018;
 
     let currentFlow : Flow;
     let detachedClosureFlows : Flow[] = [];
@@ -50,7 +52,11 @@ export function Binder() {
         bindListFunctionsLast(sourceFile_.content, sourceFile_);
     }
 
-    function bindFlowToNode(flow: Flow, node: Node) {
+    function setLang(lv: LanguageVersion) {
+        langVersion = lv;
+    }
+
+    function bindFlowToNode(flow: Flow, node: Node) : void {
         flow.node = node;
         node.flow = flow;
     }
@@ -376,9 +382,11 @@ export function Binder() {
         }
 
         if (node.expr.kind === NodeKind.identifier) {
+            bindNode(node.expr, node);
+
             const name = getTriviallyComputableString(node.expr);
             if (!name) return;
-            getNodeLinks(node).symTabEntry = addSymbolToTable(targetScope, name, node);
+            addSymbolToTable(targetScope, name, node);
         }
         else if (node.expr.kind === NodeKind.indexedAccess) {
             // need a dot/bracket "path creation" mechanism, e.g., for (local.foo in bar) {}
@@ -413,10 +421,7 @@ export function Binder() {
 
         const [uiPath, canonicalPath] = [identifierBaseName.ui.split("."), identifierBaseName.canonical.split(".")];
 
-        if (isStaticallyKnownScopeName(canonicalPath[0]) && canonicalPath.length === 1 && node.varModifier) {
-            errorAtRange(mergeRanges(node.finalModifier, node.varModifier, (<BinaryOperator>node.expr).left), "Variable declaration shadows built-in scope `" + canonicalPath[0] + "`");
-        }
-        else if (isStaticallyKnownScopeName(canonicalPath[0]) && canonicalPath.length === 2) {
+        if (isStaticallyKnownScopeName(canonicalPath[0]) && canonicalPath.length === 2) {
             let targetScope : SymTab | undefined = undefined;
             if (canonicalPath[0] === "local") {
                 targetScope = currentContainer.containedScope.local;
@@ -663,6 +668,7 @@ export function Binder() {
 
     function bindIdentifier(node: Identifier) {
         bindNode(node.source, node);
+        checkIdentifierValidity(node);
     }
 
     function bindIndexedAccess(node: IndexedAccess) {
@@ -1074,6 +1080,72 @@ export function Binder() {
         }
     }
 
+
+
+    function checkIdentifierValidity(node: Node) : void {
+        const defaultMsg = (nameLike: {uiName: string | undefined, canonicalName: string | undefined}) => `'${nameLike.uiName || nameLike.canonicalName}' cannot be used as an identifier in this position.`;
+        switch (node.kind) {
+            case NodeKind.identifier: {
+                switch (node.canonicalName) {
+                    case "final": {
+                        if (isNamedFunctionArgumentName(node) || isObjectLiteralPropertyName(node)) {
+                            // ok as a named arg name and object property name
+                            break;
+                        }
+                        else if (langVersion === LanguageVersion.acf2018) {
+                            // invalid as an identifier, both tag and script
+                            errorAtRange(node.range, defaultMsg(node));
+                        }
+                        break;
+                    }
+                    case "not": {
+                        if (isObjectLiteralPropertyName(node)) {
+                            // x = {not: 0} fails on both lucee and acf
+                            errorAtRange(node.range, "The identifier 'not' cannot be used to define an object property name. Consider quote-escaping it.");
+                            break;
+                        }
+
+                        if (langVersion === LanguageVersion.acf2018) {
+                            errorAtRange(node.range, defaultMsg(node));
+                            break;
+                        }
+                    }
+                    case "break":
+                    case "case":
+                    case "catch":
+                    case "continue":
+                    case "default":
+                    case "do":
+                    case "else":
+                    case "false":
+                    case "final":
+                    case "finally":
+                    case "for":
+                    case "function":
+                    case "if":
+                    case "import":
+                    case "new":
+                    case "return":
+                    case "switch":
+                    case "true":
+                    case "try":
+                    case "var":
+                    case "while": {
+                        if (node.canonicalName === "function" && node.parent?.kind === NodeKind.functionDefinition) {
+                            errorAtRange(node.range, defaultMsg(node));
+                            break;
+                        }
+                        else if (langVersion === LanguageVersion.acf2018 && !isNamedFunctionArgumentName(node) && !isObjectLiteralPropertyName(node) && isInScriptBlock(node)) {
+                            errorAtRange(node.range, defaultMsg(node));
+                            break;
+                        }
+                    }
+                }
+            }
+            default: break;
+        }
+    }
+
     function errorAtRange(range: SourceRange, msg: string) : void {
         errorAtSpan(range.fromInclusive, range.toExclusive, msg);
     }
@@ -1086,6 +1158,7 @@ export function Binder() {
     const self = {
         bind,
         setDebug,
+        setLang,
         getNodeMap: () => <ReadonlyMap<NodeId, Node>>nodeMap,
     }
 

@@ -4,7 +4,7 @@ import { Project } from "../compiler/project"
 import { Node, NodeKind, CallExpression, CfTag, StaticallyKnownScopeName } from "../compiler/node"
 import { TokenType } from "../compiler/scanner";
 import { isCfc, isFunctionSignature, isStruct } from "../compiler/types";
-import { isExpressionContext, isCfScriptTagBlock } from "../compiler/utils";
+import { isExpressionContext, isCfScriptTagBlock, stringifyCallExprArgName } from "../compiler/utils";
 import { tagNames } from "./tagnames";
 
 export const enum CompletionItemKind {
@@ -96,7 +96,10 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
         if (!sig || !isFunctionSignature(sig)) return [];
 
         const yetToBeUsedParams = new Set<string>(sig.params.map(param => param.canonicalName));
-        for (const arg of callExpr.args) if (arg.name?.canonicalName) yetToBeUsedParams.delete(arg.name?.canonicalName)
+        for (const arg of callExpr.args) {
+            const argName = stringifyCallExprArgName(arg);
+            if (argName) yetToBeUsedParams.delete(argName.canonical);
+        }
 
         const detail = callExpr.parent?.kind === NodeKind.new ? "named constructor argument" : "named function argument";
 

@@ -54,16 +54,19 @@ export function DebugFileSystem(files: [absPath: string, text: string][], pathSe
     }
 }
 
+export const enum LanguageVersion { acf2018 = 1, lucee5 };
+
 export interface ProjectOptions {
     debug: boolean,
     parseTypes: boolean,
+    language: LanguageVersion,
     noUndefinedVars: boolean,
 }
 
 export function Project(absRoots: string[], fileSystem: FileSystem, options: ProjectOptions) {
     type AbsPath = string;
     
-    const parser = Parser();
+    const parser = Parser(options);
     const binder = Binder();
     const checker = Checker();
     const heritageCircularityDetector = new Set<string>();
@@ -78,6 +81,7 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
         // checker.setDebug(true);
     }
 
+    binder.setLang(options.language);
     checker.installCfcResolver(CfcResolver);
     checker.setNoUndefinedVars(options.noUndefinedVars);
 

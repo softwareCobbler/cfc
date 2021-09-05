@@ -1,6 +1,6 @@
 import * as path from "path";
 import * as fs from "fs";
-import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CfTag, DottedPath, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, Node, NodeId, ScopeDisplay, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
+import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CfTag, DottedPath, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, Node, NodeId, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
 import { NodeKind } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature } from "./types";
@@ -114,7 +114,7 @@ export function isLexemeLikeToken(token: Token, allowNumeric = false) : boolean 
         || (val > TokenType._FIRST_LIT && val < TokenType._LAST_LIT);
 }
 
-const sugaredTagNames = new Set<string>(["component", "interface", "savecontent", "lock", "transaction"]);
+const sugaredTagNames = new Set<string>(["component", "interface", "savecontent", "lock", "transaction", "param"]);
 export function isSugaredTagName(text: string) {
     return sugaredTagNames.has(text);
 }
@@ -867,7 +867,12 @@ export class BiMap<K,V> {
     }
 }
 
-export function findAncestor(node: Node, predicate: (node: Node | null) => true | false | "bail") : Node | undefined {
+/**
+ * if predicate returns true, return the current Node
+ * if predicate returns false, set current Node to parent, and try again
+ * if predicate returns "bail", return undefined
+ */
+export function findAncestor(node: Node, predicate: (node: Node) => true | false | "bail") : Node | undefined {
     let current : Node | null = node;
     while (current) {
         const result = predicate(current);
@@ -948,7 +953,12 @@ export function isHoistableFunctionDefinition(node: FunctionDefinition | ArrowFu
     return node.kind === NodeKind.functionDefinition && (typeof node.canonicalName === "string");
 }
 
-export function stringifyLValue(node: Identifier | IndexedAccess) : {ui: string, canonical: string} | undefined {
+export interface CanonicalizedName {
+    ui: string,
+    canonical: string
+}
+
+export function stringifyLValue(node: Identifier | IndexedAccess) : CanonicalizedName | undefined {
     if (node.kind === NodeKind.identifier) return node.uiName && node.canonicalName ? {ui: node.uiName, canonical: node.canonicalName} : undefined;
     let result : {ui: string, canonical: string};
 
@@ -976,6 +986,22 @@ export function stringifyLValue(node: Identifier | IndexedAccess) : {ui: string,
         }
     }
     return result;
+}
+
+export function stringifyStringAsLValue(node: SimpleStringLiteral | InterpolatedStringLiteral) : CanonicalizedName | undefined {
+    const sval = getTriviallyComputableString(node);
+    return sval ? {ui: sval, canonical: sval.toLowerCase()} : undefined;
+}
+
+/**
+ * if the passed call argument is a named call argument, return the stringified name
+ */
+export function stringifyCallExprArgName(node: CallArgument) : CanonicalizedName | undefined {
+    return node.name
+        ? node.name.kind === NodeKind.identifier
+            ? stringifyLValue(node.name)
+            : stringifyStringAsLValue(node.name)
+        : undefined;
 }
 
 export function stringifyDottedPath(node: DottedPath) {
@@ -1066,4 +1092,29 @@ export function recursiveGetFiles(root: string, pattern: RegExp) : string [] {
 		}
 	}
 	return result;
+}
+
+export function isSimpleOrInterpolatedStringLiteral(node: Node | null) : node is SimpleStringLiteral | InterpolatedStringLiteral {
+    return node?.kind === NodeKind.simpleStringLiteral || node?.kind === NodeKind.interpolatedStringLiteral;
+}
+
+export function isNamedFunctionArgumentName(node: Node) {
+    return node.parent?.kind === NodeKind.callArgument && node === node.parent.name
+}
+
+export function isObjectLiteralPropertyName(node: Node) {
+    return node.parent?.kind === NodeKind.structLiteralInitializerMember
+        && node.parent.subType === StructLiteralInitializerMemberSubtype.keyed
+        && node.parent.key === node;
+}
+
+export function isInScriptBlock(node: Node) {
+    // @fixme perhaps better to just mark script nodes as such with a flag, during parse node finalization
+    // `return !!(node.flags & NodeFlags.script)` would be way faster than a tree walk
+    return !!findAncestor(node, (node) => {
+        if (node.kind === NodeKind.functionDefinition && node.fromTag) return "bail";
+        if (node.kind === NodeKind.block && node.subType === BlockType.fromTag && node.tagOrigin.startTag?.canonicalName === "script") return true;
+        if (node.kind === NodeKind.block && node.subType === BlockType.scriptSugaredTagCallBlock && (node.name?.token.text === "component" || node.name?.token.text === "interface")) return true;
+        return false;
+    })
 }

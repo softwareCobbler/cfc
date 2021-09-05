@@ -5,9 +5,9 @@ import { IndexedAccess, NodeKind } from "../src/compiler/node";
 import { findNodeInFlatSourceMap, getTriviallyComputableString } from "../src/compiler/utils";
 import * as TestLoader from "./TestLoader";
 import { getCompletions } from "../src/services/completions";
-import { ProjectOptions } from "../src/compiler/project";
+import { LanguageVersion, ProjectOptions } from "../src/compiler/project";
 
-const parser = Parser().setDebug(true);
+const parser = Parser({language: LanguageVersion.acf2018}).setDebug(true);
 const binder = Binder().setDebug(true);
 
 function assertDiagnosticsCount(text: string, cfFileType: CfFileType, count: number) {
@@ -19,7 +19,7 @@ function assertDiagnosticsCount(text: string, cfFileType: CfFileType, count: num
 }
 
 function assertDiagnosticsCountWithProject(fs: FileSystem, diagnosticsTargetFile: string, count: number, options?: Partial<ProjectOptions>) {
-    const defaultOptions = {debug: true, parseTypes: true, noUndefinedVars: false}
+    const defaultOptions = {debug: true, parseTypes: true, language: LanguageVersion.acf2018, noUndefinedVars: false}
     const mergedOptions = {...defaultOptions, ...(options ?? {})};
     const project = Project(["/"], fs, mergedOptions);
     project.addFile(diagnosticsTargetFile);
@@ -276,7 +276,7 @@ describe("general smoke test for particular constructs", () => {
         const testCase = TestLoader.loadCompletionAtTest("./test/sourcefiles/cfc_function_completion.cfc");
 
         const fs = DebugFileSystem([["/a.cfc", testCase.sourceText]], "/");
-        const project = Project(["/"], fs, {debug: true, parseTypes: true, noUndefinedVars: false});
+        const project = Project(["/"], fs, {debug: true, parseTypes: true, language: LanguageVersion.acf2018, noUndefinedVars: false});
         project.addFile("/a.cfc");
 
         const completions = getCompletions(project, "/a.cfc", testCase.index, null);
@@ -293,7 +293,7 @@ describe("general smoke test for particular constructs", () => {
             ["/cfc_function_completion.cfc", cfc.sourceText],
             ["/cfc_function_completion.cfm", cfm.sourceText]
         ], "/");
-        const project = Project(["/"], fs, {debug: true, parseTypes: true, noUndefinedVars: false});
+        const project = Project(["/"], fs, {debug: true, parseTypes: true, language: LanguageVersion.acf2018, noUndefinedVars: false});
         project.addFile("/cfc_function_completion.cfc");
         project.addFile("/cfc_function_completion.cfm");
 
@@ -332,5 +332,82 @@ describe("general smoke test for particular constructs", () => {
             ["/a.cfm", `<cfset foo(.42)>`],
         ], "/");
         assertDiagnosticsCountWithProject(dfs, "/a.cfm", 0);
+    });
+    it("Should accept a variable declaration as a loose statement after an if predicate", () => {
+        // really the issue we are checking for is that we parse the semicolon after `var y = z`, so that we see the 'else' following it
+        const dfs = DebugFileSystem([
+            ["/a.cfm", `
+            <cfscript>
+                function foo() {
+                    if (x) var y = z;
+                    else 42;
+                }
+            </cfscript>`],
+        ], "/");
+        assertDiagnosticsCountWithProject(dfs, "/a.cfm", 0);
+    });
+    it("Should parse param as a sugared tag expression.", () => {
+        const dfs = DebugFileSystem([
+            ["/a.cfc", `
+                component {
+                    param name="foo" default="lel";
+                }`]],
+            "/");
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);
+    });
+    it("Should parse catch bindings as either string or dotted path.", () => {
+        const dfs = DebugFileSystem([
+            ["/a.cfc", `
+                component {
+                    try {}
+                    catch ("a.b.c" e) {}
+
+                    try {}
+                    catch (a.b.c e) {}
+
+                    try {}
+                    catch ('a.b.c' e) {}
+
+                    try {}
+                    catch('#abc#' e) {}
+
+                    try {}
+                    catch(e e) {}
+                }`]],
+            "/");
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);
+    });
+    it("Should not error on reserved keywords when used in contextually valid positions.", () => {
+        const dfs = DebugFileSystem([
+            ["/a.cfc", `
+                component {
+                    s = {
+                        final: 42,
+                        default: 42
+                    };
+                    call(final=42, default=42);
+                }`]],
+            "/");
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);
+    });
+    it("Should error on quoted named call argument names in Adobe; in Lucee it is OK", () => {
+        const dfs = DebugFileSystem([
+            ["/a.cfc", `
+                component {
+                    someCall("quotedArgName" = 42);
+                }`]],
+            "/");
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 1, {language: LanguageVersion.acf2018});
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0, {language: LanguageVersion.lucee5});
+    });
+    it("Should not require a required && defaulted parameter", () => {
+        const dfs = DebugFileSystem([
+            ["/a.cfc", `
+                component {
+                    function foo(required arg = 0) {}
+                    foo();
+                }`]],
+            "/");
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);
     });
 });

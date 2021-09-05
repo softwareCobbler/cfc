@@ -6,7 +6,7 @@ import { Scanner, Parser, Binder, NilDCfm, NilCfc, NilCfm, SourceFile } from "..
 import { CfFileType } from "../compiler/scanner";
 import { binarySearch, cfmOrCfc, findNodeInFlatSourceMap, flattenTree } from "../compiler/utils";
 import { Checker } from "../compiler/checker";
-import { DebugFileSystem, Project } from "../compiler/project";
+import { DebugFileSystem, FileSystem, LanguageVersion, Project } from "../compiler/project";
 
 import * as fs from "fs";
 import * as path from "path";
@@ -18,7 +18,7 @@ function projectFiddle() {
         //["/lib.d.cfm", "@declare function foo(arg0: number[]) : string"]
     ], "/");
 
-    const project = Project(["/"], /*filesystem*/debugfs, {debug: true, parseTypes: true, noUndefinedVars: true});
+    const project = Project(["/"], /*filesystem*/debugfs, {debug: true, parseTypes: true, language: LanguageVersion.acf2018, noUndefinedVars: true});
 
     const a = project.addFile("/a.cfm");
     //const b = project.addFile("/b.cfc");
@@ -47,7 +47,7 @@ const sourceFile = NilCfm(`
     // @type (foo_arg: string) => ({x: number})
 `);
 
-const parser = Parser().setDebug(true).setParseTypes(true);
+const parser = Parser({language: LanguageVersion.acf2018}).setDebug(true).setParseTypes(true);
 const binder = Binder().setDebug(true);
 const checker = Checker();
 

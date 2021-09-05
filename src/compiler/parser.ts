@@ -27,9 +27,10 @@ import {
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, TypeShim } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
-import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, Mutable} from "./utils";
+import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, Mutable, isSimpleOrInterpolatedStringLiteral} from "./utils";
 import { cfIndexedType, cfIntersection, cfMappedType, extractCfFunctionSignature, isIntersection, isTypeId, isUnion } from "./types";
 import { _Type, cfArray, cfStruct, cfTuple, cfFunctionSignature, cfTypeConstructorInvocation, cfTypeConstructorParam, cfTypeConstructor, cfTypeId, cfUnion, SyntheticType, cfFunctionSignatureParam } from "./types";
+import { LanguageVersion } from "./project";
 
 let debugParseModule = false;
 let parseTypes = false; // generally not yet possible
@@ -61,6 +62,7 @@ const enum ParseContext {
     typeStruct,
     awaitingRightBracket,
     typeAnnotation,
+    interface,
     END                 // sentinel for looping over ParseContexts
 }
 
@@ -102,7 +104,7 @@ interface ScannerState {
     artificialEndLimit: number | undefined;
 }
 
-export function Parser() {
+export function Parser(config: {language: LanguageVersion}) {
     function setSourceFile(sourceFile_: SourceFile) {
         sourceFile = sourceFile_;
         scanner = sourceFile.scanner;
@@ -141,6 +143,7 @@ export function Parser() {
     let token_ : Token;
     let lastNonTriviaToken : Token;
     let diagnostics : Diagnostic[] = [];
+    const langVersion = config.language;
 
     let lastTypeAnnotation : _Type | null = null;
     
@@ -771,7 +774,15 @@ export function Parser() {
         return result;
     }
 
-    function parseComponentPreamble() : "script" | "tag" | null {
+    const enum ComponentSyntaxType { tag = 1, script = 2 }; // start at non-zero
+    const enum ComponentOrInterface { component = 1, interface = 2 };
+
+    interface ComponentType {
+        primarySyntax: ComponentSyntaxType,
+        type: ComponentOrInterface
+    }
+
+    function parseComponentPreamble() : ComponentType | null {
         setScannerMode(ScannerMode.allow_both);
         const preamble : Node[] = [];
 
@@ -784,25 +795,37 @@ export function Parser() {
                 return false;
             }
             const tag = parseCfStartTag();
-            return tag.canonicalName === "component" || tag.canonicalName === "interface";
+            return tag.canonicalName === "component" 
+                ? ComponentOrInterface.component
+                : tag.canonicalName === "interface"
+                ? ComponentOrInterface.interface
+                : null;
         }
 
         function isScriptComponentOrInterfaceBlock() {
             setScannerMode(ScannerMode.script);
             const peekedText = peek().text.toLowerCase();
-            if (peekedText !== "component" && peekedText !== "interface") {
-                return false;
+            const cOrI = peekedText === "component"
+                ? ComponentOrInterface.component
+                : peekedText === "interface"
+                ? ComponentOrInterface.interface
+                : null;
+
+            if (!cOrI) {
+                return null;
             }
+
             next();
             parseTrivia();
             parseTagAttributes();
-            return peek().type === TokenType.LEFT_BRACE;
+            return peek().type === TokenType.LEFT_BRACE ? cOrI : null;
         }
 
         let gotNonComment = false;
         let gotTagComment = false;
         let gotScriptComment = false;
-        let match : "script" | "tag" | null = null;
+        let syntaxType : ComponentSyntaxType | null = null;
+        let componentOrInterface : ComponentOrInterface | null = null;
         outer:
         while (lookahead() !== TokenType.EOF) {
             switch (lookahead()) {
@@ -822,8 +845,10 @@ export function Parser() {
                     continue;
                 }
                 case TokenType.LEXEME: {
-                    if (SpeculationHelper.lookahead(isScriptComponentOrInterfaceBlock)) {
-                        match = "script";
+                    const maybeCOrI = SpeculationHelper.lookahead(isScriptComponentOrInterfaceBlock);
+                    if (maybeCOrI) {
+                        syntaxType = ComponentSyntaxType.script;
+                        componentOrInterface = maybeCOrI;
                         break outer;
                     }
                     gotNonComment = true;
@@ -831,8 +856,10 @@ export function Parser() {
                     continue;
                 }
                 case TokenType.CF_START_TAG_START: {
-                    if (SpeculationHelper.lookahead(isTagComponentOrInterfaceBlock)) {
-                        match = "tag";
+                    const maybeCOrI = SpeculationHelper.lookahead(isTagComponentOrInterfaceBlock);
+                    if (maybeCOrI) {
+                        syntaxType = ComponentSyntaxType.tag;
+                        componentOrInterface = maybeCOrI;
                         break outer;
                     }
                     gotNonComment = true;
@@ -855,28 +882,36 @@ export function Parser() {
             parseErrorAtRange(0, getIndex(), "A component preamble may only contain comments.");
         }
 
-        if (match && ((match === "tag" && gotScriptComment) || (match === "script" && gotTagComment))) {
-            parseErrorAtRange(0, getIndex(), `A ${match} component preamble may only contain ${match}-style comments.`);
+        if (syntaxType && ((syntaxType === ComponentSyntaxType.tag && gotScriptComment) || (syntaxType === ComponentSyntaxType.script && gotTagComment))) {
+            // we also need to consider "import" statements
+            //parseErrorAtRange(0, getIndex(), `A ${match} component preamble may only contain ${match}-style comments.`);
         }
-        else if (!match) {
-            parseErrorAtRange(0, getIndex(), `A CFC file must contain a component definition.`);
+        else if (!syntaxType) {
+            parseErrorAtRange(0, getIndex(), `A CFC file must contain a component or interface definition.`);
         }
 
-        return match;
+        if (syntaxType && componentOrInterface) return {primarySyntax: syntaxType, type: componentOrInterface};
+        else return null;
     }
 
     function parse(cfFileType: CfFileType = sourceFile?.cfFileType || CfFileType.cfm) : Node[] {
+        const savedContext = parseContext;
         switch (cfFileType) {
             case CfFileType.cfm:
                 sourceFile.content = parseTags();
                 break;
             case CfFileType.cfc: {
-                const componentType = parseComponentPreamble();
-                if (!componentType) {
+                const componentInfo = parseComponentPreamble();
+                if (!componentInfo) {
                     sourceFile.content = [];
                     break;
                 }
-                else if (componentType === "tag") {
+
+                if (componentInfo.type === ComponentOrInterface.interface) {
+                    updateParseContext(ParseContext.interface);
+                }
+
+                if (componentInfo.primarySyntax === ComponentSyntaxType.tag) {
                     sourceFile.content = parseTags();
                     break;
                 }
@@ -891,6 +926,7 @@ export function Parser() {
             }
         }
 
+        parseContext = savedContext;
         return sourceFile.content;
     }
 
@@ -1733,7 +1769,7 @@ export function Parser() {
             //      ^^^^^^^^^
             // so we hope to see an `in` following this; otherwise, it *also* needs an initializer
             // but we can flag that in the antecedent `for` parser
-            if (!isInSomeContext(ParseContext.for) && varModifier) {
+            if (!isInSomeContext(ParseContext.for) && varModifier && langVersion === LanguageVersion.acf2018) {
                 parseErrorAtRange(root.range, "Variable declarations require initializers.");
             }
 
@@ -2305,10 +2341,12 @@ export function Parser() {
 
     function parseNewExpression() {
         const newToken       = parseExpectedTerminal(TokenType.KW_NEW, ParseOptions.withTrivia);
-        const className      = parseDottedPathTypename();
+        const className      = lookahead() === TokenType.QUOTE_SINGLE || lookahead() === TokenType.QUOTE_DOUBLE
+            ? parseStringLiteral()
+            : parseDottedPathTypename();
         const callExpression = parseCallExpression(className);
         const newExpression  = New(newToken, callExpression);
-        return parseCallExpressionOrLowerRest(newExpression); // is new foo()["some property"] ok ?
+        return parseCallExpressionOrLowerRest(newExpression);
     }
 
     function isStartOfStatement() : boolean {
@@ -2404,7 +2442,11 @@ export function Parser() {
         // like within a struct literals, `=` and `:` share the same meaning
         // we don't know from our current position if all of the args are named,
         // we can check that later; if one is, all of them must be
-        if (exprOrArgName.kind === NodeKind.identifier) {
+        if (exprOrArgName.kind === NodeKind.identifier || isSimpleOrInterpolatedStringLiteral(exprOrArgName)) {
+            if (langVersion === LanguageVersion.acf2018 && isSimpleOrInterpolatedStringLiteral(exprOrArgName)) {
+                parseErrorAtRange(exprOrArgName.range, "String literals cannot be used as argument names.");
+            }
+
             let equalOrComma : Terminal | null;
             if (equalOrComma =
                     (parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia) ??
@@ -2523,9 +2565,16 @@ export function Parser() {
     // @todo - the rules around what is and isn't a valid struct key need to be made more clear
     //
     function parseStructLiteralInitializerKey() : Node {
+        if (langVersion === LanguageVersion.lucee5) {
+            return parseExpression();
+        }
+
+        // fixme: consider dotted path
         const maybeLexemeLikeKey = scanLexemeLikeStructKey();
         if (maybeLexemeLikeKey) {
-            return Terminal(maybeLexemeLikeKey, parseTrivia());
+            return Identifier(
+                Terminal(maybeLexemeLikeKey, parseTrivia()),
+                maybeLexemeLikeKey.text);
         }
 
         let result = parseExpression();
@@ -2570,7 +2619,7 @@ export function Parser() {
             if (!maybeComma && lookahead() !== terminator) {
                 parseErrorAtRange(value.range.toExclusive - 1, value.range.toExclusive + 1, "Expected ','");
             }
-            if (maybeComma && lookahead() === terminator) {
+            if (maybeComma && lookahead() === terminator && langVersion === LanguageVersion.acf2018) {
                 parseErrorAtRange(maybeComma.range, "Illegal trailing comma.");
             }
             return KeyedStructLiteralInitializerMember(key, colonOrEqual, value, maybeComma);
@@ -2650,13 +2699,6 @@ export function Parser() {
         }
     }
 
-    function isIllegalKeywordTokenAsIdentifier(tokenType: TokenType) {
-        // maybe have some versioning here; 2018+ makes final an illegal identifier? ok in 2016 or below ?
-        return tokenType > TokenType._FIRST_KW
-            && tokenType < TokenType._LAST_KW
-            && tokenType !== TokenType.KW_VAR; // `var` is a valid identifier, so `var var = expr` is OK
-    }
-
     // withTrivia is to support instances where the caller may want to manually consume trivia,
     // in order to grab type annotations that are inside comments
     function parseIdentifier(withTrivia = true) : Identifier {
@@ -2670,10 +2712,6 @@ export function Parser() {
             name = "";
         }
         else {
-            if (isIllegalKeywordTokenAsIdentifier(lookahead())) {
-                parseErrorAtRange(peek().range, `Reserved keyword \`${peek().text.toLowerCase()}\` cannot be used as an identifier.`);
-            }
-
             terminal = Terminal(scanIdentifier()!, withTrivia ? parseTrivia() : []);
             name = terminal.token.text;
         }
@@ -3221,7 +3259,11 @@ export function Parser() {
         while (lookahead() === TokenType.KW_CATCH) {
             const catchToken       = parseExpectedTerminal(TokenType.KW_CATCH, ParseOptions.withTrivia);
             const leftParen        = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
-            const exceptionType    = parseDottedPathTypename();
+            // an exception type can be a variable, a dotted path, a string, or an interpolated string
+            // if it is an identifier or interpolated string, at runtime it should resolve to an exception "type"
+            const exceptionType    = lookahead() === TokenType.QUOTE_SINGLE || lookahead() === TokenType.QUOTE_DOUBLE
+                ? parseStringLiteral()
+                : parseDottedPathTypename();
             const exceptionBinding = parseIdentifier();
             const rightParen       = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
             const leftBrace        = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
@@ -3322,7 +3364,13 @@ export function Parser() {
                 case TokenType.KW_NEW:
                 case TokenType.KW_FINAL:
                 case TokenType.KW_VAR: {
-                    return parseAssignmentOrLower();
+                    const stmt = parseAssignmentOrLower();
+
+                    // we may want to hold onto the semicolon later, but right now we can just discard it
+                    // it is valid in this position though so we need to parse it
+                    if (scriptMode()) parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia);
+
+                    return stmt;
                 }
                 case TokenType.LEFT_BRACE: {
                     // will we *ever* parse a block in tag mode ... ?

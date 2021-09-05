@@ -3,7 +3,7 @@
 	"description": "ColdFusion syntax error checker",
 	"author": "David Rogers",
 	"license": "MIT",
-	"version": "1.0.25",
+	"version": "1.0.26",
 	"publisher": "DavidRogers",
 	"categories": [],
 	"repository": {
@@ -40,6 +40,21 @@
 					"type": "boolean",
 					"default": false,
 					"description": "experimental types / flow analysis; toggling it on enables better autocomplete and errors, but it is still in development and WILL crash. default is OFF (unchecked / false)."
+				},
+				"cflsp.languageVersion": {
+					"scope": "resource",
+					"type": "string",
+					"description": "Which ColdFusion language version to use",
+					"enum": [
+						"Adobe",
+						"Lucee"
+					],
+					"default": "Lucee",
+					"enumDescriptions": [
+						"Adobe",
+						"Lucee"
+					],
+					"items": ["acf2018+", "lucee5+"]
 				}
 			}
 		}

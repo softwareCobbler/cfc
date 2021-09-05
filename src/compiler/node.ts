@@ -621,14 +621,14 @@ export function CallExpression(left: Node, leftParen: Terminal, args: CallArgume
 
 export interface CallArgument extends NodeBase {
     kind: NodeKind.callArgument;
-    name: Identifier | null;
+    name: SimpleStringLiteral | InterpolatedStringLiteral | Identifier | null;
     equals: Terminal | null;
     dotDotDot: Terminal | null;
     expr: Node;
     comma: Terminal | null;
 }
 
-export function CallArgument(name: Identifier | null, equals: Terminal | null, dotDotDot: Terminal | null, expr: Node, comma: Terminal | null) : CallArgument {
+export function CallArgument(name: SimpleStringLiteral | InterpolatedStringLiteral | Identifier | null, equals: Terminal | null, dotDotDot: Terminal | null, expr: Node, comma: Terminal | null) : CallArgument {
     const v = NodeBase<CallArgument>(NodeKind.callArgument, mergeRanges(name, expr, comma));
     v.name = name;
     v.equals = equals;
@@ -1277,15 +1277,21 @@ export function BooleanLiteral(literal: Terminal, value: boolean) {
 export interface Identifier extends NodeBase {
     kind: NodeKind.identifier;
     source: Node; // can be e.g, `var x = 42`, `var 'x' = 42`, `var #x# = 42`; <cfargument name="#'interpolated_string_but_constant'#">`
+    /* might be nice to do the following, to know that if canonical is not undefined, then ui is not either
+    name: {
+        canonical: string,
+        ui: string
+    } | undefined
+    */
     canonicalName: string | undefined; // undefined at least in the case of something like var '#foo#' = bar;
     uiName: string | undefined;
 }
 
-export function Identifier(identifier: Node, name: string | undefined) {
+export function Identifier(identifier: Node, uiName: string | undefined) {
     const v = NodeBase<Identifier>(NodeKind.identifier, identifier.range);
     v.source = identifier;
-    v.uiName = name;
-    v.canonicalName = name?.toLowerCase();
+    v.uiName = uiName;
+    v.canonicalName = uiName?.toLowerCase();
     return v;
 }
 
@@ -1444,6 +1450,7 @@ export function pushAccessElement(base: IndexedAccess, element: IndexedAccessCha
 interface FunctionParameterBase extends NodeBase {
     kind: NodeKind.functionParameter,
     required: boolean,
+    defaultValue: Node | null,
     fromTag: boolean,
     canonicalName: string,
     uiName: string,
@@ -1460,7 +1467,6 @@ export namespace Script {
         dotDotDot: Terminal | null,
         identifier: Identifier,
         equals: Terminal | null,
-        defaultValue: Node | null,
         comma: Terminal | null,
         type: _Type | null,
     }
@@ -1486,7 +1492,8 @@ export namespace Script {
         v.canonicalName = identifier.canonicalName || "<<ERROR>>";
         v.uiName = identifier.uiName || "<<ERROR>>";
         v.type = type;
-        v.required = !!(requiredTerminal);
+        // it is legal to say something is required and give it a default; however, a required parameter with a default is not really required
+        v.required = !!(requiredTerminal) && !defaultValue;
         return v;
     }
 }
@@ -1506,7 +1513,9 @@ export namespace Tag {
         v.tagOrigin.startTag = tag;
         v.canonicalName = name?.toLowerCase() || "<<ERROR>>";
         v.uiName = name || "<<ERROR>>";
-        v.required = getTriviallyComputableBoolean(getAttributeValue(tag.attrs, "required")) ?? false;
+        v.defaultValue = getAttributeValue(tag.attrs, "default") ?? null;
+        // it is legal to say something is required and give it a default; however, a required parameter with a default is not really required
+        v.required = !v.defaultValue && (getTriviallyComputableBoolean(getAttributeValue(tag.attrs, "required")) ?? false);
         v.type = null;
         return v;
     }
@@ -2157,7 +2166,7 @@ export namespace Script {
         fromTag: false,
         catchToken: Terminal,
         leftParen: Terminal,
-        exceptionType: DottedPath,
+        exceptionType: SimpleStringLiteral | InterpolatedStringLiteral | DottedPath,
         exceptionBinding: Identifier,
         rightParen: Terminal,
         leftBrace: Terminal,
@@ -2168,7 +2177,7 @@ export namespace Script {
     export function Catch(
         catchToken: Terminal,
         leftParen: Terminal,
-        exceptionType: DottedPath,
+        exceptionType: SimpleStringLiteral | InterpolatedStringLiteral | DottedPath,
         exceptionBinding: Identifier,
         rightParen: Terminal,
         leftBrace: Terminal,
