@@ -16,25 +16,28 @@ function projectFiddle() {
     const debugfs = DebugFileSystem([
         [fname, `
             component {
-                function foo() {
-                    param a.b=42 default="a.c";
-                }
+                x = [
+                    "getTransactionDetailsRequest" = [
+                        "merchantAuthentication" = getMerchantAuthenticationBlock(),
+                        "transId" = arguments.gatewayTransactionID
+                    ]
+                ];
             }
         `],
         //["/b.cfc", `component { function foo() {} }`],
         //["/lib.d.cfm", "@declare function foo(arg0: number[]) : string"]
     ], "/");
 
-    //const project = Project(["/"], /*filesystem*/debugfs, {debug: true, parseTypes: true, language: LanguageVersion.lucee5});
-    const project = Project([path.resolve(".")], FileSystem(), {debug: true, parseTypes: true, language: LanguageVersion.lucee5});
-    const target = path.join(path.resolve("./test/"), "mxunit/framework/javaloader/JavaProxy.cfc");
-    project.addFile(target);
+    const project = Project(["/"], /*filesystem*/debugfs, {debug: true, parseTypes: true, language: LanguageVersion.lucee5});
+    //const project = Project([path.resolve(".")], FileSystem(), {debug: true, parseTypes: true, language: LanguageVersion.lucee5});
+    //const target = path.join(path.resolve("./test/"), "mxunit/framework/javaloader/JavaProxy.cfc");
+    //project.addFile(target);
 
-    //const a = project.addFile(fname);
+    const a = project.addFile(fname);
     //const b = project.addFile("/b.cfc");
     //const c = project.addFile("/lib.d.cfm");
 
-    const diagnostics = project.getDiagnostics(target);
+    const diagnostics = project.getDiagnostics(fname);
 
     for (const diagnostic of diagnostics) {
         console.log(diagnostic);

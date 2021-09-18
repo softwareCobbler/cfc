@@ -524,10 +524,9 @@ export function Checker() {
     // `l !<: r` means "left is NOT a subtype of right"
     // subtype has the common meaning; however it is maybe helpful to note that "sub" also means "substitutable" in addition to "a descendant in a heirarchy"
     // i.e. `l <: r` means l is substitutable for r (you can safely use an l in r's place)
-    // 
     //
     function isLeftSubtypeOfRight(l: _Type, r: _Type) : boolean {
-        // generally, a type is a subtype of itself
+        // a type is a subtype of itself
         if (l === r) return true;
 
         // any is a subtype of every type; every type is a subtype of any
@@ -535,6 +534,10 @@ export function Checker() {
 
         // void is not a subtype of anything except itself and any
         if (l.flags & TypeFlags.void || r.flags & TypeFlags.void) return false;
+
+        // it would be nice to error on this, but plenty of legacy code relies on
+        // number being assignable to boolean
+        if (l.flags & TypeFlags.number && r.flags & TypeFlags.boolean) return true;
 
         //
         // {x: number, y: number} <: {x: number}, because L has AT LEAST all the properties of R
@@ -1254,7 +1257,7 @@ export function Checker() {
             for (const element of node.accessElements) {
                 setCachedEvaluatedNodeType(element, SyntheticType.any);
             }
-            typeErrorAtNode(node.root, `Type '${stringifyType(type)}' is not indexable.`)
+            // typeErrorAtNode(node.root, `Type '${stringifyType(type)}' is not indexable.`)
         }
 
         checkList(node.accessElements);

@@ -905,7 +905,8 @@ export function Parser(config: {language: LanguageVersion}) {
         }
 
         if (gotNonComment) {
-            parseErrorAtRange(0, getIndex(), "A component preamble may only contain comments.");
+            // should be "only comments or import statements"
+            //parseErrorAtRange(0, getIndex(), "A component preamble may only contain comments.");
         }
 
         if (syntaxType && ((syntaxType === ComponentSyntaxType.tag && gotScriptComment) || (syntaxType === ComponentSyntaxType.script && gotTagComment))) {
@@ -1823,7 +1824,7 @@ export function Parser(config: {language: LanguageVersion}) {
 
         const finalModifier = parseOptionalTerminal(TokenType.KW_FINAL, ParseOptions.withTrivia);
         const varModifier = parseOptionalTerminal(TokenType.KW_VAR, ParseOptions.withTrivia);
-        const root = parseExpression();
+        const root = parseAnonymousFunctionDefinitionOrExpression();
 
         if (!isAssignmentOperator()) {
             // if we're in a `for` context, we just got the following:
@@ -2129,10 +2130,16 @@ export function Parser(config: {language: LanguageVersion}) {
     }
 
     function parseParentheticalOrUnaryPrefix(allowUnary = true) : Node {
+        const arrowFunction = tryParseArrowFunctionDefinition();
+        if (arrowFunction) return arrowFunction;
+
         switch (lookahead()) {
             case TokenType.LEFT_PAREN: {
+
                 const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
-                const expr = parseAnonymousFunctionDefinitionOrExpression();
+                const expr = langVersion === LanguageVersion.acf2018
+                    ? parseAnonymousFunctionDefinitionOrExpression()
+                    : parseAssignmentOrLower()
                 const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
                 let root : Node = Parenthetical(leftParen, expr, rightParen);
 
@@ -2141,27 +2148,32 @@ export function Parser(config: {language: LanguageVersion}) {
                 // `() => ({x:1})` is illegal, but the message could be "Consider an explicit return"
                 // anyway, at least its flagged
                 //
-                switch (stripOuterParens(root).kind) {
-                    case NodeKind.arrayLiteral:
-                        parseErrorAtRange(root.range, "Parenthesized array literals are illegal. Consider removing the parentheses.");
-                        break;
-                    case NodeKind.structLiteral:
-                        parseErrorAtRange(root.range, "Parenthesized struct literals are illegal. Consider removing the parentheses.");
-                        break;
+                if (langVersion === LanguageVersion.acf2018) {
+                    switch (stripOuterParens(root).kind) {
+                        case NodeKind.arrayLiteral:
+                            parseErrorAtRange(root.range, "Parenthesized array literals are illegal. Consider removing the parentheses.");
+                            break;
+                        case NodeKind.structLiteral:
+                            parseErrorAtRange(root.range, "Parenthesized struct literals are illegal. Consider removing the parentheses.");
+                            break;
+                    }
                 }
 
                 root = parseCallExpressionOrLowerRest(root);
 
                 // (function() {})()      valid cf2021+
                 // (() => value)()        valid cf2021+
-                // (function() {}).v()    invalid
-                // ([1,2,3])[1]           invalid
-                // ({x:1}).x              invalid
-                // ({x:1})["x"]           invalid
+                // (function() {}).v()    invalid in acf
+                // ([1,2,3])[1]           invalid in acf
+                // ({x:1}).x              invalid in acf
+                // ({x:1})["x"]           invalid in acf
                 //
-                if ((root.kind === NodeKind.indexedAccess) ||
-                    (root.kind === NodeKind.unaryOperator && root.expr.kind === NodeKind.indexedAccess) ||
-                    (root.kind === NodeKind.callExpression && root.left.kind === NodeKind.indexedAccess)) {
+                // all of the above are valid in lucee
+                //
+                if (langVersion == LanguageVersion.acf2018 && (
+                    (root.kind === NodeKind.indexedAccess)
+                    || (root.kind === NodeKind.unaryOperator && root.expr.kind === NodeKind.indexedAccess)
+                    || (root.kind === NodeKind.callExpression && root.left.kind === NodeKind.indexedAccess))) {
                     parseErrorAtRange(root.range, "Illegal indexed access expression; consider removing the parentheses from the left-most expression.");
                 }
                 return root;
@@ -2712,12 +2724,12 @@ export function Parser(config: {language: LanguageVersion}) {
             return EmptyOrderedStructLiteral(leftBracket, colon, rightBracket);
         }        
 
-        function isExpressionThenColon() {
+        function isExpressionThenColonOrEquals() {
             parseExpression();
-            return lookahead() === TokenType.COLON;
+            return lookahead() === TokenType.COLON || lookahead() === TokenType.EQUAL;
         }
 
-        if (SpeculationHelper.lookahead(isExpressionThenColon)) {
+        if (SpeculationHelper.lookahead(isExpressionThenColonOrEquals)) {
             const useArrayBodyListTerminator = ParseContext.arrayLiteralBody;
             const structMembers = parseList(useArrayBodyListTerminator, parseStructLiteralInitializerMember, TokenType.RIGHT_BRACKET);
             const rightBracket = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
@@ -2734,7 +2746,7 @@ export function Parser(config: {language: LanguageVersion}) {
                     if (!maybeComma && lookahead() !== TokenType.RIGHT_BRACKET) {
                         parseErrorAtRange(expr.range.toExclusive-1, expr.range.toExclusive, "Expected ','");
                     }
-                    if (maybeComma && lookahead() === TokenType.RIGHT_BRACKET) {
+                    if (maybeComma && langVersion === LanguageVersion.acf2018 && lookahead() === TokenType.RIGHT_BRACKET) {
                         parseErrorAtRange(maybeComma.range, "Illegal trailing comma.");
                     }
                     elements.push(SpreadArrayLiteralInitializerMember(dotDotDot, expr, maybeComma));
@@ -2746,7 +2758,7 @@ export function Parser(config: {language: LanguageVersion}) {
                     if (!maybeComma && lookahead() !== TokenType.RIGHT_BRACKET) {
                         parseErrorAtRange(expr.range.toExclusive-1, expr.range.toExclusive, "Expected ','");
                     }
-                    if (maybeComma && lookahead() === TokenType.RIGHT_BRACKET) {
+                    if (maybeComma && langVersion === LanguageVersion.acf2018 && lookahead() === TokenType.RIGHT_BRACKET) {
                         parseErrorAtRange(maybeComma.range, "Illegal trailing comma.");
                     }
 
@@ -2984,7 +2996,7 @@ export function Parser(config: {language: LanguageVersion}) {
             result.push(Script.FunctionParameter(requiredTerminal, javaLikeTypename, dotDotDot, name, equal, defaultValue, attrs, comma, type));
         }
 
-        if (result.length > 0 && result[result.length-1].comma) {
+        if (langVersion === LanguageVersion.acf2018 && result.length > 0 && result[result.length-1].comma) {
             parseErrorAtRange(result[result.length-1].comma!.range, "Illegal trailing comma.");
         }
 
@@ -2994,73 +3006,82 @@ export function Parser(config: {language: LanguageVersion}) {
     }
 
     function tryParseArrowFunctionDefinition() : ArrowFunctionDefinition | null {
-        let leftParen : Terminal | null = null;
-        let params : Script.FunctionParameter[];
-        let rightParen : Terminal | null = null;
+        // the whole thing is speculative
+        return SpeculationHelper.speculate(() => {
+            let leftParen : Terminal | null = null;
+            let params : Script.FunctionParameter[];
+            let rightParen : Terminal | null = null;
 
-        if (SpeculationHelper.lookahead(isIdentifierThenFatArrow)) {
-            params = [
-                Script.FunctionParameter(
-                    null,
-                    null,
-                    null,
-                    parseIdentifier(),
-                    null,
-                    null,
-                    /*attrs*/ [],
-                    null,
-                    null)
-            ];
-        }
-        else if (lookahead() === TokenType.LEFT_PAREN) {
-            leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
-            const maybeParams = SpeculationHelper.speculate(tryParseFunctionDefinitionParameters, /*speculative*/ true);
-            if (!maybeParams) {
-                return null;
+            if (SpeculationHelper.lookahead(isIdentifierThenFatArrow)) {
+                params = [
+                    Script.FunctionParameter(
+                        null,
+                        null,
+                        null,
+                        parseIdentifier(),
+                        null,
+                        null,
+                        /*attrs*/ [],
+                        null,
+                        null)
+                ];
             }
-            params = maybeParams;
-            rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
-        }
-        else {
-            return null;
-        }
-
-        //
-        // we're in a position where the caller determined the production can descend into an arrow function
-        // we got a valid parameters list; but a fat arrow here is what completes the deal
-        // e.g,
-        // <cfset x = (y)>
-        // is a valid assignment of `(y)` to `x`; but it also looks like the start of an arrow function
-        //
-
-        const fatArrow = parseOptionalTerminal(TokenType.EQUAL_RIGHT_ANGLE, ParseOptions.withTrivia);
-        if (!fatArrow) {
-            return null;
-        }
-
-        //
-        // we enter script mode IF we are entering a braced-block;
-        // otherwise, we don't change modes;
-        // <cfset identity_lambda = x => <!--- still in tag mode ---> x>
-        // <cfset identity_lambda = x => { /* entered script mode */ return x; }>
-        //
-        if (lookahead() === TokenType.LEFT_BRACE) {
-            const block = doOutsideOfContext(ParseContext.cfcPsuedoConstructor, () => parseBracedBlock(ScannerMode.script));
-            return ArrowFunctionDefinition(leftParen, params, rightParen, fatArrow, block);
-        }
-        else {
-            // having matched a params list with a fat arrow, we're definitely in an arrow function, 
-            // but the expression may not have been written yet (e.g `(v) => $` where '$' is EOF);
-            // speculative or not, we return an arrow function
-            if (!isStartOfExpression()) {
-                parseErrorAtRange(fatArrow.range.toExclusive, fatArrow.range.toExclusive+1, "Expression expected.");
-                return ArrowFunctionDefinition(leftParen, params, rightParen, fatArrow, createMissingNode(NilTerminal(pos())));
+            else if (lookahead() === TokenType.LEFT_PAREN) {
+                leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
+                const maybeParams = SpeculationHelper.speculate(tryParseFunctionDefinitionParameters, /*speculative*/ true);
+                if (!maybeParams) {
+                    return null;
+                }
+                params = maybeParams;
+                rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
             }
             else {
-                return ArrowFunctionDefinition(leftParen, params, rightParen, fatArrow, doOutsideOfContext(ParseContext.cfcPsuedoConstructor, () => parseAnonymousFunctionDefinitionOrExpression()));
+                return null;
             }
-        }
 
+            //
+            // we're in a position where the caller determined the production can descend into an arrow function
+            // we got a valid parameters list; but a fat arrow here is what completes the deal
+            // e.g,
+            // <cfset x = (y)>
+            // is a valid assignment of `(y)` to `x`; but it also looks like the start of an arrow function
+            //
+
+            const fatArrow = parseOptionalTerminal(TokenType.EQUAL_RIGHT_ANGLE, ParseOptions.withTrivia);
+            if (!fatArrow) {
+                return null;
+            }
+
+            //
+            // we enter script mode IF we are entering a braced-block;
+            // otherwise, we don't change modes;
+            // <cfset identity_lambda = x => <!--- still in tag mode ---> x>
+            // <cfset identity_lambda = x => { /* entered script mode */ return x; }>
+            //
+            if (lookahead() === TokenType.LEFT_BRACE) {
+                const block = doOutsideOfContext(ParseContext.cfcPsuedoConstructor, () => parseBracedBlock(ScannerMode.script));
+                return ArrowFunctionDefinition(leftParen, params, rightParen, fatArrow, block);
+            }
+            else {
+                // having matched a params list with a fat arrow, we're definitely in an arrow function, 
+                // but the expression may not have been written yet (e.g `(v) => $` where '$' is EOF);
+                // speculative or not, we return an arrow function
+                if (!isStartOfExpression()) {
+                    parseErrorAtRange(fatArrow.range.toExclusive, fatArrow.range.toExclusive+1, "Expression expected.");
+                    return ArrowFunctionDefinition(leftParen, params, rightParen, fatArrow, createMissingNode(NilTerminal(pos())));
+                }
+                else {
+                    return ArrowFunctionDefinition(
+                        leftParen,
+                        params,
+                        rightParen,
+                        fatArrow,
+                        doOutsideOfContext(ParseContext.cfcPsuedoConstructor, () => langVersion === LanguageVersion.acf2018
+                            ? parseAnonymousFunctionDefinitionOrExpression()
+                            : parseAssignmentOrLower()));
+                }
+            }
+        });
     }
 
     function stripOuterParens(node: Node) {
@@ -3495,7 +3516,7 @@ export function Parser(config: {language: LanguageVersion}) {
                 }
                 case TokenType.KW_RETURN: {
                     const returnToken = parseExpectedTerminal(TokenType.KW_RETURN, ParseOptions.withTrivia);
-                    const expr = isStartOfExpression() ? parseAnonymousFunctionDefinitionOrExpression() : null;
+                    const expr = isStartOfExpression() ? parseAssignmentOrLower() : null;
                     // if we've got a return statement we should be in a script context;
                     // but a user may not be heeding that rule
                     const semi = scriptMode() ? parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia) : null;

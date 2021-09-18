@@ -152,7 +152,7 @@ const expectedDiagnosticCountByFile : Record<string, number> = {
     "./mxunit/tests/framework/ConfigManagerTest.cfc": 0,
     "./mxunit/tests/framework/CSVUtilityTest.cfc": 0,
     "./mxunit/tests/framework/DataProviderTest.cfc": 0,
-    "./mxunit/tests/framework/DynamicTestCaseGenerationTest.cfc": 3, // they have a <cfscript> tag in a component preamble, is that legit ? any we will currently get an error for the open and close <cfscript> tags
+    "./mxunit/tests/framework/DynamicTestCaseGenerationTest.cfc": 2, // they have a <cfscript> tag in a component preamble, is that legit ?
     "./mxunit/tests/framework/ExpectedExceptionTest.cfc": 0,
     "./mxunit/tests/framework/HamcrestMatcherTest.cfc": 0,
     "./mxunit/tests/framework/HamcrestTest.cfc": 0,

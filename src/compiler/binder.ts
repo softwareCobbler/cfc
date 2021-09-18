@@ -725,11 +725,11 @@ export function Binder() {
                         targetScope = currentContainer.containedScope.local;
                     }
                     else {
-                        const attrVal = getAttributeValue((<CfTag.Common>tag).attrs, attrName);
-                        // this is not really an error; it will simply write into `local.foo` in the global context
-                        // but perhaps is a code smell to be warned about
-                        if (attrVal) errorAtRange(attrVal.range, `Tag binds result name '${name[1]}' to a local scope in a non-local context.`);
-                        return;
+                        // const attrVal = getAttributeValue((<CfTag.Common>tag).attrs, attrName);
+                        // // this is not really an error; it will simply write into `local.foo` in the global context
+                        // // but perhaps is a code smell to be warned about
+                        // if (attrVal) errorAtRange(attrVal.range, `Tag binds result name '${name[1]}' to a local scope in a non-local context.`);
+                        // return;
                     }
                 }
                 case "variables": {
