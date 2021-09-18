@@ -619,8 +619,16 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                 || visitor(node.callExpr);
         case NodeKind.typeShim:
             return;
+        case NodeKind.property:
+            if (node.fromTag) {
+                return visitor(node.tagOrigin.startTag)
+            }
+            else {
+                return visitor(node.propertyTerminal)
+                || forEachNode(node.attrs, visitor)
+            }
         default:
-            ((_:never) => { throw "Non-exhaustive case or unintentional fallthrough." })(node);
+            exhaustiveCaseGuard(node);
     }
 }
 
@@ -628,6 +636,8 @@ export interface NodeSourceMap {
     nodeId: number,
     range: SourceRange
 }
+
+export function exhaustiveCaseGuard(_:never) { throw "Non-exhaustive case or unintentional fallthrough."; }
 
 export function flattenTree(tree: Node | Node[]) : NodeSourceMap[] {
     const result : NodeSourceMap[] = [];

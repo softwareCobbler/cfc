@@ -2,9 +2,9 @@
 // we can get it to compile with tsc with non-relative paths, but loading it during testing does not work
 import { Project } from "../compiler/project"
 import { Node, NodeKind, CallExpression, CfTag, StaticallyKnownScopeName } from "../compiler/node"
-import { TokenType } from "../compiler/scanner";
+import { CfFileType, TokenType } from "../compiler/scanner";
 import { isCfc, isFunctionSignature, isStruct } from "../compiler/types";
-import { isExpressionContext, isCfScriptTagBlock, stringifyCallExprArgName } from "../compiler/utils";
+import { isExpressionContext, isCfScriptTagBlock, stringifyCallExprArgName, getSourceFile } from "../compiler/utils";
 import { tagNames } from "./tagnames";
 
 export const enum CompletionItemKind {
@@ -86,6 +86,16 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
     }
     
     const result : CompletionItem[] = [];
+
+    // things that are always visible, but with low priority in relation to the user's identifiers
+    // probably better to bind these as identifiers in the appropriate symbol tables
+    if (getSourceFile(node)?.cfFileType === CfFileType.cfc) {
+        result.push({label: "this", kind: CompletionItemKind.variable, sortText: "z"});
+    }
+    result.push({label: "variables", kind: CompletionItemKind.variable, sortText: "z"});
+    result.push({label: "url", kind: CompletionItemKind.variable, sortText: "z"});
+    result.push({label: "request", kind: CompletionItemKind.variable, sortText: "z"});
+    result.push({label: "cgi", kind: CompletionItemKind.variable, sortText: "z"});
 
     // `foo(bar = baz, |)`
     // `foo(b|`

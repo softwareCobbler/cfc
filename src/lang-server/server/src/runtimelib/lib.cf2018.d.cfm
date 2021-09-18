@@ -1,4 +1,13 @@
-@declare function abs(required number: any) : any;
+/**
+ * description of abs
+ * further description of abs
+ * @always-visible
+ * @x-returns number[]
+ * @returntype array
+ */
+@declare function abs(required numeric number);
+
+<!---
 @declare function acos(required number: any) : any;
 @declare function addSOAPRequestHeader(required webservice: any, required namespace: any, required name: any, required value: any, mustUnderstand: any) : any;
 @declare function addSOAPResponseHeader(required namespace: any, required name: any, required value: any, mustUnderstand: any) : any;
@@ -808,3 +817,4 @@
     server_protocol:      string,
     server_software:      string,
 }
+--->

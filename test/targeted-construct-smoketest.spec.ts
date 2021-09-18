@@ -279,9 +279,10 @@ describe("general smoke test for particular constructs", () => {
 
         const completions = getCompletions(project, "/a.cfc", testCase.index, null);
 
-        assert.strictEqual(completions.length, 2);
-        assert.strictEqual(completions[0].label, "foo");
-        assert.strictEqual(completions[1].label, "bar");
+        assert.strictEqual(completions.length, 7);
+        const justLabels = completions.map(v => v.label);
+        assert.strictEqual(justLabels.includes("foo"), true, "completions includes `foo`");
+        assert.strictEqual(justLabels.includes("bar"), true, "completions includes `bar`");
     });
     it("Should offer completions for functions of a CFC from a CFM", () => {
         const cfc = TestLoader.loadCompletionAtTest("./test/sourcefiles/cfc_function_completion.cfc");
@@ -297,9 +298,10 @@ describe("general smoke test for particular constructs", () => {
 
         const completions = getCompletions(project, "/cfc_function_completion.cfm", cfm.index, null);
 
-        assert.strictEqual(completions.length, 2);
-        assert.strictEqual(completions[0].label, "foo");
-        assert.strictEqual(completions[1].label, "bar");
+        assert.strictEqual(completions.length, 6);
+        const justLabels = completions.map(v => v.label);
+        assert.strictEqual(justLabels.includes("foo"), true, "completions includes `foo`");
+        assert.strictEqual(justLabels.includes("bar"), true, "completions includes `bar`");
     });
     it("Should accept argumentCollection as meeting the named argument requirements for a function call", () => {
         const dfs = DebugFileSystem([

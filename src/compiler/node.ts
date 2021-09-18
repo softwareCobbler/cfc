@@ -29,6 +29,7 @@ export const enum NodeKind {
     structLiteralInitializerMember, arrayLiteralInitializerMember, try, catch, finally,
     breakStatement, continueStatement, returnStatement, importStatement,
     new, typeShim,
+    property
 }
 
 const NodeTypeUiString : Record<NodeKind, string> = {
@@ -80,6 +81,7 @@ const NodeTypeUiString : Record<NodeKind, string> = {
     [NodeKind.importStatement]: "import",
     [NodeKind.new]: "new",
     [NodeKind.typeShim]: "typeshim",
+    [NodeKind.property]: "property",
 };
 
 export type Node =
@@ -135,6 +137,7 @@ export type Node =
     | OptionalBracketAccess
     | OptionalCall
     | TypeShim // Node-based Type wrapper, would be nice to unify all types/nodes
+    | Property
 
 export interface SymTabEntry {
     uiName: string,
@@ -2323,4 +2326,49 @@ export function TypeShim(what: "typedef" | "annotation", type: _Type) : TypeShim
     v.type = type;
     v.what = what;
     return v;
+}
+
+interface PropertyBase extends NodeBase {
+    kind: NodeKind.property,
+    fromTag: boolean,
+    attrs: TagAttribute[],
+}
+
+export type Property = Tag.Property | Script.Property;
+
+export namespace Tag {
+    export interface Property extends PropertyBase {
+        fromTag: true,
+        tagOrigin: {
+            startTag: CfTag.Common,
+            endTag: null
+        }
+        attrs: TagAttribute[]
+    }
+
+    export function Property(tag: CfTag.Common) : Property {
+        const v = NodeBase<Property>(NodeKind.property, tag.range);
+        v.fromTag = true;
+        v.tagOrigin = {
+            startTag: tag,
+            endTag: null
+        }
+        v.attrs = tag.attrs;
+        return v;
+    }
+}
+
+export namespace Script {
+    export interface Property extends PropertyBase {
+        fromTag: false,
+        propertyTerminal: Terminal,
+    }
+
+    export function Property(terminal: Terminal, attrs: TagAttribute[]) : Property {
+        const v = NodeBase<Property>(NodeKind.property, mergeRanges(terminal, attrs));
+        v.fromTag = false;
+        v.propertyTerminal = terminal;
+        v.attrs = attrs;
+        return v;
+    }
 }

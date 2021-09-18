@@ -12,17 +12,14 @@ import * as fs from "fs";
 import * as path from "path";
 
 function projectFiddle() {
-    const fname = "a.d.cfm";
+    const fname = "a.cfc";
     const debugfs = DebugFileSystem([
         [fname, `
-            /**
-             * description of abs
-             * further description of abs
-             * @always-visible
-             * @x-returns number[]
-             * @returntype array
-             */
-            @declare function abs(required numeric number);
+            <cfcomponent>
+                <cffunction name="foo">
+                    <cfproperty name="uh">
+                </cffunction>
+            </cfcomponent>
         `],
         //["/b.cfc", `component { function foo() {} }`],
         //["/lib.d.cfm", "@declare function foo(arg0: number[]) : string"]

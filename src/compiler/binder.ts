@@ -1,5 +1,5 @@
-import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, ConditionalSubtype, SymTab, TypeShim } from "./node";
-import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock } from "./utils";
+import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, ConditionalSubtype, SymTab, TypeShim, Property } from "./node";
+import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { SyntheticType, _Type, extractCfFunctionSignature, isFunctionSignature } from "./types";
 import { LanguageVersion } from "./project";
@@ -10,11 +10,12 @@ export function Binder() {
     let scanner : Scanner;
     let diagnostics: Diagnostic[];
     let langVersion : LanguageVersion = LanguageVersion.acf2018;
-
+    
     let currentFlow : Flow;
     let detachedClosureFlows : Flow[] = [];
-
+    
     let nodeMap = new Map<NodeId, Node>();
+    let withPropertyAccessors = false;
 
     function bind(sourceFile_: SourceFile) {
         if (sourceFile_.cfFileType === CfFileType.dCfm) {
@@ -25,6 +26,7 @@ export function Binder() {
         scanner = sourceFile_.scanner;
         diagnostics = sourceFile_.diagnostics;
         nodeMap = new Map<NodeId, Node>();
+        withPropertyAccessors = false;
 
         RootNode = sourceFile_ as NodeWithScope<SourceFile>;
 
@@ -39,6 +41,19 @@ export function Binder() {
 
         if (sourceFile_.cfFileType === CfFileType.cfc) {
             RootNode.containedScope.this = new Map<string, SymTabEntry>();
+            const componentAttrs = getComponentAttrs(RootNode);
+            if (componentAttrs) {
+                const accessors = getAttributeValue(componentAttrs, "accessors");
+                if (accessors === null) { // property not present
+                    withPropertyAccessors = false;
+                }
+                else if (accessors === undefined) { // property present by name only, no explicit value
+                    withPropertyAccessors = true;
+                }
+                else { // property present with value, should be a bool
+                    withPropertyAccessors = !!getTriviallyComputableBoolean(accessors);
+                }
+            }
         }
 
         currentFlow = freshFlow([], FlowType.default);
@@ -261,8 +276,11 @@ export function Binder() {
             case NodeKind.typeShim:
                 bindTypeShim(node);
                 return;
+            case NodeKind.property:
+                bindProperty(node);
+                return;
             default:
-                ((_:never) => { throw "Non-exhaustive case or unintentional fallthrough." })(node);
+                exhaustiveCaseGuard(node);
         }
     }
 
@@ -320,7 +338,7 @@ export function Binder() {
             case CfTag.TagType.text:
                 throw "These should be dealt with prior to binding.";
             default:
-                ((_:never) => { throw "Non-exhaustive case or unintentional fallthrough." })(node);
+                exhaustiveCaseGuard(node);
         }
     }
 
@@ -388,7 +406,11 @@ export function Binder() {
         }
     }
 
-    function addSymbolToTable(symTab: SymTab, uiName: string, declaringNode: Node, type: _Type | null = null, declaredType?: _Type | null) : SymTabEntry {
+    function addExistingSymbolToTable(table: SymTab, entry: SymTabEntry) {
+        table.set(entry.canonicalName, entry);
+    }
+
+    function addFreshSymbolToTable(symTab: SymTab, uiName: string, declaringNode: Node, type: _Type | null = null, declaredType?: _Type | null) : SymTabEntry {
         const canonicalName = uiName.toLowerCase();
         let symTabEntry : SymTabEntry;
 
@@ -433,7 +455,7 @@ export function Binder() {
 
             const name = getTriviallyComputableString(node.expr);
             if (!name) return;
-            addSymbolToTable(targetScope, name, node);
+            addFreshSymbolToTable(targetScope, name, node);
         }
         else if (node.expr.kind === NodeKind.indexedAccess) {
             // need a dot/bracket "path creation" mechanism, e.g., for (local.foo in bar) {}
@@ -483,7 +505,7 @@ export function Binder() {
             }
 
             if (targetScope) {
-                addSymbolToTable(targetScope, uiPath[1], node, null, node.typeAnnotation);
+                addFreshSymbolToTable(targetScope, uiPath[1], node, null, node.typeAnnotation);
             }
 
             return;
@@ -491,7 +513,7 @@ export function Binder() {
 
         if (node.finalModifier || node.varModifier) {
             if (getContainingFunction(node)) {
-                addSymbolToTable(currentContainer.containedScope.local!, uiPath[0], node, null, node.typeAnnotation);
+                addFreshSymbolToTable(currentContainer.containedScope.local!, uiPath[0], node, null, node.typeAnnotation);
             }
             else {
                 // we're not in a function, so we must be at top-level scope
@@ -716,7 +738,7 @@ export function Binder() {
             }
         }
 
-        addSymbolToTable(targetScope, targetName, tag, tag.typeAnnotation);
+        addFreshSymbolToTable(targetScope, targetName, tag, tag.typeAnnotation);
     }
 
     function bindSimpleStringLiteral(node: SimpleStringLiteral) {
@@ -768,13 +790,13 @@ export function Binder() {
             bindNode(node.tagOrigin.startTag, node);
 
             if (node.canonicalName !== undefined) {
-                addSymbolToTable(currentContainer.containedScope.arguments!, node.uiName, node);
+                addFreshSymbolToTable(currentContainer.containedScope.arguments!, node.uiName, node);
             }
 
             return;
         }
 
-        addSymbolToTable(currentContainer.containedScope.arguments!, node.uiName, node);
+        addFreshSymbolToTable(currentContainer.containedScope.arguments!, node.uiName, node);
         bindNode(node.javaLikeTypename, node);
         bindNode(node.identifier, node);
         bindNode(node.defaultValue, node);
@@ -842,16 +864,16 @@ export function Binder() {
 
                 if (targetBaseName === "local") {
                     if (currentContainer.containedScope.local) {
-                        addSymbolToTable(currentContainer.containedScope.local, firstAccessAsString, node);
+                        addFreshSymbolToTable(currentContainer.containedScope.local, firstAccessAsString, node);
                     }
                     else {
                         // assigning to `local.x` in a non-local scope just binds the name `local` to the root variables scope
-                        addSymbolToTable(RootNode.containedScope.variables!, "local", node);
+                        addFreshSymbolToTable(RootNode.containedScope.variables!, "local", node);
                     }
                 }
                 else {
                     if (targetBaseName in RootNode.containedScope) {
-                        addSymbolToTable(RootNode.containedScope[targetBaseName]!, firstAccessAsString, node);
+                        addFreshSymbolToTable(RootNode.containedScope[targetBaseName]!, firstAccessAsString, node);
                     }
                 }
             }
@@ -873,7 +895,7 @@ export function Binder() {
                     return;
                 }
 
-                addSymbolToTable(targetScope, targetBaseName, node);
+                addFreshSymbolToTable(targetScope, targetBaseName, node);
             }
         }
     }
@@ -910,7 +932,7 @@ export function Binder() {
             }
             
             for (const scopeTarget of scopeTargets) {
-                addSymbolToTable(
+                addFreshSymbolToTable(
                     scopeTarget,
                     node.uiName!,
                     node,
@@ -935,7 +957,7 @@ export function Binder() {
             const type = signature.params[i]?.type || null;
             const annotatedType = typeAnnotatedParams ? typeAnnotatedParams[i]?.type : null;
             // we also need the annotation-provided type if it exists; for now it is implicitly null
-            addSymbolToTable(node.containedScope.arguments!, param.uiName, param, type, annotatedType);
+            addFreshSymbolToTable(node.containedScope.arguments!, param.uiName, param, type, annotatedType);
         }
 
         if (!node.fromTag && node.kind === NodeKind.functionDefinition) {
@@ -1114,6 +1136,42 @@ export function Binder() {
         bindNode(node.callExpr, node);
     }
 
+    function bindProperty(node: Property) {
+        if (node.fromTag) {
+            if (!isInCfcPsuedoConstructor(node)) {
+                errorAtRange(node.range, "Properties must be declared at the top-level of a component.")
+            }
+        }
+        else {
+            const uiNameAttr = getAttributeValue(node.attrs, "name");
+            if (!uiNameAttr) {
+                errorAtRange(node.range, "Properties must have a 'name' attribute.");
+                return;
+            }
+
+            const uiName = getTriviallyComputableString(uiNameAttr);
+            if (!uiName) {
+                errorAtRange(node.range, "Property names cannot be dynamic.");
+                return;
+            }
+
+            // property gets add to variables scope with just its name;
+            addFreshSymbolToTable(RootNode.containedScope.variables!, uiName, node, SyntheticType.any);
+
+            // if generating accessors, both variables and this get the getter/setter version of it
+            if (withPropertyAccessors) {
+                // uppercase the first letter of the propertyname, so that
+                // "somePropertyName" becomes "setSomePropertyName" and "getSomePropertyName"
+                const camelCasedUiName = uiName[0].toUpperCase() + uiName.slice(1);
+                const getter = addFreshSymbolToTable(RootNode.containedScope.variables!, "get" + camelCasedUiName, node, SyntheticType.anyFunction);
+                const setter = addFreshSymbolToTable(RootNode.containedScope.variables!, "set" + camelCasedUiName, node, SyntheticType.anyFunction);
+
+                addExistingSymbolToTable(RootNode.containedScope.this!, getter);
+                addExistingSymbolToTable(RootNode.containedScope.this!, setter);
+            }
+        }
+    }
+
     function errorAtSpan(fromInclusive: number, toExclusive: number, msg: string) {
         const freshDiagnostic : Diagnostic = {fromInclusive, toExclusive, msg };
 
@@ -1140,7 +1198,7 @@ export function Binder() {
         for (const node of sourceFile.content) {
             if (node.kind === NodeKind.typeShim) {
                 if (isFunctionSignature(node.type)) {
-                    addSymbolToTable(sourceFile.containedScope!.global!, node.type.uiName, node);
+                    addFreshSymbolToTable(sourceFile.containedScope!.global!, node.type.uiName, node);
                 }
             }
             else {

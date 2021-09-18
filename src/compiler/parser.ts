@@ -27,7 +27,7 @@ import {
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, TypeShim } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
-import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, Mutable, isSimpleOrInterpolatedStringLiteral, getAttributeValue} from "./utils";
+import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, Mutable, isSimpleOrInterpolatedStringLiteral, getAttributeValue } from "./utils";
 import { cfIndexedType, cfIntersection, cfMappedType, extractCfFunctionSignature, isIntersection, isTypeId, isUnion } from "./types";
 import { _Type, cfArray, cfStruct, cfTuple, cfFunctionSignature, cfTypeConstructorInvocation, cfTypeConstructorParam, cfTypeConstructor, cfTypeId, cfUnion, SyntheticType, cfFunctionSignatureParam } from "./types";
 import { LanguageVersion } from "./project";
@@ -63,6 +63,7 @@ const enum ParseContext {
     awaitingRightBracket,
     typeAnnotation,
     interface,
+    cfcPsuedoConstructor, // inside the top-level of a cfc
     END                 // sentinel for looping over ParseContexts
 }
 
@@ -70,7 +71,8 @@ function TagContext() {
     const depth = {
         output: 0,
         mail: 0,
-        query: 0
+        query: 0,
+        function: 0
     };
     
     function inTextInterpolationContext() {
@@ -79,19 +81,26 @@ function TagContext() {
             || depth.query > 0;
     };
 
+    function inFunction() {
+        return depth.function > 0;
+    }
+
     function update(tag: CfTag) {
-        let bumpDir = tag.which === CfTag.Which.start ? 1 : -1;
-        switch (tag.canonicalName) {
+        const bumpDir = tag.which === CfTag.Which.start ? 1 : -1;
+        switch (tag.canonicalName as keyof typeof depth) {
             case "output":
             case "mail":
-            case "query": {
-                depth[tag.canonicalName] += bumpDir;
-            }
+            case "query":
+            case "function":
+                depth[tag.canonicalName as keyof typeof depth] += bumpDir;
+            default:
+                // no-op
         }
     }
 
     return {
         inTextInterpolationContext,
+        inFunction,
         update
     }
 }
@@ -365,12 +374,20 @@ export function Parser(config: {language: LanguageVersion}) {
     }
 
     /**
-     * updates the context to be extended with a new context, and returns the previous context,
-     * so it can be restored
+     * updates the context to be extended with a new context, and returns the previous context
      */
     function updateParseContext(newContext: ParseContext) {
         const savedContext = parseContext;
         parseContext |= (1 << newContext);
+        return savedContext;
+    }
+
+    /**
+     * updates the context to exclude a context flag, and returns the previous context
+     */
+    function dropParseContext(context: ParseContext) {
+        const savedContext = parseContext;
+        parseContext &= ~(1 << context);
         return savedContext;
     }
 
@@ -902,6 +919,7 @@ export function Parser(config: {language: LanguageVersion}) {
         else return null;
     }
 
+    // fixme: we can supply a filetype, but have to set the sourceFile with an earlier call?
     function parse(cfFileType: CfFileType = sourceFile?.cfFileType || CfFileType.cfm) : Node[] {
         const savedContext = parseContext;
         switch (cfFileType) {
@@ -916,7 +934,26 @@ export function Parser(config: {language: LanguageVersion}) {
                 }
 
                 if (componentInfo.type === ComponentOrInterface.interface) {
-                    updateParseContext(ParseContext.interface);
+                    // fixme:
+                    // we don't parse interface files yet, mostly because we don't parse function declarations
+                    // we also don't later check that a cfc correctly implements the interfaces it says it implements, either
+                    return [];
+                    //updateParseContext(ParseContext.interface);
+                }
+                else {
+                    //
+                    // when parsing a component (tag or script), update the context to say we are in the top-level of a component
+                    // the only way to get out of this context from within a component is to descend into a function definition
+                    //
+                    // <cfcomponent>
+                    //     <!--- psuedoconstructor context --->
+                    //     <cfscript>
+                    //        /* also psuedoconstructor context */
+                    //        function foo() { /* no longer psuedoconstructor */ }
+                    //     </cfscript>
+                    // </cfcomponent>
+                    //
+                    updateParseContext(ParseContext.cfcPsuedoConstructor);
                 }
 
                 if (componentInfo.primarySyntax === ComponentSyntaxType.tag) {
@@ -1477,6 +1514,11 @@ export function Parser(config: {language: LanguageVersion}) {
                                 result.push(Tag.SwitchDefault(startTag as CfTag.Common, body, endTag as CfTag.Common));
                                 continue;
                             }
+                            case "property": {
+                                result.push(Tag.Property(tag as CfTag.Common));
+                                nextTag();
+                                continue;
+                            }
                             case "script": {
                                 nextTag();
                                 const endTag = parseExpectedTag(CfTag.Which.end, "script", () => parseErrorAtRange(tag.range, "Missing </cfscript> tag."));
@@ -1590,9 +1632,15 @@ export function Parser(config: {language: LanguageVersion}) {
                     const savedLastDocBlock = lastDocBlock;
                     const tag = doInExtendedContext(ParseContext.insideCfTagAngles, parseCfStartTag);
                     tagContext.update(tag);
+
+                    if (sourceFile.cfFileType === CfFileType.cfc && isInSomeContext(ParseContext.cfcPsuedoConstructor) && tagContext.inFunction()) {
+                        dropParseContext(ParseContext.cfcPsuedoConstructor);
+                    }
+
                     if (savedLastDocBlock) {
                         tag.typeAnnotation = savedLastDocBlock.type;
                     }
+
                     result.push(tag);
                     lastDocBlock = null;
                     continue;
@@ -1600,6 +1648,11 @@ export function Parser(config: {language: LanguageVersion}) {
                 case TokenType.CF_END_TAG_START: {
                     const tag = doInExtendedContext(ParseContext.insideCfTagAngles, parseCfEndTag);
                     tagContext.update(tag);
+
+                    if (sourceFile.cfFileType === CfFileType.cfc && !isInSomeContext(ParseContext.cfcPsuedoConstructor) && !tagContext.inFunction()) { // we're back in the psuedo-constructor
+                        updateParseContext(ParseContext.cfcPsuedoConstructor);
+                    }
+
                     result.push(tag);
                     lastDocBlock = null;
                     continue;
@@ -2991,19 +3044,19 @@ export function Parser(config: {language: LanguageVersion}) {
         // <cfset identity_lambda = x => { /* entered script mode */ return x; }>
         //
         if (lookahead() === TokenType.LEFT_BRACE) {
-            const block = parseBracedBlock(ScannerMode.script);
+            const block = doOutsideOfContext(ParseContext.cfcPsuedoConstructor, () => parseBracedBlock(ScannerMode.script));
             return ArrowFunctionDefinition(leftParen, params, rightParen, fatArrow, block);
         }
         else {
             // having matched a params list with a fat arrow, we're definitely in an arrow function, 
-            // but the expression may not have been written yet;
+            // but the expression may not have been written yet (e.g `(v) => $` where '$' is EOF);
             // speculative or not, we return an arrow function
             if (!isStartOfExpression()) {
                 parseErrorAtRange(fatArrow.range.toExclusive, fatArrow.range.toExclusive+1, "Expression expected.");
                 return ArrowFunctionDefinition(leftParen, params, rightParen, fatArrow, createMissingNode(NilTerminal(pos())));
             }
             else {
-                return ArrowFunctionDefinition(leftParen, params, rightParen, fatArrow, parseAnonymousFunctionDefinitionOrExpression());
+                return ArrowFunctionDefinition(leftParen, params, rightParen, fatArrow, doOutsideOfContext(ParseContext.cfcPsuedoConstructor, () => parseAnonymousFunctionDefinitionOrExpression()));
             }
         }
 
@@ -3172,7 +3225,7 @@ export function Parser(config: {language: LanguageVersion}) {
         else {
             rightParen    = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
             attrs         = parseTagAttributes();
-            body          = parseBracedBlock(ScannerMode.script);
+            body          = doOutsideOfContext(ParseContext.cfcPsuedoConstructor, () => parseBracedBlock(ScannerMode.script));
         }
 
         if (savedLastDocBlock?.docBlockAttrs) {
@@ -3449,10 +3502,10 @@ export function Parser(config: {language: LanguageVersion}) {
                 }
                 default: {
                     const peeked = peek();
-                    const peekedText = peeked.text.toLowerCase();
+                    const peekedCanonicalText = peeked.text.toLowerCase();
 
                     // special case for sugared `abort`
-                    if (peekedText === "abort" && !isInSomeContext(ParseContext.sugaredAbort)) {
+                    if (peekedCanonicalText === "abort" && !isInSomeContext(ParseContext.sugaredAbort)) {
                         const terminal = Terminal(parseNextToken(), parseTrivia());
                         if (lookahead() === TokenType.SEMICOLON) {
                             return ScriptSugaredTagCallStatement(terminal, [], parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia));
@@ -3497,7 +3550,13 @@ export function Parser(config: {language: LanguageVersion}) {
                         }
                     }
                     
-                    if (isSugaredTagName(peekedText)) {
+                    if (isInSomeContext(ParseContext.cfcPsuedoConstructor) && peekedCanonicalText === "property") {
+                        const propertyToken = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/false, /*allowNumeric*/false);
+                        const attrs = parseTagAttributes();
+                        return Script.Property(propertyToken, attrs);
+                    }
+
+                    if (isSugaredTagName(peekedCanonicalText)) {
                         const quickPeek = SpeculationHelper.speculate(() => {
                             const sugaredTagNameToken = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/false, /*allowNumeric*/false);
                             return lookahead() === TokenType.LEFT_BRACE
@@ -3519,6 +3578,8 @@ export function Parser(config: {language: LanguageVersion}) {
                                 }
                             }
                             // otherwise we just got a terminal
+                            // e.g. `component { ...` or `transaction { ...`
+                            //       ^^^^^^^^^            ^^^^^^^^^^^
                             else {
                                 const block = parseBracedBlock();
                                 return ScriptSugaredTagCallBlock(/*name*/quickPeek as Terminal, /*attrs*/[], /*block*/block);
@@ -3529,7 +3590,7 @@ export function Parser(config: {language: LanguageVersion}) {
                     // if the name matches the "cf..." pattern, and the next non trivia is a left paren, this is a TagLikeCall(Statement|Block)
                     // cfSomeTag(attr1=foo, attr2=bar) { ... } (taglikecall block)
                     // cfSomeTag(); (taglikecall statement)
-                    if (peekedText.length > 2 && /^cf/i.test(peekedText)) {
+                    if (peekedCanonicalText.length > 2 && /^cf/i.test(peekedCanonicalText)) {
                         const nameTerminalIfIsCall = SpeculationHelper.speculate(function() {
                             const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ false);
                             return lookahead() === TokenType.LEFT_PAREN

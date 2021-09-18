@@ -2,7 +2,7 @@ import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, State
 import { CfcResolver } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfStruct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStruct, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType, stringifyType, cfFunctionSignatureParam } from "./types";
-import { getAttributeValue, getContainingFunction, getSourceFile, getTriviallyComputableString, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
+import { exhaustiveCaseGuard, getAttributeValue, getContainingFunction, getSourceFile, getTriviallyComputableString, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
 
 type CanonicalSymbolName = string;
 type SymbolTable = ReadonlyMap<CanonicalSymbolName, SymTabEntry>;
@@ -251,8 +251,10 @@ export function Checker() {
                 return;
             case NodeKind.typeShim:
                 return;
+            case NodeKind.property:
+                return;
             default:
-                ((_:never) => { throw "Non-exhaustive case or unintentional fallthrough." })(node);
+                exhaustiveCaseGuard(node);
         }
     }
 /*
