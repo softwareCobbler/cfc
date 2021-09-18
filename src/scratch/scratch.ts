@@ -12,15 +12,17 @@ import * as fs from "fs";
 import * as path from "path";
 
 function projectFiddle() {
+    const fname = "a.d.cfm";
     const debugfs = DebugFileSystem([
-        ["/a.cfc", `
-            <cfcomponent>
-                <cfscript>
-                    // function returns a function taking a function -- that's ok
-                    // function as the function name -- no good
-                    function function function(function f) {};
-                </cfscript>
-            </cfcomponent>
+        [fname, `
+            /**
+             * description of abs
+             * further description of abs
+             * @always-visible
+             * @x-returns number[]
+             * @returntype array
+             */
+            @declare function abs(required numeric number);
         `],
         //["/b.cfc", `component { function foo() {} }`],
         //["/lib.d.cfm", "@declare function foo(arg0: number[]) : string"]
@@ -30,11 +32,11 @@ function projectFiddle() {
     //const project = Project([path.resolve(".")], FileSystem(), {debug: true, parseTypes: true, language: LanguageVersion.acf2018});
     //const target = path.join(path.resolve("./test/"), "mxunit/tests/framework/RemoteFacadeObjectCacheTest.cfc");
 
-    const a = project.addFile("/a.cfc");
+    const a = project.addFile(fname);
     //const b = project.addFile("/b.cfc");
     //const c = project.addFile("/lib.d.cfm");
 
-    const diagnostics = project.getDiagnostics("/a.cfc")
+    const diagnostics = project.getDiagnostics(fname);
 
     for (const diagnostic of diagnostics) {
         console.log(diagnostic);

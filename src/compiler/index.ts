@@ -9,4 +9,4 @@ export { DebugFileSystem, FileSystem, Project } from "./project";
 
 // exports that we'd rather put wrappers on, in the form of services like "getCompletion" or etc.
 export { findNodeInFlatSourceMap, getNearestEnclosingScope, isExpressionContext, getTriviallyComputableString } from "./utils";
-export { isStaticallyKnownScopeName, NodeId, NodeKind as NodeType, } from "./node";
+export { isStaticallyKnownScopeName, NodeId, NodeKind } from "./node";

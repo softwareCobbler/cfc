@@ -1,6 +1,6 @@
 import * as path from "path";
 import * as fs from "fs";
-import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CfTag, DottedPath, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, Node, NodeId, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
+import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CfTag, DottedPath, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, Node, NodeFlags, NodeId, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
 import { NodeKind } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature } from "./types";
@@ -226,9 +226,9 @@ export function castCfStringAsCfBoolean(stringText: string) : boolean | undefine
  *      null if not found
  */
 export function getAttributeValue(attrs: TagAttribute[], name: string) : Node | undefined | null {
-    const name_ = name.toLowerCase();
+    const canonicalName = name.toLowerCase();
     for (const attr of attrs) {
-        if (attr.lcName === name_) {
+        if (attr.canonicalName === canonicalName) {
             return attr.expr
                 ? attr.expr
                 : undefined;
@@ -646,6 +646,12 @@ export function flattenTree(tree: Node | Node[]) : NodeSourceMap[] {
 
     function visitor(node: Node | undefined | null) {
         if (node) {
+            // a docBlock attribute is sourced from a comment; the comments get visited and flattened, so we don't need to do the same
+            // to the attributes the doc block generates (if we did so, they would be out-of-source order, too, which would break things)
+            if (node.kind === NodeKind.tagAttribute && node.flags & NodeFlags.docBlock) {
+                return;
+            }
+            
             if (node.kind === NodeKind.terminal || node.kind === NodeKind.comment || node.kind === NodeKind.textSpan) {
                 pushNode(node);
             }

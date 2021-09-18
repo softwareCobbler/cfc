@@ -1046,6 +1046,19 @@ export function Checker() {
         }
     }
 
+    function getSymbolImpl(node: Node | null, workingSourceFile: SourceFile) : SymTabEntry | undefined {
+        if (!node) return undefined;
+        return workingSourceFile.nodeToSymbol.get(node.nodeId);
+    }
+
+    /*function getSymbol(node: Node | null) {
+        return getSymbolImpl(node, sourceFile);
+    }*/
+
+    function setResolvedSymbol(node: Node, symTabEntry: SymTabEntry) : void {
+        sourceFile.nodeToSymbol.set(node.nodeId, symTabEntry);
+    }
+
     function isStructOrArray(type: _Type) : boolean {
         return isStruct(type)
             || isArray(type)
@@ -1140,6 +1153,7 @@ export function Checker() {
 
             if (resolvedSymbol) {
                 setCachedEvaluatedNodeType(node, resolvedSymbol.symTabEntry.declaredType ?? resolvedSymbol.symTabEntry.type);
+                setResolvedSymbol(node, resolvedSymbol.symTabEntry);
             }
             // let flowType : _Type | undefined = undefined; determineFlowType(node, name);
 
@@ -1858,6 +1872,7 @@ export function Checker() {
     return {
         check,
         getCachedEvaluatedNodeType: getCachedEvaluatedNodeTypeImpl,
+        getSymbol: getSymbolImpl,
         setNoUndefinedVars,
         installCfcResolver,
     }

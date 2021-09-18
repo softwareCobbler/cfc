@@ -171,16 +171,18 @@ export interface cfFunctionSignature extends _Type {
     uiName: string,
     canonicalName: string,
     params: cfFunctionSignatureParam[],
-    returns: _Type
+    returns: _Type,
+    attrs: TagAttribute[]
 }
 
-export function cfFunctionSignature(uiName: string, params: cfFunctionSignatureParam[], returns: _Type) : cfFunctionSignature {
+export function cfFunctionSignature(uiName: string, params: cfFunctionSignatureParam[], returns: _Type, attrs: TagAttribute[]) : cfFunctionSignature {
     const type = {
         flags: TypeFlags.functionSignature,
         uiName,
         canonicalName: uiName.toLowerCase(),
         params,
         returns,
+        attrs
     }
 
     if (debugTypeModule) {
@@ -455,7 +457,7 @@ export const SyntheticType = (function() {
     const anyFunction = (() => {
         const spreadParam = cfFunctionSignatureParam(false, cfArray(any), "args");
         (spreadParam as Mutable<_Type>).flags |= TypeFlags.spread;
-        return cfFunctionSignature("", [spreadParam], any);
+        return cfFunctionSignature("", [spreadParam], any, []);
     })();
 
     const void_ : _Type = {
@@ -585,6 +587,7 @@ export function extractCfFunctionSignature(def: FunctionDefinition | ArrowFuncti
     let uiName : string;
     let returnType : _Type;
     let paramTypes : cfFunctionSignatureParam[] = [];
+    const attrs = def.kind === NodeKind.functionDefinition ? def.attrs : [];
 
     if (def.kind === NodeKind.functionDefinition) {
         if (def.fromTag) {
@@ -606,7 +609,7 @@ export function extractCfFunctionSignature(def: FunctionDefinition | ArrowFuncti
         paramTypes = extractScriptFunctionParams(def.params);
     }
 
-    return cfFunctionSignature(uiName, paramTypes, returnType);
+    return cfFunctionSignature(uiName, paramTypes, returnType, attrs);
 }
 
 function extractScriptFunctionParams(params: readonly Script.FunctionParameter[], asDeclaration = false) : cfFunctionSignatureParam[] {

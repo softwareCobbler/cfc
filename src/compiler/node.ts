@@ -14,6 +14,7 @@ export const enum NodeFlags {
     error        = 1 << 0,
     missing      = 1 << 1,
     checkerError = 1 << 2,
+    docBlock     = 1 << 3,
 }
 
 export const enum NodeKind {
@@ -305,10 +306,24 @@ export interface SourceFile extends NodeBase {
     scanner: Scanner,
     cachedNodeTypes: Map<NodeId, _Type>, // type of a particular node, exactly zero or one per node
     cachedFlowTypes: Map<FlowId, Map<string, _Type>>, // types for symbols as determined at particular flow nodes, zero or more per flow node
-    cfc?: {
+    nodeToSymbol: Map<NodeId, SymTabEntry>,
+    cfc: {
         extends: SourceFile | null,
         implements: SourceFile[]
-    }
+    } | undefined,
+    resetInPlaceWithNewSource: (newSource: string | Buffer) => void
+}
+
+function resetSourceFileInPlace(target: SourceFile, newSource: string | Buffer) : void {
+    target.containedScope = {container: null, typedefs: new Map()};
+    target.content = [];
+    // target.libRefs untouched
+    target.diagnostics = [];
+    target.scanner = Scanner(newSource);
+    target.cachedNodeTypes = new Map();
+    target.cachedFlowTypes = new Map();
+    target.nodeToSymbol = new Map<NodeId, SymTabEntry>();
+    target.cfc = undefined;
 }
 
 export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: string | Buffer) : SourceFile {
@@ -325,6 +340,8 @@ export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: 
     sourceFile.scanner = Scanner(sourceText);
     sourceFile.cachedNodeTypes = new Map<NodeId, _Type>();
     sourceFile.cachedFlowTypes = new Map<FlowId, Map<string, _Type>>();
+    sourceFile.nodeToSymbol = new Map<NodeId, SymTabEntry>();
+    sourceFile.resetInPlaceWithNewSource = (newSource: string | Buffer) => resetSourceFileInPlace(sourceFile, newSource);
     return sourceFile;
 }
 
@@ -373,11 +390,12 @@ export interface Comment extends NodeBase {
 }
 
 export function Comment(tagOrigin: CfTag.Comment) : Comment;
-export function Comment(commentType: CommentType, range: SourceRange, typedefs?: TypeShim[]) : Comment;
-export function Comment(commentType: CfTag.Comment | CommentType, range?: SourceRange, typedefs?: TypeShim[]) {
-    if (typeof commentType === "number") { // overload 2
+export function Comment(commentType: CommentType, isDocBlock: boolean, range: SourceRange, typedefs?: TypeShim[]) : Comment;
+export function Comment(commentType: CfTag.Comment | CommentType, isDocBlock?: boolean, range?: SourceRange, typedefs?: TypeShim[]) {
+    if (typeof commentType === /*CommentType enum*/ "number") { // overload 2
         const comment = NodeBase<Comment>(NodeKind.comment, range);
         comment.commentType = commentType;
+        if (isDocBlock) comment.flags |= NodeFlags.docBlock;
         if (typedefs) comment.typedefs = typedefs;
         return comment;
     }
@@ -435,12 +453,13 @@ export interface TagAttribute extends NodeBase {
     name: Terminal;
     equals: Terminal | null;
     expr: Node | null;
-
-    lcName: string; // mapify so we don't need this
+    uiName: string;
+    canonicalName: string;
 }
-export function TagAttribute(name: Terminal, lcName: string) : TagAttribute;
-export function TagAttribute(name: Terminal, lcName: string, equals: Terminal, expr: Node) : TagAttribute;
-export function TagAttribute(name: Terminal, lcName: string, equals?: Terminal, expr?: Node | undefined) : TagAttribute {
+
+export function TagAttribute(name: Terminal, uiName: string) : TagAttribute;
+export function TagAttribute(name: Terminal, uiName: string, equals: Terminal, expr: Node) : TagAttribute;
+export function TagAttribute(name: Terminal, uiName: string, equals?: Terminal, expr?: Node | undefined) : TagAttribute {
     let tagAttr : TagAttribute;
     if (name && equals && expr) {
         tagAttr = NodeBase<TagAttribute>(NodeKind.tagAttribute, mergeRanges(name, expr));
@@ -452,7 +471,8 @@ export function TagAttribute(name: Terminal, lcName: string, equals?: Terminal, 
     tagAttr.name = name;
     tagAttr.equals = equals ?? null;
     tagAttr.expr = expr ?? null;
-    tagAttr.lcName = lcName;
+    tagAttr.uiName = uiName;
+    tagAttr.canonicalName = uiName.toLowerCase();
     return tagAttr;
 }
 
@@ -1432,6 +1452,8 @@ interface FunctionParameterBase extends NodeBase {
     fromTag: boolean,
     canonicalName: string,
     uiName: string,
+    attrs: TagAttribute[],
+    type: _Type | null
 }
 
 export type FunctionParameter = Script.FunctionParameter | Tag.FunctionParameter;
@@ -1446,7 +1468,6 @@ export namespace Script {
         identifier: Identifier,
         equals: Terminal | null,
         comma: Terminal | null,
-        type: _Type | null,
     }
 
     export function FunctionParameter(
@@ -1456,6 +1477,7 @@ export namespace Script {
         identifier: Identifier,
         equals: Terminal | null,
         defaultValue: Node | null,
+        attrs: TagAttribute[],
         comma: Terminal | null,
         type: _Type | null) : FunctionParameter {
         const v = NodeBase<FunctionParameter>(NodeKind.functionParameter, mergeRanges(requiredTerminal, javaLikeTypename, identifier, defaultValue, comma));
@@ -1465,12 +1487,13 @@ export namespace Script {
         v.dotDotDot = dotDotDot;
         v.identifier = identifier;
         v.equals = equals;
-        v.defaultValue = defaultValue;
         v.comma = comma;
         v.canonicalName = identifier.canonicalName || "<<ERROR>>";
         v.uiName = identifier.uiName || "<<ERROR>>";
         v.type = type;
+        v.attrs = attrs;
         // it is legal to say something is required and give it a default; however, a required parameter with a default is not really required
+        v.defaultValue = defaultValue;
         v.required = !!(requiredTerminal) && !defaultValue;
         return v;
     }
@@ -1480,7 +1503,6 @@ export namespace Tag {
     export interface FunctionParameter extends FunctionParameterBase {
         kind: NodeKind.functionParameter,
         fromTag: true,        
-        type: _Type | null,
     }
 
     export function FunctionParameter(tag: CfTag.Common) : FunctionParameter {
@@ -1491,8 +1513,9 @@ export namespace Tag {
         v.tagOrigin.startTag = tag;
         v.canonicalName = name?.toLowerCase() || "<<ERROR>>";
         v.uiName = name || "<<ERROR>>";
-        v.defaultValue = getAttributeValue(tag.attrs, "default") ?? null;
+        v.attrs = tag.attrs;
         // it is legal to say something is required and give it a default; however, a required parameter with a default is not really required
+        v.defaultValue = getAttributeValue(tag.attrs, "default") ?? null;
         v.required = !v.defaultValue && (getTriviallyComputableBoolean(getAttributeValue(tag.attrs, "required")) ?? false);
         v.type = null;
         return v;
@@ -1504,6 +1527,7 @@ interface FunctionDefinitionBase extends NodeBase {
     fromTag: boolean,
     canonicalName  : string | null,
     uiName         : string | null,
+    attrs          : TagAttribute[],
 }
 
 export type FunctionDefinition = Script.FunctionDefinition | Tag.FunctionDefinition;
@@ -1519,7 +1543,6 @@ export namespace Script {
         leftParen      : Terminal,
         params         : FunctionParameter[],
         rightParen     : Terminal,
-        attrs          : TagAttribute[],
         body           : Block,
         returnTypeAnnotation : _Type | null,
     }
@@ -1572,6 +1595,7 @@ export namespace Tag {
         v.body               = body;
         v.uiName             = name;
         v.canonicalName      = name?.toLowerCase() ?? null;
+        v.attrs              = startTag.attrs;
         return v;
     }
 }

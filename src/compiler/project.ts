@@ -3,9 +3,9 @@ import * as path from "path";
 
 import { Binder } from "./binder";
 import { Checker } from "./checker";
-import { BlockType, mergeRanges, Node, NodeId, SourceFile, SymTabEntry } from "./node";
+import { BlockType, mergeRanges, Node, NodeId, NodeKind, SourceFile, SymTabEntry } from "./node";
 import { Parser } from "./parser";
-import { Scanner, CfFileType, SourceRange } from "./scanner";
+import { CfFileType, SourceRange } from "./scanner";
 import { cfmOrCfc, findNodeInFlatSourceMap, flattenTree, getAttributeValue, getComponentAttrs, getComponentBlock, getTriviallyComputableString, NodeSourceMap } from "./utils";
 
 interface CachedFile {
@@ -221,16 +221,8 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
             return {parse: -1, bind: -1, check: -1};
         }
 
-        // need to formalize this; we want to reset the source file object but not move it in memory, so
-        // that other files referencing it can continue to do so
         const sourceFile = cache.parsedSourceFile;
-        sourceFile.scanner = Scanner(newSource);
-        sourceFile.cfc = undefined;
-        sourceFile.cachedFlowTypes = new Map();
-        sourceFile.cachedNodeTypes = new Map();
-        sourceFile.containedScope = {container: null, typedefs: new Map()};
-        sourceFile.content = [];
-        sourceFile.diagnostics = [];
+        sourceFile.resetInPlaceWithNewSource(newSource);
 
         return parseBindCheckWorker(sourceFile);
     }
@@ -250,6 +242,19 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
 		const docCache = getCachedFile(absPath);
 		if (!docCache) return undefined;
 		return findNodeInFlatSourceMap(docCache.flatTree, docCache.nodeMap, targetIndex);
+    }
+
+    /**
+     * get node to left of cursor, but return undefined on text spans and comments, and jump from the terminal node to it's parent construct
+     * so instead of a terminal, return Identifier, or etc.
+     */
+    function getInterestingNodeToLeftOfCursor(absPath: string, targetIndex: number) : Node | undefined {
+		const docCache = getCachedFile(absPath);
+		if (!docCache) return undefined;
+		const node = findNodeInFlatSourceMap(docCache.flatTree, docCache.nodeMap, targetIndex);
+        if (!node || node.kind === NodeKind.comment || node.kind === NodeKind.textSpan) return undefined;
+        if (node.kind === NodeKind.terminal) return node.parent ?? undefined;
+        return node;
     }
 
     function getParsedSourceFile(absPath: string) {
@@ -297,6 +302,7 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
         parseBindCheck,
         getDiagnostics,
         getNodeToLeftOfCursor,
+        getInterestingNodeToLeftOfCursor,
         getParsedSourceFile,
         __unsafe_dev_getChecker: () => checker
     }

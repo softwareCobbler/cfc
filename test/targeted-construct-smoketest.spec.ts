@@ -393,6 +393,7 @@ describe("general smoke test for particular constructs", () => {
             ["/a.cfc", `
                 component {
                     someCall("quotedArgName" = 42);
+                    someCall("quotedArg");
                 }`]],
             "/");
         assertDiagnosticsCountWithProject(dfs, "/a.cfc", 1, LanguageVersion.acf2018);
@@ -408,4 +409,14 @@ describe("general smoke test for particular constructs", () => {
             "/");
         assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);
     });
+    /*it("Should not require a required && defaulted parameter", () => {
+        const dfs = DebugFileSystem([
+            ["/a.cfc", `
+                component {
+                    function foo(required any arg=42) {}
+                    function foo(required any arg=42 attr attr attr) {}
+                }`]],
+            "/");
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);
+    });*/
 });

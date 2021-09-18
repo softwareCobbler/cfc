@@ -28,6 +28,8 @@ import {
 	ConfigurationItem,
 	WorkspaceFolder,
 	ProgressType,
+	HoverParams,
+	Hover,
 } from 'vscode-languageserver/node';
 
 import { SignatureHelp, Position, Location, Range } from "vscode-languageserver-types"
@@ -38,11 +40,13 @@ import {
 
 import { URI } from "vscode-uri";
 
-import { NodeId, SourceFile, Parser, Binder, Node, Diagnostic as cfcDiagnostic, cfmOrCfc, flattenTree, NodeSourceMap, Checker } from "compiler";
+import { NodeId, SourceFile, Parser, Binder, Node, Diagnostic as cfcDiagnostic, cfmOrCfc, NodeSourceMap, Checker, NodeKind } from "compiler";
 
 import { _Type } from '../../../compiler/types';
 import { FileSystem, LanguageVersion, Project } from "../../../compiler/project";
 import * as cfls from "../../../services/completions";
+import { getAttributeValue, getTriviallyComputableString } from '../../../compiler/utils';
+import { NodeFlags } from '../../../compiler/node';
 
 type TextDocumentUri = string;
 
@@ -115,6 +119,7 @@ connection.onInitialize((params: InitializeParams) => {
 			completionProvider: {triggerCharacters: [".", " ", "("]},
 			//signatureHelpProvider: {triggerCharacters: ["("]},
 			//definitionProvider: true,
+			//hoverProvider: true,
 		}
 	};
 
@@ -137,6 +142,7 @@ interface ClientRequest {
 	position: Position,
 }
 
+// show where a symbol is defined at
 connection.onDefinition((params) : Location | undefined  => {
 	return undefined;
 	/*
@@ -436,6 +442,51 @@ connection.onCompletion((completionParams: CompletionParams): CompletionItem[] =
 		completionParams.context?.triggerCharacter ?? null);
 	return completions.map(mapCflsCompletionToVsCodeCompletion);
 });
+
+/*
+connection.onHover((hoverParams: HoverParams) : Hover | null => {
+	const document = documents.get(hoverParams.textDocument.uri);
+	if (!document) return null;
+	const fsPath = URI.parse(document.uri).fsPath;
+	const targetIndex = document.offsetAt(hoverParams.position);
+
+	const targetNode = project.getInterestingNodeToLeftOfCursor(fsPath, targetIndex);
+	if (!targetNode) return null;
+	if (targetNode.kind === NodeKind.textSpan || targetNode.kind === NodeKind.comment) return null;
+	
+	const checker = project.__unsafe_dev_getChecker();
+	const symbol = checker.getSymbol(targetNode, project.getParsedSourceFile(fsPath)!);
+	if (symbol) {
+		if (symbol.declarations) {
+			const decl = Array.isArray(symbol.declarations)
+				? symbol.declarations.length === 0
+				? symbol.declarations[0]
+				: null
+				: symbol.declarations;
+			if (!decl || decl.kind !== NodeKind.functionDefinition) return null;
+			const attrVal = getAttributeValue(decl.attrs, "hint");
+			let text;
+			if (attrVal && attrVal.kind === NodeKind.textSpan) {
+				text = attrVal.text;
+			}
+			if (attrVal && attrVal.kind === NodeKind.simpleStringLiteral) {
+				text = getTriviallyComputableString(attrVal)!;
+			}
+			
+			if (!text) return null;
+
+			return {
+				contents: {
+					kind: "plaintext"
+					value: text
+				}
+			}
+		}
+	}
+
+	return null;
+})
+*/
 
 /*connection.onSignatureHelp((params) : SignatureHelp => {
 	params;

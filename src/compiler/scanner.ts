@@ -941,12 +941,20 @@ export function Scanner(source_: string | Buffer) {
     }
 
     return {
-        advance: () : void => {index = Math.min(index+1, end-1)},
+        advance: () : boolean => {
+            const startIndex = index;
+            index = Math.min(index+1, end-1);
+            return index !== startIndex;
+        },
         getLastScannedText,
         getTextSlice,
         getIndex,
         hasNext,
         peek: peekToken,
+        peekChar: (jump: number) => {
+            const codepoint = peekChar(jump)?.codepoint;
+            return codepoint ? String.fromCharCode(codepoint) : "";
+        },
         next: nextToken,
         scanToNext,
         setArtificialEndLimit,
