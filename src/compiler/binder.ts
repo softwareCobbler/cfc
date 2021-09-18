@@ -1,5 +1,5 @@
-import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, ConditionalSubtype, SymTab, TypeShim, Property } from "./node";
-import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean } from "./utils";
+import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, ConditionalSubtype, SymTab, TypeShim, Property, ParamStatement, ParamStatementSubType } from "./node";
+import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { SyntheticType, _Type, extractCfFunctionSignature, isFunctionSignature } from "./types";
 import { LanguageVersion } from "./project";
@@ -278,6 +278,9 @@ export function Binder() {
                 return;
             case NodeKind.property:
                 bindProperty(node);
+                return;
+            case NodeKind.paramStatement:
+                bindParamStatement(node);
                 return;
             default:
                 exhaustiveCaseGuard(node);
@@ -1137,7 +1140,7 @@ export function Binder() {
     }
 
     function bindProperty(node: Property) {
-        if (node.fromTag) {
+        if (node.fromTag) {            
             if (!isInCfcPsuedoConstructor(node)) {
                 errorAtRange(node.range, "Properties must be declared at the top-level of a component.")
             }
@@ -1168,6 +1171,27 @@ export function Binder() {
 
                 addExistingSymbolToTable(RootNode.containedScope.this!, getter);
                 addExistingSymbolToTable(RootNode.containedScope.this!, setter);
+            }
+        }
+    }
+
+    function bindParamStatement(node: ParamStatement) {
+        if (node.subType === ParamStatementSubType.withImplicitTypeAndName) {
+            const typeIndex = node.attrs.findIndex(tagAttr => tagAttr.canonicalName === "type");
+            if (typeIndex !== -1) {
+                errorAtRange(node.attrs[typeIndex].range, `Explicit type attribute shadows implicit type attribute '${stringifyDottedPath(node.implicitType).ui}'.`);
+            }
+        }
+
+        if (node.subType === ParamStatementSubType.withImplicitTypeAndName || node.subType === ParamStatementSubType.withImplicitName) {
+            const nameIndex = node.attrs.findIndex(tagAttr => tagAttr.canonicalName === "name");
+            const defaultIndex = node.implicitNameExpr ? node.attrs.findIndex(tagAttr => tagAttr.canonicalName === "default") : -1;
+
+            if (nameIndex !== -1) {
+                errorAtRange(node.attrs[nameIndex].range, `Explicit name attribute shadows implicit name attribute '${stringifyDottedPath(node.implicitName).ui}'.`);
+            }
+            if (defaultIndex !== -1) {
+                errorAtRange(node.attrs[defaultIndex].range, `Explicit default attribute shadows implicit default value.`);
             }
         }
     }

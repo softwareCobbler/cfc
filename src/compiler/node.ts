@@ -1,5 +1,5 @@
 import { Scanner, SourceRange, TokenType, Token, NilToken, TokenTypeUiString, CfFileType } from "./scanner";
-import { getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString } from "./utils";
+import { getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, Mutable } from "./utils";
 import { _Type } from "./types";
 
 let debug = false;
@@ -29,7 +29,7 @@ export const enum NodeKind {
     structLiteralInitializerMember, arrayLiteralInitializerMember, try, catch, finally,
     breakStatement, continueStatement, returnStatement, importStatement,
     new, typeShim,
-    property
+    property, paramStatement
 }
 
 const NodeTypeUiString : Record<NodeKind, string> = {
@@ -82,6 +82,7 @@ const NodeTypeUiString : Record<NodeKind, string> = {
     [NodeKind.new]: "new",
     [NodeKind.typeShim]: "typeshim",
     [NodeKind.property]: "property",
+    [NodeKind.paramStatement]: "param",
 };
 
 export type Node =
@@ -138,6 +139,7 @@ export type Node =
     | OptionalCall
     | TypeShim // Node-based Type wrapper, would be nice to unify all types/nodes
     | Property
+    | ParamStatement
 
 export interface SymTabEntry {
     uiName: string,
@@ -1630,13 +1632,14 @@ export interface DottedPathRest extends NodeBase {
 export interface DottedPath extends NodeBase {
     kind: NodeKind.dottedPath;
     headKey: Terminal;
-    rest: DottedPathRest[],
+    readonly rest: ReadonlyArray<DottedPathRest>,
+    readonly length: number,
 }
 
 export function DottedPath(headKey: Terminal) : DottedPath {
     const v = NodeBase<DottedPath>(NodeKind.dottedPath, headKey.range);
     v.headKey = headKey;
-    v.rest = [];
+    (v as Mutable<DottedPath>).rest = [];
     return v;
 }
 
@@ -1648,8 +1651,9 @@ export function DottedPathRest(dot: Terminal, key: Terminal) {
 }
 
 export function pushDottedPathElement(dottedPath: DottedPath, dot: Terminal, key: Terminal) {
-    dottedPath.rest.push(DottedPathRest(dot, key));
+    (dottedPath.rest as DottedPathRest[]).push(DottedPathRest(dot, key));
     dottedPath.range = mergeRanges(dottedPath, dot, key);
+    (dottedPath as Mutable<DottedPath>).length += 1;
 }
 
 interface SwitchBase extends NodeBase {
@@ -2371,4 +2375,78 @@ export namespace Script {
         v.attrs = attrs;
         return v;
     }
+}
+
+export const enum ParamStatementSubType { withImplicitTypeAndName, withImplicitName, default };
+
+interface ParamStatementBase extends NodeBase {
+    kind: NodeKind.paramStatement,
+    subType: ParamStatementSubType,
+    paramToken: Terminal,
+    implicitType?: DottedPath,
+    implicitName?: DottedPath,
+    implicitNameEquals?: Terminal | null,
+    implicitNameExpr?: Node | null
+    attrs: TagAttribute[]
+}
+
+export interface ParamStatementDefault extends ParamStatementBase {
+    subType: ParamStatementSubType.default,
+}
+
+export interface ParamStatementWithImplicitTypeAndName extends ParamStatementBase {
+    subType: ParamStatementSubType.withImplicitTypeAndName,
+    implicitType: DottedPath,
+    implicitName: DottedPath,
+    implicitNameEquals: Terminal | null,
+    implicitNameExpr: Node | null
+}
+
+export interface ParamStatementWithImplicitName extends ParamStatementBase {
+    subType: ParamStatementSubType.withImplicitName,
+    implicitName: DottedPath,
+    implicitNameEquals: Terminal | null,
+    implicitNameExpr: Node | null
+}
+
+export type ParamStatement = ParamStatementDefault | ParamStatementWithImplicitName | ParamStatementWithImplicitTypeAndName;
+
+export function ParamStatementWithImplicitTypeAndName(paramToken: Terminal,
+                                                      type: DottedPath,
+                                                      name: DottedPath,
+                                                      equals: Terminal | null,
+                                                      expr: Node | null,
+                                                      attrs: TagAttribute[]) {
+    const v = NodeBase<ParamStatementBase>(NodeKind.paramStatement, mergeRanges(paramToken, type, name, equals, expr, attrs)) as ParamStatementWithImplicitTypeAndName;
+    v.subType = ParamStatementSubType.withImplicitTypeAndName;
+    v.paramToken = paramToken;
+    v.implicitType = type;
+    v.implicitName = name;
+    v.implicitNameEquals = equals;
+    v.implicitNameExpr = expr;
+    v.attrs = attrs;
+    return v;
+}
+
+export function ParamStatementWithImplicitName(paramToken: Terminal,
+                                               name: DottedPath,
+                                               equals: Terminal | null,
+                                               expr: Node | null,
+                                               attrs: TagAttribute[]) {
+    const v = NodeBase<ParamStatementBase>(NodeKind.paramStatement, mergeRanges(paramToken, name, equals, expr, attrs)) as ParamStatementWithImplicitName;
+    v.subType = ParamStatementSubType.withImplicitName;
+    v.paramToken = paramToken;
+    v.implicitName = name;
+    v.implicitNameEquals = equals;
+    v.implicitNameExpr = expr;
+    v.attrs = attrs;
+    return v;
+}
+
+export function ParamStatement(paramToken: Terminal, attrs: TagAttribute[]) {
+    const v = NodeBase<ParamStatementBase>(NodeKind.paramStatement, mergeRanges(paramToken, attrs)) as ParamStatementDefault;
+    v.subType = ParamStatementSubType.default;
+    v.paramToken = paramToken;
+    v.attrs = attrs;
+    return v;
 }

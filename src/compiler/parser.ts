@@ -25,7 +25,7 @@ import {
     New,
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
-    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, TypeShim } from "./node";
+    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, TypeShim, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, Mutable, isSimpleOrInterpolatedStringLiteral, getAttributeValue } from "./utils";
 import { cfIndexedType, cfIntersection, cfMappedType, extractCfFunctionSignature, isIntersection, isTypeId, isUnion } from "./types";
@@ -760,11 +760,12 @@ export function Parser(config: {language: LanguageVersion}) {
         return CfTag.Common(CfTag.Which.end, tagStart, tagName, null, rightAngle, canonicalName);
     }
 
-    function parseTagAttributes() : TagAttribute[] {
+    function parseTagAttributes(maxToParse = -1) : TagAttribute[] {
+        const parseAll = maxToParse === -1;
         const result : TagAttribute[] = [];
 
         let attrNameLexeme;
-        while (attrNameLexeme = scanTagAttributeName()) {
+        while ((parseAll || result.length < maxToParse) && (attrNameLexeme = scanTagAttributeName())) {
             const attrName = Terminal(attrNameLexeme, parseTrivia());
             if (lookahead() === TokenType.EQUAL) {
                 const equal = parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
@@ -2404,7 +2405,7 @@ export function Parser(config: {language: LanguageVersion}) {
         const newToken       = parseExpectedTerminal(TokenType.KW_NEW, ParseOptions.withTrivia);
         const className      = lookahead() === TokenType.QUOTE_SINGLE || lookahead() === TokenType.QUOTE_DOUBLE
             ? parseStringLiteral()
-            : parseDottedPathTypename();
+            : parseDottedPath();
         const callExpression = parseCallExpression(className);
         const newExpression  = New(newToken, callExpression);
         return parseCallExpressionOrLowerRest(newExpression);
@@ -2863,7 +2864,7 @@ export function Parser(config: {language: LanguageVersion}) {
     /**
      * allowTrailingGlob is for import statements like `import foo.bar.*;`
      */
-    function parseDottedPathTypename(allowTrailingGlob = false) : DottedPath {
+    function parseDottedPath(allowTrailingGlob = false) : DottedPath {
         const result = DottedPath(parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false));
         while (lookahead() === TokenType.DOT) {
             const dot = parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
@@ -2938,7 +2939,7 @@ export function Parser(config: {language: LanguageVersion}) {
                 // function foo((required)? type(.name)* name (= defaultExpr)?) { ... }
                 //                          ^^^^^^^^^^^^^
                 if (SpeculationHelper.lookahead(isJavaLikeTypenameThenName)) {
-                    javaLikeTypename = parseDottedPathTypename();
+                    javaLikeTypename = parseDottedPath();
                     name = parseIdentifier();
                     // todo - parse type annotation
                 }
@@ -3194,7 +3195,7 @@ export function Parser(config: {language: LanguageVersion}) {
             accessModifier = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ false);
         }
         if (SpeculationHelper.lookahead(isJavaLikeTypenameThenFunction)) {
-            returnType = parseDottedPathTypename();
+            returnType = parseDottedPath();
         }
 
         if (speculative) {
@@ -3310,7 +3311,7 @@ export function Parser(config: {language: LanguageVersion}) {
             // if it is an identifier or interpolated string, at runtime it should resolve to an exception "type"
             const exceptionType    = lookahead() === TokenType.QUOTE_SINGLE || lookahead() === TokenType.QUOTE_DOUBLE
                 ? parseStringLiteral()
-                : parseDottedPathTypename();
+                : parseDottedPath();
             const exceptionBinding = parseIdentifier();
             const rightParen       = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
             const leftBrace        = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
@@ -3456,7 +3457,7 @@ export function Parser(config: {language: LanguageVersion}) {
                 }
                 case TokenType.KW_IMPORT: {
                     const importToken = parseExpectedTerminal(TokenType.KW_IMPORT, ParseOptions.withTrivia);
-                    const path = parseDottedPathTypename(/*allowTrailingGlob*/ true);
+                    const path = parseDottedPath(/*allowTrailingGlob*/ true);
                     const semi = parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia);
                     return ImportStatement(importToken, path, semi);
                 }
@@ -3556,7 +3557,66 @@ export function Parser(config: {language: LanguageVersion}) {
                         return Script.Property(propertyToken, attrs);
                     }
 
-                    if (isSugaredTagName(peekedCanonicalText)) {
+                    //
+                    // lucee supports the following param syntax:
+                    // 1) param <type> <name> ("=" <default>)? <attr>*
+                    // 2) param <name> ("=" <default>)? <attr>*
+                    // 3?) param <attr>+ <---- this might be indistinguishable from (2), we don't recognize it
+                    // see lucee's AbstrCFMLScriptTransformer.java::_paramStatement
+                    //
+                    // in adobe, param is just a typical sugared tag name: `param <attr>+`
+                    //
+                    if (peekedCanonicalText === "param" && langVersion === LanguageVersion.lucee5) {
+                        // param is also a valid variable name;
+                        // we don't want to create a ParamStatement for something like `param = 42`, which is an assignment to a symbol named 'param', and has nothing to do with a ParamStatement
+                        const paramToken = SpeculationHelper.speculate(() => {
+                            const paramToken = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/false, /*allowNumeric*/false);
+                            if (isLexemeLikeToken(peek())) return paramToken;
+                            else return null;
+                        });
+                        if (paramToken) { // ok, we got a legit param token starting a ParamStatement
+                            const nextIsLiterallyNameEquals = SpeculationHelper.speculate(() => {
+                                const singleAttr = parseTagAttributes(/*maxToParse*/ 1);
+                                if (singleAttr.length === 1 && singleAttr[0].canonicalName === "name" && singleAttr[0].equals && singleAttr[0].expr) {
+                                    return singleAttr[0];
+                                }
+                                return null;
+                            });
+
+                            if (nextIsLiterallyNameEquals) {
+                                // we got `"param" "name" "=" ...` which is just a basic param statement
+                                const attrs = [nextIsLiterallyNameEquals, ...parseTagAttributes()];
+                                /*discarded*/parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia);
+                                return ParamStatement(paramToken, attrs);
+                            }
+
+                            const paramWithImplicitTypeAndName = SpeculationHelper.speculate(() => {
+                                const typeName = parseDottedPath();
+                                if (lookahead() === TokenType.EQUAL) return null; // the implicit type will not be followed by an equals
+                                const name = parseDottedPath();
+                                const equals = parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
+                                const expr = equals ? parseExpression() : null;
+                                const attrs = parseTagAttributes();
+                                /*discarded*/parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia);
+
+                                return ParamStatementWithImplicitTypeAndName(paramToken, typeName, name, equals, expr, attrs);
+                            });
+
+                            if (paramWithImplicitTypeAndName) {
+                                return paramWithImplicitTypeAndName;
+                            }
+
+                            const name = parseDottedPath();
+                            const equals = parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
+                            const expr = equals ? parseExpression() : null;
+                            const attrs = parseTagAttributes();
+                            /*discarded*/parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia);
+
+                            return ParamStatementWithImplicitName(paramToken, name, equals, expr, attrs);
+                        }
+                    }
+                    else if (peekedCanonicalText === "param" || isSugaredTagName(peekedCanonicalText)) {
+                        // fixme: also create a param statement here
                         const quickPeek = SpeculationHelper.speculate(() => {
                             const sugaredTagNameToken = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/false, /*allowNumeric*/false);
                             return lookahead() === TokenType.LEFT_BRACE

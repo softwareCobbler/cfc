@@ -1,6 +1,6 @@
 import * as path from "path";
 import * as fs from "fs";
-import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CfTag, DottedPath, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, Node, NodeFlags, NodeId, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
+import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CfTag, DottedPath, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, Node, NodeFlags, NodeId, ParamStatementSubType, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
 import { NodeKind } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature } from "./types";
@@ -114,7 +114,10 @@ export function isLexemeLikeToken(token: Token, allowNumeric = false) : boolean 
         || (val > TokenType._FIRST_LIT && val < TokenType._LAST_LIT);
 }
 
-const sugaredTagNames = new Set<string>(["component", "interface", "savecontent", "lock", "transaction", "param"]);
+// a sugared tag is a tagname that kicks off special script-syntax:
+// <sugared-tag-name> <attrs>* <braced-block-representing-tag-child-elements>?
+// `param` almost follows this pattern, but lucee supports some different syntax for it; see parser for more details
+const sugaredTagNames = new Set<string>(["component", "interface", "savecontent", "lock", "transaction"]);
 export function isSugaredTagName(text: string) {
     return sugaredTagNames.has(text);
 }
@@ -238,7 +241,7 @@ export function getAttributeValue(attrs: TagAttribute[], name: string) : Node | 
 }
 
 // falsy return values keep it going
-function forEachNode<T>(nodeList: Node[], f: (node: Node) => T) : T | undefined {
+function forEachNode<T>(nodeList: readonly Node[], f: (node: Node) => T) : T | undefined {
     for (let i = 0; i < nodeList.length; i++) {
         const result = f(nodeList[i]);
         if (result) return result;
@@ -627,6 +630,10 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                 return visitor(node.propertyTerminal)
                 || forEachNode(node.attrs, visitor)
             }
+        case NodeKind.paramStatement: 
+            return (node.subType === ParamStatementSubType.withImplicitTypeAndName ? visitor(node.implicitType) : undefined)
+                || (node.subType === ParamStatementSubType.withImplicitName ? visitor(node.implicitName) || visitor(node.implicitNameEquals) || visitor(node.implicitNameExpr) : undefined)
+                || forEachNode(node.attrs, visitor);
         default:
             exhaustiveCaseGuard(node);
     }

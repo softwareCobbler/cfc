@@ -253,6 +253,8 @@ export function Checker() {
                 return;
             case NodeKind.property:
                 return;
+            case NodeKind.paramStatement:
+                return;
             default:
                 exhaustiveCaseGuard(node);
         }
