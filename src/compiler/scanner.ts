@@ -79,6 +79,7 @@ export const enum TokenType {
     EXCLAMATION_EQUAL,
     EXCLAMATION_DBL_EQUAL,
     FORWARD_SLASH,
+    BACK_SLASH,
     FORWARD_SLASH_EQUAL,
     FORWARD_SLASH_STAR,
     HASH,
@@ -192,6 +193,7 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.EXCLAMATION_EQUAL]:    "!=",
     [TokenType.EXCLAMATION_DBL_EQUAL]:    "!==",
     [TokenType.FORWARD_SLASH]:        "/",
+    [TokenType.BACK_SLASH]:           "\\",
     [TokenType.FORWARD_SLASH_EQUAL]:  "/=",
     [TokenType.FORWARD_SLASH_STAR]:   "/*",
     [TokenType.HASH]:                 "#",
@@ -575,6 +577,8 @@ export function Scanner(source_: string | Buffer) {
                 else if (script && maybeEat(/\/\*/iy)) return makeToken(TokenType.FORWARD_SLASH_STAR, from, getIndex());
                 else if (maybeEat(/\/=/iy)) return makeToken(TokenType.FORWARD_SLASH_EQUAL, from, getIndex());
                 else return consumeCurrentCharAs(TokenType.FORWARD_SLASH);
+            case AsciiMap.BACK_SLASH:
+                return consumeCurrentCharAs(TokenType.BACK_SLASH);
             case AsciiMap.a: // [[fallthrough]];
             case AsciiMap.A:
                 if (maybeEat(/and\b/iy)) return makeToken(TokenType.LIT_AND, from, getIndex());

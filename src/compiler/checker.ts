@@ -667,8 +667,14 @@ export function Checker() {
         // invoking the builtin function 'encodeForHTML' on the string argument 'encodeForHTML'
         // if the above is true, checking has cached the non-engine type, and we need to override that decision
         const symbol = getResolvedSymbol(node.left);
-        if (symbol?.alwaysVisibleEngineSymbol && isFunctionSignature(symbol.alwaysVisibleEngineSymbol.type)) {
-            setCachedEvaluatedNodeType(node.left, symbol.alwaysVisibleEngineSymbol.type);
+        if (symbol?.alwaysVisibleEngineSymbol || symbol?.scopeName === "__cfEngine") { // are we shadowing an alwaysVisible symbol, or this symbol is directly a built-in type?
+            const sig = symbol.alwaysVisibleEngineSymbol?.type ?? symbol.symTabEntry.type;
+            if (isFunctionSignature(sig)) { // what else could it be here?
+                setCachedEvaluatedNodeType(node.left, sig);
+                setCachedEvaluatedNodeType(node, sig.returns);
+            }
+            // for now we won't check that the args to built-ins are correct (have the right names / types etc.), because we don't have great definitions for them
+            return;
         }
 
         const sig = getCachedEvaluatedNodeType(node.left);

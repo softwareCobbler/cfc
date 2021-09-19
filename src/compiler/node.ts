@@ -697,7 +697,7 @@ export function tokenTypeToUnaryOpType(tokenType: TokenType) {
 }
 
 export const enum BinaryOpType {
-    add, sub, mul, div, mod, exp, cat, eq, neq, lt, lte, gt, gte, nullCoalesce,
+    add, sub, mul, div, quotient, mod, exp, cat, eq, neq, lt, lte, gt, gte, nullCoalesce,
     and, or, xor,
     assign, assign_add, assign_sub, assign_mul, assign_div, assign_mod, assign_cat,
     contains, does_not_contain, strict_eq, strict_neq,
@@ -708,6 +708,7 @@ export const BinaryOpTypeUiString : Record<BinaryOpType, string> = {
     [BinaryOpType.sub]:              "-",
     [BinaryOpType.mul]:              "*",
     [BinaryOpType.div]:              "/",
+    [BinaryOpType.quotient]:         "\\",
     [BinaryOpType.mod]:              "%",
     [BinaryOpType.exp]:              "exp", // in cf, "^", but that is easily confusable with the xor symbol from other langs so we spell it out
     [BinaryOpType.cat]:              "&",
@@ -765,6 +766,7 @@ export function tokenTypeToBinaryOpType(tokenType: TokenType) : BinaryOpType {
         case TokenType.MINUS:         		  return BinaryOpType.sub;
         case TokenType.STAR:          		  return BinaryOpType.mul;
         case TokenType.FORWARD_SLASH: 		  return BinaryOpType.div;
+        case TokenType.BACK_SLASH:            return BinaryOpType.quotient;
         case TokenType.PERCENT:       		  return BinaryOpType.mod;
         case TokenType.LIT_MOD:       		  return BinaryOpType.mod;
         case TokenType.CARET:         		  return BinaryOpType.exp;

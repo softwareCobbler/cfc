@@ -2093,6 +2093,7 @@ export function Parser(config: {language: LanguageVersion}) {
                     }
                     // fallthrough
                 }
+                case TokenType.BACK_SLASH: // quotient operator, `4.2 \ 2 == 2`
                 case TokenType.STAR:
                 case TokenType.PERCENT:
                 case TokenType.LIT_MOD: {
@@ -3452,7 +3453,7 @@ export function Parser(config: {language: LanguageVersion}) {
                     return parseBracedBlock(mode);
                 }
                 case TokenType.LEFT_BRACKET: {
-                    const expr = parseArrayLiteralOrOrderedStructLiteral();
+                    const expr = parseExpression();
                     const semi = scriptMode() ? parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia) : null;
                     return Statement(expr, semi);
                 }

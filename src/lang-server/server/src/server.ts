@@ -51,12 +51,7 @@ import { NodeFlags } from '../../../compiler/node';
 type TextDocumentUri = string;
 
 interface CflsConfig {
-	parser: ReturnType<typeof Parser>,
-	binder: ReturnType<typeof Binder>,
-	checker: Checker,
-	//parseCache: Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, Node>}>,
-	evictFile: (uri: TextDocumentUri) => void, // what happens if we evict engine lib?
-	lib: SourceFile | null,
+	engineLibAbsPath: string | null
 	x_types: boolean,
 	languageVersion: LanguageVersion
 }
@@ -197,25 +192,16 @@ connection.onDefinition((params) : Location | undefined  => {
 	}*/
 });
 
-function resetCflsp(language: LanguageVersion, x_types: boolean = false) {
-	console.info("[reset]");
-	cflsConfig = {
-		parser: Parser({language}).setDebug(true).setParseTypes(false),
-		binder: Binder().setDebug(true),
-		checker: Checker(),
-		//parseCache: new Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, Node>}>(),
-		lib: cflsConfig?.lib ?? null, // carry forward lib
-		evictFile: (uri: TextDocumentUri) : void => {
-			/*if (cflsConfig.parseCache.has(uri)) {
-				cflsConfig.parseCache.delete(uri);
-			}*/
-		},
-		x_types: false,
-		languageVersion: language
-	};
-	//cflsConfig.checker.installCfcResolver(CfcResolver(workspaceRoots.map(root => root.uri)));
+function resetCflsp(config: CflsConfig, why: string) {
+	connection.console.info("[reset] -- " + why);
+	connection.console.info("[reset] libPath is: " + cflsConfig.engineLibAbsPath ?? "null");
 
-	project = Project(workspaceRoots.map(v => URI.parse(v.uri).fsPath), FileSystem(), {parseTypes: x_types, debug: true, language});
+	project = Project(
+		workspaceRoots.map(v => URI.parse(v.uri).fsPath),
+		FileSystem(),
+		{parseTypes: config.x_types, debug: true, language: config.languageVersion});
+
+	if (cflsConfig.engineLibAbsPath) project.addEngineLib(cflsConfig.engineLibAbsPath);
 }
 
 function reemitDiagnostics() {
@@ -243,14 +229,19 @@ connection.onInitialized(() => {
 		connection.client.register(DidChangeConfigurationNotification.type, undefined);
 
 		// immediately configure ourselves
-		resetCflsp(LanguageVersion.lucee5); // how to get init'd value instead of waiting on it below ?
+		cflsConfig = {
+			engineLibAbsPath: null,
+			x_types: false,
+			languageVersion: LanguageVersion.lucee5
+		};
+		resetCflsp(cflsConfig, "onInitialized"); // how to get init'd value instead of waiting on it below ?
 
 		// ok, now we can wait to ask the client for the workspace configuration; this might take a while to complete
 		// and completions requests and etc. can be arriving and getting serviced during the wait
 		connection.workspace.getConfiguration("cflsp").then((config) => {
 			const languageVersion = languageConfigToEnum(config.languageVersion);
 			if (languageVersion !== cflsConfig.languageVersion || config.x_types !== cflsConfig.x_types) {
-				resetCflsp(config.languageVersion, config.x_types ?? false);
+				resetCflsp(config, "onInitialized and after config");
 			}
 		});
 	}
@@ -294,20 +285,23 @@ function languageConfigToEnum(s: string) {
 }
 
 connection.onDidChangeConfiguration(async change => {
-	//let x_types : boolean;
 	if (hasConfigurationCapability) {
 		// Reset all cached document settings
 		documentSettings.clear();
 		connection.workspace.getConfiguration("cflsp").then((config) => {
-			resetCflsp(languageConfigToEnum(config.languageVersion), config.x_types ?? false);
+			cflsConfig.languageVersion = languageConfigToEnum(config.languageVersion);
+			resetCflsp(cflsConfig, "onDidChangeConfiguration");
 			documents.all().forEach(validateTextDocument);
 		});
 	}
 	else {
-		/*globalSettings = <ExampleSettings>(
-			(change.settings.languageServerExample || defaultSettings)
-		);*/
-		resetCflsp(LanguageVersion.lucee5, /*x_types*/false);
+		cflsConfig = {
+			languageVersion: LanguageVersion.lucee5,
+			x_types: false,
+			engineLibAbsPath: cflsConfig.engineLibAbsPath
+		};
+		resetCflsp(cflsConfig, "onDidChangeConfiguration");
+
 		// Revalidate all open text documents
 		documents.all().forEach(validateTextDocument);
 	}
@@ -504,9 +498,11 @@ connection.onHover((hoverParams: HoverParams) : Hover | null => {
 connection.onNotification("cflsp/libpath", (libAbsPath: string) => {
 	connection.console.info("received cflsp/libpath notification, path=" + libAbsPath);
 	if (!project) {
-		connection.console.warn("Aborting engine library load: `project` was not initialized.");
+		connection.console.warn("Aborting engine library load: `project` was not yet initialized.");
 		return;
 	}
+
+	cflsConfig.engineLibAbsPath = libAbsPath;
 
 	project.addEngineLib(libAbsPath);
 	reemitDiagnostics();

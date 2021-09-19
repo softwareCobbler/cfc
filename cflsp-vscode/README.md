@@ -4,6 +4,11 @@ A language plugin to see how far we can push ColdFusion language tooling.
 
 If we are marking a tag, expression or statement as an error and you know it shouldn't (or it isn't and it should), please let me know [on github](https://github.com/softwareCobbler/cfc).
 
+1.0.27 (Sep 2021)
+
+- Provide option in config `(File >> Preferences >> Settings >> (search for cflsp))` to switch between Lucee and Adobe language mode.
+- Misc. fixes to give less false positive errors.
+
 1.0.24
 
 With 1.0.24, we introduce a *very* limited notion of type checking.

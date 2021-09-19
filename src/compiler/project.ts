@@ -81,6 +81,7 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
     }
 
     binder.setLang(options.language);
+    checker.setLang(options.language);
     checker.install({CfcResolver, EngineSymbolResolver});
 
     type FileCache = Map<AbsPath, CachedFile>;

@@ -411,14 +411,27 @@ describe("general smoke test for particular constructs", () => {
             "/");
         assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);
     });
-    /*it("Should not require a required && defaulted parameter", () => {
-        const dfs = DebugFileSystem([
-            ["/a.cfc", `
-                component {
-                    function foo(required any arg=42) {}
-                    function foo(required any arg=42 attr attr attr) {}
-                }`]],
-            "/");
-        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);
-    });*/
+    it("Should not typecheck a call expression to a built-in function", () => {
+        const fname = "a.cfm";
+        const debugfs = DebugFileSystem([
+            [fname, `
+                <cfscript>
+                    dateFormat(); // should require one param, but we're not type checking this yet
+
+                    function foo(string dateFormat) {
+                        dateFormat(42); // built-in should be "more visible" in a call-expression position than the argument named dateFormat
+                    }
+                </cfscript>
+            `],
+            ["lib.d.cfm", `@declare function dateFormat(required date date, string mask) xtype="any";`],
+        ], "/");
+    
+        const project = Project(["/"], /*filesystem*/debugfs, {debug: true, parseTypes: true, language: LanguageVersion.acf2018});
+        project.addEngineLib("lib.d.cfm");
+        project.addFile("a.cfm");
+    
+        const diagnostics = project.getDiagnostics("a.cfm");
+
+        assert.strictEqual(diagnostics.length, 0);
+    });
 });
