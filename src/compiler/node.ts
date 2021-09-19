@@ -144,7 +144,7 @@ export type Node =
 export interface SymTabEntry {
     uiName: string,
     canonicalName: string,
-    declarations: Node | Node[] | null,
+    declarations: Node[] | null,
     type: _Type,
     declaredType?: _Type | null,
 }
@@ -167,7 +167,6 @@ const staticallyKnownScopeName = [
     "file",
     "form",
     "local",
-    "query",
     "request",
     "server",
     "session",
@@ -178,8 +177,10 @@ const staticallyKnownScopeName = [
     "threadLocal",
     "url",
     "variables",
+    "__query", // magic scope inside <cfloop query=...> tags
     "__cfEngine", // things that the cf engine should provide (e.g. `encodeForHTML` or etc.)
     "__declaration", // for declaration files
+    "__transient", // for non-var-decl'd vars within functions that are not already defined outside of the function; we model them as visible during the function but they disappear on return to parent container
 ] as const;
 
 export type StaticallyKnownScopeName = (typeof staticallyKnownScopeName)[number];

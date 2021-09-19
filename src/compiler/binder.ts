@@ -1,5 +1,5 @@
-import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, ScopeDisplay, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, ConditionalSubtype, SymTab, TypeShim, Property, ParamStatement, ParamStatementSubType } from "./node";
-import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath } from "./utils";
+import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, ConditionalSubtype, SymTab, TypeShim, Property, ParamStatement, ParamStatementSubType, ScopeDisplay } from "./node";
+import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { SyntheticType, _Type, extractCfFunctionSignature, isFunctionSignature } from "./types";
 import { LanguageVersion } from "./project";
@@ -17,6 +17,8 @@ export function Binder() {
     let nodeMap = new Map<NodeId, Node>();
     let withPropertyAccessors = false;
 
+    let pendingSymbolResolutionStack : Map<string, Set<SymTab>>[] = [];
+
     function bind(sourceFile_: SourceFile) {
         if (sourceFile_.cfFileType === CfFileType.dCfm) {
             bindDeclarationFile(sourceFile_);
@@ -27,6 +29,7 @@ export function Binder() {
         diagnostics = sourceFile_.diagnostics;
         nodeMap = new Map<NodeId, Node>();
         withPropertyAccessors = false;
+        pendingSymbolResolutionStack = [new Map()];
 
         RootNode = sourceFile_ as NodeWithScope<SourceFile>;
 
@@ -64,7 +67,7 @@ export function Binder() {
         }
 
         currentContainer = RootNode;
-        bindListFunctionsFirst(sourceFile_.content, sourceFile_);
+        bindList(sourceFile_.content, sourceFile_);
         connectDetachedClosureFlowsToCurrentFlow();
     }
 
@@ -303,11 +306,6 @@ export function Binder() {
         }
     }
 
-    function bindListFunctionsFirst(nodes: Node[], parent: Node) {
-        bindList(nodes.filter(node => node.kind === NodeKind.functionDefinition), parent);
-        bindList(nodes.filter(node => node.kind !== NodeKind.functionDefinition), parent);
-    }
-
     function bindTypeShim(node: TypeShim) {
         // types always have names here? -- yes, typedefs do, but we need to explicitly indicate that inside the typesystem
         // we get them from `@type x = ` so presumably always...
@@ -413,25 +411,26 @@ export function Binder() {
         table.set(entry.canonicalName, entry);
     }
 
+    function addDeclarationToSymbol(table: SymTabEntry, node: Node) {
+        if (table.declarations) table.declarations.push(node);
+        else table.declarations = [node];
+    }
+
     function addFreshSymbolToTable(symTab: SymTab, uiName: string, declaringNode: Node, type: _Type | null = null, declaredType?: _Type | null) : SymTabEntry {
         const canonicalName = uiName.toLowerCase();
         let symTabEntry : SymTabEntry;
 
         // fixme: if there are type annotations on multiple declarations of the same var, they should match
+        // also this method is "addFresh" and we are checking to see if one already exists?
         if (symTab.has(canonicalName)) {
             symTabEntry = symTab.get(canonicalName)!;
-            if (Array.isArray(symTabEntry.declarations)) {
-                symTabEntry.declarations.push(declaringNode);
-            }
-            else {
-                symTabEntry.declarations = symTabEntry.declarations ? [symTabEntry.declarations, declaringNode] : declaringNode;
-            }
+            addDeclarationToSymbol(symTabEntry, declaringNode);
         }
         else {
             symTabEntry = {
                 uiName,
                 canonicalName,
-                declarations: declaringNode,
+                declarations: [declaringNode],
                 type: type ?? SyntheticType.any,
                 declaredType: declaredType ?? null
             };
@@ -515,6 +514,9 @@ export function Binder() {
         }
 
         if (node.finalModifier || node.varModifier) {
+            const canonicalName = canonicalPath[0];
+            resolvePendingSymbolResolutions(canonicalName);
+
             if (getContainingFunction(node)) {
                 addFreshSymbolToTable(currentContainer.containedScope.local!, uiPath[0], node, null, node.typeAnnotation);
             }
@@ -610,22 +612,22 @@ export function Binder() {
             case BlockType.fromTag:
                 maybeBindTagResult(node.tagOrigin.startTag);
                 bindNode(node.tagOrigin.startTag, node);
-                bindListFunctionsFirst(node.stmtList, node);
+                bindList(node.stmtList, node);
                 bindNode(node.tagOrigin.endTag, node);
                 break;
             case BlockType.scriptSugaredTagCallBlock:
                 // check against cf tag meta
                 bindList(node.sugaredCallStatementAttrs!, node);
-                bindListFunctionsFirst(node.stmtList, node);
+                bindList(node.stmtList, node);
                 break;
             case BlockType.scriptTagCallBlock:
                 // check against cf tag meta
                 // maybe push context to make sure children are correct
                 bindList(node.tagCallStatementArgs!.args, node);
-                bindListFunctionsFirst(node.stmtList, node);
+                bindList(node.stmtList, node);
                 break;
             case BlockType.cLike:
-                bindListFunctionsFirst(node.stmtList, node);
+                bindList(node.stmtList, node);
                 break;
         }
     }
@@ -715,7 +717,10 @@ export function Binder() {
             return;
         }
 
-        let targetScope : SymTab = RootNode.containedScope.variables!;
+        // unqualified result names (i.e. no dots in the name) get written to the transient scope if we are in a container with a transient scope (i.e. a function)
+        // otherwise, it goes straight into the root variables scope
+        // we do not push a symbol resolution for the __transient in this case; this is an assignment to a var that will be in play for the remainder of the function
+        let targetScope : SymTab = currentContainer.containedScope.__transient ?? RootNode.containedScope.variables!;
         let targetName = name.length === 1 ? name[0] : name[1];
 
         if (name.length === 2) {
@@ -741,6 +746,7 @@ export function Binder() {
             }
         }
 
+        resolvePendingSymbolResolutions(targetName);
         addFreshSymbolToTable(targetScope, targetName, tag, tag.typeAnnotation);
     }
 
@@ -828,7 +834,8 @@ export function Binder() {
         }
     }
 
-    // assignment and declaration should share more code
+    // n.b. this is different than a declaring assignment, like `var x = y`;
+    // this is for non-declaring assignments like `x = y`
     function bindAssignment(node: BinaryOperator) {
         bindAssignmentFlow(node.left, node.right);
         bindNode(node.left, node);
@@ -890,16 +897,84 @@ export function Binder() {
             const targetBaseName = getTriviallyComputableString(target);
             if (targetBaseName) {
                 const targetBaseCanonicalName = targetBaseName.toLowerCase();
-                const targetScope = currentContainer.containedScope.local
-                    ? currentContainer.containedScope.local
-                    : RootNode.containedScope.variables!;
+
+                const existingSymbol = walkupScopesToResolveSymbol(node, targetBaseName);
+
+                if (existingSymbol && existingSymbol.scopeName !== "__transient") {
+                    return;
+                }
+
+                const targetScope = currentContainer === RootNode
+                    ? currentContainer.containedScope.variables!
+                    : currentContainer.containedScope.__transient!;
+
+                if (targetScope === currentContainer.containedScope.__transient) {
+                    pushPendingSymbolResolution(targetBaseName, currentContainer.containedScope.__transient);
+                }
 
                 if (targetScope.has(targetBaseCanonicalName)) {
+                    const symbolResolution = targetScope.get(targetBaseCanonicalName)!;
+                    if (symbolResolution.declarations) symbolResolution.declarations.push(node);
+                    else symbolResolution.declarations = [node];
                     return;
                 }
 
                 addFreshSymbolToTable(targetScope, targetBaseName, node);
             }
+        }
+    }
+
+    function pushPendingSymbolResolution(canonicalName: string, symTab: Map<string, SymTabEntry>) {
+        const stackTop = pendingSymbolResolutionStack[pendingSymbolResolutionStack.length - 1];
+        if (stackTop.has(canonicalName)) {
+            stackTop.get(canonicalName)!.add(symTab);
+        }
+        else {
+            stackTop.set(canonicalName, new Set([symTab]));
+        }
+    }
+
+    function pushPendingSymbolResolutionFrame() : void {
+        pendingSymbolResolutionStack.push(new Map());
+    }
+
+    function popAndMergePendingSymbolResolutionFrame() : void {
+        const popped = pendingSymbolResolutionStack.pop();
+        if (!popped) return; // ?
+        const top = pendingSymbolResolutionStack[pendingSymbolResolutionStack.length - 1];
+        for (const [symbolCanonicalName, targetScopeSet] of popped) {
+            if (top.has(symbolCanonicalName)) {
+                const existingSet = top.get(symbolCanonicalName)!;
+                for (const scope of targetScopeSet) {
+                    existingSet.add(scope);
+                }
+            }
+            else {
+                top.set(symbolCanonicalName, targetScopeSet);
+            }
+        }
+    }
+
+    function resolvePendingSymbolResolutions(canonicalName: string) {
+        const stackTop = pendingSymbolResolutionStack[pendingSymbolResolutionStack.length - 1];
+        // if the top-most stack has the target symbol name, we remove the target symbol name from all the
+        // scopes listed as participating in trying to find this symbol;
+        // e.g.
+        // function outer() {
+        //     function inner1() {
+        //         a = 42; // pending resolution, set as __transient on `inner1`
+        //     }
+        //     function inner2() {
+        //         a = 42; // pending resolution, set as __transient on `inner2`
+        //     }
+        //     var a = 42; // resolved; remove the __transient symbol from `inner1` and `inner2`; in the checker, symbol lookup for 'a' within inner1/inner2 will now find `outer::local::a`
+        // }
+        //
+        if (stackTop.has(canonicalName)) {
+            for (const scope of stackTop.get(canonicalName)!) {
+                scope.delete(canonicalName);
+            }
+            stackTop.delete(canonicalName);
         }
     }
 
@@ -949,7 +1024,10 @@ export function Binder() {
             typedefs: new Map<string, _Type>(),
             local: new Map<string, SymTabEntry>(),
             arguments: new Map<string, SymTabEntry>(),
+            __transient: new Map<string, SymTabEntry>(),
         };
+
+        pushPendingSymbolResolutionFrame();
 
         // fixme: handle the following gracefully -
         // there is no guarantee that the annotation has the same param count as the cf signature;
@@ -994,6 +1072,8 @@ export function Binder() {
         currentFlow = savedFlow;
         currentContainer = savedContainer;
         detachedClosureFlows = savedDetachedClosureFlows;
+
+        popAndMergePendingSymbolResolutionFrame();
     }
 
     function bindSwitch(node: Switch) {

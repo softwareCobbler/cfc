@@ -1,9 +1,10 @@
 import * as path from "path";
 import * as fs from "fs";
-import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CfTag, DottedPath, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, Node, NodeFlags, NodeId, ParamStatementSubType, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymTab, TagAttribute, UnaryOperatorPos } from "./node";
+import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CfTag, DottedPath, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, isStaticallyKnownScopeName, Node, NodeFlags, NodeId, ParamStatementSubType, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymbolResolution, SymTab, SymTabResolution, TagAttribute, UnaryOperatorPos } from "./node";
 import { NodeKind } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
-import { cfFunctionSignature } from "./types";
+import { cfFunctionSignature, isStruct } from "./types";
+import { EngineSymbolResolver } from "./project";
 
 const enum TagFact {
     ALLOW_VOID		= 0x00000001, // tag can be void, e.g., <cfhttp> can be loose, or have a body like <cfhttp><cfhttpparam></cfhttp>
@@ -1140,4 +1141,80 @@ export function isInScriptBlock(node: Node) {
         if (node.kind === NodeKind.block && node.subType === BlockType.scriptSugaredTagCallBlock && (node.name?.token.text === "component" || node.name?.token.text === "interface")) return true;
         return false;
     })
+}
+
+//https://helpx.adobe.com/coldfusion/developing-applications/the-cfml-programming-language/using-coldfusion-variables/about-scopes.html
+const scopeLookupOrder : readonly StaticallyKnownScopeName[] = [
+    "local",
+    "arguments",
+    "__query", // magic inaccessible scope inside a <cfloop query=#q#>...</cfquery> body
+    "__transient", // found a quasi-declaration (raw assignment) which we can possibly use; keep climbing for an actual decl, but use this if we find no other
+    "thread",
+    "variables",
+    "cgi",
+    "file",
+    "url",
+    "form",
+    "cookie",
+    "client"
+];
+
+export function getScopeDisplayMember(scope: ScopeDisplay, canonicalName: string) : SymTabResolution | undefined {
+    // could we not do this, if we stored a link to the symTab for nested things ?
+    // how would that work for arrays? there wouldn't be a symTab for those...
+    const path = canonicalName.split(".");
+    if (path.length > 1) {
+        if (!isStaticallyKnownScopeName(path[0])) return undefined;
+        const scopeName = path[0];
+        if (!scope.hasOwnProperty(scopeName) || !scope[scopeName as StaticallyKnownScopeName]!.get(path[1])) return undefined;
+        let current = scope[scopeName as StaticallyKnownScopeName]!.get(path[1])!;
+        for (let i = 2; i < path.length; i++) {
+            if (!isStruct(current.type)) return undefined;
+            let maybeNext = current.type.members.get(path[i]);
+            if (!maybeNext) return undefined;
+            current = maybeNext;
+        }
+        return {scopeName: path[0], symTabEntry: current};
+    }
+
+    for (const scopeName of scopeLookupOrder) {
+        if (scope.hasOwnProperty(scopeName)) {
+            const entry = scope[scopeName]!.get(canonicalName);
+            if (entry) {
+                return {scopeName: scopeName, symTabEntry: entry};
+            }
+        }
+    }
+    return undefined;
+}
+
+export function walkupScopesToResolveSymbol(base: Node, canonicalName: string, engineSymbolResolver?: EngineSymbolResolver) : SymbolResolution | undefined {
+    const engineSymbol = engineSymbolResolver?.(canonicalName);
+    let node : Node | null = base;
+
+    while (node) {
+        if (node.containedScope) {
+            const varEntry = getScopeDisplayMember(node.containedScope, canonicalName);
+            if (varEntry) {
+                (varEntry as SymbolResolution).container = node;
+                if (engineSymbol) varEntry.alwaysVisibleEngineSymbol = engineSymbol;
+                return varEntry as SymbolResolution;
+            }
+
+            if (node.kind === NodeKind.sourceFile) {
+                return engineSymbol
+                    ? {scopeName: "__cfEngine", symTabEntry: engineSymbol, container: null}
+                    : undefined;
+            }
+
+            else {
+                node = node.containedScope.container;
+            }
+        }
+        else {
+            node = node.parent;
+        }
+    }
+
+    return undefined;
 }

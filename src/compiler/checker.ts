@@ -1,8 +1,9 @@
-import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymTabResolution, SymbolResolution } from "./node";
-import { CfcResolver, EngineSymbolResolver } from "./project";
+import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution } from "./node";
+import { CfcResolver, EngineSymbolResolver, LanguageVersion } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfStruct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStruct, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType, stringifyType, cfFunctionSignatureParam } from "./types";
 import { exhaustiveCaseGuard, getAttributeValue, getContainingFunction, getSourceFile, getTriviallyComputableString, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
+import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol } from "./utils";
 
 type CanonicalSymbolName = string;
 type SymbolTable = ReadonlyMap<CanonicalSymbolName, SymTabEntry>;
@@ -13,6 +14,7 @@ export function Checker() {
     let diagnostics!: Diagnostic[];
     let noUndefinedVars = false;
     const structViewCache = new Map<SymbolTable, cfStruct>();
+    let languageVersion!: LanguageVersion;
 
     function check(sourceFile_: SourceFile) {
         sourceFile = sourceFile_;
@@ -281,11 +283,13 @@ export function Checker() {
         }
     }*/
 
+    /* rmme
     //https://helpx.adobe.com/coldfusion/developing-applications/the-cfml-programming-language/using-coldfusion-variables/about-scopes.html
     const scopeLookupOrder : readonly StaticallyKnownScopeName[] = [
         "local",
         "arguments",
-        "query", // magic inaccessible scope inside a <cfloop query=#q#>...</cfquery> body
+        "__query", // magic inaccessible scope inside a <cfloop query=#q#>...</cfquery> body
+        "__transient", // found a quasi-declaration (raw assignment) which we can possibly use; keep climbing for an actual decl, but use this if we find no other
         "thread",
         "variables",
         "cgi",
@@ -297,7 +301,6 @@ export function Checker() {
     ];
 
     
-
     function getScopeDisplayMember(scope: ScopeDisplay, canonicalName: string) : SymTabResolution | undefined {
         // could we not do this, if we stored a link to the symTab for nested things ?
         // how would that work for arrays? there wouldn't be a symTab for those...
@@ -327,21 +330,31 @@ export function Checker() {
         return undefined;
     }
 
+    
     function walkupScopesToResolveSymbol(base: Node, canonicalName: string) : SymbolResolution | undefined {
         const engineSymbol = engineSymbolResolver(canonicalName);
+        let transientLocal : SymbolResolution | undefined = undefined;
         let node : Node | null = base;
+
         while (node) {
             if (node.containedScope) {
                 const varEntry = getScopeDisplayMember(node.containedScope, canonicalName);
                 if (varEntry) {
                     (varEntry as SymbolResolution).container = node;
                     if (engineSymbol) varEntry.alwaysVisibleEngineSymbol = engineSymbol;
-                    return varEntry as SymbolResolution;
+
+                    if (varEntry.scopeName === "__transient") {
+                        transientLocal = varEntry as SymbolResolution; // keep climbing for an actual declaration; if we don't find one, we'll use this
+                    }
+                    else {
+                        return varEntry as SymbolResolution;
+                    }
                 }
 
                 if (node.kind === NodeKind.sourceFile) {
-                    // engine symbol or null
-                    return engineSymbol ? {scopeName: "__cfEngine", symTabEntry: engineSymbol, container: null} : undefined;
+                    return engineSymbol
+                        ? {scopeName: "__cfEngine", symTabEntry: engineSymbol, container: null}
+                        : transientLocal;
                 }
 
                 else {
@@ -353,8 +366,9 @@ export function Checker() {
             }
         }
 
-        return undefined;
+        return transientLocal;
     }
+    */
 
     // function determineFlowType(base: Node, canonicalName: string) : _Type | undefined {
     //     base;
@@ -964,7 +978,7 @@ export function Checker() {
             typeErrorAtRange(mergeRanges(node.finalModifier, node.expr), `final-qualified declaration in a for initializer will fail at runtime.`);
         }
 
-        if (canonicalPath.length === 1) {
+        if (languageVersion === LanguageVersion.acf2018 && canonicalPath.length === 1) {
             const enclosingFunction = getContainingFunction(node);
             if (enclosingFunction) {
                 for (const param of enclosingFunction.params) {
@@ -1466,7 +1480,7 @@ export function Checker() {
                 memberTypes.set(canonicalName, {
                     uiName: key,
                     canonicalName,
-                    declarations: member,
+                    declarations: [member],
                     type: getCachedEvaluatedNodeType(member),
                 });
             }
@@ -1557,12 +1571,16 @@ export function Checker() {
     }
 
     let cfcResolver! : CfcResolver;
-    let engineSymbolResolver! : EngineSymbolResolver;
+    let walkupScopesToResolveSymbol! : (a: Node, b: string) => SymbolResolution | undefined;
     function install(installables: Partial<CheckerInstallable>) {
         for (const key of Object.keys(installables) as (keyof CheckerInstallable)[]) {
             switch (key) {
-                case "CfcResolver": cfcResolver = installables[key]!; break;
-                case "EngineSymbolResolver": engineSymbolResolver = installables[key]!; break;
+                case "CfcResolver":
+                    cfcResolver = installables[key]!;
+                    break;
+                case "EngineSymbolResolver":
+                    walkupScopesToResolveSymbol = (baseNode: Node, canonicalName: string) => externWalkupScopesToResolveSymbol(baseNode, canonicalName, installables[key]!);
+                    break;
                 default: exhaustiveCaseGuard(key);
             }
         }
@@ -1889,6 +1907,7 @@ export function Checker() {
         getSymbol: getSymbolImpl,
         setNoUndefinedVars,
         install,
+        setLang: (lv: LanguageVersion) => languageVersion = lv,
     }
 }
 
