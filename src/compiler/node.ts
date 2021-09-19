@@ -178,7 +178,8 @@ const staticallyKnownScopeName = [
     "threadLocal",
     "url",
     "variables",
-    "global", // fake scope where we stick things like `encodeForHTML` or etc.
+    "__cfEngine", // things that the cf engine should provide (e.g. `encodeForHTML` or etc.)
+    "__declaration", // for declaration files
 ] as const;
 
 export type StaticallyKnownScopeName = (typeof staticallyKnownScopeName)[number];
@@ -300,6 +301,16 @@ export interface Diagnostic {
     __debug_to_col?: number,
 }
 
+export interface SymTabResolution {
+    scopeName: StaticallyKnownScopeName,
+    symTabEntry: SymTabEntry,
+    alwaysVisibleEngineSymbol?: SymTabEntry,
+}
+
+export interface SymbolResolution extends SymTabResolution {
+    container: Node | null
+}
+
 export interface SourceFile extends NodeBase {
     kind: NodeKind.sourceFile,
     absPath: string,
@@ -311,7 +322,7 @@ export interface SourceFile extends NodeBase {
     scanner: Scanner,
     cachedNodeTypes: Map<NodeId, _Type>, // type of a particular node, exactly zero or one per node
     cachedFlowTypes: Map<FlowId, Map<string, _Type>>, // types for symbols as determined at particular flow nodes, zero or more per flow node
-    nodeToSymbol: Map<NodeId, SymTabEntry>,
+    nodeToSymbol: Map<NodeId, SymbolResolution>,
     cfc: {
         extends: SourceFile | null,
         implements: SourceFile[]
@@ -327,7 +338,7 @@ function resetSourceFileInPlace(target: SourceFile, newSource: string | Buffer) 
     target.scanner = Scanner(newSource);
     target.cachedNodeTypes = new Map();
     target.cachedFlowTypes = new Map();
-    target.nodeToSymbol = new Map<NodeId, SymTabEntry>();
+    target.nodeToSymbol = new Map<NodeId, SymbolResolution>();
     target.cfc = undefined;
 }
 
@@ -345,7 +356,7 @@ export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: 
     sourceFile.scanner = Scanner(sourceText);
     sourceFile.cachedNodeTypes = new Map<NodeId, _Type>();
     sourceFile.cachedFlowTypes = new Map<FlowId, Map<string, _Type>>();
-    sourceFile.nodeToSymbol = new Map<NodeId, SymTabEntry>();
+    sourceFile.nodeToSymbol = new Map<NodeId, SymbolResolution>();
     sourceFile.resetInPlaceWithNewSource = (newSource: string | Buffer) => resetSourceFileInPlace(sourceFile, newSource);
     return sourceFile;
 }
@@ -375,7 +386,7 @@ export function Terminal(token: Token, trivia: Node[] = []) : Terminal {
     return v;
 }
 
-export function NilTerminal(pos: number) { return Terminal(NilToken(pos)) };
+export function NilTerminal(pos: number, text: string = "") { return Terminal(NilToken(pos, text)) };
 
 export const freshFlow = (function() {
     let flowId = 0;

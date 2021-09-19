@@ -54,8 +54,8 @@ interface CflsConfig {
 	parser: ReturnType<typeof Parser>,
 	binder: ReturnType<typeof Binder>,
 	checker: Checker,
-	parseCache: Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, Node>}>,
-	evictFile: (uri: TextDocumentUri) => void,
+	//parseCache: Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, Node>}>,
+	evictFile: (uri: TextDocumentUri) => void, // what happens if we evict engine lib?
 	lib: SourceFile | null,
 	x_types: boolean,
 	languageVersion: LanguageVersion
@@ -73,7 +73,7 @@ function naiveGetDiagnostics(uri: TextDocumentUri, freshText: string | Buffer) :
 	const fsPath = URI.parse(uri).fsPath;
 
 	const timing = project.parseBindCheck(fsPath, freshText);
-	connection.console.info(`parse ${timing.parse} // bind ${timing.bind} // check ${timing.check}`);
+	//connection.console.info(`parse ${timing.parse} // bind ${timing.bind} // check ${timing.check}`);
 	return project.getDiagnostics(fsPath) ?? [];
 }
 
@@ -203,12 +203,12 @@ function resetCflsp(language: LanguageVersion, x_types: boolean = false) {
 		parser: Parser({language}).setDebug(true).setParseTypes(false),
 		binder: Binder().setDebug(true),
 		checker: Checker(),
-		parseCache: new Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, Node>}>(),
+		//parseCache: new Map<TextDocumentUri, {parsedSourceFile: SourceFile, flatTree: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, Node>}>(),
 		lib: cflsConfig?.lib ?? null, // carry forward lib
 		evictFile: (uri: TextDocumentUri) : void => {
-			if (cflsConfig.parseCache.has(uri)) {
+			/*if (cflsConfig.parseCache.has(uri)) {
 				cflsConfig.parseCache.delete(uri);
-			}
+			}*/
 		},
 		x_types: false,
 		languageVersion: language
@@ -219,15 +219,15 @@ function resetCflsp(language: LanguageVersion, x_types: boolean = false) {
 }
 
 function reemitDiagnostics() {
-	connection.console.info("reemit diagnositcs for " + cflsConfig.parseCache.size + " file URIs");
-	const uris = [...cflsConfig.parseCache.keys()]; // parseCache is indirectly updated in-loop, so grab a copy of the values before iterating
-	for (const uri of uris) {
+	const absPaths = project.getFileListing();
+	connection.console.info("reemit diagnositcs for " + absPaths.length + " file URIs");
+	for (const absPath of absPaths) {
+		const uri = URI.parse(absPath).toString();
 		const textDocument = documents.get(uri);
 		const text = textDocument?.getText();
 		const fileType = cfmOrCfc(uri);
 
 		if (text && fileType) {
-			cflsConfig.evictFile(uri);
 			connection.sendDiagnostics({
 				uri: uri,
 				diagnostics: cfcDiagnosticsToLspDiagnostics(textDocument!, naiveGetDiagnostics(uri, text))
@@ -502,6 +502,15 @@ connection.onHover((hoverParams: HoverParams) : Hover | null => {
 })*/
 
 connection.onNotification("cflsp/libpath", (libAbsPath: string) => {
+	connection.console.info("received cflsp/libpath notification, path=" + libAbsPath);
+	if (!project) {
+		connection.console.warn("Aborting engine library load: `project` was not initialized.");
+		return;
+	}
+
+	project.addEngineLib(libAbsPath);
+	reemitDiagnostics();
+
 	/*connection.console.info("received cflsp/libpath notification, path=" + libAbsPath);
 	if (!libAbsPath) return;
 	const path = libAbsPath;
@@ -513,14 +522,14 @@ connection.onNotification("cflsp/libpath", (libAbsPath: string) => {
 });
 
 connection.onNotification("cflsp/cache-cfcs", (cfcAbsPaths: string[]) => {
+	const start = new Date().getTime();
 	for (const absPath of cfcAbsPaths) {
-		const start = new Date().getTime();
 		project.addFile(absPath);
 		connection.sendNotification("cflsp/cached-cfc"); // just saying "hey we're done with one more"
-		const elapsed = (new Date().getTime()) - start;
-		connection.console.info(absPath + "\n\t" + elapsed);
 	}
-})
+	const elapsed = (new Date().getTime()) - start;
+	connection.console.info("Cached " + cfcAbsPaths.length + " CFCs in " + elapsed + "ms");
+});
 
 // This handler resolves additional information for the item selected in
 // the completion list.

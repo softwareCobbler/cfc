@@ -1216,13 +1216,13 @@ export function Binder() {
         sourceFile.containedScope = {
             container: null,
             typedefs: new Map<string, _Type>(),
-            global: new Map<string, SymTabEntry>()
+            __declaration: new Map<string, SymTabEntry>()
         };
 
         for (const node of sourceFile.content) {
             if (node.kind === NodeKind.typeShim) {
                 if (isFunctionSignature(node.type)) {
-                    addFreshSymbolToTable(sourceFile.containedScope!.global!, node.type.uiName, node);
+                    addFreshSymbolToTable(sourceFile.containedScope!.__declaration!, node.type.uiName, node, node.type);
                 }
             }
             else {

@@ -1,5 +1,5 @@
-import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement } from "./node";
-import { CfcResolver } from "./project";
+import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, ScopeDisplay, StaticallyKnownScopeName, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymTabResolution, SymbolResolution } from "./node";
+import { CfcResolver, EngineSymbolResolver } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfStruct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStruct, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType, stringifyType, cfFunctionSignatureParam } from "./types";
 import { exhaustiveCaseGuard, getAttributeValue, getContainingFunction, getSourceFile, getTriviallyComputableString, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
@@ -167,7 +167,7 @@ export function Checker() {
                 setCachedEvaluatedNodeType(node, SyntheticType.string);
                 return;
             case NodeKind.numericLiteral:
-                setCachedEvaluatedNodeType(node, SyntheticType.number);
+                setCachedEvaluatedNodeType(node, SyntheticType.numeric);
                 return;
             case NodeKind.booleanLiteral:
                 setCachedEvaluatedNodeType(node, SyntheticType.boolean);
@@ -296,14 +296,7 @@ export function Checker() {
         "client"
     ];
 
-    interface SymTabResolution {
-        scopeName: StaticallyKnownScopeName,
-        symTabEntry: SymTabEntry
-    }
-
-    interface SymbolResolution extends SymTabResolution {
-        container: Node | null
-    }
+    
 
     function getScopeDisplayMember(scope: ScopeDisplay, canonicalName: string) : SymTabResolution | undefined {
         // could we not do this, if we stored a link to the symTab for nested things ?
@@ -335,18 +328,20 @@ export function Checker() {
     }
 
     function walkupScopesToResolveSymbol(base: Node, canonicalName: string) : SymbolResolution | undefined {
+        const engineSymbol = engineSymbolResolver(canonicalName);
         let node : Node | null = base;
         while (node) {
             if (node.containedScope) {
                 const varEntry = getScopeDisplayMember(node.containedScope, canonicalName);
                 if (varEntry) {
                     (varEntry as SymbolResolution).container = node;
+                    if (engineSymbol) varEntry.alwaysVisibleEngineSymbol = engineSymbol;
                     return varEntry as SymbolResolution;
                 }
 
                 if (node.kind === NodeKind.sourceFile) {
-                    const type = checkLibRefsForName(canonicalName);
-                    return type ? {scopeName: "global", symTabEntry: type, container: null} : undefined;
+                    // engine symbol or null
+                    return engineSymbol ? {scopeName: "__cfEngine", symTabEntry: engineSymbol, container: null} : undefined;
                 }
 
                 else {
@@ -479,13 +474,6 @@ export function Checker() {
         return cfUnion(membersBuilder, flags);
     }
 
-    function checkLibRefsForName(canonicalName: string) : SymTabEntry | undefined{
-        for (const lib of sourceFile.libRefs) {
-            if (lib.containedScope?.global?.has(canonicalName)) return lib.containedScope.global.get(canonicalName)!;
-        }
-        return undefined;
-    }
-
     function unsafeAssertTypeKind<T extends _Type>(_type: _Type) : asserts _type is T {}
 
     /**
@@ -537,7 +525,13 @@ export function Checker() {
 
         // it would be nice to error on this, but plenty of legacy code relies on
         // number being assignable to boolean
-        if (l.flags & TypeFlags.number && r.flags & TypeFlags.boolean) return true;
+        if (l.flags & TypeFlags.numeric && r.flags & TypeFlags.boolean) return true;
+
+        // numeric is a subtype of string
+        // however, string is not a subtype of numeric
+        if (l === SyntheticType.numeric && r === SyntheticType.string) {
+            return true;
+        }
 
         //
         // {x: number, y: number} <: {x: number}, because L has AT LEAST all the properties of R
@@ -552,7 +546,7 @@ export function Checker() {
             return true;
         }
 
-        if (l.flags & TypeFlags.number && r.flags & TypeFlags.number) {
+        if (l.flags & TypeFlags.numeric && r.flags & TypeFlags.numeric) {
             return true;
         }
         if (l.flags & TypeFlags.string && r.flags & TypeFlags.string) {
@@ -652,6 +646,16 @@ export function Checker() {
     function checkCallExpression(node: CallExpression) {
         checkNode(node.left);
         checkList(node.args);
+
+        // the resolved symbol may shadow a built-in always-visible engine symbol
+        // function call identifiers always call the built-in if it names a built-in
+        // e.g function `foo(string encodeForHtml) { return encodeForHTML(encodeForHTML); }` is valid,
+        // invoking the builtin function 'encodeForHTML' on the string argument 'encodeForHTML'
+        // if the above is true, checking has cached the non-engine type, and we need to override that decision
+        const symbol = getResolvedSymbol(node.left);
+        if (symbol?.alwaysVisibleEngineSymbol && isFunctionSignature(symbol.alwaysVisibleEngineSymbol.type)) {
+            setCachedEvaluatedNodeType(node.left, symbol.alwaysVisibleEngineSymbol.type);
+        }
 
         const sig = getCachedEvaluatedNodeType(node.left);
 
@@ -792,7 +796,7 @@ export function Checker() {
     function checkUnaryOperator(node: UnaryOperator) {
         checkNode(node.expr);
         const type = getCachedEvaluatedNodeType(node.expr);
-        if (!(type.flags & TypeFlags.any) && !(type.flags & TypeFlags.number)) {
+        if (!(type.flags & TypeFlags.any) && !(type.flags & TypeFlags.numeric)) {
             // true for ++/--
             //typeErrorAtNode(node.expr, "Unary operator requires a numeric operand.");
             // need "coercible to bool" for "!"
@@ -1053,17 +1057,17 @@ export function Checker() {
         }
     }
 
-    function getSymbolImpl(node: Node | null, workingSourceFile: SourceFile) : SymTabEntry | undefined {
+    function getSymbolImpl(node: Node | null, workingSourceFile: SourceFile) : SymbolResolution | undefined {
         if (!node) return undefined;
         return workingSourceFile.nodeToSymbol.get(node.nodeId);
     }
 
-    /*function getSymbol(node: Node | null) {
+    function getResolvedSymbol(node: Node | null) {
         return getSymbolImpl(node, sourceFile);
-    }*/
+    }
 
-    function setResolvedSymbol(node: Node, symTabEntry: SymTabEntry) : void {
-        sourceFile.nodeToSymbol.set(node.nodeId, symTabEntry);
+    function setResolvedSymbol(node: Node, resolvedSymbol: SymbolResolution) : void {
+        sourceFile.nodeToSymbol.set(node.nodeId, resolvedSymbol);
     }
 
     function isStructOrArray(type: _Type) : boolean {
@@ -1160,7 +1164,7 @@ export function Checker() {
 
             if (resolvedSymbol) {
                 setCachedEvaluatedNodeType(node, resolvedSymbol.symTabEntry.declaredType ?? resolvedSymbol.symTabEntry.type);
-                setResolvedSymbol(node, resolvedSymbol.symTabEntry);
+                setResolvedSymbol(node, resolvedSymbol);
             }
             // let flowType : _Type | undefined = undefined; determineFlowType(node, name);
 
@@ -1293,6 +1297,17 @@ export function Checker() {
     function checkFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {
         const cfSyntaxDirectedTypeSig = extractCfFunctionSignature(node);
         let finalType = cfSyntaxDirectedTypeSig;
+
+        // if (node.kind === NodeKind.functionDefinition && node.canonicalName) {
+        //     const engineSymbol = engineSymbolResolver(node.canonicalName);
+        //     if (engineSymbol && isFunctionSignature(engineSymbol.type)) {
+        //         // we pull engine function information from cfdocs;
+        //         // it includes things like "onSessionStart", which are methods meant to be overridden by users inside application.cfm
+        //         // probably we need to "auto-implements" application.cfc and have an interface definition file for the expected shape;
+        //         // but! you don't *need* to implement some methods; so it's more of an auto-extends; can user-code have application.cfc extend anything?
+        //         // typeErrorAtRange(node.range, `Named functions cannot shadow built-in functions; name '${node.uiName}' is reserved by a built-in function.`)
+        //     }
+        // }
 
         if (node.typeAnnotation) {
             const evaluatedType = evaluateType(node, node.typeAnnotation);
@@ -1541,24 +1556,16 @@ export function Checker() {
         return undefined;
     }
 
-    function getTypeOfExpression(node: Node) : _Type {
-        if (!getCachedEvaluatedNodeType(node)) checkNode(node);
-        return getCachedEvaluatedNodeType(node);
-    }
-    getTypeOfExpression;
-
-    /*function getScope(origin: Node, name: StaticallyKnownScopeName) : SymTab | undefined {
-        if (name === "local") {
-            return getContainingFunction(origin)?.containedScope?.local;
+    let cfcResolver! : CfcResolver;
+    let engineSymbolResolver! : EngineSymbolResolver;
+    function install(installables: Partial<CheckerInstallable>) {
+        for (const key of Object.keys(installables) as (keyof CheckerInstallable)[]) {
+            switch (key) {
+                case "CfcResolver": cfcResolver = installables[key]!; break;
+                case "EngineSymbolResolver": engineSymbolResolver = installables[key]!; break;
+                default: exhaustiveCaseGuard(key);
+            }
         }
-        else {
-            return sourceFile.containedScope[name];
-        }
-    }*/
-
-    let cfcResolver : CfcResolver;
-    function installCfcResolver(resolver: CfcResolver) {
-        cfcResolver = resolver;
     }
 
     //
@@ -1881,8 +1888,13 @@ export function Checker() {
         getCachedEvaluatedNodeType: getCachedEvaluatedNodeTypeImpl,
         getSymbol: getSymbolImpl,
         setNoUndefinedVars,
-        installCfcResolver,
+        install,
     }
+}
+
+export interface CheckerInstallable {
+    CfcResolver: CfcResolver,
+    EngineSymbolResolver: EngineSymbolResolver
 }
 
 export type Checker = ReturnType<typeof Checker>;

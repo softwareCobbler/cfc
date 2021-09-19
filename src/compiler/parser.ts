@@ -289,8 +289,8 @@ export function Parser(config: {language: LanguageVersion}) {
         return result;
     }
 
-    function scanTagAttributeName() {
-        const result = scanner.scanTagAttributeName();
+    function scanTagAttributeName(allowDot = false) {
+        const result = scanner.scanTagAttributeName(allowDot);
         if (result && !isInSomeContext(ParseContext.trivia)) lastNonTriviaToken = result;
         primeLookahead();
         return result;
@@ -2917,6 +2917,7 @@ export function Parser(config: {language: LanguageVersion}) {
     function tryParseFunctionDefinitionParameters(speculative: boolean, _asDeclaration = false) : Script.FunctionParameter[] | null {
         const savedContext = updateParseContext(ParseContext.argOrParamList);
         const result : Script.FunctionParameter[] = [];
+        const paramTypeAttrName = "xtype";
         // might have to handle 'required' specially in "isIdentifier"
         // we could set a flag saying we're in a functionParameterList to help out
         while (isStartOfExpression()) {
@@ -2988,6 +2989,14 @@ export function Parser(config: {language: LanguageVersion}) {
                 else {
                     attrs = parseTagAttributes();
                     defaultValue = getAttributeValue(attrs, "default") ?? null;
+                    for (const attr of attrs) {
+                        if (attr.canonicalName === paramTypeAttrName && attr.expr?.kind === NodeKind.simpleStringLiteral) {
+                            // parse the type as though it were a loose expression;
+                            // the range provided to the type parser has the leading and trailing quotes removed
+                            type = parseType(attr.expr.range.fromInclusive+1, attr.expr.range.toExclusive-1);
+                            break;
+                        }
+                    }
                 }
             }
 
@@ -3188,15 +3197,6 @@ export function Parser(config: {language: LanguageVersion}) {
         return Script.FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body, null);
     }
 
-    function parseNamedFunctionDeclaration() : cfFunctionSignature {
-        const decl = tryParseNamedFunctionDefinition(/*speculative*/ false, /*asDeclaration*/ true);
-        if (!decl.returnTypeAnnotation) {
-            parseErrorAtRange(decl.range, "A function declaration requires a return type.");
-        }
-        const sig = extractCfFunctionSignature(decl, /*asDeclaration*/ true);
-        return sig;
-    }
-
     function tryParseNamedFunctionDefinition(speculative: false, asDeclaration: boolean) : Script.FunctionDefinition;
     function tryParseNamedFunctionDefinition(speculative: true) : Script.FunctionDefinition | null;
     function tryParseNamedFunctionDefinition(speculative: boolean, asDeclaration = false) : Script.FunctionDefinition | null {
@@ -3210,7 +3210,6 @@ export function Parser(config: {language: LanguageVersion}) {
         let rightParen    : Terminal;
         let attrs         : TagAttribute[];
         let body          : Block;
-        let returnTypeAnnotation : _Type | null = null;
         
         if (SpeculationHelper.lookahead(isAccessModifier)) {
             accessModifier = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ false);
@@ -3235,14 +3234,12 @@ export function Parser(config: {language: LanguageVersion}) {
         
         if (asDeclaration) {
             rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
-            ///*discarded*/ parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
-            //returnTypeAnnotation = parseType();
 
             attrs = parseTagAttributes();
             body = Block(null, [], null);
             body.range = new SourceRange(pos(), pos());
 
-            parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.noTrivia);
+            /*discarded*/ parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.noTrivia);
         }
         else {
             rightParen    = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
@@ -3252,6 +3249,14 @@ export function Parser(config: {language: LanguageVersion}) {
 
         if (savedLastDocBlock?.docBlockAttrs) {
             attrs.push(...savedLastDocBlock.docBlockAttrs);
+        }
+
+        let returnTypeAnnotation : _Type | null = null;
+        const returnTypeAttrName = "xtype";
+        for (const attr of attrs) {
+            if (attr.canonicalName === returnTypeAttrName && attr.expr?.kind === NodeKind.simpleStringLiteral) {
+                returnTypeAnnotation = parseType(attr.expr.range.fromInclusive + 1, attr.expr.range.toExclusive - 1);                
+            }
         }
         const result = Script.FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body, returnTypeAnnotation);
 
@@ -3739,17 +3744,17 @@ export function Parser(config: {language: LanguageVersion}) {
             mode: ScannerMode.allow_both
         });        
 
-        function finishDocBlockAttribute(attrValueSourceRange: SourceRange, attrUiName: string) {
+        function finishDocBlockAttribute(attrValueSourceRange: SourceRange, attrUiName: Terminal) {
             const text = scanner.getTextSlice(attrValueSourceRange).replace(stripStructuralOnlyDocBlockTextPattern, "$1").trim();
-            const nilTerminal = NilTerminal(-1);
-            
+            const syntheticEquals = NilTerminal(attrUiName.range.toExclusive, "=");
+
             let docBlockAttr : TagAttribute;
             if (text) {
                 const textSpanNode = TextSpan(attrValueSourceRange, text);
-                docBlockAttr = TagAttribute(nilTerminal, attrUiName, nilTerminal, textSpanNode);
+                docBlockAttr = TagAttribute(attrUiName, attrUiName.token.text, syntheticEquals, textSpanNode);
             }
             else {
-                docBlockAttr = TagAttribute(nilTerminal, attrUiName);
+                docBlockAttr = TagAttribute(attrUiName, attrUiName.token.text);
             }
 
             docBlockAttr.flags |= NodeFlags.docBlock;
@@ -3764,9 +3769,11 @@ export function Parser(config: {language: LanguageVersion}) {
             })
         }
 
-        function scanDocBlockAttrName() : string | undefined {
+        function scanDocBlockAttrName() : Terminal {
             parseExpectedTerminal(TokenType.CHAR, ParseOptions.noTrivia); // consume "@"
-            return scanTagAttributeName()?.text;
+            const token = scanTagAttributeName(/*allowDot*/ true);
+            if (!token) return NilTerminal(pos(), "<<error/doc-block-attr-name>>");
+            else return Terminal(token, []);
         }
 
         /**
@@ -3799,7 +3806,7 @@ export function Parser(config: {language: LanguageVersion}) {
         
         // the first part of a cf-docblock is implicitly a "hint" attribute if it is text without an attribute name
         let first = true;
-        let workingAttributeUiName = "hint";
+        let workingAttributeUiName : Terminal = NilTerminal(pos(), "hint");
         const docBlockAttrs : TagAttribute[] = [];
 
         while (true) {
@@ -3813,7 +3820,7 @@ export function Parser(config: {language: LanguageVersion}) {
                 break;
             }
 
-            workingAttributeUiName = scanDocBlockAttrName() || "__error__";
+            workingAttributeUiName = scanDocBlockAttrName() || {uiName: "__error__", fromInclusive: pos(), toExclusive: pos()};
             first = false;
         }
 
@@ -3891,8 +3898,9 @@ export function Parser(config: {language: LanguageVersion}) {
                     parseTrivia();
                     const declarationSpecifier = peek();
                     if (declarationSpecifier.text === "function") {
-                        const functionDecl = parseNamedFunctionDeclaration();
-                        result.push(TypeShim("typedef", functionDecl));
+                        const decl = tryParseNamedFunctionDefinition(/*speculative*/ false, /*asDeclaration*/ true);
+                        const signature = extractCfFunctionSignature(decl, /*asDeclaration*/true);
+                        result.push(TypeShim("typedef", signature));
                     }
                     else if (declarationSpecifier.text === "global") {
                         parseErrorAtRange(contextualKeyword.range, "Global declarations are not yet supported. This would be for the cgi and etc. scopes.");
@@ -3949,8 +3957,8 @@ export function Parser(config: {language: LanguageVersion}) {
     function parseType(fromInclusive?: number, toExclusive?: number) : _Type {
         function textToType(lexeme: Token) {
             switch (lexeme.text) {
-                case "number":
-                    return SyntheticType.number;
+                case "numeric":
+                    return SyntheticType.numeric;
                 case "string":
                     return SyntheticType.string;
                 case "any":
@@ -4051,13 +4059,14 @@ export function Parser(config: {language: LanguageVersion}) {
                 artificialEndLimit: toExclusive
             })
         }
+        
+        parseTrivia(); // only necessary if we just updated scanner state? caller can maybe guarantee that the target scanner state begins on non-trivial input?
 
         if (!isStartOfType()) {
             parseErrorAtPos(pos(), "Expected a type expression.");
             return SyntheticType.any;
         }
 
-        parseTrivia(); // only necessary if we just updated scanner state? caller can maybe guarantee that the target scanner state begins on non-trivial input?
 
         function localParseType() : _Type {
             let result : _Type = SyntheticType.any;

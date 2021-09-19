@@ -9,7 +9,7 @@ export const enum TypeFlags {
     any                             = 1 << 0,
     void                            = 1 << 1,
     string                          = 1 << 2,
-    number                          = 1 << 3,
+    numeric                          = 1 << 3,
     boolean                         = 1 << 4,
     nil                             = 1 << 5,
     never                           = 1 << 6,
@@ -42,7 +42,7 @@ const TypeKindUiString : Record<TypeFlags, string> = {
     [TypeFlags.any]:                             "any",
     [TypeFlags.void]:                            "void",
     [TypeFlags.string]:                          "string",
-    [TypeFlags.number]:                          "number",
+    [TypeFlags.numeric]:                          "number",
     [TypeFlags.boolean]:                         "boolean",
     [TypeFlags.nil]:                             "nil",
     [TypeFlags.array]:                           "array",
@@ -471,10 +471,10 @@ export const SyntheticType = (function() {
     (string as Mutable<_Type>).canonicalType = string;
 
 
-    const number : _Type = {
-        flags: TypeFlags.synthetic | TypeFlags.number,
+    const numeric : _Type = {
+        flags: TypeFlags.synthetic | TypeFlags.numeric | TypeFlags.string,
     } as _Type;
-    (number as Mutable<_Type>).canonicalType = number;
+    (numeric as Mutable<_Type>).canonicalType = numeric;
 
     const boolean : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.boolean,
@@ -503,7 +503,7 @@ export const SyntheticType = (function() {
         any: createType(any),
         void_: createType(void_),
         string: createType(string),
-        number: createType(number),
+        numeric: createType(numeric),
         boolean: createType(boolean),
         nil: createType(nil),
         never: createType(never),
@@ -569,7 +569,7 @@ function typeFromStringifiedJavaLikeTypename(typename: string | null) : _Type {
         case "array": return cfArray(SyntheticType.any);
         case "boolean": return SyntheticType.boolean;
         case "function": return SyntheticType.anyFunction;
-        case "numeric": return SyntheticType.number;
+        case "numeric": return SyntheticType.numeric;
         case "query": return SyntheticType.emptyStruct; // @fixme: have real query type
         case "string": return SyntheticType.string;
         case "struct": return SyntheticType.emptyStruct;
@@ -596,9 +596,9 @@ export function extractCfFunctionSignature(def: FunctionDefinition | ArrowFuncti
             paramTypes = extractTagFunctionParams(def.params);
         }
         else {
-            uiName     = def.nameToken?.uiName || ""; // anonymous function is OK
+            uiName = def.nameToken?.uiName || ""; // anonymous function is OK
             returnType = asDeclaration
-                ? (def.returnTypeAnnotation ?? SyntheticType.any)
+                ? (def.returnTypeAnnotation || SyntheticType.any)
                 : typeFromJavaLikeTypename(def.returnType);
             paramTypes = extractScriptFunctionParams(def.params, asDeclaration);
         }
@@ -612,14 +612,13 @@ export function extractCfFunctionSignature(def: FunctionDefinition | ArrowFuncti
     return cfFunctionSignature(uiName, paramTypes, returnType, attrs);
 }
 
-function extractScriptFunctionParams(params: readonly Script.FunctionParameter[], asDeclaration = false) : cfFunctionSignatureParam[] {
+function extractScriptFunctionParams(params: readonly Script.FunctionParameter[], asDeclaration = false) {
     const result : cfFunctionSignatureParam[] = [];
     for (const param of params) {
         const type = asDeclaration
-            ? (param.type ?? SyntheticType.any)
+            ? (param.type || SyntheticType.any)
             : typeFromJavaLikeTypename(param.javaLikeTypename);
-        const name = param.identifier.uiName || "<<ERROR>>";
-        result.push(cfFunctionSignatureParam(param.required && !param.defaultValue, type, name));
+        result.push(cfFunctionSignatureParam(param.required && !param.defaultValue, type, param.identifier.uiName || "<<ERROR>>"));
     }
     return result;
 }
@@ -637,7 +636,7 @@ function extractTagFunctionParams(params: readonly Tag.FunctionParameter[]) : cf
 export function stringifyType(type: _Type) : string {
     if (type.flags & TypeFlags.any) return "any";
     if (type.flags & TypeFlags.void) return "void";
-    if (type.flags & TypeFlags.number) return "number";
+    if (type.flags & TypeFlags.numeric) return "numeric";
     if (type.flags & TypeFlags.string) return "string";
     if (type.flags & TypeFlags.boolean) return "boolean";
     if (isStruct(type)) {

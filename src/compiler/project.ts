@@ -81,10 +81,11 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
     }
 
     binder.setLang(options.language);
-    checker.installCfcResolver(CfcResolver);
+    checker.install({CfcResolver, EngineSymbolResolver});
 
     type FileCache = Map<AbsPath, CachedFile>;
     const files : FileCache = new Map();
+    let engineLib : CachedFile | undefined;
 
     function tryAddFile(absPath: string) : CachedFile | undefined {
         if (!fileSystem.existsSync(absPath)) return undefined;
@@ -131,7 +132,16 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
         const sourceFile = SourceFile(absPath, fileType, bytes);
 
         parseBindCheckWorker(sourceFile);
+
+        if (fileType === CfFileType.dCfm) {
+            
+        }
+
         return files.get(absPath)!;
+    }
+
+    function addEngineLib(absPath: string) {
+        engineLib = addFile(absPath);
     }
 
     function maybeFollowParentComponents(sourceFile: SourceFile) {
@@ -297,19 +307,28 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
         return undefined;
     }
 
+    function EngineSymbolResolver(canonicalName: string) : SymTabEntry | undefined {
+        if (!engineLib) return undefined;
+        if (!engineLib.parsedSourceFile.containedScope.__declaration) return undefined;
+        return engineLib.parsedSourceFile.containedScope.__declaration.get(canonicalName);
+    }
+
     return {
         addFile,
+        addEngineLib,
         parseBindCheck,
         getDiagnostics,
         getNodeToLeftOfCursor,
         getInterestingNodeToLeftOfCursor,
         getParsedSourceFile,
+        getFileListing: () => [...files.keys()],
         __unsafe_dev_getChecker: () => checker
     }
 }
 
 export type Project = ReturnType<typeof Project>;
 export type CfcResolver = (args: {resolveFrom: string, cfcName: string}) => ReadonlyMap<string, SymTabEntry> | undefined;
+export type EngineSymbolResolver = (name: string) => SymTabEntry | undefined;
 
 export interface ComponentSpecifier {
     canonicalName: string,

@@ -737,13 +737,14 @@ export function Scanner(source_: string | Buffer) {
             || codePoint === AsciiMap.DOLLAR;
     }
 
-    function isTagAttributeNameRest(codePoint: number) {
+    function isTagAttributeNameRest(codePoint: number, allowDot: boolean) {
         return isAsciiAlpha(codePoint)
             || isAsciiDigit(codePoint)
             || codePoint === AsciiMap.UNDERSCORE
             || codePoint === AsciiMap.MINUS
             || codePoint === AsciiMap.DOLLAR
-            || codePoint === AsciiMap.COLON;
+            || codePoint === AsciiMap.COLON
+            || (codePoint === AsciiMap.DOT && allowDot);
     }
 
     function scanTagName() : Token | null {
@@ -756,11 +757,11 @@ export function Scanner(source_: string | Buffer) {
         return makeToken(TokenType.LEXEME, from, getIndex());
     }
 
-    function scanTagAttributeName() : Token | null {
+    function scanTagAttributeName(allowDot: boolean) : Token | null {
         if (!hasNext() || !isTagAttributeNameStart(annotatedChars[index].codepoint)) return null;
         const from = index;
         index += 1;
-        while (isTagAttributeNameRest(annotatedChars[index].codepoint)) {
+        while (isTagAttributeNameRest(annotatedChars[index].codepoint, allowDot)) {
             index += 1;
         }
         lastScannedText = sourceText.slice(from, index);
@@ -1006,6 +1007,6 @@ export function Token(type: TokenType, text: string, fromOrRange: number | Sourc
     }
 }
 
-export const NilToken = (pos: number) => Token(TokenType.NIL, "", new SourceRange(pos, pos));
+export const NilToken = (pos: number, text: string = "") => Token(TokenType.NIL, text, new SourceRange(pos, pos));
 
 export const enum ScannerMode { tag, script, allow_both }
