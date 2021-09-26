@@ -36,8 +36,10 @@ export function FileSystem() : FileSystem {
     }
 }
 
+const nativeSepPattern = /[\\/]/g;
 export function DebugFileSystem(files: [absPath: string, text: string][], pathSepOfDebugFs: string) : FileSystem {
     const fmap = new Map(files.map(([absPath, text]) => [absPath, Buffer.from(text, "utf-8")]));
+
     return {
         readFileSync: (path: string) => {
             const file = fmap.get(path);
@@ -48,7 +50,7 @@ export function DebugFileSystem(files: [absPath: string, text: string][], pathSe
         join: (...args: string[]) => {
             // join using path.join, then replace the platform pathSep with the debug path sep
             const t = path.join(...args);
-            return t.replace(path.sep, pathSepOfDebugFs);
+            return t.replace(nativeSepPattern, pathSepOfDebugFs);
         },
         pathSep: pathSepOfDebugFs
     }
@@ -110,15 +112,18 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
         
         maybeFollowParentComponents(sourceFile);
 
-        const checkStart = new Date().getTime();
-        checker.check(sourceFile);
-        const checkElapsed = new Date().getTime() - checkStart;
-
+        // do before checking so resolving a self-referential cfc in the checker works
+        // e.g. in foo.cfc `public foo function bar() { return this; }`
         files.set(sourceFile.absPath, {
             parsedSourceFile: sourceFile,
             flatTree: flattenTree(sourceFile),
             nodeMap
         });
+
+        const checkStart = new Date().getTime();
+        checker.check(sourceFile);
+        const checkElapsed = new Date().getTime() - checkStart;
+
 
         return { parse: parseElapsed, bind: bindElapsed, check: checkElapsed };
     }
@@ -193,19 +198,26 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
         });
     }
 
+    // this assumes work has already been done to load the parent file
     function tryGetParentComponent(sourceFile: SourceFile) : CachedFile | undefined {
         if (sourceFile.cfFileType !== CfFileType.cfc) return undefined;
         const heritageInfo = getExtendsSpecifier(sourceFile);
         if (!heritageInfo) return undefined;
         const {extendsSpecifier, extendsAttr} = heritageInfo;
         if (!extendsSpecifier) return undefined;
-        if (extendsSpecifier.path === sourceFile.absPath) {
+        const noSelfExtendsSpecifier = extendsSpecifier.filter(specifier => specifier.path !== sourceFile.absPath);
+        if (extendsSpecifier.length !== noSelfExtendsSpecifier.length && noSelfExtendsSpecifier.length === 0) {
             errorAtNode(sourceFile, extendsAttr, "A component may not extend itself.");
             return undefined;
         }
-        const cachedParent = getCachedFile(extendsSpecifier.path);
-        if (cachedParent) return cachedParent;
-        else return tryAddFile(extendsSpecifier.path);
+
+        let result : CachedFile | undefined = undefined;
+        for (const specifier of noSelfExtendsSpecifier) {
+            result = getCachedFile(specifier.path) ?? tryAddFile(specifier.path);
+            if (result) break;
+        }
+
+        return result;
     }
 
     function getExtendsSpecifier(sourceFile: SourceFile) {
@@ -243,10 +255,17 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
     }
 
     function CfcResolver(args: {resolveFrom: string, cfcName: string}) {
-        const specifier = getCfcSpecifier(absRoots, args.resolveFrom, args.cfcName);
-        if (!specifier) return undefined;
-        const file = getCachedFile(specifier.path)?.parsedSourceFile;
-        return file?.containedScope.this || undefined;
+        const specifiers = getCfcSpecifier(absRoots, args.resolveFrom, args.cfcName);
+        if (!specifiers) return undefined;
+        for (const specifier of specifiers) {
+            const file = getCachedFile(specifier.path)?.parsedSourceFile;
+            if (file && file.containedScope.this) return {
+                sourceFile: file,
+                symbolTable: file.containedScope.this
+            }
+        }
+
+        return undefined;
     }
 
     function getNodeToLeftOfCursor(absPath: string, targetIndex: number) : Node | undefined {
@@ -272,7 +291,7 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
         return getCachedFile(absPath)?.parsedSourceFile || undefined;
     }
 
-    function getCfcSpecifier(absRoots: string[], resolveFrom: string, possiblyUnqualifiedCfc: string) : ComponentSpecifier | undefined {
+    function getCfcSpecifier(absRoots: string[], resolveFrom: string, possiblyUnqualifiedCfc: string) : ComponentSpecifier[] | undefined {
         const isUnqualified = !/\./.test(possiblyUnqualifiedCfc);
         for (const root of absRoots) {
             const base = path.parse(root).base; // Z in X/Y/Z, assuming Z is some root we're interested in
@@ -283,11 +302,19 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
             if (isUnqualified) {
                 if (resolveFrom.startsWith(root)) {
                     const cfcName = [base, ...dir.split(fileSystem.pathSep), possiblyUnqualifiedCfc].filter(e => e !== "").join("."); // filter out possibly empty base and dirs; e.g. root is '/' so path.parse(root).base is ''
-                    return {
-                        canonicalName: cfcName.toLowerCase(),
-                        uiName: cfcName,
-                        path: fileSystem.join(root, dir, possiblyUnqualifiedCfc + ".cfc")
-                    }
+                    const xname = [base, possiblyUnqualifiedCfc].filter(e => e !== "").join(".");
+                    return [
+                        {
+                            canonicalName: cfcName.toLowerCase(),
+                            uiName: cfcName,
+                            path: fileSystem.join(root, dir, possiblyUnqualifiedCfc + ".cfc")
+                        },
+                        {
+                            canonicalName: xname.toLowerCase(),
+                            uiName: xname,
+                            path: fileSystem.join(root, possiblyUnqualifiedCfc + ".cfc")
+                        },
+                    ];
                 }
             }
             else {
@@ -298,11 +325,11 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
                 if (!canonicalCfcName.startsWith(canonicalBase)) continue;
                 const cfcAsPathElidedBase = possiblyUnqualifiedCfc.split(".").slice(1);
                 if (cfcAsPathElidedBase.length > 0) cfcAsPathElidedBase[cfcAsPathElidedBase.length - 1] = cfcAsPathElidedBase[cfcAsPathElidedBase.length - 1] + ".cfc";
-                return {
+                return [{
                     canonicalName: canonicalCfcName,
                     uiName: possiblyUnqualifiedCfc,
                     path: fileSystem.join(root, ...cfcAsPathElidedBase)
-                }
+                }]
             }
         }
         return undefined;
@@ -328,7 +355,7 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
 }
 
 export type Project = ReturnType<typeof Project>;
-export type CfcResolver = (args: {resolveFrom: string, cfcName: string}) => ReadonlyMap<string, SymTabEntry> | undefined;
+export type CfcResolver = (args: {resolveFrom: string, cfcName: string}) => {sourceFile: SourceFile, symbolTable: ReadonlyMap<string, SymTabEntry>} | undefined;
 export type EngineSymbolResolver = (name: string) => SymTabEntry | undefined;
 
 export interface ComponentSpecifier {

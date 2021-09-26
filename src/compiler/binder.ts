@@ -1,4 +1,4 @@
-import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, ConditionalSubtype, SymTab, TypeShim, Property, ParamStatement, ParamStatementSubType, ScopeDisplay } from "./node";
+import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, ConditionalSubtype, SymbolTable, TypeShim, Property, ParamStatement, ParamStatementSubType, ScopeDisplay } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { SyntheticType, _Type, extractCfFunctionSignature, isFunctionSignature } from "./types";
@@ -17,7 +17,7 @@ export function Binder() {
     let nodeMap = new Map<NodeId, Node>();
     let withPropertyAccessors = false;
 
-    let pendingSymbolResolutionStack : Map<string, Set<SymTab>>[] = [];
+    let pendingSymbolResolutionStack : Map<string, Set<SymbolTable>>[] = [];
 
     function bind(sourceFile_: SourceFile) {
         if (sourceFile_.cfFileType === CfFileType.dCfm) {
@@ -407,7 +407,7 @@ export function Binder() {
         }
     }
 
-    function addExistingSymbolToTable(table: SymTab, entry: SymTabEntry) {
+    function addExistingSymbolToTable(table: SymbolTable, entry: SymTabEntry) {
         table.set(entry.canonicalName, entry);
     }
 
@@ -416,7 +416,7 @@ export function Binder() {
         else table.declarations = [node];
     }
 
-    function addFreshSymbolToTable(symTab: SymTab, uiName: string, declaringNode: Node, type: _Type | null = null, declaredType?: _Type | null) : SymTabEntry {
+    function addFreshSymbolToTable(symTab: SymbolTable, uiName: string, declaringNode: Node, type: _Type | null = null, declaredType?: _Type | null) : SymTabEntry {
         const canonicalName = uiName.toLowerCase();
         let symTabEntry : SymTabEntry;
 
@@ -498,7 +498,7 @@ export function Binder() {
         const [uiPath, canonicalPath] = [identifierBaseName.ui.split("."), identifierBaseName.canonical.split(".")];
 
         if (isStaticallyKnownScopeName(canonicalPath[0]) && canonicalPath.length === 2) {
-            let targetScope : SymTab | undefined = undefined;
+            let targetScope : SymbolTable | undefined = undefined;
             if (canonicalPath[0] === "local") {
                 targetScope = currentContainer.containedScope.local;
             }
@@ -720,7 +720,7 @@ export function Binder() {
         // unqualified result names (i.e. no dots in the name) get written to the transient scope if we are in a container with a transient scope (i.e. a function)
         // otherwise, it goes straight into the root variables scope
         // we do not push a symbol resolution for the __transient in this case; this is an assignment to a var that will be in play for the remainder of the function
-        let targetScope : SymTab = currentContainer.containedScope.__transient ?? RootNode.containedScope.variables!;
+        let targetScope : SymbolTable = currentContainer.containedScope.__transient ?? RootNode.containedScope.variables!;
         let targetName = name.length === 1 ? name[0] : name[1];
 
         if (name.length === 2) {
@@ -978,6 +978,7 @@ export function Binder() {
         }
     }
 
+    // fixme: make more explicit that we grab signatures here for cfc member functions
     function bindFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {
         const signature = extractCfFunctionSignature(node);
         if (isHoistableFunctionDefinition(node) && typeof node.canonicalName === "string") {
@@ -997,7 +998,7 @@ export function Binder() {
                 // }
             }
 
-            let scopeTargets : SymTab[];
+            let scopeTargets : SymbolTable[];
 
             if (currentContainer.containedScope.local) { // it's only callable from local, but in ACF the name is taken globally
                 scopeTargets = [currentContainer.containedScope.local];

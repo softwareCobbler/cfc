@@ -4,7 +4,7 @@ import { Parser, Binder, CfFileType, SourceFile, NilCfm, flattenTree, NilCfc, De
 import { IndexedAccess, NodeKind } from "../src/compiler/node";
 import { findNodeInFlatSourceMap, getTriviallyComputableString } from "../src/compiler/utils";
 import * as TestLoader from "./TestLoader";
-import { getCompletions } from "../src/services/completions";
+import { CompletionItem, getCompletions } from "../src/services/completions";
 import { LanguageVersion } from "../src/compiler/project";
 
 const parser = Parser({language: LanguageVersion.acf2018}).setDebug(true);
@@ -434,4 +434,47 @@ describe("general smoke test for particular constructs", () => {
 
         assert.strictEqual(diagnostics.length, 0);
     });
+    it("Should offer completions for methods in parent components", () => {
+        const files = TestLoader.loadMultiFileTest("./test/sourcefiles/returntypeCompletions.cfm");
+        const fileSys : [string, string][] = [];
+
+        // for the completions tests, we want to strip the completions marker before adding it to the compiler host
+        const testTargets = {
+            ...(() => {
+                const name = "/foo/Child.cfc";
+                const completionsAt = TestLoader.loadCompletionAtTestFromSource(files[name]);
+                const check = (completions: CompletionItem[]) => {
+                    assert.strictEqual(completions.length, 1, "got exactly 1 completion");
+                    assert.strictEqual(completions[0].label, "someRootSiblingMethod");            
+                }
+                return {[name]: {...completionsAt, check}};
+            })(),
+            ...(() => {
+                const name = "/foo/Impl.cfm";
+                const completionsAt = TestLoader.loadCompletionAtTestFromSource(files[name]);
+                const check = (completions: CompletionItem[]) => {
+                    assert.strictEqual(completions.length, 3, "got exactly 3 completions");
+                    const justNames = completions.map(completion => completion.label);
+                    for (const name of ["shouldReturnRootSibling", "someChildMethod", "someBaseMethod"]) {
+                        assert.deepStrictEqual(justNames.includes(name), true, `includes a completion for '${name}'`);
+                    }
+                }
+                return {[name]: {...completionsAt, check}};
+            })()
+        };
+
+        for (const absPath of Object.keys(files)) {
+            if (testTargets.hasOwnProperty(absPath)) fileSys.push([absPath, testTargets[absPath as keyof typeof testTargets].sourceText]);
+            else fileSys.push([absPath, files[absPath]]);
+        }
+
+        const debugFs = DebugFileSystem(fileSys, "/");
+        const project = Project(["/"], /*filesystem*/debugFs, {debug: true, parseTypes: true, language: LanguageVersion.acf2018});
+        for (const [absPath, _] of fileSys) project.addFile(absPath);
+
+        for (const absPath of Object.keys(testTargets) as (keyof typeof testTargets)[]) {
+            const completions = getCompletions(project, absPath, testTargets[absPath].index, ".");
+            testTargets[absPath].check(completions);
+        }
+    })
 });

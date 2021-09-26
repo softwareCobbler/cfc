@@ -1,10 +1,10 @@
 // fixme - use non-relative paths, which requires we get ts-node to resolve the paths during testing
 // we can get it to compile with tsc with non-relative paths, but loading it during testing does not work
 import { Project } from "../compiler/project"
-import { Node, NodeKind, CallExpression, CfTag, StaticallyKnownScopeName } from "../compiler/node"
+import { Node, NodeKind, CallExpression, CfTag, StaticallyKnownScopeName, SymbolTable, SymTabEntry } from "../compiler/node"
 import { CfFileType, TokenType } from "../compiler/scanner";
-import { isCfc, isFunctionSignature, isStruct } from "../compiler/types";
-import { isExpressionContext, isCfScriptTagBlock, stringifyCallExprArgName, getSourceFile } from "../compiler/utils";
+import { cfStruct, isFunctionSignature, isStruct, TypeFlags, _Type } from "../compiler/types";
+import { isExpressionContext, isCfScriptTagBlock, stringifyCallExprArgName, getSourceFile, cfcIsDescendantOf, isPublicMethod } from "../compiler/utils";
 import { tagNames } from "./tagnames";
 
 export const enum CompletionItemKind {
@@ -27,7 +27,7 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
 
     const parsedSourceFile = project.getParsedSourceFile(fsPath);
     const checker = project.__unsafe_dev_getChecker();
-    const node = project.getNodeToLeftOfCursor(fsPath, targetIndex);
+    const node = project.getNodeToLeftOfCursor(fsPath, targetIndex); // fixme: probably generally want "getInterestingNodeLeftOfCursor" to not grab terminals, but all the ".parent.parent..." chains would have to be fixed up
 
     if (!parsedSourceFile || !node) return [];
 
@@ -87,16 +87,6 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
     
     const result : CompletionItem[] = [];
 
-    // things that are always visible, but with low priority in relation to the user's identifiers
-    // probably better to bind these as identifiers in the appropriate symbol tables
-    if (getSourceFile(node)?.cfFileType === CfFileType.cfc) {
-        result.push({label: "this", kind: CompletionItemKind.variable, sortText: "z"});
-    }
-    result.push({label: "variables", kind: CompletionItemKind.variable, sortText: "z"});
-    result.push({label: "url", kind: CompletionItemKind.variable, sortText: "z"});
-    result.push({label: "request", kind: CompletionItemKind.variable, sortText: "z"});
-    result.push({label: "cgi", kind: CompletionItemKind.variable, sortText: "z"});
-
     // `foo(bar = baz, |)`
     // `foo(b|`
     // `foo( |)`
@@ -128,12 +118,32 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
         // get the type one level before the current
         // x.y| -- we want the type of `x` for completions, not `y`
 
-        const typeinfo = project.__unsafe_dev_getChecker().getCachedEvaluatedNodeType(node.parent.parent, parsedSourceFile);
+        // fixme: unify "type" vs. "SymbolTable" disparity, we have symbol tables pretending to be structs for typechecking purposes but is that necessary? or can everything be a struct or ... ?
+        let typeinfo : _Type | SymbolTable | undefined = project.__unsafe_dev_getChecker().getCachedEvaluatedNodeType(node.parent.parent, parsedSourceFile);
+        
+        // the first symbol table we get is a cfStruct or null; after that, we will start getting actual symbol tables
+        // we can check the first cfstruct we get for "cfc-ness"
+        const forCfcCompletions = typeinfo ? !!((typeinfo as cfStruct).flags & TypeFlags.cfc) : false;
+        const sourceFileIsCfcDescendantOfSymbolTableFile = typeinfo.cfc ? cfcIsDescendantOf(typeinfo.cfc, parsedSourceFile) : false;
+
+        let workingSourceFile = typeinfo.cfc ?? parsedSourceFile;
         const result : CompletionItem[] = [];
 
-        if (isStruct(typeinfo)) {
-            for (const symTabEntry of typeinfo.members.values()) {
-                if (symTabEntry.canonicalName === "init" && isCfc(typeinfo)) { continue };
+        while (typeinfo) {
+            let underlyingMembers : ReadonlyMap<string, SymTabEntry>;
+            if (typeinfo instanceof Map) {
+                underlyingMembers = typeinfo;
+            }
+            else if (isStruct(typeinfo)) {
+                underlyingMembers = typeinfo.members;
+            }
+            else {
+                break; // unreachable
+            }
+
+            for (const symTabEntry of underlyingMembers.values()) {
+                if (symTabEntry.canonicalName === "init" && forCfcCompletions) { continue };
+                if (forCfcCompletions && isFunctionSignature(symTabEntry.type) && !isPublicMethod(symTabEntry.type) && !sourceFileIsCfcDescendantOfSymbolTableFile) { continue; }
                 result.push({
                     label: symTabEntry.uiName,
                     kind: isFunctionSignature(symTabEntry.type)
@@ -142,10 +152,29 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
                     detail: ""
                 })
             }
+
+            // if our first symbol was for a cfc exported/public symbol, then we can climb the hierarchy and offer public members of parent components, too
+            if (forCfcCompletions && workingSourceFile.cfc?.extends) {
+                workingSourceFile = workingSourceFile.cfc.extends;
+                typeinfo = workingSourceFile.containedScope.this; // the first typeinfo was guaranteed to be a `cfStruct`; from here and for every subsequent iteration, we get a SymbolTable instaed
+            }
+            else {
+                break;
+            }
         }
 
         return result;
     }
+
+    // things that are always visible, but with low priority in relation to the user's identifiers
+    // probably better to bind these as identifiers in the appropriate symbol tables
+    if (getSourceFile(node)?.cfFileType === CfFileType.cfc) {
+        result.push({label: "this", kind: CompletionItemKind.variable, sortText: "z"});
+    }
+    result.push({label: "variables", kind: CompletionItemKind.variable, sortText: "z"});
+    result.push({label: "url", kind: CompletionItemKind.variable, sortText: "z"});
+    result.push({label: "request", kind: CompletionItemKind.variable, sortText: "z"});
+    result.push({label: "cgi", kind: CompletionItemKind.variable, sortText: "z"});
 
     // we're in a primary expression context, where we need to do symbol lookup in all visible scopes
     // e.g,. `x = | + y`
@@ -166,7 +195,12 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
                 }
                 scopeDistance++;
             }
-            node = node.containedScope?.container || node.parent;
+
+            // if we're at the root of a sourcefile, try to climb into the parent CFC if it exists
+            // otherwise, climb to ancestor container or direct parent node
+            node = (node.kind === NodeKind.sourceFile && node.cfc?.extends)
+                ? node.cfc.extends
+                : node.containedScope?.container || node.parent;
         }
         return result;
     })(node);

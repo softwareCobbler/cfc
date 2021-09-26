@@ -149,7 +149,7 @@ export interface SymTabEntry {
     declaredType?: _Type | null,
 }
 
-export type SymTab = Map<string, SymTabEntry>;
+export type SymbolTable = Map<string, SymTabEntry>;
 
 export type ScopeDisplay = {
     container: Node | null, // rename to parentContainer
@@ -194,7 +194,7 @@ export type NodeId = number;
 export type TypeId = number;
 export type FlowId = number;
 export type IdentifierId = number;
-export type NodeWithScope<N extends Node = Node, T extends (StaticallyKnownScopeName | never) = never> = N & {containedScope: ScopeDisplay & {[k in T]: SymTab}};
+export type NodeWithScope<N extends Node = Node, T extends (StaticallyKnownScopeName | never) = never> = N & {containedScope: ScopeDisplay & {[k in T]: SymbolTable}};
 
 export const enum FlowType {
     default,

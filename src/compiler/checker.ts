@@ -2,7 +2,7 @@ import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, State
 import { CfcResolver, EngineSymbolResolver, LanguageVersion } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfStruct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStruct, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType, stringifyType, cfFunctionSignatureParam } from "./types";
-import { exhaustiveCaseGuard, getAttributeValue, getContainingFunction, getSourceFile, getTriviallyComputableString, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
+import { exhaustiveCaseGuard, getAttributeValue, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionReturnsLiteral, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol } from "./utils";
 
 type CanonicalSymbolName = string;
@@ -13,7 +13,7 @@ export function Checker() {
     let scanner!: Scanner;
     let diagnostics!: Diagnostic[];
     let noUndefinedVars = false;
-    const structViewCache = new Map<SymbolTable, cfStruct>();
+    const structViewCache = new Map<SymbolTable, cfStruct>(); // fixme: weakmap? when a sourcefile gets re-init'd it would be nice to clear this automagically
     let languageVersion!: LanguageVersion;
 
     function check(sourceFile_: SourceFile) {
@@ -22,13 +22,11 @@ export function Checker() {
         diagnostics = sourceFile.diagnostics;
         structViewCache.clear();
 
-        if (sourceFile.cfFileType === CfFileType.cfc) {
-            installHeritage();
-        }
-
         checkListFunctionsLast(sourceFile.content);
     }
 
+    /*
+    rmme
     function installHeritage() {
         if (!sourceFile.containedScope.this) return; // n.b. CFCs should always have a `this` scope installed during binding
         let ancestor = sourceFile.cfc?.extends;
@@ -49,6 +47,7 @@ export function Checker() {
             ancestor = ancestor.cfc?.extends;
         }
     }
+    */
 
     function setNoUndefinedVars(newVal: boolean) : void {
         noUndefinedVars = newVal;
@@ -1117,11 +1116,12 @@ export function Checker() {
         
     }
 
-    function structViewOfCfc(scopeContents: SymbolTable) : cfStruct {
+    function structViewOfCfc(scopeContents: SymbolTable, cfc: SourceFile) : cfStruct {
         const type = structViewOfScope(scopeContents);
         
         // @unsafe
         (type.flags as Mutable<TypeFlags>) |= TypeFlags.cfc;
+        (type as Mutable<_Type>).cfc = cfc;
 
         return type;
     }
@@ -1314,10 +1314,36 @@ export function Checker() {
         }
     }
 
-    function checkFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {
-        const cfSyntaxDirectedTypeSig = extractCfFunctionSignature(node);
-        let finalType = cfSyntaxDirectedTypeSig;
+    
 
+    function checkFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {
+        // for cfc member functions, some work was already done in the binder to extract the signature, but we didn't have visibility into CFC resolution there;
+        // so here we can try to resolve CFC return types / param types
+
+        const isMemberFunction = isCfcMemberFunctionDefinition(node);
+        let memberFunctionSignature : cfFunctionSignature | undefined;
+        
+        if (isMemberFunction) {
+            if (node.kind === NodeKind.functionDefinition && node.canonicalName) {
+                const symbol = walkupScopesToResolveSymbol(sourceFile, (node as any).canonicalName);
+                if (symbol?.symTabEntry.type && isFunctionSignature(symbol.symTabEntry.type)) {
+                    memberFunctionSignature = symbol.symTabEntry.type;
+                    if (memberFunctionSignature.returns === SyntheticType.any) { // we got any as a returntype; user may have explicitly said "any", or we may have gotten something we didn't understand in the binder
+                        const returnTypeLiteral = getFunctionDefinitionReturnsLiteral(node);
+                        if (returnTypeLiteral && returnTypeLiteral.canonical !== "any") { // fixme: if (returnTypeLiteral && !isBuiltinType) so we don't try to lookup "string" as a cfc or etc.
+                            const cfc = cfcResolver({resolveFrom: sourceFile.absPath, cfcName: returnTypeLiteral.ui});
+                            if (cfc) {
+                                memberFunctionSignature.returns = structViewOfCfc(cfc.symbolTable, cfc.sourceFile);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        const cfSyntaxDirectedTypeSig = memberFunctionSignature ?? extractCfFunctionSignature(node);
+        let finalType = cfSyntaxDirectedTypeSig;
+        
         // if (node.kind === NodeKind.functionDefinition && node.canonicalName) {
         //     const engineSymbol = engineSymbolResolver(node.canonicalName);
         //     if (engineSymbol && isFunctionSignature(engineSymbol.type)) {
@@ -1348,6 +1374,20 @@ export function Checker() {
             else if (!(evaluatedType.flags & TypeFlags.any)) {
                 typeErrorAtNode(node, `Expected a function signature as an annotated type, but got type '${stringifyType(evaluatedType)}'.`)
             }
+        }
+
+        // put access modifiers on the type signature for cfc member functions
+        if (node.kind === NodeKind.functionDefinition && isMemberFunction) {
+            const accessModifier = getFunctionDefinitionAccessLiteral(node);
+            let accessModifierFlag : TypeFlags = 0;
+            switch (accessModifier) {
+                case "remote":    accessModifierFlag = TypeFlags.remote;    break;
+                case "public":    accessModifierFlag = TypeFlags.public;    break;
+                case "protected": accessModifierFlag = TypeFlags.protected; break;
+                case "private":   accessModifierFlag = TypeFlags.private;   break;
+                default: exhaustiveCaseGuard(accessModifier);
+            }
+            (finalType as Mutable<_Type>).flags |= accessModifierFlag;
         }
 
         setCachedEvaluatedNodeType(node, finalType);
@@ -1540,7 +1580,7 @@ export function Checker() {
         const cfcName = stringifyDottedPath(node.callExpr.left).ui;
         const cfc = cfcResolver({resolveFrom: sourceFile.absPath, cfcName: cfcName});
         if (!cfc) return;
-        const cfcThis = structViewOfCfc(cfc);
+        const cfcThis = structViewOfCfc(cfc.symbolTable, cfc.sourceFile);
         setCachedEvaluatedNodeType(node, cfcThis);
         
         const initSig = cfcThis.members.get("init");
@@ -1577,7 +1617,7 @@ export function Checker() {
     }
 
     let cfcResolver! : CfcResolver;
-    let walkupScopesToResolveSymbol! : (a: Node, b: string) => SymbolResolution | undefined;
+    let walkupScopesToResolveSymbol! : (base: Node, canonicalName: string) => SymbolResolution | undefined;
     function install(installables: Partial<CheckerInstallable>) {
         for (const key of Object.keys(installables) as (keyof CheckerInstallable)[]) {
             switch (key) {

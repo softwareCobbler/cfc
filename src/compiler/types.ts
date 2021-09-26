@@ -1,4 +1,4 @@
-import { ArrowFunctionDefinition, CfTag, DottedPath, FunctionDefinition, NodeKind, Script, SymTabEntry, Tag, TagAttribute, } from "./node";
+import { ArrowFunctionDefinition, CfTag, DottedPath, FunctionDefinition, NodeKind, Script, SourceFile, SymTabEntry, Tag, TagAttribute, } from "./node";
 import { getAttributeValue, getTriviallyComputableString, Mutable } from "./utils";
 
 let debugTypeModule = true;
@@ -6,36 +6,49 @@ debugTypeModule;
 
 export const enum TypeFlags {
     none                            = 0,
-    any                             = 1 << 0,
-    void                            = 1 << 1,
-    string                          = 1 << 2,
-    numeric                          = 1 << 3,
-    boolean                         = 1 << 4,
-    nil                             = 1 << 5,
-    never                           = 1 << 6,
-    array                           = 1 << 7,
-    tuple                           = 1 << 8,
-    struct                          = 1 << 9,
-    union                           = 1 << 10,
-    intersection                    = 1 << 11,
-    functionSignature               = 1 << 12,
-    functionSignatureParam          = 1 << 13,
-    typeConstructor                 = 1 << 14,
-    typeConstructorInvocation       = 1 << 15,
-    cachedTypeConstructorInvocation = 1 << 16,
-    typeConstructorParam            = 1 << 17,
-    typeId                          = 1 << 18,
-    final                           = 1 << 19,
-    synthetic                       = 1 << 20,
-    containsUndefined               = 1 << 21,
-    optional                        = 1 << 22,
-    spread                          = 1 << 23,
-    mappedType                      = 1 << 24,
-    indexedType                     = 1 << 25,
-    cfc                             = 1 << 26,
-    derived                         = 1 << 27,
+    any                             = 0x00000001,
+    void                            = 0x00000002,
+    string                          = 0x00000004,
+    numeric                         = 0x00000008,
+    boolean                         = 0x00000010,
+    nil                             = 0x00000020,
+    never                           = 0x00000040,
+    array                           = 0x00000080,
+    tuple                           = 0x00000100,
+    struct                          = 0x00000200,
+    union                           = 0x00000400,
+    intersection                    = 0x00000800,
+    functionSignature               = 0x00001000,
+    functionSignatureParam          = 0x00002000,
+    typeConstructor                 = 0x00004000,
+    typeConstructorInvocation       = 0x00008000,
+    cachedTypeConstructorInvocation = 0x00010000,
+    typeConstructorParam            = 0x00020000,
+    typeId                          = 0x00040000,
+    final                           = 0x00080000,
+    synthetic                       = 0x00100000,
+    containsUndefined               = 0x00200000,
+    optional                        = 0x00400000,
+    spread                          = 0x00800000,
+    mappedType                      = 0x01000000,
+    indexedType                     = 0x02000000,
+    cfc                             = 0x04000000,
+    derived                         = 0x08000000,
+    remote                          = 0x10000000,
+    public                          = 0x20000000,
+    protected                       = 0x40000000,
+    private                         = 0x80000000,
     end
 }
+
+// workaround for bitshift operator being 32-bit
+const powersOf2 = (() => {
+    const result : number[] = [ /* 1, 2, 4, 8, ...*/ ];
+    for (let i = 0; i < 53; i++) { // 2**53 > Number.MAX_SAFE_INTEGER
+        result.push(2 ** i);
+    }
+    return result;
+})();
 
 const TypeKindUiString : Record<TypeFlags, string> = {
     [TypeFlags.none]:                            "none",
@@ -67,15 +80,23 @@ const TypeKindUiString : Record<TypeFlags, string> = {
     [TypeFlags.indexedType]:                     "indexed-type",
     [TypeFlags.cfc]:                             "cfc",
     [TypeFlags.derived]:                         "derived",
+
+    // access modifiers for cfc member functions
+    [TypeFlags.remote]:                          "remote",
+    [TypeFlags.public]:                          "public",
+    [TypeFlags.protected]:                       "protected",
+    [TypeFlags.private]:                         "private",
+
+    [TypeFlags.end]:                             "<<end-sentinel>>",
 };
 
 function addDebugTypeInfo(type: _Type) {
     Object.defineProperty(type, "__debugTypeInfo", {
         get() {
             const result : string[] = [];
-            for (let i = 0; (1 << i) < TypeFlags.end; i++) {
-                if (type.flags & (1 << i)) {
-                    result.push(TypeKindUiString[1 << i]);
+            for (let i = 0; powersOf2[i] && powersOf2[i] < TypeFlags.end; i++) {
+                if (type.flags & powersOf2[i]) {
+                    result.push(TypeKindUiString[powersOf2[i] as TypeFlags]);
                 }
             }
             return result.join(",");
@@ -88,6 +109,7 @@ export interface _Type {
     readonly name?: string,
     readonly canonicalType?: _Type,
     readonly types?: _Type[],
+    readonly cfc?: SourceFile, // kludge for connecting a cfstruct that represents a cfc to its cfc
 }
 
 export function getCanonicalType(type: _Type) {
@@ -633,7 +655,10 @@ function extractTagFunctionParams(params: readonly Tag.FunctionParameter[]) : cf
     return result;
 }
 
-export function stringifyType(type: _Type) : string {
+export function stringifyType(_type: _Type, _depth = 0) : string {
+    return "x";
+    /*
+    if (depth > 2) return "<<TYPE-TOO-DEEP>>";
     if (type.flags & TypeFlags.any) return "any";
     if (type.flags & TypeFlags.void) return "void";
     if (type.flags & TypeFlags.numeric) return "numeric";
@@ -642,29 +667,30 @@ export function stringifyType(type: _Type) : string {
     if (isStruct(type)) {
         const builder = [];
         for (const [propName, {type: memberType}] of type.members) {
-            builder.push(propName + ": " + stringifyType(memberType));
+            builder.push(propName + ": " + stringifyType(memberType, depth+1));
         }
         const result = builder.join(", ");
         return "{" + result + "}";
     }
     if (isArray(type)) {
-        return stringifyType(type.memberType) + "[]";
+        return stringifyType(type.memberType, depth+1) + "[]";
     }
     if (isUnion(type) || isIntersection(type)) {
         const joiner = isUnion(type) ? " | " : " & ";
-        const result = type.types.map(memberType => stringifyType(memberType)).join(joiner);
+        const result = type.types.map(memberType => stringifyType(memberType, depth+1)).join(joiner);
         return result;
     }
     if (isFunctionSignature(type)) {
         const params = [];
         for (const param of type.params) {
-            params.push(stringifyType(param));
+            params.push(stringifyType(param, depth+1));
         }
-        return "(" + params.join(", ") + ")" + " => " + stringifyType(type.returns);
+        return "(" + params.join(", ") + ")" + " => " + stringifyType(type.returns, depth+1);
     }
     if (isFunctionSignatureParam(type)) {
-        return (!(type.flags & TypeFlags.optional) ? "required " : "") + type.uiName + ": " + (type.flags & TypeFlags.spread ? "..." : "") + stringifyType(type.type);
+        return (!(type.flags & TypeFlags.optional) ? "required " : "") + type.uiName + ": " + (type.flags & TypeFlags.spread ? "..." : "") + stringifyType(type.type, depth+1);
     }
 
     return "<<type>>";
+    */
 }

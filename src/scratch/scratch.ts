@@ -12,18 +12,31 @@ import * as fs from "fs";
 import * as path from "path";
 
 function projectFiddle() {
-    const fname = "a.cfc";
     const debugfs = DebugFileSystem([
-        [fname, `
+        ["/base.cfc", `
             component {
-                x = [
-                    "getTransactionDetailsRequest" = [
-                        "merchantAuthentication" = getMerchantAuthenticationBlock(),
-                        "transId" = arguments.gatewayTransactionID
-                    ]
-                ];
+                public base function identity() {
+                    return this;
+                }
+
+                public function foo() {
+
+                }
+
+                private function bar() {
+
+                }
             }
         `],
+        [
+            "/foo/leaf.cfc", `
+                component extends="base" {
+                    function foo() {
+                        identity().foo();
+                    }
+                }
+            `
+        ],
         //["/b.cfc", `component { function foo() {} }`],
         //["/lib.d.cfm", "@declare function foo(arg0: number[]) : string"]
     ], "/");
@@ -33,11 +46,10 @@ function projectFiddle() {
     //const target = path.join(path.resolve("./test/"), "mxunit/framework/javaloader/JavaProxy.cfc");
     //project.addFile(target);
 
-    const a = project.addFile(fname);
-    //const b = project.addFile("/b.cfc");
-    //const c = project.addFile("/lib.d.cfm");
+    const a = project.addFile("/base.cfc");
+    const b = project.addFile("/foo/leaf.cfc");
 
-    const diagnostics = project.getDiagnostics(fname);
+    const diagnostics = project.getDiagnostics("/base.cfc");
 
     for (const diagnostic of diagnostics) {
         console.log(diagnostic);

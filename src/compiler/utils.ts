@@ -1,9 +1,9 @@
 import * as path from "path";
 import * as fs from "fs";
-import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CfTag, DottedPath, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, isStaticallyKnownScopeName, Node, NodeFlags, NodeId, ParamStatementSubType, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymbolResolution, SymTab, SymTabResolution, TagAttribute, UnaryOperatorPos } from "./node";
+import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CfTag, DottedPath, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, isStaticallyKnownScopeName, Node, NodeFlags, NodeId, ParamStatementSubType, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymbolResolution, SymbolTable, SymTabResolution, TagAttribute, UnaryOperatorPos } from "./node";
 import { NodeKind } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
-import { cfFunctionSignature, isStruct } from "./types";
+import { cfFunctionSignature, isStruct, TypeFlags } from "./types";
 import { EngineSymbolResolver } from "./project";
 
 const enum TagFact {
@@ -827,7 +827,7 @@ export function isCfScriptTagBlock(node: Node | null) : boolean {
     return false;
 }
 
-export function getNearestEnclosingScope(node: Node, scopeName: StaticallyKnownScopeName) : SymTab | undefined {
+export function getNearestEnclosingScope(node: Node, scopeName: StaticallyKnownScopeName) : SymbolTable | undefined {
     while (true) {
         // scope on this node contains the target scope
         if (node.containedScope?.[scopeName]) {
@@ -897,6 +897,10 @@ export class BiMap<K,V> {
  * if predicate returns "bail", return undefined
  */
 export function findAncestor(node: Node, predicate: (node: Node) => true | false | "bail") : Node | undefined {
+    return node.parent ? findSelfOrAncestor(node.parent, predicate) : undefined;
+}
+
+export function findSelfOrAncestor(node: Node, predicate: (node: Node) => true | false | "bail") : Node | undefined {
     let current : Node | null = node;
     while (current) {
         const result = predicate(current);
@@ -914,7 +918,13 @@ export function findAncestor(node: Node, predicate: (node: Node) => true | false
 }
 
 export function getContainingFunction(node: Node) : FunctionDefinition | ArrowFunctionDefinition | undefined {
-    return findAncestor(node, (node) => !!node && (node.kind === NodeKind.functionDefinition || node.kind === NodeKind.arrowFunctionDefinition)) as FunctionDefinition | ArrowFunctionDefinition;
+    return findAncestor(node, (node) => node.kind === NodeKind.functionDefinition || node.kind === NodeKind.arrowFunctionDefinition) as FunctionDefinition | ArrowFunctionDefinition;
+}
+
+export function isCfcMemberFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) : boolean {
+    if (node.kind === NodeKind.arrowFunctionDefinition) return false;
+    return !getContainingFunction(node) // there is no outer function
+        && getSourceFile(node)?.cfFileType === CfFileType.cfc; // and the file type is a cfc
 }
 
 export function getNodeLinks(node: Node) {
@@ -922,7 +932,7 @@ export function getNodeLinks(node: Node) {
 }
 
 export function getSourceFile(node: Node) : SourceFile | undefined {
-    return findAncestor(node, (node) => node?.kind === NodeKind.sourceFile) as SourceFile | undefined;
+    return findSelfOrAncestor(node, (node) => node.kind === NodeKind.sourceFile) as SourceFile | undefined;
 }
 
 export function getNearestConstruct(node: Node) : Node | undefined {
@@ -935,17 +945,16 @@ export function getNearestConstruct(node: Node) : Node | undefined {
 
 export function isInCfcPsuedoConstructor(node: Node) : boolean {
     return !!findAncestor(node, (node) => {
-        if (!node) return false;
         // if we have an ancestor of a function definition, we weren't in a psuedo constructor
-        if (node.parent?.kind === NodeKind.functionDefinition) return "bail";
+        if (node.kind === NodeKind.functionDefinition) return "bail";
         // otherwise, if this is a block, check if the block is:
         // 1) a component tag block (i.e., `<cfcomponent>...</cfcomponent>`)
         // 2) a script sugared component block (i.e., `component { ... }`)
         // if it is, then OK, we are in a psuedo constructor
         // otherwise, keep climbing
-        return node.parent?.kind === NodeKind.block && (
-            (node.parent.subType === BlockType.fromTag && node.parent.tagOrigin.startTag?.canonicalName === "component")
-            || (node.parent.subType === BlockType.scriptSugaredTagCallBlock && node.parent.name?.token.text.toLowerCase() === "component")
+        return node.kind === NodeKind.block && (
+            (node.subType === BlockType.fromTag && node.tagOrigin.startTag?.canonicalName === "component")
+            || (node.subType === BlockType.scriptSugaredTagCallBlock && node.name?.token.text.toLowerCase() === "component")
         );
     })
 }
@@ -1202,6 +1211,10 @@ export function walkupScopesToResolveSymbol(base: Node, canonicalName: string, e
             }
 
             if (node.kind === NodeKind.sourceFile) {
+                if (node.cfc?.extends) {
+                    node = node.cfc.extends;
+                    continue;
+                }
                 return engineSymbol
                     ? {scopeName: "__cfEngine", symTabEntry: engineSymbol, container: null}
                     : undefined;
@@ -1217,4 +1230,56 @@ export function walkupScopesToResolveSymbol(base: Node, canonicalName: string, e
     }
 
     return undefined;
+}
+
+export function getFunctionDefinitionReturnsLiteral(node: FunctionDefinition) : CanonicalizedName | undefined {
+    if (node.fromTag) {
+        const attrVal = getAttributeValue(node.attrs, "returns");
+        const v = getTriviallyComputableString(attrVal);
+        if (!v) return undefined;
+        else return {ui: v, canonical: v.toLowerCase()}
+    }
+    else {
+        return node.returnType ? stringifyDottedPath(node.returnType) : undefined;
+    }
+}
+
+export function getFunctionDefinitionAccessLiteral(node: FunctionDefinition) {
+    let val : string;
+
+    if (node.fromTag) {
+        const attrVal = getAttributeValue(node.attrs, "access");
+        val = getTriviallyComputableString(attrVal)?.toLowerCase() ?? "public";
+    }
+    else {
+        val = node.accessModifier?.token.text.toLowerCase() ?? "public";
+    }
+
+    switch (val) {
+        case "remote":
+        case "public":
+        case "protected":
+        case "private":
+            return val;
+        default:
+            return "public";
+    }
+}
+
+/**
+ * check if `maybeDescendant` is a descendant of `ancestor`;
+ * i.e. by one or more extends clauses can we climb from `maybeDescendant` to `ancestor`
+ */
+export function cfcIsDescendantOf(ancestor: SourceFile, maybeIsDescendant: SourceFile) : boolean {
+    if (maybeIsDescendant.cfFileType !== CfFileType.cfc || ancestor.cfFileType !== CfFileType.cfc) return false;
+    let working : SourceFile | null = maybeIsDescendant;
+    while (working) {
+        if (working === ancestor) return true;
+        working = working.cfc?.extends ?? null;
+    }
+    return false;
+}
+
+export function isPublicMethod(sig: cfFunctionSignature) : boolean {
+    return !!(sig.flags & TypeFlags.public) || !!(sig.flags & TypeFlags.remote);
 }
