@@ -1256,13 +1256,15 @@ export function Checker() {
                     const walkupInheritance = sourceFile.cfFileType === CfFileType.cfc
                         && i === 0
                         && node.root.kind === NodeKind.identifier
-                        && node.root.canonicalName === "this";
+                        && (node.root.canonicalName === "this" || node.root.canonicalName === "super");
 
                     if (!propertyName) {
                         type = undefined;
                     }
                     else if (walkupInheritance) {
-                        const symbol = walkupThisToResolveSymbol(propertyName);
+                        const symbol = (node.root as Identifier).canonicalName === "this"
+                            ? walkupThisToResolveSymbol(propertyName)
+                            : walkupSuperToResolveSymbol(propertyName);
                         if (symbol) {
                             type = symbol.symTabEntry.type;
                             setResolvedSymbol(element, symbol);
@@ -1642,6 +1644,14 @@ export function Checker() {
     // specialize `externWalkupScopesToResolveSymbol` to start at the top-level of our current source file, don't resolve engine symbols, and only consider `this` scopes
     function walkupThisToResolveSymbol(canonicalName: string) : SymbolResolution | undefined {
         return externWalkupScopesToResolveSymbol(sourceFile, canonicalName, /*engineSymbolResolver*/undefined, ["this"]);
+    }
+
+    // same as `walkupThisToResolveSymbol` but we start in the parent component
+    function walkupSuperToResolveSymbol(canonicalName: string) : SymbolResolution | undefined {
+        if (sourceFile.cfc?.extends) {
+            return externWalkupScopesToResolveSymbol(sourceFile.cfc.extends, canonicalName, /*engineSymbolResolver*/undefined, ["this"]);
+        }
+        return undefined;
     }
 
     let cfcResolver! : CfcResolver;

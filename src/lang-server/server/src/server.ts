@@ -154,35 +154,33 @@ connection.onDefinition((params) : Location[] | undefined  => {
 	const targetNode = project.getInterestingNodeToLeftOfCursor(fsPath, targetIndex);
 	if (!targetNode) return undefined;
 
-	if (targetNode.kind === NodeKind.indexedAccessChainElement) {
-		const checker = project.__unsafe_dev_getChecker();
-		const symbol = checker.getSymbol(targetNode, sourceFile);
-		if (!symbol || !symbol.symTabEntry.declarations) return undefined;
+	const checker = project.__unsafe_dev_getChecker();
+	const symbol = checker.getSymbol(targetNode, sourceFile);
+	if (!symbol || !symbol.symTabEntry.declarations) return undefined;
 
-		const result : Location[] = [];
-		for (const decl of symbol.symTabEntry.declarations) {
-			const declFile = getSourceFile(decl);
-			if (!declFile) continue;
-			const declFileUri = URI.file(declFile.absPath);
+	const result : Location[] = [];
+	for (const decl of symbol.symTabEntry.declarations) {
+		const declFile = getSourceFile(decl);
+		if (!declFile) continue;
+		const declFileUri = URI.file(declFile.absPath);
 
-			switch (decl.kind) {
-				case NodeKind.property: {
-					const location = getPropertyDefinitionLocation(decl, declFileUri.toString());
-					if (!location) continue;
-					result.push(location);
-					break;
-				}
-				case NodeKind.functionDefinition: {
-					const location = getFunctionDefinitionLocation(decl, declFileUri.toString());
-					if (!location) continue;
-					result.push(location);
-					break;
-				}
+		switch (decl.kind) {
+			case NodeKind.property: {
+				const location = getPropertyDefinitionLocation(decl, declFileUri.toString());
+				if (!location) continue;
+				result.push(location);
+				break;
+			}
+			case NodeKind.functionDefinition: {
+				const location = getFunctionDefinitionLocation(decl, declFileUri.toString());
+				if (!location) continue;
+				result.push(location);
+				break;
 			}
 		}
-
-		return result;
 	}
+
+	return result;
 
 	function cfRangeToVsRange(sourceRange: SourceRange) : Range {
 		return {
