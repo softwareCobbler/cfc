@@ -190,11 +190,11 @@ export function isStruct(t: _Type) : t is cfStruct {
 }
 
 export interface cfFunctionSignature extends _Type {
-    uiName: string,
-    canonicalName: string,
-    params: cfFunctionSignatureParam[],
-    returns: _Type,
-    attrs: TagAttribute[]
+    readonly uiName: string,
+    readonly canonicalName: string,
+    readonly params: cfFunctionSignatureParam[],
+    readonly returns: _Type,
+    readonly attrs: TagAttribute[]
 }
 
 export function cfFunctionSignature(uiName: string, params: cfFunctionSignatureParam[], returns: _Type, attrs: TagAttribute[]) : cfFunctionSignature {
@@ -212,6 +212,10 @@ export function cfFunctionSignature(uiName: string, params: cfFunctionSignatureP
     }
     
     return type;
+}
+
+export function cfFunctionSignatureWithFreshReturnType(other: cfFunctionSignature, freshReturnType: _Type) : cfFunctionSignature {
+    return {...other, returns: freshReturnType};
 }
 
 export function isFunctionSignature(t: _Type) : t is cfFunctionSignature {

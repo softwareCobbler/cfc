@@ -18,6 +18,7 @@
 			"runtimeExecutable": "${execPath}",
 			"args": ["--extensionDevelopmentPath=${workspaceRoot}/cflsp-vscode/"],
 			"outFiles": ["${workspaceRoot}/cflsp-vscode/out/**/*.js"],
+			"trace": true
 		},
         {
 			"type": "node",
@@ -25,7 +26,8 @@
 			"name": "Attach to cfls (server process)",
 			"port": 6009,
 			"restart": true,
-			"outFiles": ["${workspaceRoot}/cflsp-vscode/out/**/*.js"]
+			"outFiles": ["${workspaceRoot}/cflsp-vscode/out/**/*.js"],
+			"trace": true,
 		},
 		{
 			"name": "Debug current test",

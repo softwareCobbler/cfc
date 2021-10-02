@@ -44,6 +44,7 @@ export function Binder() {
 
         if (sourceFile_.cfFileType === CfFileType.cfc) {
             RootNode.containedScope.this = new Map<string, SymTabEntry>();
+            RootNode.containedScope.super = new Map<string, SymTabEntry>();
             const componentAttrs = getComponentAttrs(RootNode);
             if (componentAttrs) {
                 const accessors = getAttributeValue(componentAttrs, "accessors");
@@ -407,25 +408,37 @@ export function Binder() {
         }
     }
 
+    // the symbol and its declarations already fully exist, we just want to include it in another symbol table
+    // it is common for `variables` and `this` to share symbols
     function addExistingSymbolToTable(table: SymbolTable, entry: SymTabEntry) {
         table.set(entry.canonicalName, entry);
     }
 
-    function addDeclarationToSymbol(table: SymTabEntry, node: Node) {
-        if (table.declarations) table.declarations.push(node);
-        else table.declarations = [node];
+    function addDeclarationToSymbol(symbol: SymTabEntry, decl: Node) {
+        if (symbol.declarations) symbol.declarations.push(decl);
+        else symbol.declarations = [decl];
     }
 
     function addFreshSymbolToTable(symTab: SymbolTable, uiName: string, declaringNode: Node, type: _Type | null = null, declaredType?: _Type | null) : SymTabEntry {
         const canonicalName = uiName.toLowerCase();
         let symTabEntry : SymTabEntry;
 
-        // fixme: if there are type annotations on multiple declarations of the same var, they should match
-        // also this method is "addFresh" and we are checking to see if one already exists?
+        // the symbol name might already exist, by way of a duplicate definition, or an auto-generated property getter/setter followed by a user-supplied custom getter/setter, or (others?)
+        // in that case, we just add the declaration to the symbol
         if (symTab.has(canonicalName)) {
             symTabEntry = symTab.get(canonicalName)!;
-            addDeclarationToSymbol(symTabEntry, declaringNode);
+            // don't add a duplicate declaration
+            // say we add symbol X with declaration node N<1> to `variables`, and then want to add the same symbol to `this`;
+            // and we may have done so for the same symbol name earlier with decl node N<0> (i.e. symbol X where N<0> was an auto-gen'd property setter, now N<1> is a custom setter with the same name)
+            // so `variables` and `this` both have X, which has decl N<0>
+            // Now, we may have added decl N<1> to X by way of a preceding call to addFreshSymbolToTable for `variables`, and now we are adding to `this`
+            // the reference to X in `this` is the same object as in `variables` and so X in `this` already has decl's N<0> and N<1>, and we are trying to add N<1> again
+            // could maybe use a Set<Node>
+            if (!symTabEntry.declarations?.some((existingDecl) => existingDecl.nodeId === declaringNode.nodeId)) {
+                addDeclarationToSymbol(symTabEntry, declaringNode);
+            }
         }
+        // otherwise, we create a new entry
         else {
             symTabEntry = {
                 uiName,
@@ -799,13 +812,13 @@ export function Binder() {
             bindNode(node.tagOrigin.startTag, node);
 
             if (node.canonicalName !== undefined) {
-                addFreshSymbolToTable(currentContainer.containedScope.arguments!, node.uiName, node);
+                //addFreshSymbolToTable(currentContainer.containedScope.arguments!, node.uiName, node); // fixme: already done in bindFunctionDefinition
             }
 
             return;
         }
 
-        addFreshSymbolToTable(currentContainer.containedScope.arguments!, node.uiName, node);
+        //addFreshSymbolToTable(currentContainer.containedScope.arguments!, node.uiName, node); // fixme: already done in bindFunctionDefinition
         bindNode(node.javaLikeTypename, node);
         bindNode(node.identifier, node);
         bindNode(node.defaultValue, node);
@@ -1034,6 +1047,7 @@ export function Binder() {
         // there is no guarantee that the annotation has the same param count as the cf signature;
         const typeAnnotatedParams = node.typeAnnotation && isFunctionSignature(node.typeAnnotation) ? node.typeAnnotation.params : null;
 
+        // fixme: we also do this in bindFunctionParameter, so we get duplicate nodes in each param's symbol decl list
         for (let i = 0; i < node.params.length; i++) {
             const param = node.params[i];
             const type = signature.params[i]?.type || null;

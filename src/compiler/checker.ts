@@ -1,7 +1,7 @@
 import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution } from "./node";
 import { CfcResolver, EngineSymbolResolver, LanguageVersion } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
-import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfStruct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStruct, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType, stringifyType, cfFunctionSignatureParam } from "./types";
+import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfStruct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStruct, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType, stringifyType, cfFunctionSignatureParam, cfFunctionSignatureWithFreshReturnType } from "./types";
 import { exhaustiveCaseGuard, getAttributeValue, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionReturnsLiteral, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol } from "./utils";
 
@@ -13,14 +13,17 @@ export function Checker() {
     let scanner!: Scanner;
     let diagnostics!: Diagnostic[];
     let noUndefinedVars = false;
-    const structViewCache = new Map<SymbolTable, cfStruct>(); // fixme: weakmap? when a sourcefile gets re-init'd it would be nice to clear this automagically
+    const structViewCache = new WeakMap<SymbolTable, cfStruct>(); // fixme: weakmap? when a sourcefile gets re-init'd it would be nice to clear this automagically
     let languageVersion!: LanguageVersion;
 
     function check(sourceFile_: SourceFile) {
         sourceFile = sourceFile_;
         scanner = sourceFile.scanner;
         diagnostics = sourceFile.diagnostics;
-        structViewCache.clear();
+
+        if (sourceFile.cfFileType === CfFileType.cfc && sourceFile.cfc?.extends && sourceFile.cfc?.extends.containedScope.this) {
+            sourceFile.containedScope.super = sourceFile.cfc.extends.containedScope.this;
+        }
 
         checkListFunctionsLast(sourceFile.content);
     }
@@ -1104,9 +1107,8 @@ export function Checker() {
     // sake of completions; a "scope" in CF is essentially a struct, but not quite; and vice versa; so the abstraction is not perfect but it's close
     // we cache for something like "this" which may be repeatedly wrapped as a structView type
     function structViewOfScope(scopeContents: SymbolTable) : cfStruct {
-        const alreadyExists = structViewCache.get(scopeContents);
-        if (alreadyExists) {
-            return alreadyExists;
+        if (structViewCache.has(scopeContents)) {
+            return structViewCache.get(scopeContents)!;
         }
         else {
             const type = SyntheticType.struct(scopeContents);
@@ -1333,7 +1335,7 @@ export function Checker() {
                         if (returnTypeLiteral && returnTypeLiteral.canonical !== "any") { // fixme: if (returnTypeLiteral && !isBuiltinType) so we don't try to lookup "string" as a cfc or etc.
                             const cfc = cfcResolver({resolveFrom: sourceFile.absPath, cfcName: returnTypeLiteral.ui});
                             if (cfc) {
-                                memberFunctionSignature.returns = structViewOfCfc(cfc.symbolTable, cfc.sourceFile);
+                                symbol.symTabEntry.type = cfFunctionSignatureWithFreshReturnType(memberFunctionSignature, structViewOfCfc(cfc.symbolTable, cfc.sourceFile));
                             }
                         }
                     }
