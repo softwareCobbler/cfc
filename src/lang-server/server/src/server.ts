@@ -45,8 +45,9 @@ import { NodeId, SourceFile, Parser, Binder, Node, Diagnostic as cfcDiagnostic, 
 import { _Type } from '../../../compiler/types';
 import { FileSystem, LanguageVersion, Project } from "../../../compiler/project";
 import * as cfls from "../../../services/completions";
-import { getAttributeValue, getTriviallyComputableString } from '../../../compiler/utils';
-import { NodeFlags } from '../../../compiler/node';
+import { getAttribute, getAttributeValue, getSourceFile, getTriviallyComputableString } from '../../../compiler/utils';
+import { FunctionDefinition, NodeFlags, Property } from '../../../compiler/node';
+import { SourceRange, Token } from '../../../compiler/scanner';
 
 type TextDocumentUri = string;
 
@@ -68,7 +69,7 @@ function naiveGetDiagnostics(uri: TextDocumentUri, freshText: string | Buffer) :
 	const fsPath = URI.parse(uri).fsPath;
 
 	const timing = project.parseBindCheck(fsPath, freshText);
-	//connection.console.info(`parse ${timing.parse} // bind ${timing.bind} // check ${timing.check}`);
+	connection.console.info(`${uri}\n\tparse ${timing.parse} // bind ${timing.bind} // check ${timing.check}`);
 	return project.getDiagnostics(fsPath) ?? [];
 }
 
@@ -113,7 +114,7 @@ connection.onInitialize((params: InitializeParams) => {
 			// Tell the client that this server supports code completion.
 			completionProvider: {triggerCharacters: [".", " ", "("]},
 			//signatureHelpProvider: {triggerCharacters: ["("]},
-			//definitionProvider: true,
+			definitionProvider: true,
 			//hoverProvider: true,
 		}
 	};
@@ -138,58 +139,91 @@ interface ClientRequest {
 }
 
 // show where a symbol is defined at
-connection.onDefinition((params) : Location | undefined  => {
-	return undefined;
-	/*
+connection.onDefinition((params) : Location[] | undefined  => {
+	const document = documents.get(params.textDocument.uri);
+	if (!document) return undefined;
+	const fsPath = URI.parse(document.uri).fsPath;
+	const targetIndex = document.offsetAt(params.position);
+
 	const doc = documents.get(params.textDocument.uri);
 	if (!doc) return;
-	const targetNode = getNodeTargetedByClientRequest(params);
+
+	const sourceFile = project.__unsafe_dev_getFile(fsPath)?.parsedSourceFile;
+	if (!sourceFile) return undefined;
+	
+	const targetNode = project.getInterestingNodeToLeftOfCursor(fsPath, targetIndex);
 	if (!targetNode) return undefined;
-	const node = getNearestConstruct(targetNode);
-	if (!node || !isExpressionContext(node)) return undefined;
 
-	if (node.kind === NodeType.callExpression) {
-		return getFunctionDefinitionLocation(node.left, doc);
-	}
-	else if (node.parent?.kind === NodeType.callExpression && node === node.parent?.left) {
-		return getFunctionDefinitionLocation(node, doc);
-	}
-	else {
-		return undefined;
-	}
+	if (targetNode.kind === NodeKind.indexedAccessChainElement) {
+		const checker = project.__unsafe_dev_getChecker();
+		const symbol = checker.getSymbol(targetNode, sourceFile);
+		if (!symbol || !symbol.symTabEntry.declarations) return undefined;
 
-	function getFunctionDefinitionLocation(node: cfNode, doc: TextDocument) : Location | undefined {
-		if (node.kind === NodeType.identifier && node.canonicalName) {
-			const sourceFile = getSourceFile(node);
-			if (sourceFile?.cfFileType === CfFileType.cfc) {
-				const symbol = sourceFile.containedScope!.this?.get(node.canonicalName);
-				if (!symbol || !symbol.firstBinding) return undefined;
-				const functionDef = symbol.firstBinding as FunctionDefinition;
-				let range : Range;
-				if (functionDef.fromTag) {
-					const attrVal = getAttributeValue((node.tagOrigin.startTag as CfTag.Common).attrs, "name");
-					if (!attrVal) {
-						return undefined;
-					}
-					range = {
-						start: doc.positionAt(attrVal.range.fromInclusive),
-						end: doc.positionAt(attrVal.range.toExclusive)
-					};
+		const result : Location[] = [];
+		for (const decl of symbol.symTabEntry.declarations) {
+			const declFile = getSourceFile(decl);
+			if (!declFile) continue;
+			const declFileUri = URI.file(declFile.absPath);
+
+			switch (decl.kind) {
+				case NodeKind.property: {
+					const location = getPropertyDefinitionLocation(decl, declFileUri.toString());
+					if (!location) continue;
+					result.push(location);
+					break;
 				}
-				else {
-					const mergedRange = mergeRanges(functionDef.accessModifier, functionDef.returnType, functionDef.functionToken, functionDef.rightParen, functionDef.attrs);
-					range = {
-						start: doc.positionAt(mergedRange.fromInclusive),
-						end: doc.positionAt(mergedRange.toExclusive)
-					};
+				case NodeKind.functionDefinition: {
+					const location = getFunctionDefinitionLocation(decl, declFileUri.toString());
+					if (!location) continue;
+					result.push(location);
+					break;
 				}
-				return {
-					uri: params.textDocument.uri,
-					range
-				}
-			}		
+			}
 		}
-	}*/
+
+		return result;
+	}
+
+	function cfRangeToVsRange(sourceRange: SourceRange) : Range {
+		return {
+			start: {line: sourceRange.fromLineInclusive!, character: sourceRange.fromColInclusive!},
+			end: {line: sourceRange.toLineInclusive!, character: sourceRange.toColInclusive!},
+		}
+	}
+
+	function getFunctionDefinitionLocation(node: FunctionDefinition, uri: string) : Location | undefined {
+		if (node.fromTag) {
+			if (!node.tagOrigin?.startTag?.range) return undefined;
+			return {
+				uri: uri,
+				range: cfRangeToVsRange(node.tagOrigin.startTag.range)
+			}
+		}
+		else {
+			if (!node.nameToken) return undefined;
+			return {
+				uri: uri,
+				range: cfRangeToVsRange(node.nameToken.range)
+			}
+		}
+	}
+
+	function getPropertyDefinitionLocation(node: Property, uri: string) : Location | undefined {
+		if (node.fromTag) {
+			return {
+				uri: uri,
+				range: cfRangeToVsRange(node.range)
+			}
+		}
+		else {
+			const nameAttr = getAttribute(node.attrs, "name");
+			if (!nameAttr) return undefined;
+			return {
+				uri: uri,
+				range: cfRangeToVsRange(nameAttr.name.range)
+			}
+		}
+	}
 });
 
 function resetCflsp(config: CflsConfig, why: string) {
@@ -519,12 +553,17 @@ connection.onNotification("cflsp/libpath", (libAbsPath: string) => {
 
 connection.onNotification("cflsp/cache-cfcs", (cfcAbsPaths: string[]) => {
 	const start = new Date().getTime();
+	let addFileTime = 0;
 	for (const absPath of cfcAbsPaths) {
+		const start = new Date().getTime();
 		project.addFile(absPath);
+		const elapsed = new Date().getTime() - start;
+		connection.console.log(`${absPath} (cachetime): ${elapsed}`);
+		addFileTime += elapsed;
 		connection.sendNotification("cflsp/cached-cfc"); // just saying "hey we're done with one more"
 	}
 	const elapsed = (new Date().getTime()) - start;
-	connection.console.info("Cached " + cfcAbsPaths.length + " CFCs in " + elapsed + "ms");
+	connection.console.info("Cached " + cfcAbsPaths.length + " CFCs in " + elapsed + "ms, time spend in addfile: " + addFileTime + "ms");
 });
 
 // This handler resolves additional information for the item selected in

@@ -320,15 +320,29 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
             else {
                 // otherwise, we have a qualified CFC
                 // check that the base name matches with the current root, and then try to resolve
+
+                // root is /X/Y/Z, cfc is "Z.foo.bar"
+                // we want paths:
+                // - "/X/Y/Z/foo/bar.cfc" 
+                // - "/X/Y/Z/Z/foo/bar.cfc"
                 const canonicalCfcName = possiblyUnqualifiedCfc.toLowerCase();
                 const canonicalBase = base.toLowerCase();
                 if (!canonicalCfcName.startsWith(canonicalBase)) continue;
-                const cfcAsPathElidedBase = possiblyUnqualifiedCfc.split(".").slice(1);
-                if (cfcAsPathElidedBase.length > 0) cfcAsPathElidedBase[cfcAsPathElidedBase.length - 1] = cfcAsPathElidedBase[cfcAsPathElidedBase.length - 1] + ".cfc";
+                const cfcComponents = possiblyUnqualifiedCfc.split(".");
+                
+                if (cfcComponents.length === 0) continue; // just to not crash; why would this happen?
+                
+                cfcComponents[cfcComponents.length - 1] = cfcComponents[cfcComponents.length - 1] + ".cfc";
+
                 return [{
                     canonicalName: canonicalCfcName,
                     uiName: possiblyUnqualifiedCfc,
-                    path: fileSystem.join(root, ...cfcAsPathElidedBase)
+                    path: fileSystem.join(root, ...(cfcComponents.slice(1))) // /X/Y/Z/foo/bar.cfc
+                },
+                {
+                    canonicalName: canonicalCfcName,
+                    uiName: possiblyUnqualifiedCfc,
+                    path: fileSystem.join(root, ...cfcComponents) // /X/Y/Z/Z/foo/bar.cfc
                 }]
             }
         }
@@ -350,7 +364,8 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
         getInterestingNodeToLeftOfCursor,
         getParsedSourceFile,
         getFileListing: () => [...files.keys()],
-        __unsafe_dev_getChecker: () => checker
+        __unsafe_dev_getChecker: () => checker,
+        __unsafe_dev_getFile: (fname: string) => files.get(fname)
     }
 }
 

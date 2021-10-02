@@ -1252,7 +1252,28 @@ export function Checker() {
                     const propertyName = element.accessType === IndexedAccessType.dot
                         ? element.property.token.text.toLowerCase()
                         : getTriviallyComputableString(element.expr);
-                    type = propertyName ? getStructMemberType(type, node, propertyName) : undefined;
+
+                    const walkupInheritance = sourceFile.cfFileType === CfFileType.cfc
+                        && i === 0
+                        && node.root.kind === NodeKind.identifier
+                        && node.root.canonicalName === "this";
+
+                    if (!propertyName) {
+                        type = undefined;
+                    }
+                    else if (walkupInheritance) {
+                        const symbol = walkupThisToResolveSymbol(propertyName);
+                        if (symbol) {
+                            type = symbol.symTabEntry.type;
+                            setResolvedSymbol(element, symbol);
+                        }
+                        else {
+                            type = undefined;
+                        }
+                    }
+                    else {
+                        type = getStructMemberType(type, node, propertyName);
+                    }
 
                     if (!type || (type.flags & TypeFlags.any)) {
                         type = SyntheticType.any; // subsequent access elements will also be any
@@ -1616,6 +1637,11 @@ export function Checker() {
         }
 
         return undefined;
+    }
+
+    // specialize `externWalkupScopesToResolveSymbol` to start at the top-level of our current source file, don't resolve engine symbols, and only consider `this` scopes
+    function walkupThisToResolveSymbol(canonicalName: string) : SymbolResolution | undefined {
+        return externWalkupScopesToResolveSymbol(sourceFile, canonicalName, /*engineSymbolResolver*/undefined, ["this"]);
     }
 
     let cfcResolver! : CfcResolver;

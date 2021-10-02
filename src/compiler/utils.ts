@@ -241,6 +241,16 @@ export function getAttributeValue(attrs: TagAttribute[], name: string) : Node | 
     return null;
 }
 
+export function getAttribute(attrs: TagAttribute[], name: string) : TagAttribute | null {
+    const canonicalName = name.toLowerCase();
+    for (const attr of attrs) {
+        if (attr.canonicalName === canonicalName) {
+            return attr;
+        }
+    }
+    return null;
+}
+
 // falsy return values keep it going
 function forEachNode<T>(nodeList: readonly Node[], f: (node: Node) => T) : T | undefined {
     for (let i = 0; i < nodeList.length; i++) {
@@ -1153,7 +1163,7 @@ export function isInScriptBlock(node: Node) {
 }
 
 //https://helpx.adobe.com/coldfusion/developing-applications/the-cfml-programming-language/using-coldfusion-variables/about-scopes.html
-const scopeLookupOrder : readonly StaticallyKnownScopeName[] = [
+const defaultScopeLookupOrder : readonly StaticallyKnownScopeName[] = [
     "local",
     "arguments",
     "__query", // magic inaccessible scope inside a <cfloop query=#q#>...</cfquery> body
@@ -1168,7 +1178,9 @@ const scopeLookupOrder : readonly StaticallyKnownScopeName[] = [
     "client"
 ];
 
-export function getScopeDisplayMember(scope: ScopeDisplay, canonicalName: string) : SymTabResolution | undefined {
+export function getScopeDisplayMember(scope: ScopeDisplay,
+                                      canonicalName: string,
+                                      orderedScopes: readonly StaticallyKnownScopeName[] = defaultScopeLookupOrder) : SymTabResolution | undefined {
     // could we not do this, if we stored a link to the symTab for nested things ?
     // how would that work for arrays? there wouldn't be a symTab for those...
     const path = canonicalName.split(".");
@@ -1186,7 +1198,7 @@ export function getScopeDisplayMember(scope: ScopeDisplay, canonicalName: string
         return {scopeName: path[0], symTabEntry: current};
     }
 
-    for (const scopeName of scopeLookupOrder) {
+    for (const scopeName of orderedScopes) {
         if (scope.hasOwnProperty(scopeName)) {
             const entry = scope[scopeName]!.get(canonicalName);
             if (entry) {
@@ -1197,13 +1209,16 @@ export function getScopeDisplayMember(scope: ScopeDisplay, canonicalName: string
     return undefined;
 }
 
-export function walkupScopesToResolveSymbol(base: Node, canonicalName: string, engineSymbolResolver?: EngineSymbolResolver) : SymbolResolution | undefined {
+export function walkupScopesToResolveSymbol(base: Node,
+                                            canonicalName: string,
+                                            engineSymbolResolver?: EngineSymbolResolver,
+                                            orderedScopes?: readonly StaticallyKnownScopeName[]) : SymbolResolution | undefined {
     const engineSymbol = engineSymbolResolver?.(canonicalName);
     let node : Node | null = base;
 
     while (node) {
         if (node.containedScope) {
-            const varEntry = getScopeDisplayMember(node.containedScope, canonicalName);
+            const varEntry = getScopeDisplayMember(node.containedScope, canonicalName, orderedScopes || defaultScopeLookupOrder);
             if (varEntry) {
                 (varEntry as SymbolResolution).container = node;
                 if (engineSymbol) varEntry.alwaysVisibleEngineSymbol = engineSymbol;

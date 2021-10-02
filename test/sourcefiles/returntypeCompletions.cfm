@@ -21,6 +21,14 @@ component extends="Base" {
     private function shouldBeNotExportedBecauseItIsPrivate() {}
 }
 
+//// @file="/foo/Child2.cfc"
+component extends="Base" {
+    public function someChildMethod() {
+        so|<<<<
+    }
+    private function shouldBeNotExportedBecauseItIsPrivate() {}
+}
+
 //// @file="/foo/Impl.cfm"
 <cfscript>
     new Child().|<<<< // should get Child::someChildMethod, Child::Base::someBaseMethod, Child::Base::Top::shouldReturnRootSibling

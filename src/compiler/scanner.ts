@@ -1,3 +1,5 @@
+import { Mutable } from "./utils";
+
 export const enum AsciiMap {
     TAB = 9,
     NEWLINE = 10,         // \n
@@ -302,6 +304,14 @@ export interface AnnotatedChar {
 export class SourceRange {
     fromInclusive: number;
     toExclusive: number;
+
+    // shim for interacting with vscode which often wants (line, col) instead of just (pos)
+    // the intent here is that on creating a real token (not a synthetic token! we only want this from real sourcecode), we explicitly set these
+    // and it is only used for editor navigation, not for error spans or etc.
+    readonly fromLineInclusive: number | undefined;
+    readonly fromColInclusive: number | undefined;
+    readonly toLineInclusive: number | undefined;
+    readonly toColInclusive: number | undefined;
 
     constructor(fromInclusive: number, toExclusive: number) {
         this.fromInclusive = fromInclusive;
@@ -880,12 +890,18 @@ export function Scanner(source_: string | Buffer) {
     function makeToken(tokenType: TokenType, from: number, to: number, text: string = lastScannedText): Token {
         const token = Token(tokenType, text, from!, to!);
 
+        const annotatedFrom = getAnnotatedChar(from);
+        const annotatedTo = getAnnotatedChar(to);
         if (debugScanner) {
-            const annotatedChar = getAnnotatedChar(from!);
-            token.__debug_line = annotatedChar.line + 1;
-            token.__debug_col = annotatedChar.col + 1;
+            token.__debug_line = annotatedFrom.line + 1;
+            token.__debug_col = annotatedFrom.col + 1;
             token.__debug_type = TokenTypeUiString[tokenType];
         }
+
+        (token.range.fromColInclusive as Mutable<number>) = annotatedFrom.col;
+        (token.range.fromLineInclusive as Mutable<number>) = annotatedFrom.line;
+        (token.range.toColInclusive as Mutable<number>) = annotatedTo.col;
+        (token.range.toLineInclusive as Mutable<number>) = annotatedTo.line;
 
         return token;
     }

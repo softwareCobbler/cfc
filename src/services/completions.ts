@@ -3,7 +3,7 @@
 import { Project } from "../compiler/project"
 import { Node, NodeKind, CallExpression, CfTag, StaticallyKnownScopeName, SymbolTable, SymTabEntry } from "../compiler/node"
 import { CfFileType, TokenType } from "../compiler/scanner";
-import { cfStruct, isFunctionSignature, isStruct, TypeFlags, _Type } from "../compiler/types";
+import { isFunctionSignature, isStruct, _Type } from "../compiler/types";
 import { isExpressionContext, isCfScriptTagBlock, stringifyCallExprArgName, getSourceFile, cfcIsDescendantOf, isPublicMethod } from "../compiler/utils";
 import { tagNames } from "./tagnames";
 
@@ -123,7 +123,7 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
         
         // the first symbol table we get is a cfStruct or null; after that, we will start getting actual symbol tables
         // we can check the first cfstruct we get for "cfc-ness"
-        const forCfcCompletions = typeinfo ? !!((typeinfo as cfStruct).flags & TypeFlags.cfc) : false;
+        const forCfcCompletions = parsedSourceFile.cfFileType === CfFileType.cfc;
         const sourceFileIsCfcDescendantOfSymbolTableFile = typeinfo.cfc ? cfcIsDescendantOf(typeinfo.cfc, parsedSourceFile) : false;
 
         let workingSourceFile = typeinfo.cfc ?? parsedSourceFile;

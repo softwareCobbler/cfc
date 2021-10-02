@@ -13,15 +13,27 @@ import * as path from "path";
 
 function projectFiddle() {
     const debugfs = DebugFileSystem([
-        ["/Base.cfc", `
+        ["/Super.cfc", `
             component {
+                public function mega() {
+                    
+                }
+            }
+        `],
+        ["/Base.cfc", `
+            component extends="Super" {
                 public Base function foo() {
                     return this;
                 }
             }
         `],
-        //["/b.cfc", `component { function foo() {} }`],
-        //["/lib.d.cfm", "@declare function foo(arg0: number[]) : string"]
+        ["/Child.cfc", `
+            component extends="Base" {
+                public function bar() {
+                    this.mega()
+                }
+            }
+        `],
     ], "/");
 
     const project = Project(["/"], /*filesystem*/debugfs, {debug: true, parseTypes: true, language: LanguageVersion.lucee5});
@@ -29,7 +41,9 @@ function projectFiddle() {
     //const target = path.join(path.resolve("./test/"), "mxunit/framework/javaloader/JavaProxy.cfc");
     //project.addFile(target);
 
-    const a = project.addFile("/Base.cfc");
+    const a = project.addFile("/Super.cfc");
+    const b = project.addFile("/Base.cfc");
+    const c = project.addFile("/Child.cfc");
 
     const diagnostics = project.getDiagnostics("/Base.cfc");
 
@@ -37,12 +51,12 @@ function projectFiddle() {
         console.log(diagnostic);
     }
 }
-//projectFiddle();
+projectFiddle();
 
 
-function xfiddle() {
+/*function xfiddle() {
     const files = recursiveGetFiles("c:/users/anon/dev/coldbox/", /\.cfc$/i);
-    const project = Project(["c:\\users\\anon\\dev\\coldbox\\"], FileSystem(), {debug: true, parseTypes: true, language: LanguageVersion.lucee5});
+    const project = Project(["c:\\users\\anon\\dev\\coldbox\\"], FileSystem(), {debug: false, parseTypes: false, language: LanguageVersion.acf2018});
     project.addEngineLib("c:\\Users\\anon\\dev\\cfc\\cflsp-vscode\\out\\lib.cf2018.d.cfm")
     for (const file of files) {
         console.log(file);
@@ -51,5 +65,5 @@ function xfiddle() {
     console.log("done");
 }
 
-xfiddle();
+xfiddle();*/
 
