@@ -23,19 +23,25 @@ function projectFiddle() {
         ["/Base.cfc", `
             component extends="Super" {
                 public Base function foo() {
-                    return this;
+                    
                 }
             }
         `],
         ["/Child.cfc", `
             component extends="Base" {
                 public function bar() {
-                    this.mega()
+                    mega() // 102 on the e
+                }
+
+                function mega() {
+                    
                 }
             }
         `],
     ], "/");
 
+    //let x = debugfs.readFileSync("/Child.cfc").toString().slice(102,105)
+    
     const project = Project(["/"], /*filesystem*/debugfs, {debug: true, parseTypes: true, language: LanguageVersion.lucee5});
     //const project = Project([path.resolve(".")], FileSystem(), {debug: true, parseTypes: true, language: LanguageVersion.lucee5});
     //const target = path.join(path.resolve("./test/"), "mxunit/framework/javaloader/JavaProxy.cfc");
@@ -44,6 +50,10 @@ function projectFiddle() {
     const a = project.addFile("/Super.cfc");
     const b = project.addFile("/Base.cfc");
     const c = project.addFile("/Child.cfc");
+
+    const n = project.getInterestingNodeToLeftOfCursor("/Child.cfc", 102)!;
+    const symbol = project.__unsafe_dev_getChecker().getSymbol(n, project.__unsafe_dev_getFile("/Child.cfc")!.parsedSourceFile);
+    n;
 
     const diagnostics = project.getDiagnostics("/Base.cfc");
 

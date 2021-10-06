@@ -444,7 +444,16 @@ describe("general smoke test for particular constructs", () => {
                 const name = "/foo/Child.cfc";
                 const completionsAt = TestLoader.loadCompletionAtTestFromSource(files[name]);
                 const check = (completions: CompletionItem[]) => {
-                    assert.strictEqual(completions.length, 1, "got exactly 1 completion");
+                    assert.strictEqual(completions.length, 1, `${name} :: got exactly 1 completion`);
+                    assert.strictEqual(completions[0].label, "someRootSiblingMethod");            
+                }
+                return {[name]: {...completionsAt, check}};
+            })(),
+            ...(() => {
+                const name = "/foo/Child2.cfc";
+                const completionsAt = TestLoader.loadCompletionAtTestFromSource(files[name]);
+                const check = (completions: CompletionItem[]) => {
+                    assert.strictEqual(completions.length, 1, `${name} :: got exactly 3 completions`);
                     assert.strictEqual(completions[0].label, "someRootSiblingMethod");            
                 }
                 return {[name]: {...completionsAt, check}};
@@ -453,7 +462,7 @@ describe("general smoke test for particular constructs", () => {
                 const name = "/foo/Impl.cfm";
                 const completionsAt = TestLoader.loadCompletionAtTestFromSource(files[name]);
                 const check = (completions: CompletionItem[]) => {
-                    assert.strictEqual(completions.length, 3, "got exactly 3 completions");
+                    assert.strictEqual(completions.length, 3, `${name} :: got exactly 3 completions`);
                     const justNames = completions.map(completion => completion.label);
                     for (const name of ["shouldReturnRootSibling", "someChildMethod", "someBaseMethod"]) {
                         assert.deepStrictEqual(justNames.includes(name), true, `includes a completion for '${name}'`);
