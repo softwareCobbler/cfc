@@ -1,17 +1,19 @@
 // fixme - use non-relative paths, which requires we get ts-node to resolve the paths during testing
 // we can get it to compile with tsc with non-relative paths, but loading it during testing does not work
 import { Project } from "../compiler/project"
-import { Node, NodeKind, CallExpression, CfTag, StaticallyKnownScopeName, SymbolTable, SymTabEntry } from "../compiler/node"
+import { Node, NodeKind, CallExpression, CfTag, StaticallyKnownScopeName, SymbolTable, SymTabEntry, SimpleStringLiteral, SourceFile } from "../compiler/node"
 import { CfFileType, TokenType } from "../compiler/scanner";
-import { isFunctionSignature, isStruct, _Type } from "../compiler/types";
+import { isFunctionOverloadSet, isFunctionSignature, isLiteralType, isStruct, TypeFlags, _Type } from "../compiler/types";
 import { isExpressionContext, isCfScriptTagBlock, stringifyCallExprArgName, getSourceFile, cfcIsDescendantOf, isPublicMethod } from "../compiler/utils";
 import { tagNames } from "./tagnames";
+import { Checker } from "../compiler/checker";
 
 export const enum CompletionItemKind {
     tagName,
     function,
     variable,
     structMember,
+    stringLiteral
 }
 
 export interface CompletionItem {
@@ -22,7 +24,44 @@ export interface CompletionItem {
     sortText?: string,
 }
 
-export function getCompletions(project: Project, fsPath: string, targetIndex: number, triggerCharacter: string | null) {
+function getCallExprArgIndex(callExpr: CallExpression, node: Node) {
+    const index = callExpr.args.findIndex((v) => v.expr === node);
+    return index === -1 ? undefined : index;
+}
+
+function getStringLiteralCompletions(checker: Checker, sourceFile: SourceFile, node: SimpleStringLiteral) : CompletionItem[] | undefined {
+    if (node.parent?.kind === NodeKind.callArgument && node.parent.parent?.kind === NodeKind.callExpression) {
+        const ziArgIndex = getCallExprArgIndex(node.parent.parent, node);
+        if (ziArgIndex === undefined) return undefined;
+        const symbol = checker.getSymbol(node.parent.parent.left, sourceFile);
+        if (!symbol) return undefined;
+
+        let strings : string[] = [];
+        if (isFunctionOverloadSet(symbol.symTabEntry.type)) {
+            for (const overload of symbol.symTabEntry.type.overloads) {
+                const type = overload.params[ziArgIndex]?.type;
+                if (!type) continue;
+                if (type.flags & TypeFlags.string && isLiteralType(type)) {
+                    strings.push(type.literalValue as string);
+                }
+            }
+        }
+        else if (isFunctionSignature(symbol.symTabEntry.type)) {
+            return undefined; // not yet impl'd
+        }
+
+        return strings.length > 0 ? strings.map((s) => {
+            return {
+                label: s,
+                kind: CompletionItemKind.stringLiteral
+            }
+        }) : undefined;
+    }
+
+    return undefined;
+}
+
+export function getCompletions(project: Project, fsPath: string, targetIndex: number, triggerCharacter: string | null) : CompletionItem[] {
     if (!project) return [];
 
     const parsedSourceFile = project.getParsedSourceFile(fsPath);
@@ -30,6 +69,21 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
     const node = project.getNodeToLeftOfCursor(fsPath, targetIndex); // fixme: probably generally want "getInterestingNodeLeftOfCursor" to not grab terminals, but all the ".parent.parent..." chains would have to be fixed up
 
     if (!parsedSourceFile || !node) return [];
+
+    if ((node.kind === NodeKind.terminal || node.kind === NodeKind.textSpan) && node.parent?.kind === NodeKind.simpleStringLiteral) {
+        const checker = project.__unsafe_dev_getChecker();
+        const sourceFile = getSourceFile(node);
+        if (checker && sourceFile) {
+            return getStringLiteralCompletions(checker, sourceFile, node.parent) ?? [];
+        }
+        else {
+            return [];
+        }
+    }
+    // after the above, we've handled all the string completions
+    if (triggerCharacter === "\"" || triggerCharacter === "'") {
+        return [];
+    }
 
     let callExpr : CallExpression | null = (node.parent?.parent?.kind === NodeKind.callArgument && !node.parent.parent.equals)
         ? node.parent.parent.parent as CallExpression // inside a named argument `foo(a|)

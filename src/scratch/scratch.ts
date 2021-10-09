@@ -7,38 +7,47 @@ import { CfFileType } from "../compiler/scanner";
 import { binarySearch, cfmOrCfc, findNodeInFlatSourceMap, flattenTree, recursiveGetFiles } from "../compiler/utils";
 import { Checker } from "../compiler/checker";
 import { DebugFileSystem, FileSystem, LanguageVersion, Project } from "../compiler/project";
+import { getCompletions } from "../services/completions";
 
 import * as fs from "fs";
 import * as path from "path";
 
 function projectFiddle() {
-    const debugfs = DebugFileSystem([
-        ["/Super.cfc", `
-            component {
-                public function mega() {
-                    
-                }
+    const debugfs = DebugFileSystem(
+        {
+            "/": {
+                "Wirebox.cfc": `
+                    component {
+                        public function mega() {
+                        }
+        
+                        public function configure() {
+                            mapDirectory("a.b");
+                            mapDirectory("c.d");
+                        }
+                    }`,
+                "someFile.cfc": `
+                    /*
+                        @declare interface application {
+                            wirebox: {
+                                getInstance: engine.getInstance
+                            }
+                        }
+                    */
+                    component {
+                        function foo() {
+                            getInstance("a.b.x");
+                        }
+                    }`,
+                "a": {
+                    "b": {
+                        "x.cfc": "component { function foobar() {} }",
+                        "y.cfc": "component {}",
+                    }
+                },
             }
-        `],
-        ["/Base.cfc", `
-            component extends="Super" {
-                public Base function foo() {
-                    
-                }
-            }
-        `],
-        ["/Child.cfc", `
-            component extends="Base" {
-                public function bar() {
-                    mega() // 102 on the e
-                }
-
-                function mega() {
-                    
-                }
-            }
-        `],
-    ], "/");
+        }
+    , "/");
 
     //let x = debugfs.readFileSync("/Child.cfc").toString().slice(102,105)
     
@@ -47,16 +56,14 @@ function projectFiddle() {
     //const target = path.join(path.resolve("./test/"), "mxunit/framework/javaloader/JavaProxy.cfc");
     //project.addFile(target);
 
-    const a = project.addFile("/Super.cfc");
-    const b = project.addFile("/Base.cfc");
-    const c = project.addFile("/Child.cfc");
-
-    const n = project.getInterestingNodeToLeftOfCursor("/Child.cfc", 102)!;
-    const symbol = project.__unsafe_dev_getChecker().getSymbol(n, project.__unsafe_dev_getFile("/Child.cfc")!.parsedSourceFile);
-    n;
+    project.addFile("/Wirebox.cfc");
+    project.addFile("/someFile.cfc");
 
     const diagnostics = project.getDiagnostics("/Base.cfc");
 
+    //const x = project.getInterestingNodeToLeftOfCursor("/someFile.cfc", 378);
+    const completions = getCompletions(project, "/someFile.cfc", 378, null);
+    console.log(completions);
     for (const diagnostic of diagnostics) {
         console.log(diagnostic);
     }

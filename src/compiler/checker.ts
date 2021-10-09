@@ -1,7 +1,7 @@
 import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution } from "./node";
 import { CfcResolver, EngineSymbolResolver, LanguageVersion } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
-import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfStruct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStruct, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType, stringifyType, cfFunctionSignatureParam, cfFunctionSignatureWithFreshReturnType } from "./types";
+import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfStruct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStruct, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType, stringifyType, cfFunctionSignatureParam, cfFunctionSignatureWithFreshReturnType, isFunctionOverloadSet, cfFunctionOverloadSet, createLiteralType, isLiteralType } from "./types";
 import { exhaustiveCaseGuard, getAttributeValue, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionReturnsLiteral, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol } from "./utils";
 
@@ -164,7 +164,7 @@ export function Checker() {
                 }
                 return;
             case NodeKind.simpleStringLiteral:
-                setCachedEvaluatedNodeType(node, SyntheticType.string);
+                setCachedEvaluatedNodeType(node, createLiteralType(node.textSpan.text));
                 return;
             case NodeKind.interpolatedStringLiteral:
                 checkList(node.elements);
@@ -543,6 +543,9 @@ export function Checker() {
         // number being assignable to boolean
         if (l.flags & TypeFlags.numeric && r.flags & TypeFlags.boolean) return true;
 
+        if (isLiteralType(l) && isLiteralType(r)) return l.literalValue === r.literalValue;
+        if (!isLiteralType(l) && isLiteralType(r)) return false; // number is not a subtype of `0`
+
         // numeric is a subtype of string
         // however, string is not a subtype of numeric
         if (l === SyntheticType.numeric && r === SyntheticType.string) {
@@ -659,6 +662,33 @@ export function Checker() {
     }
     */
 
+    function chooseOverload(overloadSet: cfFunctionOverloadSet, args: CallArgument[]) {
+        const availableOverloads = new Set(overloadSet.overloads);
+        for (let i = 0; i < args.length; i++) {
+            const paramNum = i+1;
+            const arg = args[i];
+            const argType = getCachedEvaluatedNodeType(arg.expr);
+
+            const deleteableOverloads = new Set<cfFunctionOverloadSet["overloads"][number]>();
+            for (const overload of availableOverloads) {
+                if (overload.params.length < paramNum) {
+                    deleteableOverloads.add(overload);
+                    continue;
+                }
+                const paramType = overload.params[i].type;
+                if (!isAssignable(/*assignThis*/argType, /*to*/paramType)) {
+                    deleteableOverloads.add(overload);
+                    continue;
+                }
+            }
+            for (const deleteable of deleteableOverloads) {
+                availableOverloads.delete(deleteable);
+            }
+        }
+
+        return [...availableOverloads];
+    }
+
     function checkCallExpression(node: CallExpression) {
         checkNode(node.left);
         checkList(node.args);
@@ -681,7 +711,16 @@ export function Checker() {
 
         const sig = getCachedEvaluatedNodeType(node.left);
 
-        if (isFunctionSignature(sig)) {
+        if (isFunctionOverloadSet(sig)) {
+            const overloads = chooseOverload(sig, node.args);
+            if (overloads.length !== 1) {
+                setCachedEvaluatedNodeType(node, SyntheticType.any);
+            }
+            else {
+                setCachedEvaluatedNodeType(node, overloads[0].returns);
+            }
+        }
+        else if (isFunctionSignature(sig)) {
             checkCallLikeArguments(sig, node);
             setCachedEvaluatedNodeType(node, sig.returns);
         }

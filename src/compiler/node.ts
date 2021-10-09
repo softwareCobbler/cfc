@@ -312,13 +312,15 @@ export interface SymbolResolution extends SymTabResolution {
     container: Node | null
 }
 
+
+
 export interface SourceFile extends NodeBase {
     kind: NodeKind.sourceFile,
     absPath: string,
     cfFileType: CfFileType,
     containedScope: ScopeDisplay,
     content: Node[]
-    libRefs: SourceFile[],
+    libRefs: Map<string, SourceFile>,
     diagnostics: Diagnostic[],
     scanner: Scanner,
     cachedNodeTypes: Map<NodeId, _Type>, // type of a particular node, exactly zero or one per node
@@ -352,7 +354,7 @@ export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: 
         typedefs: new Map(),
     };
     sourceFile.content = [];
-    sourceFile.libRefs = [];
+    sourceFile.libRefs = new Map();
     sourceFile.diagnostics = [];
     sourceFile.scanner = Scanner(sourceText);
     sourceFile.cachedNodeTypes = new Map<NodeId, _Type>();

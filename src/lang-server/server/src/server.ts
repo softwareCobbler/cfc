@@ -112,7 +112,7 @@ connection.onInitialize((params: InitializeParams) => {
 		capabilities: {
 			textDocumentSync: TextDocumentSyncKind.Incremental,
 			// Tell the client that this server supports code completion.
-			completionProvider: {triggerCharacters: [".", " ", "("]},
+			completionProvider: {triggerCharacters: ["\"", "'", ".", " ", "("]},
 			//signatureHelpProvider: {triggerCharacters: ["("]},
 			definitionProvider: true,
 			//hoverProvider: true,
@@ -441,6 +441,7 @@ function mapCflsCompletionItemKindToVsCodeCompletionItemKind(kind: cfls.Completi
 		case cfls.CompletionItemKind.structMember: return CompletionItemKind.Field;
 		case cfls.CompletionItemKind.tagName: return CompletionItemKind.Property;
 		case cfls.CompletionItemKind.variable: return CompletionItemKind.Variable;
+		case cfls.CompletionItemKind.stringLiteral: return CompletionItemKind.Constant; // not value
 		default: assertExhaustiveCase(kind);
 	}
 }

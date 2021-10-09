@@ -3,10 +3,12 @@ import * as path from "path";
 
 import { Binder } from "./binder";
 import { Checker } from "./checker";
-import { BlockType, mergeRanges, Node, NodeId, NodeKind, SourceFile, SymTabEntry } from "./node";
+import { BlockType, CallExpression, mergeRanges, Node, NodeId, NodeKind, SourceFile, StatementType, SymTabEntry } from "./node";
 import { Parser } from "./parser";
 import { CfFileType, SourceRange } from "./scanner";
-import { cfmOrCfc, findNodeInFlatSourceMap, flattenTree, getAttributeValue, getComponentAttrs, getComponentBlock, getTriviallyComputableString, NodeSourceMap } from "./utils";
+import { cfcAsType, cfFunctionOverloadSet, cfFunctionSignatureParam, createLiteralType, _Type } from "./types";
+
+import { cfmOrCfc, findNodeInFlatSourceMap, flattenTree, getAttributeValue, getComponentAttrs, getComponentBlock, getTriviallyComputableString, NodeSourceMap, visit } from "./utils";
 
 interface CachedFile {
     parsedSourceFile: SourceFile,
@@ -21,8 +23,10 @@ interface DevTimingInfo {
 }
 
 export interface FileSystem {
-    readFileSync: (path: string) => Buffer
-    existsSync: (path: string) => boolean
+    readFileSync: (path: string) => Buffer,
+    readdirSync: (root: string) => fs.Dirent[],
+    existsSync: (path: string) => boolean,
+    lstatSync: (path: string) => {isFile: () => boolean, isDirectory: () => boolean},
     join: (...args: string[]) => string,
     pathSep: string,
 }
@@ -30,23 +34,87 @@ export interface FileSystem {
 export function FileSystem() : FileSystem {
     return {
         readFileSync: fs.readFileSync,
+        readdirSync: (root: string) => fs.readdirSync(root, {withFileTypes: true}),
         existsSync: fs.existsSync,
+        lstatSync: (path: string) => fs.lstatSync(path),
         join: path.join,
         pathSep: path.sep
     }
 }
 
 const nativeSepPattern = /[\\/]/g;
-export function DebugFileSystem(files: [absPath: string, text: string][], pathSepOfDebugFs: string) : FileSystem {
-    const fmap = new Map(files.map(([absPath, text]) => [absPath, Buffer.from(text, "utf-8")]));
+export class DebugDirent extends fs.Dirent {
+    constructor(
+        public name: string,
+        private _isDir: boolean,
+        private _isFile: boolean,
+    ) {
+        super();
+    }
+    isFile() { return this._isFile; }
+    isDirectory() { return this._isDir; }
+    isBlockDevice() { return false; }
+    isCharacterDevice() { return false; }
+    isSymbolicLink() { return false; }
+    isFIFO() { return false; }
+    isSocket() { return false; }
+}
+
+export type FilesystemPath = {[dir: string]: string | Buffer | FilesystemPath};
+export function DebugFileSystem(files: Readonly<FilesystemPath>, pathSepOfDebugFs: string) : FileSystem {
+    const maybeGet = (path: string) => {
+        // we expect fileSystemPath to be rooted on "/" or "\"
+        const pathComponents = [
+            pathSepOfDebugFs,
+            ...(path.split(pathSepOfDebugFs).filter(s => s !== ""))
+        ];
+        let working = files;
+        while (pathComponents.length > 0) {
+            const next = working[pathComponents.shift()!];
+            if (!next) {
+                return undefined;
+            }
+            else if (typeof next === "string" || next instanceof Buffer) {
+                return next;
+            }
+            else {
+                working = next;
+            }
+        }
+        return working;
+    }
+
+    function isFile(v: string | Buffer | FilesystemPath | undefined) : v is string | Buffer {
+        return (typeof v === "string") || v instanceof Buffer;
+    }
+
+    function isDir(v: string | Buffer | FilesystemPath | undefined) : v is FilesystemPath {
+        return !!v && !isFile(v);
+    }
 
     return {
-        readFileSync: (path: string) => {
-            const file = fmap.get(path);
-            if (!file) throw "bad file lookup";
-            return file;
+        readFileSync: (path: string) : Buffer => {
+            const fsObj = maybeGet(path);
+            if (!fsObj) throw `Bad file lookup for path '${path}'`;
+            if (isDir(fsObj)) throw `readFileSync called on directory '${path}'`;
+            return typeof fsObj === "string" ? Buffer.from(fsObj, "utf-8") : fsObj;
         },
-        existsSync: (path: string) => !!fmap.get(path),
+        readdirSync: (root: string) => {
+            const target = maybeGet(root);
+            if (!isDir(target)) throw `readdirSync called on non-directory '${root}'`;
+            const result : DebugDirent[] = [];
+            for (const key of Object.keys(target)) {
+                const fsObj = target[key];
+                result.push(new DebugDirent(key, isDir(fsObj), isFile(fsObj)));
+            }
+            return result;
+        },
+        existsSync: (path: string) => !!maybeGet(path),
+        lstatSync: (path: string) => {
+            const fsObj = maybeGet(path);
+            if (!fsObj) throw "lstatSync called on non-existent path";
+            return new DebugDirent(path, isDir(fsObj), isFile(fsObj));
+        },
         join: (...args: string[]) => {
             // join using path.join, then replace the platform pathSep with the debug path sep
             const t = path.join(...args);
@@ -88,7 +156,10 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
 
     type FileCache = Map<AbsPath, CachedFile>;
     const files : FileCache = new Map();
+
     let engineLib : CachedFile | undefined;
+    let withWirebox = true;
+    let wireboxLib : SourceFile | null = null;
 
     function tryAddFile(absPath: string) : CachedFile | undefined {
         if (!fileSystem.existsSync(absPath)) return undefined;
@@ -121,6 +192,14 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
         });
 
         const checkStart = new Date().getTime();
+
+        if (withWirebox && wireboxLib) {
+            sourceFile.libRefs.set("<<magic/wirebox>>", wireboxLib);
+        }
+        else {
+            sourceFile.libRefs.delete("<<magic/wirebox>>");
+        }
+
         checker.check(sourceFile);
         const checkElapsed = new Date().getTime() - checkStart;
 
@@ -141,6 +220,39 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
 
         if (fileType === CfFileType.dCfm) {
             
+        }
+
+        if (withWirebox && /Wirebox\.cfc$/i.test(sourceFile.absPath)) {
+            const mappings = buildWireboxMappings(sourceFile);
+            if (mappings) {
+                const overloads : {params: cfFunctionSignatureParam[], returns: _Type}[] = [];
+                for (const mapping of mappings) {
+                    if (mapping.kind === "dir") {
+                        const fsTarget = mapping.target.replace(".", fileSystem.pathSep);
+                        if (!fileSystem.existsSync(fsTarget) || !fileSystem.lstatSync(fsTarget).isDirectory()) continue;
+                        const targets = fileSystem.readdirSync(fsTarget);
+                        for (const target of targets) {
+                            if (!target.isFile()) continue;
+                            if (cfmOrCfc(target.name) !== CfFileType.cfc) continue;
+                            const file = tryAddFile(fileSystem.join(fsTarget, target.name));
+                            if (!file) continue;
+                            const name = target.name.replace(/\.cfc$/i, "");
+                            const nameAsLiteralType = createLiteralType(fsTarget.replace(fileSystem.pathSep, ".") + "." + name);
+                            const param = cfFunctionSignatureParam(/*required*/true, nameAsLiteralType, "name")
+                            overloads.push({params: [param], returns: cfcAsType(file.parsedSourceFile)});
+                        }
+                    }
+                }
+                const wireboxGetInstanceSymbol = {
+                    uiName: "getInstance",
+                    canonicalName: "getinstance",
+                    declarations: null,
+                    type: cfFunctionOverloadSet("getInstance", overloads, [])
+                };
+
+                wireboxLib = SourceFile("<<CFLS-GENERATED-LIB>>", CfFileType.dCfm, "");
+                wireboxLib.containedScope.__declaration = new Map([["getinstance", wireboxGetInstanceSymbol]]);
+            }
         }
 
         return files.get(absPath)!;
@@ -282,8 +394,15 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
 		const docCache = getCachedFile(absPath);
 		if (!docCache) return undefined;
 		const node = findNodeInFlatSourceMap(docCache.flatTree, docCache.nodeMap, targetIndex);
-        if (!node || node.kind === NodeKind.comment || node.kind === NodeKind.textSpan) return undefined;
-        if (node.kind === NodeKind.terminal) return node.parent ?? undefined;
+        if (!node
+            || node.kind === NodeKind.comment
+            || (node.kind === NodeKind.textSpan
+                && node.parent?.kind !== NodeKind.simpleStringLiteral
+                && node.parent?.kind !== NodeKind.interpolatedStringLiteral)) return undefined;
+        
+        // climb from terminal into production, or from textSpan into string literal
+        if (node.kind === NodeKind.terminal || node.kind === NodeKind.textSpan) return node.parent ?? undefined;
+
         return node;
     }
 
@@ -377,4 +496,69 @@ export interface ComponentSpecifier {
     canonicalName: string,
     uiName: string,
     path: string,
+}
+
+interface WireboxMappingDef {
+    kind: "file" | "dir",
+    target: string,
+}
+export function buildWireboxMappings(root: SourceFile) {
+    const mappings : WireboxMappingDef[] = [];
+    const CONTINUE_VISITOR_DESCENT = false;
+
+    const component = getComponentBlock(root);
+
+    if (!component) return undefined;
+    for (const node of component.stmtList) {
+        // find the `configure` function, and descend into it, to extract mapping definitions
+        if (node.kind === NodeKind.functionDefinition && !node.fromTag && node.canonicalName === "configure") {
+            visit(node.body.stmtList, wireboxConfigureFunctionMappingExtractingVisitor);
+            break;
+        }
+    }
+
+    return mappings;
+
+    function wireboxConfigureFunctionMappingExtractingVisitor(node: Node | null | undefined) : boolean {
+        if (!node) return CONTINUE_VISITOR_DESCENT;
+        // when we hit a top-level call expression
+        // (from the current context, top-level should be "within the configure() definition", i.e.
+        // configure() { /* here */ } )
+        // visit it, possibly extracting a mapping definition
+        if (node.kind === NodeKind.statement && node.subType === StatementType.expressionWrapper && node.expr!.kind === NodeKind.callExpression) {
+            const mapping = tryMapOne(node.expr!);
+            if (mapping) mappings.push(mapping);
+        }
+        // keep going, find additional mappings
+        return CONTINUE_VISITOR_DESCENT;
+    }
+
+    function tryMapOne(node: CallExpression) : WireboxMappingDef | undefined {
+        let result : {kind: "file" | "dir", target: string} | undefined;
+        function tryMapWorker(node: Node) {
+            // recursive base case: hit bottom of call chain; if we don't get a mapper we're done
+            if (node.kind === NodeKind.callExpression && node.left.kind === NodeKind.identifier) {
+                let kind : "file" | "dir";
+                if (node.left.canonicalName === "map") kind = "file";
+                else if (node.left.canonicalName === "mapdirectory") kind = "dir";
+                else return false;
+
+                if (node.args.length === 0) return false;
+                const target = getTriviallyComputableString(node.args[0].expr);
+                if (!target) return false;
+                result = {kind, target: target};
+                return true;
+            }
+            else if (node.kind === NodeKind.callExpression && node.left.kind === NodeKind.indexedAccess && node.left.accessElements.length === 1) {
+                if (!tryMapWorker(node.left.root)) return false;
+                // here we could get "to" and etc.
+                return true;
+            }
+
+            return false;
+        }
+
+        tryMapWorker(node);
+        return result;
+    }
 }

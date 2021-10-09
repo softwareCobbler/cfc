@@ -42,6 +42,7 @@ export const enum TypeFlags {
 }
 
 // workaround for bitshift operator being 32-bit
+// fixme: doesn't work - bitwise | and & are 32-bit, too
 const powersOf2 = (() => {
     const result : number[] = [ /* 1, 2, 4, 8, ...*/ ];
     for (let i = 0; i < 53; i++) { // 2**53 > Number.MAX_SAFE_INTEGER
@@ -109,7 +110,8 @@ export interface _Type {
     readonly name?: string,
     readonly canonicalType?: _Type,
     readonly types?: _Type[],
-    readonly cfc?: SourceFile, // kludge for connecting a cfstruct that represents a cfc to its cfc
+    readonly cfc?: Readonly<SourceFile>, // kludge for connecting a cfstruct that represents a cfc to its cfc
+    readonly literalValue?: string | number
 }
 
 export function getCanonicalType(type: _Type) {
@@ -184,6 +186,22 @@ export function cfStruct(members: ReadonlyMap<string, SymTabEntry>) : cfStruct {
     return type;
 }
 
+// a cfc can serve as a type, where we interpret the "this" scope as the members of a struct
+// we store a reference to the sourceFile, which is expected to remain unchanged over the life of the cfc as it is edited
+// the underlying `containedScope.this` may change, which is OK, and necessitates the getter
+// todo: what happens when the target source file is deleted or otherwise unloaded?
+export function cfcAsType(sourceFile: Readonly<SourceFile>) : cfStruct {
+    const result : cfStruct = {
+        // fixme: this should be able to return undefined if the sourceFile is destroyed
+        get members() : ReadonlyMap<string, SymTabEntry> {
+            return sourceFile.containedScope.this!
+        },
+        cfc: sourceFile,
+        flags: TypeFlags.cfc | TypeFlags.struct
+    } as const;
+    return result;
+}
+
 export function isStruct(t: _Type) : t is cfStruct {
     t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.struct);
@@ -195,6 +213,13 @@ export interface cfFunctionSignature extends _Type {
     readonly params: cfFunctionSignatureParam[],
     readonly returns: _Type,
     readonly attrs: TagAttribute[]
+}
+
+export interface cfFunctionOverloadSet extends _Type {
+    readonly uiName: string,
+    readonly canonicalName: string,
+    readonly overloads: {params: readonly cfFunctionSignatureParam[], returns: Readonly<_Type>}[],
+    readonly attrs: readonly TagAttribute[],
 }
 
 export function cfFunctionSignature(uiName: string, params: cfFunctionSignatureParam[], returns: _Type, attrs: TagAttribute[]) : cfFunctionSignature {
@@ -214,6 +239,22 @@ export function cfFunctionSignature(uiName: string, params: cfFunctionSignatureP
     return type;
 }
 
+export function cfFunctionOverloadSet(uiName: string, overloads: {params: cfFunctionSignatureParam[], returns: _Type}[], attrs: TagAttribute[]) : cfFunctionOverloadSet {
+    const type = {
+        flags: TypeFlags.functionSignature, // fixme: we ran out of type flags, we need a way to distinguish this type from a function signature
+        uiName,
+        canonicalName: uiName.toLowerCase(),
+        overloads,
+        attrs
+    }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+    
+    return type;
+}
+
 export function cfFunctionSignatureWithFreshReturnType(other: cfFunctionSignature, freshReturnType: _Type) : cfFunctionSignature {
     return {...other, returns: freshReturnType};
 }
@@ -221,6 +262,11 @@ export function cfFunctionSignatureWithFreshReturnType(other: cfFunctionSignatur
 export function isFunctionSignature(t: _Type) : t is cfFunctionSignature {
     t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.functionSignature);
+}
+
+export function isFunctionOverloadSet(t: _Type) : t is cfFunctionOverloadSet {
+    t = getCanonicalType(t);
+    return !!(t.flags & TypeFlags.functionSignature) && !!(t as cfFunctionOverloadSet).overloads;
 }
 
 // names are part of the type signature because a caller can specify named arguments
@@ -657,6 +703,36 @@ function extractTagFunctionParams(params: readonly Tag.FunctionParameter[]) : cf
         result.push(cfFunctionSignatureParam(param.required && !param.defaultValue, type, name));
     }
     return result;
+}
+
+export function createLiteralType(value: string | number) : _Type {
+    let result : _Type;
+    if (typeof value === "string") {
+        result = {
+            flags: TypeFlags.synthetic | TypeFlags.string,
+            canonicalType: SyntheticType.string,
+            literalValue: value
+        };
+    }
+    else {
+        result = {
+            flags: TypeFlags.synthetic | TypeFlags.numeric,
+            canonicalType: SyntheticType.numeric,
+            literalValue: value,
+        };
+    }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(result);
+    }
+
+    return result;
+}
+
+// fixme: ran out of flags, need a better way to discriminate a literal type
+const __literalTypeKey : keyof _Type = "literalValue";
+export function isLiteralType(_type: _Type) : _type is _Type & {literalValue: number | string} {
+    return _type.hasOwnProperty(__literalTypeKey);
 }
 
 export function stringifyType(_type: _Type, _depth = 0) : string {

@@ -1209,6 +1209,20 @@ export function getScopeDisplayMember(scope: ScopeDisplay,
     return undefined;
 }
 
+function tryResolveFromLibs(sourceFile: SourceFile, canonicalName: string) : SymbolResolution | undefined {
+    for (const libFile of sourceFile.libRefs.values()) {
+        const symbol = libFile.containedScope.__declaration?.get(canonicalName);
+        if (symbol) {
+            return {
+                container: sourceFile,
+                scopeName: "__declaration",
+                symTabEntry: symbol
+            }
+        }
+    }
+    return undefined;
+}
+
 export function walkupScopesToResolveSymbol(base: Node,
                                             canonicalName: string,
                                             engineSymbolResolver?: EngineSymbolResolver,
@@ -1226,10 +1240,17 @@ export function walkupScopesToResolveSymbol(base: Node,
             }
 
             if (node.kind === NodeKind.sourceFile) {
+                const libResolution = tryResolveFromLibs(node, canonicalName);
+                if (libResolution) {
+                    if (engineSymbol) libResolution.alwaysVisibleEngineSymbol = engineSymbol;
+                    return libResolution;
+                }
+
                 if (node.cfc?.extends) {
                     node = node.cfc.extends;
                     continue;
                 }
+                
                 return engineSymbol
                     ? {scopeName: "__cfEngine", symTabEntry: engineSymbol, container: null}
                     : undefined;
