@@ -18,25 +18,21 @@ function projectFiddle() {
             "/": {
                 "Wirebox.cfc": `
                     component {
-                        public function mega() {
+                        public someFile function mega() {
+
                         }
         
-                        public function configure() {
-                            mapDirectory("a.b");
-                            mapDirectory("c.d");
+                        function configure() {
+                            mega().foo().mega();
+                            //mapDirectory("a.b");
+                            //mapDirectory("c.d");
                         }
                     }`,
                 "someFile.cfc": `
-                    /*
-                        @declare interface application {
-                            wirebox: {
-                                getInstance: engine.getInstance
-                            }
-                        }
-                    */
                     component {
-                        function foo() {
-                            getInstance("a.b.x");
+                        Wirebox function foo() {
+                            //getInstance("a.b.x");
+                            foo().
                         }
                     }`,
                 "a": {
@@ -51,13 +47,13 @@ function projectFiddle() {
 
     //let x = debugfs.readFileSync("/Child.cfc").toString().slice(102,105)
     
-    const project = Project(["/"], /*filesystem*/debugfs, {debug: true, parseTypes: true, language: LanguageVersion.lucee5});
+    const project = Project("/", /*filesystem*/debugfs, {debug: true, parseTypes: true, language: LanguageVersion.lucee5, withWireboxResolution: false, wireboxConfigFileAbsPath: "/Wirebox.cfc"});
     //const project = Project([path.resolve(".")], FileSystem(), {debug: true, parseTypes: true, language: LanguageVersion.lucee5});
     //const target = path.join(path.resolve("./test/"), "mxunit/framework/javaloader/JavaProxy.cfc");
     //project.addFile(target);
 
     project.addFile("/Wirebox.cfc");
-    project.addFile("/someFile.cfc");
+    //project.addFile("/someFile.cfc");
 
     const diagnostics = project.getDiagnostics("/Base.cfc");
 

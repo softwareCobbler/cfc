@@ -2,7 +2,7 @@
 // we can get it to compile with tsc with non-relative paths, but loading it during testing does not work
 import { Project } from "../compiler/project"
 import { Node, NodeKind, CallExpression, CfTag, StaticallyKnownScopeName, SymbolTable, SymTabEntry, SimpleStringLiteral, SourceFile } from "../compiler/node"
-import { CfFileType, TokenType } from "../compiler/scanner";
+import { CfFileType, SourceRange, TokenType } from "../compiler/scanner";
 import { isFunctionOverloadSet, isFunctionSignature, isLiteralType, isStruct, TypeFlags, _Type } from "../compiler/types";
 import { isExpressionContext, isCfScriptTagBlock, stringifyCallExprArgName, getSourceFile, cfcIsDescendantOf, isPublicMethod } from "../compiler/utils";
 import { tagNames } from "./tagnames";
@@ -16,12 +16,26 @@ export const enum CompletionItemKind {
     stringLiteral
 }
 
+interface InsertReplaceEdit {
+    newText: string;
+    /**
+     * The range if the insert is requested
+     */
+    insert: SourceRange;
+    /**
+     * The range if the replace is requested.
+     */
+    replace: SourceRange;
+    range: SourceRange;
+}
+
 export interface CompletionItem {
     label: string,
     kind: CompletionItemKind,
     detail?: string,
     insertText?: string,
     sortText?: string,
+    textEdit?: InsertReplaceEdit
 }
 
 function getCallExprArgIndex(callExpr: CallExpression, node: Node) {
@@ -51,9 +65,16 @@ function getStringLiteralCompletions(checker: Checker, sourceFile: SourceFile, n
         }
 
         return strings.length > 0 ? strings.map((s) => {
+            const v = new SourceRange(node.range.fromInclusive+1, node.range.fromInclusive+1+s.length);
             return {
                 label: s,
-                kind: CompletionItemKind.stringLiteral
+                kind: CompletionItemKind.stringLiteral,
+                textEdit: {
+                    newText: s,
+                    range: v,
+                    insert: v,
+                    replace: v
+                }
             }
         }) : undefined;
     }
@@ -70,7 +91,10 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
 
     if (!parsedSourceFile || !node) return [];
 
-    if ((node.kind === NodeKind.terminal || node.kind === NodeKind.textSpan) && node.parent?.kind === NodeKind.simpleStringLiteral) {
+    // check that targetIndex is inside the range of the stringLiteral, because trailing trivia is bound to the string literal
+    // So, `"abcdefg" <text-span of whitespace here>`
+    // the text-span's parent is the string literal, but we obviously don't want to offer completions from that position
+    if ((node.kind === NodeKind.terminal || node.kind === NodeKind.textSpan) && node.parent?.kind === NodeKind.simpleStringLiteral && node.parent.range.includes(targetIndex)) {
         const checker = project.__unsafe_dev_getChecker();
         const sourceFile = getSourceFile(node);
         if (checker && sourceFile) {
@@ -147,6 +171,7 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
     // NOT `foo(bar = |`, that should be an expression completion
     if (callExpr) {
         const sig = checker.getCachedEvaluatedNodeType(callExpr.left, parsedSourceFile);
+        if (isFunctionOverloadSet(sig)) return [];
         if (!sig || !isFunctionSignature(sig)) return [];
 
         const yetToBeUsedParams = new Set<string>(sig.params.map(param => param.canonicalName));

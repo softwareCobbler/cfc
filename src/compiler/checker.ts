@@ -17,6 +17,10 @@ export function Checker() {
     let languageVersion!: LanguageVersion;
 
     function check(sourceFile_: SourceFile) {
+        // we're using the Checker as a singleton, and checking one source file might trigger checking another
+        // so, we have to save state before descending into the next check
+        const savedSourceFile = sourceFile;
+        
         sourceFile = sourceFile_;
         scanner = sourceFile.scanner;
         diagnostics = sourceFile.diagnostics;
@@ -26,6 +30,10 @@ export function Checker() {
         }
 
         checkListFunctionsLast(sourceFile.content);
+
+        sourceFile = savedSourceFile;
+        scanner = savedSourceFile?.scanner;
+        diagnostics = savedSourceFile?.diagnostics;
     }
 
     /*
@@ -1397,7 +1405,14 @@ export function Checker() {
                         if (returnTypeLiteral && returnTypeLiteral.canonical !== "any") { // fixme: if (returnTypeLiteral && !isBuiltinType) so we don't try to lookup "string" as a cfc or etc.
                             const cfc = cfcResolver({resolveFrom: sourceFile.absPath, cfcName: returnTypeLiteral.ui});
                             if (cfc) {
-                                symbol.symTabEntry.type = cfFunctionSignatureWithFreshReturnType(memberFunctionSignature, structViewOfCfc(cfc.symbolTable, cfc.sourceFile));
+                                memberFunctionSignature = cfFunctionSignatureWithFreshReturnType(memberFunctionSignature, structViewOfCfc(cfc.symbolTable, cfc.sourceFile));
+                                const variablesSymbol = sourceFile.containedScope.variables?.get(node.canonicalName);
+                                // keep both `variables` and `this` in sync with member functions
+                                if (variablesSymbol) {
+                                    variablesSymbol.type = memberFunctionSignature;
+                                    sourceFile.containedScope.variables?.set(node.canonicalName, variablesSymbol);
+                                    sourceFile.containedScope.this?.set(node.canonicalName, variablesSymbol);
+                                }
                             }
                         }
                     }

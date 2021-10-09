@@ -129,10 +129,12 @@ export const enum LanguageVersion { acf2018 = 1, lucee5 };
 interface ProjectOptions {
     debug: boolean,
     parseTypes: boolean,
-    language: LanguageVersion
+    language: LanguageVersion,
+    withWireboxResolution: boolean,
+    wireboxConfigFileAbsPath: string | null,
 }
 
-export function Project(absRoots: string[], fileSystem: FileSystem, options: ProjectOptions) {
+export function Project(root: string, fileSystem: FileSystem, options: ProjectOptions) {
     type AbsPath = string;
     
     const parser = Parser(options);
@@ -158,7 +160,6 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
     const files : FileCache = new Map();
 
     let engineLib : CachedFile | undefined;
-    let withWirebox = true;
     let wireboxLib : SourceFile | null = null;
 
     function tryAddFile(absPath: string) : CachedFile | undefined {
@@ -193,7 +194,7 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
 
         const checkStart = new Date().getTime();
 
-        if (withWirebox && wireboxLib) {
+        if (options.withWireboxResolution && wireboxLib) {
             sourceFile.libRefs.set("<<magic/wirebox>>", wireboxLib);
         }
         else {
@@ -208,6 +209,7 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
     }
 
     function addFile(absPath: string) {
+        if (!fileSystem.existsSync(absPath)) return undefined;
         const alreadyExists = getCachedFile(absPath);
         if (alreadyExists) return alreadyExists;
         
@@ -222,23 +224,32 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
             
         }
 
-        if (withWirebox && /Wirebox\.cfc$/i.test(sourceFile.absPath)) {
+        if (options.withWireboxResolution && sourceFile.absPath === options.wireboxConfigFileAbsPath) {
             const mappings = buildWireboxMappings(sourceFile);
             if (mappings) {
                 const overloads : {params: cfFunctionSignatureParam[], returns: _Type}[] = [];
                 for (const mapping of mappings) {
                     if (mapping.kind === "dir") {
-                        const fsTarget = mapping.target.replace(".", fileSystem.pathSep);
-                        if (!fileSystem.existsSync(fsTarget) || !fileSystem.lstatSync(fsTarget).isDirectory()) continue;
-                        const targets = fileSystem.readdirSync(fsTarget);
+                        const dirTarget = fileSystem.join(root, ...mapping.target.split("."));
+                        if (!fileSystem.existsSync(dirTarget) || !fileSystem.lstatSync(dirTarget).isDirectory()) continue;
+                        const targets = fileSystem.readdirSync(dirTarget);
                         for (const target of targets) {
                             if (!target.isFile()) continue;
                             if (cfmOrCfc(target.name) !== CfFileType.cfc) continue;
-                            const file = tryAddFile(fileSystem.join(fsTarget, target.name));
+                            const file = tryAddFile(fileSystem.join(dirTarget, target.name));
                             if (!file) continue;
-                            const name = target.name.replace(/\.cfc$/i, "");
-                            const nameAsLiteralType = createLiteralType(fsTarget.replace(fileSystem.pathSep, ".") + "." + name);
-                            const param = cfFunctionSignatureParam(/*required*/true, nameAsLiteralType, "name")
+
+                            //
+                            // (sourceFileName - dirTargRootPreix) |> striptrailingCFC |> replace sep with dots
+                            //
+                            const instantiableName = file.parsedSourceFile.absPath
+                                .replace(dirTarget, "")           // strip common prefix
+                                .replace(/\.cfc$/i, "")           // strip file extension
+                                .replace(fileSystem.pathSep, ".") // convert path seps to dots
+                                .replace(/^\./, "")               // replace possible leading dot
+                            const instantiableNameAsLiteralType = createLiteralType(instantiableName);
+
+                            const param = cfFunctionSignatureParam(/*required*/true, instantiableNameAsLiteralType, "name")
                             overloads.push({params: [param], returns: cfcAsType(file.parsedSourceFile)});
                         }
                     }
@@ -250,7 +261,7 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
                     type: cfFunctionOverloadSet("getInstance", overloads, [])
                 };
 
-                wireboxLib = SourceFile("<<CFLS-GENERATED-LIB>>", CfFileType.dCfm, "");
+                if (!wireboxLib) wireboxLib = SourceFile("<<magic/wirebox>>", CfFileType.dCfm, "");
                 wireboxLib.containedScope.__declaration = new Map([["getinstance", wireboxGetInstanceSymbol]]);
             }
         }
@@ -342,7 +353,7 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
         if (!heritageLiteral) return undefined;
         return {
             extendsAttr: heritage,
-            extendsSpecifier: getCfcSpecifier(absRoots, sourceFile.absPath, heritageLiteral)
+            extendsSpecifier: getCfcSpecifier(root, sourceFile.absPath, heritageLiteral)
         }
     }
 
@@ -367,10 +378,10 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
     }
 
     function CfcResolver(args: {resolveFrom: string, cfcName: string}) {
-        const specifiers = getCfcSpecifier(absRoots, args.resolveFrom, args.cfcName);
+        const specifiers = getCfcSpecifier(root, args.resolveFrom, args.cfcName);
         if (!specifiers) return undefined;
         for (const specifier of specifiers) {
-            const file = getCachedFile(specifier.path)?.parsedSourceFile;
+            const file = getCachedFile(specifier.path)?.parsedSourceFile ?? tryAddFile(specifier.path)?.parsedSourceFile;
             if (file && file.containedScope.this) return {
                 sourceFile: file,
                 symbolTable: file.containedScope.this
@@ -410,61 +421,60 @@ export function Project(absRoots: string[], fileSystem: FileSystem, options: Pro
         return getCachedFile(absPath)?.parsedSourceFile || undefined;
     }
 
-    function getCfcSpecifier(absRoots: string[], resolveFrom: string, possiblyUnqualifiedCfc: string) : ComponentSpecifier[] | undefined {
+    function getCfcSpecifier(root: string, resolveFrom: string, possiblyUnqualifiedCfc: string) : ComponentSpecifier[] | undefined {
         const isUnqualified = !/\./.test(possiblyUnqualifiedCfc);
-        for (const root of absRoots) {
-            const base = path.parse(root).base; // Z in X/Y/Z, assuming Z is some root we're interested in
-            const rel = path.relative(root, resolveFrom);
-            const {dir} = path.parse(rel); // A/B/C in X/Y/Z/A/B/C, where X/Y/Z is the root
-            // if it is unqualifed, we prepend the full path from root and lookup from that
-            // with root of "X/", a file of "X/Y/Z/foo.cfm" calling "new Bar()" looks up "X.Y.Z.Bar"
-            if (isUnqualified) {
-                if (resolveFrom.startsWith(root)) {
-                    const cfcName = [base, ...dir.split(fileSystem.pathSep), possiblyUnqualifiedCfc].filter(e => e !== "").join("."); // filter out possibly empty base and dirs; e.g. root is '/' so path.parse(root).base is ''
-                    const xname = [base, possiblyUnqualifiedCfc].filter(e => e !== "").join(".");
-                    return [
-                        {
-                            canonicalName: cfcName.toLowerCase(),
-                            uiName: cfcName,
-                            path: fileSystem.join(root, dir, possiblyUnqualifiedCfc + ".cfc")
-                        },
-                        {
-                            canonicalName: xname.toLowerCase(),
-                            uiName: xname,
-                            path: fileSystem.join(root, possiblyUnqualifiedCfc + ".cfc")
-                        },
-                    ];
-                }
-            }
-            else {
-                // otherwise, we have a qualified CFC
-                // check that the base name matches with the current root, and then try to resolve
-
-                // root is /X/Y/Z, cfc is "Z.foo.bar"
-                // we want paths:
-                // - "/X/Y/Z/foo/bar.cfc" 
-                // - "/X/Y/Z/Z/foo/bar.cfc"
-                const canonicalCfcName = possiblyUnqualifiedCfc.toLowerCase();
-                const canonicalBase = base.toLowerCase();
-                if (!canonicalCfcName.startsWith(canonicalBase)) continue;
-                const cfcComponents = possiblyUnqualifiedCfc.split(".");
-                
-                if (cfcComponents.length === 0) continue; // just to not crash; why would this happen?
-                
-                cfcComponents[cfcComponents.length - 1] = cfcComponents[cfcComponents.length - 1] + ".cfc";
-
-                return [{
-                    canonicalName: canonicalCfcName,
-                    uiName: possiblyUnqualifiedCfc,
-                    path: fileSystem.join(root, ...(cfcComponents.slice(1))) // /X/Y/Z/foo/bar.cfc
-                },
-                {
-                    canonicalName: canonicalCfcName,
-                    uiName: possiblyUnqualifiedCfc,
-                    path: fileSystem.join(root, ...cfcComponents) // /X/Y/Z/Z/foo/bar.cfc
-                }]
+        const base = path.parse(root).base; // Z in X/Y/Z, assuming Z is some root we're interested in
+        const rel = path.relative(root, resolveFrom);
+        const {dir} = path.parse(rel); // A/B/C in X/Y/Z/A/B/C, where X/Y/Z is the root
+        // if it is unqualifed, we prepend the full path from root and lookup from that
+        // with root of "X/", a file of "X/Y/Z/foo.cfm" calling "new Bar()" looks up "X.Y.Z.Bar"
+        if (isUnqualified) {
+            if (resolveFrom.startsWith(root)) {
+                const cfcName = [base, ...dir.split(fileSystem.pathSep), possiblyUnqualifiedCfc].filter(e => e !== "").join("."); // filter out possibly empty base and dirs; e.g. root is '/' so path.parse(root).base is ''
+                const xname = [base, possiblyUnqualifiedCfc].filter(e => e !== "").join(".");
+                return [
+                    {
+                        canonicalName: cfcName.toLowerCase(),
+                        uiName: cfcName,
+                        path: fileSystem.join(root, dir, possiblyUnqualifiedCfc + ".cfc")
+                    },
+                    {
+                        canonicalName: xname.toLowerCase(),
+                        uiName: xname,
+                        path: fileSystem.join(root, possiblyUnqualifiedCfc + ".cfc")
+                    },
+                ];
             }
         }
+        else {
+            // otherwise, we have a qualified CFC
+            // check that the base name matches with the current root, and then try to resolve
+
+            // root is /X/Y/Z, cfc is "Z.foo.bar"
+            // we want paths:
+            // - "/X/Y/Z/foo/bar.cfc" 
+            // - "/X/Y/Z/Z/foo/bar.cfc"
+            const canonicalCfcName = possiblyUnqualifiedCfc.toLowerCase();
+            const canonicalBase = base.toLowerCase();
+            if (!canonicalCfcName.startsWith(canonicalBase)) return undefined;
+            const cfcComponents = possiblyUnqualifiedCfc.split(".");
+            
+            if (cfcComponents.length === 0) return undefined; // just to not crash; why would this happen?
+            
+            cfcComponents[cfcComponents.length - 1] = cfcComponents[cfcComponents.length - 1] + ".cfc";
+
+            return [{
+                canonicalName: canonicalCfcName,
+                uiName: possiblyUnqualifiedCfc,
+                path: fileSystem.join(root, ...(cfcComponents.slice(1))) // /X/Y/Z/foo/bar.cfc
+            },
+            {
+                canonicalName: canonicalCfcName,
+                uiName: possiblyUnqualifiedCfc,
+                path: fileSystem.join(root, ...cfcComponents) // /X/Y/Z/Z/foo/bar.cfc
+            }]
+        }
+
         return undefined;
     }
 
@@ -525,8 +535,8 @@ export function buildWireboxMappings(root: SourceFile) {
         // (from the current context, top-level should be "within the configure() definition", i.e.
         // configure() { /* here */ } )
         // visit it, possibly extracting a mapping definition
-        if (node.kind === NodeKind.statement && node.subType === StatementType.expressionWrapper && node.expr!.kind === NodeKind.callExpression) {
-            const mapping = tryMapOne(node.expr!);
+        if (node.kind === NodeKind.statement && node.subType === StatementType.expressionWrapper && node.expr?.kind === NodeKind.callExpression) {
+            const mapping = tryMapOne(node.expr);
             if (mapping) mappings.push(mapping);
         }
         // keep going, find additional mappings

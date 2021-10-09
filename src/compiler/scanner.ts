@@ -325,6 +325,10 @@ export class SourceRange {
     isNil() {
         return this.fromInclusive == -1 && this.toExclusive == -1;
     }
+
+    includes(index: number) : boolean {
+        return this.fromInclusive <= index && index < this.toExclusive
+    }
 }
 
 type char = string; // with the intent being "exactly one character" (and non-empty!)

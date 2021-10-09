@@ -2806,7 +2806,11 @@ export function Parser(config: {language: LanguageVersion}) {
         const stringElements = parseStringBody(quoteType, allowInterpolations);
         const rightQuote = parseExpectedTerminal(quoteType, ParseOptions.withTrivia);
 
-        if (stringElements.length === 1) {
+        if (stringElements.length === 0) {
+            const emptyTextSpan = TextSpan(new SourceRange(leftQuote.range.toExclusive, leftQuote.range.toExclusive), "");
+            return SimpleStringLiteral(leftQuote, emptyTextSpan, rightQuote);
+        }
+        else if (stringElements.length === 1) {
             const onlyElement = stringElements[0];
             if (onlyElement.kind === NodeKind.textSpan) {
                 return SimpleStringLiteral(leftQuote, onlyElement, rightQuote);

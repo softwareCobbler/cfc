@@ -55,6 +55,18 @@
 						"Lucee"
 					],
 					"items": ["acf2018+", "lucee5+"]
+				},
+				"cflsp.wireboxResolution": {
+					"scope": "resource",
+					"type": "boolean",
+					"description": "Enable experimental resolution of CFCs via Wirebox's `getInstance`.",
+					"default": false
+				},
+				"cflsp.wireboxConfigFile": {
+					"scope": "resource",
+					"type": "string",
+					"description": "Project-relative path to the Wirebox config file.",
+					"default": "config/Wirebox.cfc"
 				}
 			}
 		}

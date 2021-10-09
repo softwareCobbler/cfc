@@ -40,6 +40,7 @@ import {
 
 import { URI } from "vscode-uri";
 
+import * as path from "path";
 import { NodeId, SourceFile, Parser, Binder, Node, Diagnostic as cfcDiagnostic, cfmOrCfc, NodeSourceMap, Checker, NodeKind } from "compiler";
 
 import { _Type } from '../../../compiler/types';
@@ -54,7 +55,9 @@ type TextDocumentUri = string;
 interface CflsConfig {
 	engineLibAbsPath: string | null
 	x_types: boolean,
-	languageVersion: LanguageVersion
+	languageVersion: LanguageVersion,
+	wireboxConfigFile: string | null,
+	wireboxResolution: boolean
 }
 
 let project : Project; // init this before using it
@@ -138,6 +141,13 @@ interface ClientRequest {
 	position: Position,
 }
 
+function cfRangeToVsRange(sourceRange: SourceRange) : Range {
+	return {
+		start: {line: sourceRange.fromLineInclusive!, character: sourceRange.fromColInclusive!},
+		end: {line: sourceRange.toLineInclusive!, character: sourceRange.toColInclusive!},
+	}
+}
+
 // show where a symbol is defined at
 connection.onDefinition((params) : Location[] | undefined  => {
 	const document = documents.get(params.textDocument.uri);
@@ -182,12 +192,7 @@ connection.onDefinition((params) : Location[] | undefined  => {
 
 	return result;
 
-	function cfRangeToVsRange(sourceRange: SourceRange) : Range {
-		return {
-			start: {line: sourceRange.fromLineInclusive!, character: sourceRange.fromColInclusive!},
-			end: {line: sourceRange.toLineInclusive!, character: sourceRange.toColInclusive!},
-		}
-	}
+	
 
 	function getFunctionDefinitionLocation(node: FunctionDefinition, uri: string) : Location | undefined {
 		if (node.fromTag) {
@@ -224,16 +229,39 @@ connection.onDefinition((params) : Location[] | undefined  => {
 	}
 });
 
-function resetCflsp(config: CflsConfig, why: string) {
+function resetCfls(why: string) {
 	connection.console.info("[reset] -- " + why);
 	connection.console.info("[reset] libPath is: " + cflsConfig.engineLibAbsPath ?? "null");
 
+	let wireboxConfigFileAbsPath : string | null = null;
+	if (cflsConfig.wireboxConfigFile && workspaceRoots[0]) {
+		wireboxConfigFileAbsPath = path.join(URI.parse(workspaceRoots[0].uri).fsPath, cflsConfig.wireboxConfigFile);
+	}
+
+	const workspaceRoot = workspaceRoots[0];
+	if (!workspaceRoot) {
+		//project = null;
+		return;
+	}
+	
+
 	project = Project(
-		workspaceRoots.map(v => URI.parse(v.uri).fsPath),
+		URI.parse(workspaceRoot.uri).fsPath,
 		FileSystem(),
-		{parseTypes: config.x_types, debug: true, language: config.languageVersion});
+		{
+			parseTypes: cflsConfig.x_types,
+			debug: true,
+			language: cflsConfig.languageVersion,
+			withWireboxResolution: cflsConfig.wireboxResolution,
+			wireboxConfigFileAbsPath: wireboxConfigFileAbsPath,
+		});
 
 	if (cflsConfig.engineLibAbsPath) project.addEngineLib(cflsConfig.engineLibAbsPath);
+
+	// if we're doing wirebox resolution, add the wirebox config file immediately so we get the mappings
+	if (cflsConfig.wireboxResolution && wireboxConfigFileAbsPath) {
+		project.addFile(wireboxConfigFileAbsPath);
+	}
 }
 
 function reemitDiagnostics() {
@@ -255,30 +283,36 @@ function reemitDiagnostics() {
 	connection.console.info("...done with diagnostic reemit");
 }
 
+function updateConfig(config: Record<string, any> | null) {
+	cflsConfig = {
+		// engineLibAbsPath doesn't come from config, so we just carry it forward if it exists
+		engineLibAbsPath: cflsConfig?.engineLibAbsPath ?? null,
+		// the rest of these are supplied via config
+		x_types: config?.x_types,
+		languageVersion: config?.languageVersion ? languageConfigToEnum(config.languageVersion): LanguageVersion.lucee5,
+		wireboxConfigFile: config?.wireboxConfigFile ?? null,
+		wireboxResolution: config?.wireboxResolution ?? false
+	};
+}
+
 connection.onInitialized(() => {
 	if (hasConfigurationCapability) {
 		// Register for all configuration changes.
 		connection.client.register(DidChangeConfigurationNotification.type, undefined);
 
 		// immediately configure ourselves
-		cflsConfig = {
-			engineLibAbsPath: null,
-			x_types: false,
-			languageVersion: LanguageVersion.lucee5
-		};
-		resetCflsp(cflsConfig, "onInitialized"); // how to get init'd value instead of waiting on it below ?
+		updateConfig(null);
+		resetCfls("onInitialized"); // how to get init'd value instead of waiting on it below ?
 
 		// ok, now we can wait to ask the client for the workspace configuration; this might take a while to complete
 		// and completions requests and etc. can be arriving and getting serviced during the wait
 		connection.workspace.getConfiguration("cflsp").then((config) => {
-			const languageVersion = languageConfigToEnum(config.languageVersion);
-			if (languageVersion !== cflsConfig.languageVersion || config.x_types !== cflsConfig.x_types) {
-				resetCflsp(config, "onInitialized and after config");
-			}
+			updateConfig(config);
+			resetCfls("onInitialized and after config");
 		});
 	}
 	else {
-		//resetCflsp(/*x_types*/false);
+		//resetCfls(/*x_types*/false);
 	}
 
 	connection.sendNotification("cflsp/libpath");
@@ -321,18 +355,14 @@ connection.onDidChangeConfiguration(async change => {
 		// Reset all cached document settings
 		documentSettings.clear();
 		connection.workspace.getConfiguration("cflsp").then((config) => {
-			cflsConfig.languageVersion = languageConfigToEnum(config.languageVersion);
-			resetCflsp(cflsConfig, "onDidChangeConfiguration");
+			updateConfig(config);
+			resetCfls("onDidChangeConfiguration with configCapability");
 			documents.all().forEach(validateTextDocument);
 		});
 	}
 	else {
-		cflsConfig = {
-			languageVersion: LanguageVersion.lucee5,
-			x_types: false,
-			engineLibAbsPath: cflsConfig.engineLibAbsPath
-		};
-		resetCflsp(cflsConfig, "onDidChangeConfiguration");
+		updateConfig(null);
+		resetCfls("onDidChangeConfiguration no configCapability");
 
 		// Revalidate all open text documents
 		documents.all().forEach(validateTextDocument);
@@ -453,6 +483,13 @@ function mapCflsCompletionToVsCodeCompletion(completion: cfls.CompletionItem) : 
 	if (completion.detail) result.detail = completion.detail;
 	if (completion.insertText) result.insertText = completion.insertText;
 	if (completion.sortText) result.sortText = completion.sortText;
+	if (completion.textEdit) {
+		result.textEdit = {
+			insert: cfRangeToVsRange(completion.textEdit.range),
+			newText: completion.textEdit.newText,
+			replace: cfRangeToVsRange(completion.textEdit.replace),
+		}
+	}
 	return result as CompletionItem;
 }
 
