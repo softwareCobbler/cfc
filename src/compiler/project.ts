@@ -232,25 +232,27 @@ export function Project(root: string, fileSystem: FileSystem, options: ProjectOp
                     if (mapping.kind === "dir") {
                         const dirTarget = fileSystem.join(root, ...mapping.target.split("."));
                         if (!fileSystem.existsSync(dirTarget) || !fileSystem.lstatSync(dirTarget).isDirectory()) continue;
-                        const targets = fileSystem.readdirSync(dirTarget);
-                        for (const target of targets) {
-                            if (!target.isFile()) continue;
-                            if (cfmOrCfc(target.name) !== CfFileType.cfc) continue;
-                            const file = tryAddFile(fileSystem.join(dirTarget, target.name));
-                            if (!file) continue;
+                        workDir(dirTarget);
 
-                            //
-                            // (sourceFileName - dirTargRootPreix) |> striptrailingCFC |> replace sep with dots
-                            //
-                            const instantiableName = file.parsedSourceFile.absPath
-                                .replace(dirTarget, "")           // strip common prefix
-                                .replace(/\.cfc$/i, "")           // strip file extension
-                                .replace(fileSystem.pathSep, ".") // convert path seps to dots
-                                .replace(/^\./, "")               // replace possible leading dot
-                            const instantiableNameAsLiteralType = createLiteralType(instantiableName);
+                        function workDir(absPath: string) {
+                            const targets = fileSystem.readdirSync(absPath);
+                            for (const target of targets) {
+                                if (target.isSymbolicLink()) continue;
+                                if (target.isDirectory()) {
+                                    workDir(fileSystem.join(absPath, target.name));
+                                    continue;
+                                }
+                                if (!target.isFile()) continue;
+                                if (cfmOrCfc(target.name) !== CfFileType.cfc) continue;
+                                const file = tryAddFile(fileSystem.join(absPath, target.name));
+                                if (!file) continue;
 
-                            const param = cfFunctionSignatureParam(/*required*/true, instantiableNameAsLiteralType, "name")
-                            overloads.push({params: [param], returns: cfcAsType(file.parsedSourceFile)});
+                                const instantiableName = target.name.replace(/\.cfc$/i, "");
+                                const instantiableNameAsLiteralType = createLiteralType(instantiableName);
+
+                                const param = cfFunctionSignatureParam(/*required*/true, instantiableNameAsLiteralType, "name")
+                                overloads.push({params: [param], returns: cfcAsType(file.parsedSourceFile)});
+                            }
                         }
                     }
                 }
