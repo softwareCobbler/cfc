@@ -1,6 +1,6 @@
 import { Scanner, SourceRange, TokenType, Token, NilToken, TokenTypeUiString, CfFileType } from "./scanner";
 import { getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, Mutable } from "./utils";
-import { _Type } from "./types";
+import { Interface, _Type } from "./types";
 
 let debug = false;
 let nextNodeId : NodeId = 0;
@@ -151,9 +151,17 @@ export interface SymTabEntry {
 
 export type SymbolTable = Map<string, SymTabEntry>;
 
+export function typedefs() {
+    return {
+        interfaces: new Map<string, Interface[]>(),
+        mergedInterfaces: new Map<string, Interface>(),
+        aliases: new Map<string, _Type>(),
+    };
+}
+
 export type ScopeDisplay = {
-    container: Node | null, // rename to parentContainer
-    typedefs: Map<string, _Type>,
+    parentContainer: Node | null,
+    typedefs: ReturnType<typeof typedefs>,
 } & {[name in StaticallyKnownScopeName]?: Map<string, SymTabEntry>}
 
 const staticallyKnownScopeName = [
@@ -334,7 +342,7 @@ export interface SourceFile extends NodeBase {
 }
 
 function resetSourceFileInPlace(target: SourceFile, newSource: string | Buffer) : void {
-    target.containedScope = {container: null, typedefs: new Map()};
+    target.containedScope = {parentContainer: null, typedefs: typedefs()};
     target.content = [];
     // target.libRefs untouched
     target.diagnostics = [];
@@ -350,8 +358,8 @@ export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: 
     sourceFile.absPath = absPath;
     sourceFile.cfFileType = cfFileType;
     sourceFile.containedScope = {
-        container: null,
-        typedefs: new Map(),
+        parentContainer: null,
+        typedefs: typedefs(),
     };
     sourceFile.content = [];
     sourceFile.libRefs = new Map();

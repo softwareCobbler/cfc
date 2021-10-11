@@ -3,7 +3,7 @@ import * as fs from "fs";
 import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CfTag, DottedPath, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, isStaticallyKnownScopeName, Node, NodeFlags, NodeId, ParamStatementSubType, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymbolResolution, SymbolTable, SymTabResolution, TagAttribute, UnaryOperatorPos } from "./node";
 import { NodeKind } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
-import { cfFunctionSignature, isStruct, TypeFlags } from "./types";
+import { cfFunctionSignature, isStructLike, TypeFlags } from "./types";
 import { EngineSymbolResolver } from "./project";
 
 const enum TagFact {
@@ -844,8 +844,8 @@ export function getNearestEnclosingScope(node: Node, scopeName: StaticallyKnownS
             return node.containedScope[scopeName];
         }
         // didn't find it, but there is a container; we can jump to the parent container
-        else if (node.containedScope?.container) {
-            node = node.containedScope.container;
+        else if (node.containedScope?.parentContainer) {
+            node = node.containedScope.parentContainer;
         }
         // didn't find it, and there is no container; climb to parent
         else if (node.parent) {
@@ -1190,7 +1190,7 @@ export function getScopeDisplayMember(scope: ScopeDisplay,
         if (!scope.hasOwnProperty(scopeName) || !scope[scopeName as StaticallyKnownScopeName]!.get(path[1])) return undefined;
         let current = scope[scopeName as StaticallyKnownScopeName]!.get(path[1])!;
         for (let i = 2; i < path.length; i++) {
-            if (!isStruct(current.type)) return undefined;
+            if (!isStructLike(current.type)) return undefined;
             let maybeNext = current.type.members.get(path[i]);
             if (!maybeNext) return undefined;
             current = maybeNext;
@@ -1226,17 +1226,33 @@ function tryResolveFromLibs(sourceFile: SourceFile, canonicalName: string) : Sym
 export function walkupScopesToResolveSymbol(base: Node,
                                             canonicalName: string,
                                             engineSymbolResolver?: EngineSymbolResolver,
-                                            orderedScopes?: readonly StaticallyKnownScopeName[]) : SymbolResolution | undefined {
+                                            orderedScopes: readonly StaticallyKnownScopeName[] = defaultScopeLookupOrder) : SymbolResolution | undefined {
     const engineSymbol = engineSymbolResolver?.(canonicalName);
     let node : Node | null = base;
 
     while (node) {
         if (node.containedScope) {
-            const varEntry = getScopeDisplayMember(node.containedScope, canonicalName, orderedScopes || defaultScopeLookupOrder);
+            const varEntry = getScopeDisplayMember(node.containedScope, canonicalName, orderedScopes);
             if (varEntry) {
                 (varEntry as SymbolResolution).container = node;
                 if (engineSymbol) varEntry.alwaysVisibleEngineSymbol = engineSymbol;
                 return varEntry as SymbolResolution;
+            }
+            else {
+                // lookup symbols from visible interface definitions; does not yet perform interface-merging, so first hit wins, if any
+                const scopeLookup : readonly StaticallyKnownScopeName[] = node.kind === NodeKind.sourceFile ? orderedScopes : ["variables"];
+                for (const scopeName of scopeLookup) {
+                    if (node.containedScope.typedefs.interfaces.has(scopeName)) {
+                        for (const interfaceDef of node.containedScope.typedefs.interfaces.get(scopeName)!) {
+                            if (interfaceDef.members.has(canonicalName)) {
+                                const symTabEntry = interfaceDef.members.get(canonicalName)!;
+                                if (symTabEntry) {
+                                    return {scopeName, container: node, symTabEntry};
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             if (node.kind === NodeKind.sourceFile) {
@@ -1257,7 +1273,7 @@ export function walkupScopesToResolveSymbol(base: Node,
             }
 
             else {
-                node = node.containedScope.container;
+                node = node.containedScope.parentContainer;
             }
         }
         else {
@@ -1317,5 +1333,8 @@ export function cfcIsDescendantOf(ancestor: SourceFile, maybeIsDescendant: Sourc
 }
 
 export function isPublicMethod(sig: cfFunctionSignature) : boolean {
-    return !!(sig.flags & TypeFlags.public) || !!(sig.flags & TypeFlags.remote);
+    // a method is "public" if it is NOT protected or private
+    // this ensures (though maybe shouldn't be necessary but some completions logic right now relies on it) that non-cfc-bound methods are always considered "public"
+    // really what we need is a way to check if a function is "cfc-bound"
+    return !(sig.flags & TypeFlags.private || sig.flags & TypeFlags.protected);
 }

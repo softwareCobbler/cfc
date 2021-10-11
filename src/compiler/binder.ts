@@ -1,7 +1,7 @@
-import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, ConditionalSubtype, SymbolTable, TypeShim, Property, ParamStatement, ParamStatementSubType, ScopeDisplay } from "./node";
+import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, ConditionalSubtype, SymbolTable, TypeShim, Property, ParamStatement, ParamStatementSubType, typedefs } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
-import { SyntheticType, _Type, extractCfFunctionSignature, isFunctionSignature } from "./types";
+import { SyntheticType, _Type, extractCfFunctionSignature, isFunctionSignature, Interface } from "./types";
 import { LanguageVersion } from "./project";
 
 export function Binder() {
@@ -34,12 +34,13 @@ export function Binder() {
         RootNode = sourceFile_ as NodeWithScope<SourceFile>;
 
         RootNode.containedScope = {
-            container: null,
-            typedefs: new Map<string, _Type>(),
-            cgi: new Map<string, SymTabEntry>(),
+            parentContainer: null,
+            typedefs: RootNode.containedScope.typedefs, // parse phase will have provided typedefs
             variables: new Map<string, SymTabEntry>(),
+            application: new Map<string, SymTabEntry>(),
             url: new Map<string, SymTabEntry>(),
             form: new Map<string, SymTabEntry>(),
+            cgi: new Map<string, SymTabEntry>(),
         };
 
         if (sourceFile_.cfFileType === CfFileType.cfc) {
@@ -68,6 +69,7 @@ export function Binder() {
         }
 
         currentContainer = RootNode;
+        bindTypedefs(sourceFile_);
         bindList(sourceFile_.content, sourceFile_);
         connectDetachedClosureFlowsToCurrentFlow();
     }
@@ -307,11 +309,47 @@ export function Binder() {
         }
     }
 
-    function bindTypeShim(node: TypeShim) {
+    function mergeInterfaces(name: string, interfaces: readonly Interface[]) : Interface {
+        const mergedMembers = new Map<string, SymTabEntry>();
+        for (const iface of interfaces) {
+            for (const [name, symTabEntry] of iface.members) {
+                mergedMembers.set(name, symTabEntry);
+            }
+        }
+        return Interface(name, mergedMembers);
+    }
+
+    function mergeInterfaceWithParent(base: Node, name: string, iface: Readonly<Interface>) : Interface {
+        let working : Node | null = base;
+        while (working) {
+            if (working.containedScope) {
+                if (working.containedScope.typedefs.mergedInterfaces.has(name)) {
+                    return mergeInterfaces(name, [working.containedScope.typedefs.mergedInterfaces.get(name)!, iface]);
+                }
+                else {
+                    working = working.containedScope.parentContainer;
+                }
+            }
+            else {
+                working = working.parent;
+            }
+        }
+        return iface as Interface;
+    }
+
+    function bindTypedefs(node: Node) {
+        if (!node.containedScope) return;
+        for (const [name, defs] of node.containedScope.typedefs.interfaces) {
+            const localMergedDef = defs.length === 1 ? defs[0] : mergeInterfaces(name, defs);
+            const parentMergedDef = mergeInterfaceWithParent(node, name, localMergedDef);
+            node.containedScope.typedefs.mergedInterfaces.set(name, parentMergedDef);
+        }
+    }
+    function bindTypeShim(_node: TypeShim) {
         // types always have names here? -- yes, typedefs do, but we need to explicitly indicate that inside the typesystem
         // we get them from `@type x = ` so presumably always...
         // also `@declare function foo` and possibly `@declare global <identifier-name> : type`
-        currentContainer.containedScope.typedefs.set(node.type.name!, node.type);
+        //currentContainer.containedScope.typedefs.set(node.type.name!, node.type);
     }
 
     function bindTag(node: CfTag) {
@@ -834,7 +872,7 @@ export function Binder() {
         return undefined;
     }
 
-    function isBuiltinScopeName(s: string | undefined) : s is keyof Omit<ScopeDisplay, "container" | "typedefs"> {
+    function isBuiltinScopeName(s: string | undefined) : s is "url" | "form" | "cgi" | "variables" | "local" {
         switch (s) {
             case "url":
             case "form":
@@ -1034,8 +1072,8 @@ export function Binder() {
         }
 
         node.containedScope = {
-            container: currentContainer,
-            typedefs: new Map<string, _Type>(),
+            parentContainer: currentContainer,
+            typedefs: typedefs(),
             local: new Map<string, SymTabEntry>(),
             arguments: new Map<string, SymTabEntry>(),
             __transient: new Map<string, SymTabEntry>(),
@@ -1309,8 +1347,8 @@ export function Binder() {
 
     function bindDeclarationFile(sourceFile: SourceFile) {
         sourceFile.containedScope = {
-            container: null,
-            typedefs: new Map<string, _Type>(),
+            parentContainer: null,
+            typedefs: typedefs(),
             __declaration: new Map<string, SymTabEntry>()
         };
 

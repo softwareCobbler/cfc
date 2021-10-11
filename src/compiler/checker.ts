@@ -1,19 +1,18 @@
-import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution } from "./node";
+import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable } from "./node";
 import { CfcResolver, EngineSymbolResolver, LanguageVersion } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
-import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, cfStruct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStruct, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType, stringifyType, cfFunctionSignatureParam, cfFunctionSignatureWithFreshReturnType, isFunctionOverloadSet, cfFunctionOverloadSet, createLiteralType, isLiteralType } from "./types";
+import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, Struct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStructLike, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType, stringifyType, cfFunctionSignatureParam, cfFunctionSignatureWithFreshReturnType, isFunctionOverloadSet, cfFunctionOverloadSet, createLiteralType, isLiteralType, cfTypeId, SymbolTableTypeWrapper, CfcTypeWrapper, Interface, StructKind } from "./types";
 import { exhaustiveCaseGuard, getAttributeValue, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionReturnsLiteral, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol } from "./utils";
 
-type CanonicalSymbolName = string;
-type SymbolTable = ReadonlyMap<CanonicalSymbolName, SymTabEntry>;
+const structViewCache = WeakPairMap<SymbolTable, Interface, Struct>(); // map a SymbolTable -> Interface -> Struct, used to check prior existence of a wrapping of a symbol table into a struct with a possible interface extension
+const EmptyInterface = Interface("", new Map());
 
 export function Checker() {
     let sourceFile!: SourceFile;
     let scanner!: Scanner;
     let diagnostics!: Diagnostic[];
     let noUndefinedVars = false;
-    const structViewCache = new WeakMap<SymbolTable, cfStruct>(); // fixme: weakmap? when a sourcefile gets re-init'd it would be nice to clear this automagically
     let languageVersion!: LanguageVersion;
 
     function check(sourceFile_: SourceFile) {
@@ -272,7 +271,7 @@ export function Checker() {
         }
     }
 /*
-    function getNearestScopeByName(node: Node, scopeName: StaticallyKnownScopeName) : cfStruct | undefined {
+    function getNearestScopeByName(node: Node, scopeName: StaticallyKnownScopeName) : Struct | undefined {
         while (true) {
             // scope on this node contains the target scope
             if (node.containedScope?.[scopeName]) {
@@ -321,7 +320,7 @@ export function Checker() {
             if (!scope.hasOwnProperty(scopeName) || !scope[scopeName as StaticallyKnownScopeName]!.get(path[1])) return undefined;
             let current = scope[scopeName as StaticallyKnownScopeName]!.get(path[1])!;
             for (let i = 2; i < path.length; i++) {
-                if (!isStruct(current.type)) return undefined;
+                if (!isStructLike(current.type)) return undefined;
                 let maybeNext = current.type.members.get(path[i]);
                 if (!maybeNext) return undefined;
                 current = maybeNext;
@@ -564,7 +563,7 @@ export function Checker() {
         // {x: number, y: number} <: {x: number}, because L has AT LEAST all the properties of R
         // {x: number} !<: {x: number, y: number}
         //
-        function isLeftStructSubtypeOfRightStruct(l: cfStruct, r: cfStruct) {
+        function isLeftStructSubtypeOfRightStruct(l: Struct, r: Struct) {
             if (l.members.size < r.members.size) return false;
             for (const [propName, rightVal] of r.members) {
                 const leftVal = l.members.get(propName);
@@ -582,7 +581,7 @@ export function Checker() {
         if (l.flags & TypeFlags.boolean && r.flags & TypeFlags.boolean) {
             return true;
         }
-        if (isStruct(l) && isStruct(r)) {
+        if (isStructLike(l) && isStructLike(r)) {
             return isLeftStructSubtypeOfRightStruct(l, r);
         }
         if (isArray(l) && isArray(r)) {
@@ -1140,39 +1139,43 @@ export function Checker() {
     }
 
     function isStructOrArray(type: _Type) : boolean {
-        return isStruct(type)
+        return isStructLike(type)
             || isArray(type)
             || (isIntersection(type) && type.types.some(type => isStructOrArray(type)))
             || (isUnion(type) && type.types.every(type => isStructOrArray(type)))
     }
 
-    // function getContainer(node: Node) {
-    //     return findAncestor(node, (node) => !!node?.containedScope);
-    // }
-
-    // kludgy shim to take a ScopeDisplay member and wrap it in a cfStruct, so we can bridge the gap between those worlds, mostly for the 
+    // take a SymbolTable and wrap it in a Struct, so we can bridge the gap between those worlds, mostly for the 
     // sake of completions; a "scope" in CF is essentially a struct, but not quite; and vice versa; so the abstraction is not perfect but it's close
-    // we cache for something like "this" which may be repeatedly wrapped as a structView type
-    function structViewOfScope(scopeContents: SymbolTable) : cfStruct {
-        if (structViewCache.has(scopeContents)) {
-            return structViewCache.get(scopeContents)!;
+    // we cache and reuse already-wrapped sybmol tables so that we can compare types by identity
+    function structViewOfScope(scopeContents: SymbolTable, interfaceExtension?: Interface) : Struct {
+        if (!interfaceExtension) interfaceExtension = EmptyInterface;
+        if (structViewCache.has(scopeContents, interfaceExtension)) {
+            return structViewCache.get(scopeContents, interfaceExtension)!;
         }
         else {
-            const type = SyntheticType.struct(scopeContents);
-            structViewCache.set(scopeContents, type);
+            const type = SymbolTableTypeWrapper(scopeContents, interfaceExtension);
+            structViewCache.set(scopeContents, interfaceExtension, type);
             return type;
         }
         
     }
 
-    function structViewOfCfc(scopeContents: SymbolTable, cfc: SourceFile) : cfStruct {
-        const type = structViewOfScope(scopeContents);
-        
-        // @unsafe
-        (type.flags as Mutable<TypeFlags>) |= TypeFlags.cfc;
-        (type as Mutable<_Type>).cfc = cfc;
-
-        return type;
+    // fixme: consider libraries? walk into parent cfcs?
+    function walkupToFindInterfaceDefinition(name: string, node: Node) : Interface | undefined {
+        let working : Node | null = node;
+        while (working) {
+            if (working.containedScope) {
+                if (working.containedScope.typedefs.mergedInterfaces.has(name)) {
+                    return working.containedScope.typedefs.mergedInterfaces.get(name)!;
+                }
+                working = working.containedScope.parentContainer;
+            }
+            else {
+                working = working.parent;
+            }
+        }
+        return undefined;
     }
 
     function checkIdentifier(node: Identifier) {
@@ -1189,50 +1192,45 @@ export function Checker() {
             //const useContainer = getContainer(node);
 
             if (isStaticallyKnownScopeName(name)) {
-                if (name === "local" || name === "arguments") {
-                    const containingFunction = getContainingFunction(node);
-                    if (!containingFunction) {
-                        // warn about local/arguments use outside of function
-                        return;
-                    }
-                    setCachedEvaluatedNodeType(node, structViewOfScope(containingFunction.containedScope![name]!));
-                }
-                else if (name === "this" || name === "super") {
-                    const sourceFile = getSourceFile(node)!;
-                    if (sourceFile.cfFileType !== CfFileType.cfc) {
-                        // warn about using `this` outside of a cfc
-                        return;
-                    }
-
-                    setCachedEvaluatedNodeType(node, structViewOfScope(sourceFile.containedScope[name]!));
-                    /*
-                    if (!sourceFile.cfc?.extends) {
-                        setCachedEvaluatedNodeType(node, structViewOfScope(sourceFile.containedScope.this!)); // need a "cached copy" of this
-                    }
-                    else {
-                        const freshMap = new Map<string, SymTabEntry>();
-                        let workingSourceFile : SourceFile | null = sourceFile;
-                        while (workingSourceFile) {
-                            for (const [k,v] of workingSourceFile.containedScope!.this!) {
-                                freshMap.set(k,v);
-                            }
-                            workingSourceFile = workingSourceFile.cfc?.extends ?? null;
+                switch (name) {
+                    case "local":
+                    case "arguments": {
+                        const containingFunction = getContainingFunction(node);
+                        if (!containingFunction) {
+                            // warn about local/arguments use outside of function
+                            return;
                         }
-                        setCachedEvaluatedNodeType(node, structViewOfScope(freshMap));
+                        const maybeInterfaceExtension = walkupToFindInterfaceDefinition(name, containingFunction);
+                        setCachedEvaluatedNodeType(node, structViewOfScope(containingFunction.containedScope![name]!, maybeInterfaceExtension));
+                        break;
                     }
-                    */
+                    case "variables":
+                    case "this":
+                    case "super": {
+                        const sourceFile = getSourceFile(node)!;
+                        if (sourceFile.cfFileType !== CfFileType.cfc) {
+                            return;
+                        }
+                        const maybeInterfaceExtension = walkupToFindInterfaceDefinition(name, node);
+                        setCachedEvaluatedNodeType(node, structViewOfScope(sourceFile.containedScope[name]!, maybeInterfaceExtension));
+                    }
+                    case "application": {
+                        const maybeInterfaceExtension = walkupToFindInterfaceDefinition(name, node);
+                        setCachedEvaluatedNodeType(node, structViewOfScope(sourceFile.containedScope.application!, maybeInterfaceExtension));
+                    }
                 }
-                else {
-                    // @fixme
-                    //setCachedTermEvaluatedType(node, rootScope[name] ?? SyntheticType.any);
-                }
-                return;
             }
 
+            // there is no "symbol" for a built-in scope like `variables` or etc.
+            // we could probably skip this if we know that's the case
+            // the type of `this` and `variables` are built from variable declarations,
+            // but most builtin scopes support being "extended" via interface declarations;
+            // so while they don't get symbols, they will have types
             const resolvedSymbol = walkupScopesToResolveSymbol(node, name); // really we want the flow type
 
             if (resolvedSymbol) {
-                setCachedEvaluatedNodeType(node, resolvedSymbol.symTabEntry.declaredType ?? resolvedSymbol.symTabEntry.type);
+                const evaluatedType = evaluateType(node, resolvedSymbol.symTabEntry.declaredType ?? resolvedSymbol.symTabEntry.type);
+                setCachedEvaluatedNodeType(node, evaluatedType);
                 setResolvedSymbol(node, resolvedSymbol);
             }
             // let flowType : _Type | undefined = undefined; determineFlowType(node, name);
@@ -1295,7 +1293,7 @@ export function Checker() {
         if (isStructOrArray(type)) {
             for (let i = 0; i < node.accessElements.length; i++) {
                 const element = node.accessElements[i];
-                if ((element.accessType === IndexedAccessType.dot || element.accessType === IndexedAccessType.bracket) && isStruct(type)) {
+                if ((element.accessType === IndexedAccessType.dot || element.accessType === IndexedAccessType.bracket) && isStructLike(type)) {
                     const propertyName = element.accessType === IndexedAccessType.dot
                         ? element.property.token.text.toLowerCase()
                         : getTriviallyComputableString(element.expr);
@@ -1371,9 +1369,9 @@ export function Checker() {
         }
 
         if (node.accessType === IndexedAccessType.dot) {
-            if (isStruct(parentType)) {
+            if (isStructLike(parentType)) {
                 const name = node.property.token.text;
-                if (isStruct(parentType)) {
+                if (isStructLike(parentType)) {
                     if (!parentType.members.has(name) && noUndefinedVars) {
                         //typeErrorAtNode(node.property, `Property '${name}' does not exist on parent type.`);
                     }
@@ -1405,7 +1403,7 @@ export function Checker() {
                         if (returnTypeLiteral && returnTypeLiteral.canonical !== "any") { // fixme: if (returnTypeLiteral && !isBuiltinType) so we don't try to lookup "string" as a cfc or etc.
                             const cfc = cfcResolver({resolveFrom: sourceFile.absPath, cfcName: returnTypeLiteral.ui});
                             if (cfc) {
-                                memberFunctionSignature = cfFunctionSignatureWithFreshReturnType(memberFunctionSignature, structViewOfCfc(cfc.symbolTable, cfc.sourceFile));
+                                memberFunctionSignature = cfFunctionSignatureWithFreshReturnType(memberFunctionSignature, CfcTypeWrapper(cfc.sourceFile));
                                 const variablesSymbol = sourceFile.containedScope.variables?.get(node.canonicalName);
                                 // keep both `variables` and `this` in sync with member functions
                                 if (variablesSymbol) {
@@ -1532,26 +1530,27 @@ export function Checker() {
     //
     // type lookup
     //
-    function walkUpContainersToFindType(context: Node, type: _Type) : _Type | undefined {
-        if (!isTypeId(type)) {
-            return type;
-        }
-
+    function walkUpContainersToFindType(context: Node, type: cfTypeId) : _Type | undefined {
         let node : Node | null = context;
         const typeName = type.name;
 
         while (node) {
             if (node.containedScope) {
                 if (node.containedScope.typedefs) {
-                    if (node.containedScope.typedefs.has(typeName)) {
-                        return node.containedScope.typedefs.get(typeName)!;
+                    if (node.containedScope.typedefs.aliases.has(typeName)) {
+                        return node.containedScope.typedefs.aliases.get(typeName)!;
                     }
                 }
                 if (node.kind === NodeKind.sourceFile) {
+                    for (const lib of node.libRefs.values()) {
+                        if (lib.containedScope.typedefs.interfaces.has(type.name)) {
+                            return lib.containedScope.typedefs.interfaces.get(type.name)![0]; // no interface merging in libraries (or at least autogen'd libraries) yet
+                        }
+                    }
                     break;
                 }
                 else {
-                    node = node.containedScope.container;
+                    node = node.containedScope.parentContainer;
                 }
             }
             else {
@@ -1559,21 +1558,23 @@ export function Checker() {
             }
         }
 
-        if (node) { // should always be true (we hit the top, SourceFile, and broke out of the above loop)
-            // find the `std` type in the libfiles, which we're just assuming will be either present or not, and if so, it is the only libfile
-            /*for (const libFile of node.libRefs) {
-                for (const typedef of libFile.content) {
-                    if (typedef.kind === NodeType.type && typedef.typeKind === TypeKind.struct && typedef.uiName === "std") {
-                        return typedef.membersMap.get(type.uiName)?.type;
-                    }
-                }
-            }*/
-        }
-
-        if (!(type.flags & TypeFlags.synthetic)) {
-            //typeErrorAtNode(type, `Cannot find name '${type.uiName}'.`);
-        }
         return undefined;
+
+        // if (node) { // should always be true (we hit the top, SourceFile, and broke out of the above loop)
+        //     // find the `std` type in the libfiles, which we're just assuming will be either present or not, and if so, it is the only libfile
+        //     /*for (const libFile of node.libRefs) {
+        //         for (const typedef of libFile.content) {
+        //             if (typedef.kind === NodeType.type && typedef.typeKind === TypeKind.struct && typedef.uiName === "std") {
+        //                 return typedef.membersMap.get(type.uiName)?.type;
+        //             }
+        //         }
+        //     }*/
+        // }
+
+        // if (!(type.flags & TypeFlags.synthetic)) {
+        //     //typeErrorAtNode(type, `Cannot find name '${type.uiName}'.`);
+        // }
+        // return undefined;
     }
 
     function checkFor(node: For) {
@@ -1659,7 +1660,7 @@ export function Checker() {
         const cfcName = stringifyDottedPath(node.callExpr.left).ui;
         const cfc = cfcResolver({resolveFrom: sourceFile.absPath, cfcName: cfcName});
         if (!cfc) return;
-        const cfcThis = structViewOfCfc(cfc.symbolTable, cfc.sourceFile);
+        const cfcThis = CfcTypeWrapper(cfc.sourceFile);
         setCachedEvaluatedNodeType(node, cfcThis);
         
         const initSig = cfcThis.members.get("init");
@@ -1687,9 +1688,15 @@ export function Checker() {
             return cfIntersection(...(evaluatedMembers as _Type[]));
             */
         }
-        else if (isStruct(type)) {
+        else if (isStructLike(type)) {
             const memberType = type.members.get(name);
-            return memberType ? evaluateType(context, memberType.type) : undefined;
+            if (memberType) {
+                return memberType ? evaluateType(context, memberType.type) : undefined;
+            }
+            else if (type.structKind === StructKind.symbolTableTypeWrapper && type.interfaceExtension) {
+                const interfaceSuppliedType = type.interfaceExtension.members.get(name);
+                return interfaceSuppliedType ? evaluateType(context, interfaceSuppliedType.type) : undefined;
+            }
         }
 
         return undefined;
@@ -1922,7 +1929,7 @@ export function Checker() {
                 }
             }
 
-            function typeWorker(type: _Type | null) : _Type {
+            function typeWorker(type: Readonly<_Type> | null) : _Type {
                 try {
                     depth++;
                 
@@ -1934,8 +1941,9 @@ export function Checker() {
                     if (isUnion(type)) {
                         return cfUnion(type.types.map(type => typeWorker(type))); // need to dedupe and etc.
                     }
-                    if (isStruct(type)) {
-                        const evaluatedStructContents = new Map<string, SymTabEntry>();
+                    if (isStructLike(type)) {
+                        return type;
+                        /*const evaluatedStructContents = new Map<string, SymTabEntry>();
                         let concrete = true;
                         for (const key of type.members.keys()) {
                             //const preEvaluatedId = type.members.get(key)!.type.nodeId;
@@ -1954,7 +1962,7 @@ export function Checker() {
                         if (concrete) {
                             return type;
                         }
-                        return SyntheticType.struct(evaluatedStructContents);
+                        return SyntheticType.struct(evaluatedStructContents);*/
                     }
                     if (isFunctionSignature(type)) {
                         // need a more lean version of functionParameter
@@ -2022,8 +2030,16 @@ export function Checker() {
                     }
                     if (isTypeId(type)) {
                         // @fixme: should error if we can't find it; and return never ?
-                        const result = typeParamMap.get(type.name) || walkUpContainersToFindType(context, type) || null;
-                        if (!result) return SyntheticType.never;
+                        let result = typeParamMap.get(type.name) || walkUpContainersToFindType(context, type) || null;
+                        if (!result) return SyntheticType.any;
+                        if (type.indexChain) {
+                            for (const name of type.indexChain) {
+                                if (!isStructLike(result)) return SyntheticType.any; // should error with "not indexable" or etc.
+                                const nextType = result.members.get(name)?.type;
+                                if (nextType) result = typeWorker(nextType);
+                            }
+                        }
+                        
                         return typeWorker(result);
                     }
 
@@ -2055,3 +2071,41 @@ export interface CheckerInstallable {
 }
 
 export type Checker = ReturnType<typeof Checker>;
+
+function WeakPairMap<K0 extends Object, K1 extends Object, V>() {
+    const map = new WeakMap<K0, WeakMap<K1, V>>();
+
+    function get(k0: K0, k1: K1) {
+        return map.get(k0)?.get(k1);
+    }
+
+    function has(k0: K0, k1: K1) {
+        return map.has(k0) ? map.get(k0)!.has(k1) : false;
+    }
+
+    function set(k0: K0, k1: K1, v: V) {
+        const subMap = map.get(k0);
+        if (subMap) {
+            subMap.set(k1, v);
+        }
+        else {
+            map.set(k0, new WeakMap([[k1, v]]));
+        }
+    }
+
+    function _delete(k0: K0, k1?: K1) {
+        if (k1) {
+            map.get(k0)?.delete(k1);
+        }
+        else {
+            map.delete(k0);
+        }
+    }
+
+    return {
+        get,
+        set,
+        has,
+        delete: _delete
+    }
+}

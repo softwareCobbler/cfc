@@ -19,20 +19,22 @@ function projectFiddle() {
                 "Wirebox.cfc": `
                     component {
                         public someFile function mega() {
-
+                            getInstance();
                         }
         
                         function configure() {
-                            mega().foo().mega();
+                            //mega().foo().mega();
                             //mapDirectory("a.b");
                             //mapDirectory("c.d");
                         }
                     }`,
                 "someFile.cfc": `
+                    /** @interface variables { _wirebox: Wirebox, getInstance: Wirebox.getInstance } */
+                    /** @interface application { getInstance: Wirebox.getInstance } */
                     component {
-                        Wirebox function foo() {
-                            //getInstance("a.b.x");
-                            foo().
+                        function foo() {
+                            application.getInstance("a.b.x");
+                            application.getOtherInstance();
                         }
                     }`,
                 "a": {
@@ -47,7 +49,7 @@ function projectFiddle() {
 
     //let x = debugfs.readFileSync("/Child.cfc").toString().slice(102,105)
     
-    const project = Project("/", /*filesystem*/debugfs, {debug: true, parseTypes: true, language: LanguageVersion.lucee5, withWireboxResolution: false, wireboxConfigFileAbsPath: "/Wirebox.cfc"});
+    const project = Project("/", /*filesystem*/debugfs, {debug: true, parseTypes: true, language: LanguageVersion.lucee5, withWireboxResolution: true, wireboxConfigFileAbsPath: "/Wirebox.cfc"});
     //const project = Project([path.resolve(".")], FileSystem(), {debug: true, parseTypes: true, language: LanguageVersion.lucee5});
     //const target = path.join(path.resolve("./test/"), "mxunit/framework/javaloader/JavaProxy.cfc");
     //project.addFile(target);

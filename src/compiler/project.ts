@@ -6,7 +6,7 @@ import { Checker } from "./checker";
 import { BlockType, CallExpression, mergeRanges, Node, NodeId, NodeKind, SourceFile, StatementType, SymTabEntry } from "./node";
 import { Parser } from "./parser";
 import { CfFileType, SourceRange } from "./scanner";
-import { cfcAsType, cfFunctionOverloadSet, cfFunctionSignatureParam, createLiteralType, _Type } from "./types";
+import { CfcTypeWrapper, cfFunctionOverloadSet, cfFunctionSignatureParam, Interface, createLiteralType, _Type } from "./types";
 
 import { cfmOrCfc, findNodeInFlatSourceMap, flattenTree, getAttributeValue, getComponentAttrs, getComponentBlock, getTriviallyComputableString, NodeSourceMap, visit } from "./utils";
 
@@ -194,6 +194,17 @@ export function Project(root: string, fileSystem: FileSystem, options: ProjectOp
 
         const checkStart = new Date().getTime();
 
+        if (options.withWireboxResolution && sourceFile.absPath === options.wireboxConfigFileAbsPath) {
+            const wireboxInterface = constructWireboxInterface(sourceFile);
+            if (wireboxInterface) {
+                if (!wireboxLib) wireboxLib = SourceFile("<<magic/wirebox>>", CfFileType.dCfm, "");
+                wireboxLib.containedScope.typedefs.interfaces.set("Wirebox", [wireboxInterface]);
+            }
+            else {
+                wireboxLib = null;
+            }
+        }
+
         if (options.withWireboxResolution && wireboxLib) {
             sourceFile.libRefs.set("<<magic/wirebox>>", wireboxLib);
         }
@@ -224,51 +235,54 @@ export function Project(root: string, fileSystem: FileSystem, options: ProjectOp
             
         }
 
-        if (options.withWireboxResolution && sourceFile.absPath === options.wireboxConfigFileAbsPath) {
-            const mappings = buildWireboxMappings(sourceFile);
-            if (mappings) {
-                const overloads : {params: cfFunctionSignatureParam[], returns: _Type}[] = [];
-                for (const mapping of mappings) {
-                    if (mapping.kind === "dir") {
-                        const dirTarget = fileSystem.join(root, ...mapping.target.split("."));
-                        if (!fileSystem.existsSync(dirTarget) || !fileSystem.lstatSync(dirTarget).isDirectory()) continue;
-                        workDir(dirTarget);
+        return files.get(absPath)!;
+    }
 
-                        function workDir(absPath: string) {
-                            const targets = fileSystem.readdirSync(absPath);
-                            for (const target of targets) {
-                                if (target.isSymbolicLink()) continue;
-                                if (target.isDirectory()) {
-                                    workDir(fileSystem.join(absPath, target.name));
-                                    continue;
-                                }
-                                if (!target.isFile()) continue;
-                                if (cfmOrCfc(target.name) !== CfFileType.cfc) continue;
-                                const file = tryAddFile(fileSystem.join(absPath, target.name));
-                                if (!file) continue;
+    function constructWireboxInterface(sourceFile: SourceFile) {
+        const mappings = buildWireboxMappings(sourceFile);
+        if (!mappings) {
+            return undefined;
+        }
 
-                                const instantiableName = target.name.replace(/\.cfc$/i, "");
-                                const instantiableNameAsLiteralType = createLiteralType(instantiableName);
+        const overloads : {params: cfFunctionSignatureParam[], returns: _Type}[] = [];
+        for (const mapping of mappings) {
+            if (mapping.kind === "dir") {
+                const dirTarget = fileSystem.join(root, ...mapping.target.split("."));
+                if (!fileSystem.existsSync(dirTarget) || !fileSystem.lstatSync(dirTarget).isDirectory()) continue;
+                workDir(dirTarget);
 
-                                const param = cfFunctionSignatureParam(/*required*/true, instantiableNameAsLiteralType, "name")
-                                overloads.push({params: [param], returns: cfcAsType(file.parsedSourceFile)});
-                            }
+                function workDir(absPath: string) {
+                    const targets = fileSystem.readdirSync(absPath);
+                    for (const target of targets) {
+                        if (target.isSymbolicLink()) continue;
+                        if (target.isDirectory()) {
+                            workDir(fileSystem.join(absPath, target.name));
+                            continue;
                         }
+                        if (!target.isFile()) continue;
+                        if (cfmOrCfc(target.name) !== CfFileType.cfc) continue;
+                        const file = tryAddFile(fileSystem.join(absPath, target.name));
+                        if (!file) continue;
+
+                        const instantiableName = target.name.replace(/\.cfc$/i, "");
+                        const instantiableNameAsLiteralType = createLiteralType(instantiableName);
+
+                        const param = cfFunctionSignatureParam(/*required*/true, instantiableNameAsLiteralType, "name")
+                        overloads.push({params: [param], returns: CfcTypeWrapper(file.parsedSourceFile)});
                     }
                 }
-                const wireboxGetInstanceSymbol = {
-                    uiName: "getInstance",
-                    canonicalName: "getinstance",
-                    declarations: null,
-                    type: cfFunctionOverloadSet("getInstance", overloads, [])
-                };
-
-                if (!wireboxLib) wireboxLib = SourceFile("<<magic/wirebox>>", CfFileType.dCfm, "");
-                wireboxLib.containedScope.__declaration = new Map([["getinstance", wireboxGetInstanceSymbol]]);
             }
         }
 
-        return files.get(absPath)!;
+        const wireboxGetInstanceSymbol = {
+            uiName: "getInstance",
+            canonicalName: "getinstance",
+            declarations: null,
+            type: cfFunctionOverloadSet("getInstance", overloads, [])
+        };
+
+        const wireboxMembers = new Map<string, SymTabEntry>([["getinstance", wireboxGetInstanceSymbol]]);
+        return Interface("Wirebox", wireboxMembers);
     }
 
     function addEngineLib(absPath: string) {

@@ -1,5 +1,5 @@
-import { ArrowFunctionDefinition, CfTag, DottedPath, FunctionDefinition, NodeKind, Script, SourceFile, SymTabEntry, Tag, TagAttribute, } from "./node";
-import { getAttributeValue, getTriviallyComputableString, Mutable } from "./utils";
+import { ArrowFunctionDefinition, CfTag, DottedPath, FunctionDefinition, NodeKind, Script, SourceFile, SymbolTable, SymTabEntry, Tag, TagAttribute, } from "./node";
+import { exhaustiveCaseGuard, getAttributeValue, getTriviallyComputableString, Mutable } from "./utils";
 
 let debugTypeModule = true;
 debugTypeModule;
@@ -11,7 +11,7 @@ export const enum TypeFlags {
     string                          = 0x00000004,
     numeric                         = 0x00000008,
     boolean                         = 0x00000010,
-    nil                             = 0x00000020,
+    //interface                       = 0x00000020,
     never                           = 0x00000040,
     array                           = 0x00000080,
     tuple                           = 0x00000100,
@@ -32,7 +32,7 @@ export const enum TypeFlags {
     spread                          = 0x00800000,
     mappedType                      = 0x01000000,
     indexedType                     = 0x02000000,
-    cfc                             = 0x04000000,
+    //cfc                             = 0x04000000,
     derived                         = 0x08000000,
     remote                          = 0x10000000,
     public                          = 0x20000000,
@@ -58,7 +58,6 @@ const TypeKindUiString : Record<TypeFlags, string> = {
     [TypeFlags.string]:                          "string",
     [TypeFlags.numeric]:                          "number",
     [TypeFlags.boolean]:                         "boolean",
-    [TypeFlags.nil]:                             "nil",
     [TypeFlags.array]:                           "array",
     [TypeFlags.tuple]:                           "tuple",
     [TypeFlags.struct]:                          "struct",
@@ -79,7 +78,6 @@ const TypeKindUiString : Record<TypeFlags, string> = {
     [TypeFlags.spread]:                          "spread",
     [TypeFlags.mappedType]:                      "mapped-type",
     [TypeFlags.indexedType]:                     "indexed-type",
-    [TypeFlags.cfc]:                             "cfc",
     [TypeFlags.derived]:                         "derived",
 
     // access modifiers for cfc member functions
@@ -98,6 +96,17 @@ function addDebugTypeInfo(type: _Type) {
             for (let i = 0; powersOf2[i] && powersOf2[i] < TypeFlags.end; i++) {
                 if (type.flags & powersOf2[i]) {
                     result.push(TypeKindUiString[powersOf2[i] as TypeFlags]);
+                }
+            }
+            // structlike things have a few subtypes we'd like to indicate
+            if (isStructLike(type)) {
+                const val = type.structKind;
+                switch (val) {
+                    case StructKind.struct: break; // already "struct" by TypeKindUiString
+                    case StructKind.cfcTypeWrapper: result.push("CfcWrapper"); break;
+                    case StructKind.interface: result.push("Interface"); break;
+                    case StructKind.symbolTableTypeWrapper: result.push("SymbolTableWrapper"); break;
+                    default: exhaustiveCaseGuard(val);
                 }
             }
             return result.join(",");
@@ -169,13 +178,58 @@ export function isTuple(t: _Type) : t is cfTuple {
     return !!(t.flags & TypeFlags.tuple);
 }
 
-export interface cfStruct extends _Type {
-    members: ReadonlyMap<string, SymTabEntry>,
+export const enum StructKind { struct, interface, cfcTypeWrapper, symbolTableTypeWrapper };
+
+export type Struct = DefaultStruct | Interface | CfcTypeWrapper | SymbolTableTypeWrapper;
+
+interface StructBase extends _Type {
+    structKind: StructKind,
+    readonly members: ReadonlyMap<string, SymTabEntry>,
 }
 
-export function cfStruct(members: ReadonlyMap<string, SymTabEntry>) : cfStruct {
-    const type = {
+export interface DefaultStruct extends StructBase {
+    structKind: StructKind.struct,
+}
+
+export interface Interface extends StructBase {
+    structKind: StructKind.interface,
+    readonly name: string
+}
+
+export interface CfcTypeWrapper extends StructBase {
+    readonly structKind: StructKind.cfcTypeWrapper,
+    readonly cfc: Readonly<SourceFile>,
+}
+
+export interface SymbolTableTypeWrapper extends StructBase {
+    readonly structKind: StructKind.symbolTableTypeWrapper,
+    // @interface variables { key: string }
+    // variables.a = 42;
+    // function foo() { variables. } <-- symbol table may be extended with an interface
+    // interfaces will be merged with all sibling and parent interfaces of the same name prior to their attachment here
+    // since at time of attachment to the wrapper here the merging will have already taken place, there is exactly 0 or 1 of these
+    readonly interfaceExtension?: Readonly<Interface>
+}
+
+export function Struct(members: ReadonlyMap<string, SymTabEntry>) : DefaultStruct {
+    const type : DefaultStruct = {
         flags: TypeFlags.struct,
+        structKind: StructKind.struct,
+        members,
+    }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+
+    return type;
+}
+
+export function Interface(name: string, members: ReadonlyMap<string, SymTabEntry>) : Interface {
+    const type : Interface = {
+        flags: TypeFlags.struct,
+        structKind: StructKind.interface,
+        name,
         members,
     }
 
@@ -190,19 +244,43 @@ export function cfStruct(members: ReadonlyMap<string, SymTabEntry>) : cfStruct {
 // we store a reference to the sourceFile, which is expected to remain unchanged over the life of the cfc as it is edited
 // the underlying `containedScope.this` may change, which is OK, and necessitates the getter
 // todo: what happens when the target source file is deleted or otherwise unloaded?
-export function cfcAsType(sourceFile: Readonly<SourceFile>) : cfStruct {
-    const result : cfStruct = {
+export function CfcTypeWrapper(sourceFile: Readonly<SourceFile>) : CfcTypeWrapper {
+    const result : CfcTypeWrapper = {
+        flags: TypeFlags.struct,
+        structKind: StructKind.cfcTypeWrapper,
         // fixme: this should be able to return undefined if the sourceFile is destroyed
         get members() : ReadonlyMap<string, SymTabEntry> {
             return sourceFile.containedScope.this!
         },
         cfc: sourceFile,
-        flags: TypeFlags.cfc | TypeFlags.struct
     } as const;
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(result);
+    }
+
     return result;
 }
 
-export function isStruct(t: _Type) : t is cfStruct {
+export function SymbolTableTypeWrapper(symbolTable: Readonly<SymbolTable>, interfaceExtension?: Readonly<Interface>) : SymbolTableTypeWrapper {
+    const type : SymbolTableTypeWrapper = {
+        flags: TypeFlags.struct,
+        structKind: StructKind.symbolTableTypeWrapper,
+        members: symbolTable,
+    };
+
+    if (interfaceExtension) {
+        (type as Mutable<SymbolTableTypeWrapper>).interfaceExtension = interfaceExtension;
+    }
+
+    if (debugTypeModule) {
+        addDebugTypeInfo(type);
+    }
+
+    return type;
+}
+
+export function isStructLike(t: _Type) : t is Struct {
     t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.struct);
 }
@@ -218,7 +296,7 @@ export interface cfFunctionSignature extends _Type {
 export interface cfFunctionOverloadSet extends _Type {
     readonly uiName: string,
     readonly canonicalName: string,
-    readonly overloads: {params: readonly cfFunctionSignatureParam[], returns: Readonly<_Type>}[],
+    readonly overloads: {params: readonly Readonly<cfFunctionSignatureParam>[], returns: Readonly<_Type>}[],
     readonly attrs: readonly TagAttribute[],
 }
 
@@ -400,13 +478,17 @@ export function isTypeConstructorParam(t: _Type) : t is cfTypeConstructorParam {
 }
 
 export interface cfTypeId extends _Type {
-    name: string
+    readonly name: string,
+    readonly indexChain?: readonly string[]
 }
 
-export function cfTypeId(name: string) : cfTypeId {
-    const type = {
+export function cfTypeId(name: string, indexChain?: string[]) : cfTypeId {
+    const type : cfTypeId = {
         flags: TypeFlags.typeId,
         name
+    }
+    if (indexChain) {
+        (type as Mutable<cfTypeId>).indexChain = indexChain;
     }
 
     if (debugTypeModule) {
@@ -515,11 +597,6 @@ export function isIndexedType(t: _Type) : t is cfIndexedType {
     return !!(t.flags & TypeFlags.indexedType);
 }
 
-export function isCfc(t: _Type) : boolean {
-    t = getCanonicalType(t);
-    return !!(t.flags & TypeFlags.cfc);
-}
-
 export const SyntheticType = (function() {
     const any : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.any,
@@ -553,13 +630,8 @@ export const SyntheticType = (function() {
     } as _Type;
     (boolean as Mutable<_Type>).canonicalType = boolean;
 
-    const nil : _Type = {
-        flags: TypeFlags.synthetic | TypeFlags.nil,
-    } as _Type;
-    (nil as Mutable<_Type>).canonicalType = nil;
-
     const struct = (membersMap: ReadonlyMap<string, SymTabEntry> = new Map()) => {
-        const v = cfStruct(membersMap);
+        const v = Struct(membersMap);
         (v.flags as TypeFlags) |= TypeFlags.synthetic;
         return v;
     }
@@ -577,7 +649,6 @@ export const SyntheticType = (function() {
         string: createType(string),
         numeric: createType(numeric),
         boolean: createType(boolean),
-        nil: createType(nil),
         never: createType(never),
         struct, // this is a function
         anyFunction: anyFunction, // already created via call to cfFunctionSignature

@@ -3,7 +3,7 @@
 import { Project } from "../compiler/project"
 import { Node, NodeKind, CallExpression, CfTag, StaticallyKnownScopeName, SymbolTable, SymTabEntry, SimpleStringLiteral, SourceFile } from "../compiler/node"
 import { CfFileType, SourceRange, TokenType } from "../compiler/scanner";
-import { isFunctionOverloadSet, isFunctionSignature, isLiteralType, isStruct, TypeFlags, _Type } from "../compiler/types";
+import { isFunctionOverloadSet, isFunctionSignature, isLiteralType, isStructLike, StructKind, SymbolTableTypeWrapper, TypeFlags, _Type } from "../compiler/types";
 import { isExpressionContext, isCfScriptTagBlock, stringifyCallExprArgName, getSourceFile, cfcIsDescendantOf, isPublicMethod } from "../compiler/utils";
 import { tagNames } from "./tagnames";
 import { Checker } from "../compiler/checker";
@@ -47,12 +47,14 @@ function getStringLiteralCompletions(checker: Checker, sourceFile: SourceFile, n
     if (node.parent?.kind === NodeKind.callArgument && node.parent.parent?.kind === NodeKind.callExpression) {
         const ziArgIndex = getCallExprArgIndex(node.parent.parent, node);
         if (ziArgIndex === undefined) return undefined;
-        const symbol = checker.getSymbol(node.parent.parent.left, sourceFile);
-        if (!symbol) return undefined;
+        // const symbol = checker.getSymbol(node.parent.parent.left, sourceFile);
+        // if (!symbol) return undefined;
+        const type = checker.getCachedEvaluatedNodeType(node.parent.parent.left, sourceFile);
+        if (!type) return undefined;
 
         let strings : string[] = [];
-        if (isFunctionOverloadSet(symbol.symTabEntry.type)) {
-            for (const overload of symbol.symTabEntry.type.overloads) {
+        if (isFunctionOverloadSet(type)) {
+            for (const overload of type.overloads) {
                 const type = overload.params[ziArgIndex]?.type;
                 if (!type) continue;
                 if (type.flags & TypeFlags.string && isLiteralType(type)) {
@@ -60,7 +62,7 @@ function getStringLiteralCompletions(checker: Checker, sourceFile: SourceFile, n
                 }
             }
         }
-        else if (isFunctionSignature(symbol.symTabEntry.type)) {
+        else if (isFunctionSignature(type)) {
             return undefined; // not yet impl'd
         }
 
@@ -210,19 +212,21 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
 
         while (typeinfo) {
             let underlyingMembers : ReadonlyMap<string, SymTabEntry>;
+            let interfaceExtension : ReadonlyMap<string, SymTabEntry> | undefined = undefined;
             if (typeinfo instanceof Map) {
                 underlyingMembers = typeinfo;
             }
-            else if (isStruct(typeinfo)) {
+            else if (isStructLike(typeinfo)) {
                 underlyingMembers = typeinfo.members;
+                if (typeinfo.structKind === StructKind.symbolTableTypeWrapper) interfaceExtension = (typeinfo as SymbolTableTypeWrapper).interfaceExtension?.members;
             }
             else {
                 break; // unreachable
             }
 
-            for (const symTabEntry of underlyingMembers.values()) {
-                if (symTabEntry.canonicalName === "init" && forCfcCompletions) { continue };
-                if (forCfcCompletions && isFunctionSignature(symTabEntry.type) && !isPublicMethod(symTabEntry.type) && !sourceFileIsCfcDescendantOfSymbolTableFile) { continue; }
+            const runOne = (symTabEntry: SymTabEntry) => {
+                if (symTabEntry.canonicalName === "init" && forCfcCompletions) return;
+                if (forCfcCompletions && isFunctionSignature(symTabEntry.type) && !isPublicMethod(symTabEntry.type) && !sourceFileIsCfcDescendantOfSymbolTableFile) return;
                 result.push({
                     label: symTabEntry.uiName,
                     kind: isFunctionSignature(symTabEntry.type)
@@ -231,11 +235,14 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
                     detail: ""
                 })
             }
+            
+            underlyingMembers.forEach(runOne);
+            interfaceExtension?.forEach(runOne);
 
             // if our first symbol was for a cfc exported/public symbol, then we can climb the hierarchy and offer public members of parent components, too
             if (forCfcCompletions && workingSourceFile.cfc?.extends) {
                 workingSourceFile = workingSourceFile.cfc.extends;
-                typeinfo = workingSourceFile.containedScope.this; // the first typeinfo was guaranteed to be a `cfStruct`; from here and for every subsequent iteration, we get a SymbolTable instaed
+                typeinfo = workingSourceFile.containedScope.this; // the first typeinfo was guaranteed to be a Struct; from here and for every subsequent iteration, we get a SymbolTable instaed
             }
             else {
                 break;
@@ -244,16 +251,6 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
 
         return result;
     }
-
-    // things that are always visible, but with low priority in relation to the user's identifiers
-    // probably better to bind these as identifiers in the appropriate symbol tables
-    if (getSourceFile(node)?.cfFileType === CfFileType.cfc) {
-        result.push({label: "this", kind: CompletionItemKind.variable, sortText: "z"});
-    }
-    result.push({label: "variables", kind: CompletionItemKind.variable, sortText: "z"});
-    result.push({label: "url", kind: CompletionItemKind.variable, sortText: "z"});
-    result.push({label: "request", kind: CompletionItemKind.variable, sortText: "z"});
-    result.push({label: "cgi", kind: CompletionItemKind.variable, sortText: "z"});
 
     // we're in a primary expression context, where we need to do symbol lookup in all visible scopes
     // e.g,. `x = | + y`
@@ -265,7 +262,13 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
                 for (const searchScope of ["local", "arguments", "variables"] as StaticallyKnownScopeName[]) {
                     const symTab = node.containedScope[searchScope];
                     if (!symTab) continue;
-                    for (const symTabEntry of symTab.values()) {
+                    
+                    const iterableSymTabEntries = [...symTab.values()];
+                    if (node.containedScope.typedefs.mergedInterfaces.has(searchScope)) {
+                        iterableSymTabEntries.push(...node.containedScope.typedefs.mergedInterfaces.get(searchScope)!.members.values());
+                    }
+
+                    for (const symTabEntry of iterableSymTabEntries) {
                         const completionKind = isFunctionSignature(symTabEntry.type)
                             ? CompletionItemKind.function
                             : CompletionItemKind.variable;
@@ -279,7 +282,7 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
             // otherwise, climb to ancestor container or direct parent node
             node = (node.kind === NodeKind.sourceFile && node.cfc?.extends)
                 ? node.cfc.extends
-                : node.containedScope?.container || node.parent;
+                : node.containedScope?.parentContainer || node.parent;
         }
         return result;
     })(node);
