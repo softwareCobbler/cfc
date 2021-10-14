@@ -1242,13 +1242,12 @@ export function walkupScopesToResolveSymbol(base: Node,
                 // lookup symbols from visible interface definitions; does not yet perform interface-merging, so first hit wins, if any
                 const scopeLookup : readonly StaticallyKnownScopeName[] = node.kind === NodeKind.sourceFile ? orderedScopes : ["variables"];
                 for (const scopeName of scopeLookup) {
-                    if (node.containedScope.typedefs.interfaces.has(scopeName)) {
-                        for (const interfaceDef of node.containedScope.typedefs.interfaces.get(scopeName)!) {
-                            if (interfaceDef.members.has(canonicalName)) {
-                                const symTabEntry = interfaceDef.members.get(canonicalName)!;
-                                if (symTabEntry) {
-                                    return {scopeName, container: node, symTabEntry};
-                                }
+                    if (node.containedScope.typedefs.mergedInterfaces.has(scopeName)) {
+                        const interfaceDef = node.containedScope.typedefs.mergedInterfaces.get(scopeName)!;
+                        if (interfaceDef.members.has(canonicalName)) {
+                            const symTabEntry = interfaceDef.members.get(canonicalName)!;
+                            if (symTabEntry) {
+                                return {scopeName, container: node, symTabEntry};
                             }
                         }
                     }

@@ -27,8 +27,8 @@ import {
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, TypeShim, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
-import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, Mutable, isSimpleOrInterpolatedStringLiteral, getAttributeValue } from "./utils";
-import { cfIndexedType, Interface, cfIntersection, extractCfFunctionSignature, isIntersection, isStructLike, isTypeId, isUnion } from "./types";
+import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, Mutable, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath } from "./utils";
+import { cfIndexedType, Interface, cfIntersection, extractCfFunctionSignature, isIntersection, isStructLike, isTypeId, isUnion, cfTypeConstructorParam, cfTypeConstructorInvocation, CfcLookup, createLiteralType } from "./types";
 import { _Type, cfArray, Struct, StructKind, cfTuple, cfFunctionSignature, cfTypeId, cfUnion, SyntheticType, cfFunctionSignatureParam } from "./types";
 import { LanguageVersion } from "./project";
 
@@ -4019,8 +4019,8 @@ export function Parser(config: {language: LanguageVersion}) {
             }
         }
 
-        /*function parseTypeParam() : cfTypeConstructorParam {
-            const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure* /false, /*allowNumeric* /false);
+        function parseTypeParam() : cfTypeConstructorParam {
+            const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
             const equal = parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
             if (equal) {
                 const defaultType = parseType();
@@ -4031,7 +4031,7 @@ export function Parser(config: {language: LanguageVersion}) {
                 parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
                 return cfTypeConstructorParam(name.token.text);
             }
-        }*/
+        }
 
 
         function maybeParseArrayModifier(type: _Type) : _Type {
@@ -4129,7 +4129,14 @@ export function Parser(config: {language: LanguageVersion}) {
                     }
                     else {
                         result = textToType(token);
-                        if (isTypeId(result)) {
+                        if (token.text.toLowerCase() === "cfc") {
+                            parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
+                            const dottedPath = parseDottedPath();
+                            parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);
+                            const cfcPathNameAsLiteralType = createLiteralType(stringifyDottedPath(dottedPath).ui);
+                            result = CfcLookup(cfcPathNameAsLiteralType);
+                        }
+                        else if (isTypeId(result)) {
                             const rest : string[] = [];
                             while (lookahead() !== TokenType.EOF) {
                                 parseTrivia();
@@ -4142,13 +4149,19 @@ export function Parser(config: {language: LanguageVersion}) {
                                     break;
                                 }
                             }
+
                             if (rest.length > 0) {
                                 result = cfTypeId(result.name, rest);
                             }
+
+                            if (lookahead() === TokenType.LEFT_ANGLE) {
+                                parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
+                                const typeParams = parseList(ParseContext.typeParamList, parseTypeParam);
+                                parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);
+                                result = cfTypeConstructorInvocation(result, typeParams);
+                            }
                         }
-                        /*while (lookahead() === TokenType.LEFT_ANGLE) {
-                            result = parseTypeConstructorInvocation(result);
-                        }*/
+
                         result = maybeParseArrayModifier(result);
                     }
                     break;

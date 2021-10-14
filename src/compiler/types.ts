@@ -117,7 +117,7 @@ function addDebugTypeInfo(type: _Type) {
 export interface _Type {
     readonly flags: TypeFlags,
     readonly name?: string,
-    readonly canonicalType?: _Type,
+    readonly underlyingType?: _Type,
     readonly types?: _Type[],
     readonly cfc?: Readonly<SourceFile>, // kludge for connecting a cfstruct that represents a cfc to its cfc
     readonly literalValue?: string | number
@@ -125,8 +125,8 @@ export interface _Type {
 
 export function getCanonicalType(type: _Type) {
     while (true) {
-        if (type.canonicalType && type === type.canonicalType) return type;
-        else if (type.flags & TypeFlags.derived) type = type.canonicalType!;
+        if (type.underlyingType && type === type.underlyingType) return type;
+        else if (type.flags & TypeFlags.derived) type = type.underlyingType!;
         else if (!(type.flags & TypeFlags.derived)) return type;
         else break;
     }
@@ -424,9 +424,9 @@ export function isCachedTypeConstructorInvocation(t: _Type) : t is cfCachedTypeC
 }
 
 export interface cfTypeConstructor extends _Type {
-    params: cfTypeConstructorParam[],
-    capturedParams: Map<string, _Type>, // "in context Γ extended with (T0,...,Tn)"; so @type Foo = <T> => <U> => (can see T, U here)
-    body: _Type,
+    readonly params: readonly cfTypeConstructorParam[],
+    readonly capturedParams: ReadonlyMap<string, _Type>, // "in context Γ extended with (T0,...,Tn)"; so @type Foo = <T> => <U> => (can see T, U here)
+    readonly body: _Type,
 }
 
 export function cfTypeConstructor(params: cfTypeConstructorParam[], body: _Type) : cfTypeConstructor {
@@ -442,6 +442,10 @@ export function cfTypeConstructor(params: cfTypeConstructorParam[], body: _Type)
     }
     
     return type;
+}
+
+export function CfcLookup(param: _Type) {
+        return cfTypeConstructorInvocation(SyntheticType.cfcLookupType, [param]);
 }
 
 export function isTypeConstructor(t: _Type) : t is cfTypeConstructor {
@@ -601,7 +605,7 @@ export const SyntheticType = (function() {
     const any : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.any,
     } as _Type;
-    (any as Mutable<_Type>).canonicalType = any;
+    (any as Mutable<_Type>).underlyingType = any;
 
     const anyFunction = (() => {
         const spreadParam = cfFunctionSignatureParam(false, cfArray(any), "args");
@@ -612,23 +616,23 @@ export const SyntheticType = (function() {
     const void_ : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.void,
     } as _Type;
-    (void_ as Mutable<_Type>).canonicalType = void_;
+    (void_ as Mutable<_Type>).underlyingType = void_;
 
     const string : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.string,
     } as _Type;
-    (string as Mutable<_Type>).canonicalType = string;
+    (string as Mutable<_Type>).underlyingType = string;
 
 
     const numeric : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.numeric | TypeFlags.string,
     } as _Type;
-    (numeric as Mutable<_Type>).canonicalType = numeric;
+    (numeric as Mutable<_Type>).underlyingType = numeric;
 
     const boolean : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.boolean,
     } as _Type;
-    (boolean as Mutable<_Type>).canonicalType = boolean;
+    (boolean as Mutable<_Type>).underlyingType = boolean;
 
     const struct = (membersMap: ReadonlyMap<string, SymTabEntry> = new Map()) => {
         const v = Struct(membersMap);
@@ -641,7 +645,7 @@ export const SyntheticType = (function() {
     const never : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.never
     } as _Type;
-    (never as Mutable<_Type>).canonicalType = never;
+    (never as Mutable<_Type>).underlyingType = never;
 
     const results = {
         any: createType(any),
@@ -653,6 +657,7 @@ export const SyntheticType = (function() {
         struct, // this is a function
         anyFunction: anyFunction, // already created via call to cfFunctionSignature
         emptyStruct, // already created via a call to cfStruct()
+        cfcLookupType: cfTypeConstructor([], any) // param and body are meaningless here, we just want a single type constructor that says "hey, lookup the name of this as a cfc as a type"
     } as const;
 
     return results;
@@ -667,7 +672,7 @@ function freshType(type: _Type, flags: TypeFlags) : _Type {
     if (flags === TypeFlags.none || type.flags === flags) return type;
     else {
         flags |= TypeFlags.derived;
-        return createType({flags, canonicalType: type});
+        return createType({flags, underlyingType: type});
     }
 }
 
@@ -781,14 +786,14 @@ export function createLiteralType(value: string | number) : _Type {
     if (typeof value === "string") {
         result = {
             flags: TypeFlags.synthetic | TypeFlags.string,
-            canonicalType: SyntheticType.string,
+            underlyingType: SyntheticType.string,
             literalValue: value
         };
     }
     else {
         result = {
             flags: TypeFlags.synthetic | TypeFlags.numeric,
-            canonicalType: SyntheticType.numeric,
+            underlyingType: SyntheticType.numeric,
             literalValue: value,
         };
     }

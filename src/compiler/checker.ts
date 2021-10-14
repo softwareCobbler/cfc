@@ -1869,7 +1869,7 @@ export function Checker() {
                         // if a type constructor returned a type constructor, extend the new type constructor's environment
                         // with the parent's environment + the args to the parent's invocation
                         // inner most names shadows outer names if there are name conflicts
-                        result.capturedParams = typeParamMap;
+                        // result.capturedParams = typeParamMap;
                     }
                     return result;
                 }
@@ -1979,6 +1979,18 @@ export function Checker() {
                         return type;
                     }
                     if (isTypeConstructorInvocation(type)) {
+                        if (type.left === SyntheticType.cfcLookupType) {
+                            const literalType = type.args[0];
+                            if (literalType && isLiteralType(literalType) && literalType.flags & TypeFlags.string) {
+                                const resolvedCfc = cfcResolver({resolveFrom: sourceFile.absPath, cfcName: literalType.literalValue as string})
+                                if (resolvedCfc) {
+                                    const freshType = CfcTypeWrapper(resolvedCfc.sourceFile);
+                                    (freshType as Mutable<_Type>).underlyingType = type;
+                                    return freshType;
+                                }
+                            }
+                        }
+
                         const typeConstructor = typeWorker(type.left);
                         if (typeConstructor.flags & TypeFlags.never) {
                             return typeConstructor;

@@ -17,15 +17,10 @@ function projectFiddle() {
         {
             "/": {
                 "Wirebox.cfc": `
+                    /** @interface variables { x: cfc<a.b.x> } */
                     component {
-                        public someFile function mega() {
-                            getInstance();
-                        }
-        
-                        function configure() {
-                            //mega().foo().mega();
-                            //mapDirectory("a.b");
-                            //mapDirectory("c.d");
+                        public function mega() {
+                            x.foobar();
                         }
                     }`,
                 "someFile.cfc": `
@@ -41,6 +36,9 @@ function projectFiddle() {
                     "b": {
                         "x.cfc": "component { function foobar() {} }",
                         "y.cfc": "component {}",
+                    },
+                    "c": {
+                        "x.cfc": "component extends='a.b.x' {}"
                     }
                 },
             }
@@ -54,6 +52,7 @@ function projectFiddle() {
     //const target = path.join(path.resolve("./test/"), "mxunit/framework/javaloader/JavaProxy.cfc");
     //project.addFile(target);
 
+    project.addFile("/a/c/x.cfc")
     project.addFile("/Wirebox.cfc");
     //project.addFile("/someFile.cfc");
 
