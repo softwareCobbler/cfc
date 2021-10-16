@@ -573,13 +573,13 @@ export function Checker() {
     function isLeftSubtypeOfRight(l: _Type, r: _Type) : boolean {
         let depth = 0;
         let tooDeep = false;
-        tooDeep ? 0 : 1;
+        tooDeep ? 0 : 1; // yes compiler this is used
 
         return worker(l, r);
 
         function worker(l: _Type, r: _Type) : boolean {
             if (depth > 32) {
-                debugger;
+                //debugger;
                 tooDeep = true;
                 return false;
             }

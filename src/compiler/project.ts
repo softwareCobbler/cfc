@@ -171,7 +171,7 @@ export function DebugFileSystem(files?: Readonly<FileSystemNode>, pathSepOfDebug
             const t = path.join(...args);
             return t.replace(nativeSepPattern, pathSepOfDebugFs);
         },
-        normalize: (_path: string) => { throw "not implemented"; },
+        normalize: (_path: string) => { return _path; /* fixme */ },
         pathSep: pathSepOfDebugFs,
         caseSensitive: isCaseSensitive
     }
@@ -187,9 +187,10 @@ export interface ProjectOptions {
     wireboxConfigFileCanonicalAbsPath: string | null,
 }
 
-export function Project(root: string, fileSystem: FileSystem, options: ProjectOptions) {
+export function Project(__const__projectRoot: string, fileSystem: FileSystem, options: ProjectOptions) {
     type AbsPath = string;
     
+    const projectRoot = canonicalizePath(__const__projectRoot);
     const parser = Parser(options);
     const binder = Binder();
     const checker = Checker();
@@ -305,7 +306,7 @@ export function Project(root: string, fileSystem: FileSystem, options: ProjectOp
         const overloads : {params: cfFunctionSignatureParam[], returns: _Type}[] = [];
         for (const mapping of mappings) {
             if (mapping.kind === "dir") {
-                const dirTarget = fileSystem.join(root, ...mapping.target.split("."));
+                const dirTarget = fileSystem.join(projectRoot, ...mapping.target.split("."));
                 if (!fileSystem.existsSync(dirTarget) || !fileSystem.lstatSync(dirTarget).isDirectory()) continue;
                 workDir(dirTarget);
 
@@ -432,7 +433,7 @@ export function Project(root: string, fileSystem: FileSystem, options: ProjectOp
         if (!heritageLiteral) return undefined;
         return {
             extendsAttr: heritage,
-            extendsSpecifier: getCfcSpecifier(root, sourceFile.absPath, heritageLiteral)
+            extendsSpecifier: getCfcSpecifier(sourceFile.absPath, heritageLiteral)
         }
     }
 
@@ -457,7 +458,7 @@ export function Project(root: string, fileSystem: FileSystem, options: ProjectOp
     }
 
     function CfcResolver(args: {resolveFrom: string, cfcName: string}) {
-        const specifiers = getCfcSpecifier(root, args.resolveFrom, args.cfcName);
+        const specifiers = getCfcSpecifier(args.resolveFrom, args.cfcName);
         if (!specifiers) return undefined;
         for (const specifier of specifiers) {
             const file = getCachedFile(specifier.path)?.parsedSourceFile;
@@ -511,27 +512,50 @@ export function Project(root: string, fileSystem: FileSystem, options: ProjectOp
         return getCachedFile(absPath)?.parsedSourceFile || undefined;
     }
 
-    function getCfcSpecifier(root: string, resolveFrom: string, possiblyUnqualifiedCfc: string) : ComponentSpecifier[] | undefined {
+    function getCfcSpecifier(resolveFrom: string, possiblyUnqualifiedCfc: string) : ComponentSpecifier[] | undefined {
+        resolveFrom = canonicalizePath(resolveFrom);
+        if (projectRoot.startsWith(resolveFrom)) return;
         const isUnqualified = !/\./.test(possiblyUnqualifiedCfc);
-        const base = path.parse(root).base; // Z in X/Y/Z, assuming Z is some root we're interested in
-        const rel = path.relative(root, resolveFrom);
+        const base = path.parse(projectRoot).base; // Z in X/Y/Z, assuming Z is some root we're interested in
+        const rel = path.relative(projectRoot, resolveFrom);
         const {dir} = path.parse(rel); // A/B/C in X/Y/Z/A/B/C, where X/Y/Z is the root
         // if it is unqualifed, we prepend the full path from root and lookup from that
         // with root of "X/", a file of "X/Y/Z/foo.cfm" calling "new Bar()" looks up "X.Y.Z.Bar"
+
+        function findParentModulesFolders(canonicalBase: string) : string[] {
+            const parsedPath = path.parse(canonicalBase);
+            const components = parsedPath.dir.split(fileSystem.pathSep);
+            const result : string[] = [];
+
+            while (components.length > 0) {
+                components.pop();
+                const maybeModulesPath = fileSystem.normalize(fileSystem.join(...components, "modules"));
+                if (!maybeModulesPath.startsWith(projectRoot)) break; // should never happen ? i.e. we've climbed out of project root?
+                if (fileSystem.existsSync(maybeModulesPath)) {
+                    result.push(maybeModulesPath);
+                }
+            }
+
+            return result;
+        }
+
+        const parentModulesFolders = findParentModulesFolders(resolveFrom);
+        parentModulesFolders;
+
         if (isUnqualified) {
-            if (resolveFrom.startsWith(root)) {
+            if (resolveFrom.startsWith(projectRoot)) {
                 const cfcName = [base, ...dir.split(fileSystem.pathSep), possiblyUnqualifiedCfc].filter(e => e !== "").join("."); // filter out possibly empty base and dirs; e.g. root is '/' so path.parse(root).base is ''
                 const xname = [base, possiblyUnqualifiedCfc].filter(e => e !== "").join(".");
                 return [
                     {
                         canonicalName: cfcName.toLowerCase(),
                         uiName: cfcName,
-                        path: fileSystem.join(root, dir, possiblyUnqualifiedCfc + ".cfc")
+                        path: fileSystem.join(projectRoot, dir, possiblyUnqualifiedCfc + ".cfc")
                     },
                     {
                         canonicalName: xname.toLowerCase(),
                         uiName: xname,
-                        path: fileSystem.join(root, possiblyUnqualifiedCfc + ".cfc")
+                        path: fileSystem.join(projectRoot, possiblyUnqualifiedCfc + ".cfc")
                     },
                 ];
             }
@@ -557,26 +581,32 @@ export function Project(root: string, fileSystem: FileSystem, options: ProjectOp
 
             const result = [{
                 ...common,    
-                path: fileSystem.join(root, ...nameStartsWithProjectBase ? cfcComponents.slice(1) : cfcComponents) // /root/foo/bar.cfc
+                path: fileSystem.join(projectRoot, ...nameStartsWithProjectBase ? cfcComponents.slice(1) : cfcComponents) // /root/foo/bar.cfc
             },{
                 ...common,    
                 path: fileSystem.join(path.parse(resolveFrom).dir, ...cfcComponents)
             }];
 
             // magic coldbox/wirebox resolution, might want something to toggle this
-            result.push({
-                ...common,
-                path: fileSystem.join(root, "modules", ...cfcComponents) // /root/modules/foo/bar.cfc
-            });
-            result.push({
-                ...common,
-                path: fileSystem.join(path.parse(resolveFrom).dir, "modules", ...cfcComponents) // /root/modules/foo/bar.cfc
-            })
+            for (const coldboxModulePath of parentModulesFolders) {
+                result.push({
+                    ...common,
+                    path: path.join(coldboxModulePath, ...cfcComponents)
+                });    
+            }
+            // result.push({
+            //     ...common,
+            //     path: fileSystem.join(projectRoot, "modules", ...cfcComponents) // /root/modules/foo/bar.cfc
+            // });
+            // result.push({
+            //     ...common,
+            //     path: fileSystem.join(path.parse(resolveFrom).dir, "modules", ...cfcComponents) // /root/modules/foo/bar.cfc
+            // })
 
             if (nameStartsWithProjectBase) {
                 result.push({
                     ...common,
-                    path: fileSystem.join(root, ...cfcComponents) // /root/root/foo/bar.cfc
+                    path: fileSystem.join(projectRoot, ...cfcComponents) // /root/root/foo/bar.cfc
                 });
             }
 
