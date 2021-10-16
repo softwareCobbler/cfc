@@ -4,6 +4,21 @@ A language plugin to see how far we can push ColdFusion language tooling.
 
 If we are marking a tag, expression or statement as an error and you know it shouldn't (or it isn't and it should), please let me know [on github](https://github.com/softwareCobbler/cfc).
 
+1.0.28
+- Experimental coldbox/wirebox module resolution, with some autocomplete support for `getInstance`
+  - we parse and understand a subset of the Wirebox configuration file syntax (well, right now we only support the `mapDirectory` initiator, but that can be improved)
+  - currently, the resolved-modules list is built at startup, and no listeners are installed
+  to check for new / deleted modules; however, all references to resolved modules are live (so a change in a resolved module will affect autocomplete results in another file referencing it).
+  - We walk up from caller's path to find all parent `modules` folders during resolution, like `node_modules` during node's module resolution
+  - improvements to navigate-to-symbol for function definitions (f12 a function name)
+  - experimental "Decorator" feature, which serves to change the visible type of a CFC for autocomplete purposes
+    - primary reason for existence is Quick will take properties and add a "where" prefix, or take all methods that start with "scope" and drop the "scope" prefix and first argument
+    - right now a Decorator is a magic compiler builtin, but if they are useful in many situations, a user-available language interface can be developed
+- support for "interface extensions" of known-scopes, to enable autocomplete for things we statically know will be in scope at runtime
+- resolve method return types if they are cfcs for chained method auto completions
+
+![wirebox module resolutions and interface driven scope extensions](./cflsp-vscode/experimentalWireboxResolution.gif)
+
 1.0.27 (Sep 2021)
 
 - Provide option in config `(File >> Preferences >> Settings >> (search for cflsp))` to switch between Lucee and Adobe language mode.
