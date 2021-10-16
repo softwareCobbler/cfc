@@ -28,7 +28,7 @@ import {
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, TypeShim, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, Mutable, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath } from "./utils";
-import { cfIndexedType, Interface, cfIntersection, extractCfFunctionSignature, isIntersection, isStructLike, isTypeId, isUnion, cfTypeConstructorParam, cfTypeConstructorInvocation, CfcLookup, createLiteralType } from "./types";
+import { cfIndexedType, Interface, cfIntersection, extractCfFunctionSignature, isIntersection, isStructLike, isTypeId, isUnion, cfTypeConstructorParam, cfTypeConstructorInvocation, CfcLookup, createLiteralType, Decorator } from "./types";
 import { _Type, cfArray, Struct, StructKind, cfTuple, cfFunctionSignature, cfTypeId, cfUnion, SyntheticType, cfFunctionSignatureParam } from "./types";
 import { LanguageVersion } from "./project";
 
@@ -990,6 +990,9 @@ export function Parser(config: {language: LanguageVersion}) {
                         else {
                             sourceFile.containedScope.typedefs.interfaces.set((typeshim.type as Interface).name, [typeshim.type as Interface]);
                         }
+                    }
+                    else if (typeshim.what === "decorator") {
+                        sourceFile.containedScope.typedefs.decorators.push(typeshim.type as Decorator);
                     }
                 }
 
@@ -2511,6 +2514,9 @@ export function Parser(config: {language: LanguageVersion}) {
             case TokenType.LEFT_BRACKET:
             case TokenType.LEFT_PAREN:
             case TokenType.LEFT_BRACE:
+            case TokenType.NUMBER:
+            case TokenType.QUOTE_DOUBLE:
+            case TokenType.QUOTE_SINGLE:
             //case TokenType.LEFT_ANGLE: part of a type, but does not START a type
             case TokenType.LEXEME:
                 return true;
@@ -3849,9 +3855,14 @@ export function Parser(config: {language: LanguageVersion}) {
         while (true) {
             if (workingAttributeUiName.token.text === "interface") {
                 // backup to start of `interface` "token"
-                restoreScannerState({...getScannerState(), index: getIndex() - "interface".length})
+                restoreScannerState({...getScannerState(), index: getIndex() - workingAttributeUiName.token.text.length})
                 const typedef = parseType();
                 typedefs.push(TypeShim("typedef", typedef));
+            }
+            else if (workingAttributeUiName.token.text === "decorate") {
+                parseTrivia();
+                const decoratorName = stringifyDottedPath(parseDottedPath());
+                typedefs.push(TypeShim("decorator", Decorator(decoratorName.ui)));
             }
             else {
                 const valueSourceRange = scanDocBlockAttrValue(/*matchImmediate*/ first);
@@ -4129,9 +4140,9 @@ export function Parser(config: {language: LanguageVersion}) {
                     break;
                 }
                 case TokenType.LEXEME: {
-                    const token = next();
-                    if (!isInSomeContext(ParseContext.interface) && token.text === "interface") {
-                        parseTrivia(); // discarded
+                    const terminal = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
+
+                    if (!isInSomeContext(ParseContext.interface) && terminal.token.text === "interface") {
                         const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ false);
                         const start = pos();
                         const def = doInExtendedContext(ParseContext.interface, parseType);
@@ -4142,8 +4153,8 @@ export function Parser(config: {language: LanguageVersion}) {
                         return Interface(name.token.text, isStructLike(def) ? def.members : new Map(), isStructLike(def) ? def.instantiableSpreads : undefined);
                     }
                     else {
-                        result = textToType(token);
-                        if (token.text.toLowerCase() === "cfc") {
+                        result = textToType(terminal.token);
+                        if (terminal.token.text.toLowerCase() === "cfc") {
                             parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
                             const dottedPath = parseDottedPath();
                             parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);

@@ -32,7 +32,7 @@ export const enum TypeFlags {
     spread                          = 0x00800000,
     mappedType                      = 0x01000000,
     indexedType                     = 0x02000000,
-    //cfc                             = 0x04000000,
+    decorator                       = 0x04000000,
     derived                         = 0x08000000,
     remote                          = 0x10000000,
     public                          = 0x20000000,
@@ -78,6 +78,7 @@ const TypeKindUiString : Record<TypeFlags, string> = {
     [TypeFlags.spread]:                          "spread",
     [TypeFlags.mappedType]:                      "mapped-type",
     [TypeFlags.indexedType]:                     "indexed-type",
+    [TypeFlags.decorator]:                       "decorator",
     [TypeFlags.derived]:                         "derived",
 
     // access modifiers for cfc member functions
@@ -200,6 +201,7 @@ export interface Interface extends StructBase {
 export interface CfcTypeWrapper extends StructBase {
     readonly structKind: StructKind.cfcTypeWrapper,
     readonly cfc: Readonly<SourceFile>,
+    readonly interfaceExtension: Readonly<Interface> | undefined // extension of `this` via interface
 }
 
 export interface SymbolTableTypeWrapper extends StructBase {
@@ -260,6 +262,9 @@ export function CfcTypeWrapper(sourceFile: Readonly<SourceFile>) : CfcTypeWrappe
         // fixme: this should be able to return undefined if the sourceFile is destroyed
         get members() : ReadonlyMap<string, SymTabEntry> {
             return sourceFile.containedScope.this!
+        },
+        get interfaceExtension() : Readonly<Interface> | undefined {
+            return sourceFile.containedScope.typedefs.mergedInterfaces.get("this");
         },
         cfc: sourceFile,
     } as const;
@@ -342,7 +347,8 @@ export function cfFunctionOverloadSet(uiName: string, overloads: {params: cfFunc
     return type;
 }
 
-export function cfFunctionSignatureWithFreshReturnType(other: cfFunctionSignature, freshReturnType: _Type) : cfFunctionSignature {
+// is this spread safe ? 
+export function unsafe__cfFunctionSignatureWithFreshReturnType(other: cfFunctionSignature, freshReturnType: _Type) : cfFunctionSignature {
     return {...other, returns: freshReturnType};
 }
 
@@ -620,6 +626,21 @@ export function isIndexedType(t: _Type) : t is cfIndexedType {
     return !!(t.flags & TypeFlags.indexedType);
 }
 
+export interface Decorator extends _Type {
+    name: string
+}
+
+export function Decorator(name: string) : Decorator {
+    return {
+        flags: TypeFlags.decorator,
+        name
+    }
+}
+
+export function isDecorator(t: _Type) : t is Decorator {
+    return !!(t.flags & TypeFlags.decorator);
+}
+
 export const SyntheticType = (function() {
     const any : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.any,
@@ -685,6 +706,7 @@ function createType(type: _Type) {
     return type;
 }
 
+// this is really "fresh type with new flags" ... ?
 function freshType(type: _Type, flags: TypeFlags) : _Type {
     if (flags === TypeFlags.none || type.flags === flags) return type;
     else {

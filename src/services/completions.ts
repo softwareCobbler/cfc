@@ -186,6 +186,8 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
 
         for (const param of sig.params) {
             if (!yetToBeUsedParams.has(param.canonicalName)) continue;
+            if (!param.uiName) continue;
+            if (param.flags & TypeFlags.spread) continue; // don't show a name for a spread arg
             result.push({
                 label: param.uiName + "=",
                 kind: CompletionItemKind.variable,

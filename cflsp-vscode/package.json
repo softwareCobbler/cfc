@@ -67,12 +67,6 @@
 					"type": "string",
 					"description": "Project-relative path to the Wirebox config file.",
 					"default": "config/Wirebox.cfc"
-				},
-				"cflsp.wellKnownAttributeNames.interface": {
-					"scope": "resource",
-					"type": "string",
-					"markdownDescription": "The attribute name used to declare an interface in a doc-block style comment. Only supports single line for now.\n\n`/** @interface variables { someKnownValue: string, getInstance: Wirebox.getInstance, ... } */`\n\n`component {`\n\n&nbsp;&nbsp;&nbsp;&nbsp;`getInstance // visible via scope-lookup on variables`\n\n`}`",
-					"default": "interface"
 				}
 			}
 		}

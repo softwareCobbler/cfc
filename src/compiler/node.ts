@@ -1,6 +1,6 @@
 import { Scanner, SourceRange, TokenType, Token, NilToken, TokenTypeUiString, CfFileType } from "./scanner";
 import { getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, Mutable } from "./utils";
-import { Interface, _Type } from "./types";
+import { Decorator, Interface, _Type } from "./types";
 
 let debug = false;
 let nextNodeId : NodeId = 0;
@@ -155,6 +155,7 @@ export function typedefs() {
     return {
         interfaces: new Map<string, Interface[]>(),
         mergedInterfaces: new Map<string, Interface>(),
+        decorators: <Decorator[]>[],
         aliases: new Map<string, _Type>(),
     };
 }
@@ -189,6 +190,7 @@ const staticallyKnownScopeName = [
     "__cfEngine", // things that the cf engine should provide (e.g. `encodeForHTML` or etc.)
     "__declaration", // for declaration files
     "__transient", // for non-var-decl'd vars within functions that are not already defined outside of the function; we model them as visible during the function but they disappear on return to parent container
+    "__property", // 'scope' of a (arbitrarily nested) property of a struct
 ] as const;
 
 export type StaticallyKnownScopeName = (typeof staticallyKnownScopeName)[number];
@@ -2345,11 +2347,11 @@ export function New(
 
 export interface TypeShim extends NodeBase {
     kind: NodeKind.typeShim,
-    what: "typedef" | "annotation"
+    what: "typedef" | "annotation" | "decorator"
     type: _Type
 }
 
-export function TypeShim(what: "typedef" | "annotation", type: _Type) : TypeShim {
+export function TypeShim(what: TypeShim["what"], type: _Type) : TypeShim {
     const v = NodeBase<TypeShim>(NodeKind.typeShim, SourceRange.Nil());
     v.type = type;
     v.what = what;

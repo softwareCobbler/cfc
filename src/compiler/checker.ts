@@ -1,7 +1,7 @@
-import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable } from "./node";
+import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, Property } from "./node";
 import { CfcResolver, EngineSymbolResolver, LanguageVersion } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
-import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, Struct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStructLike, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType, stringifyType, cfFunctionSignatureParam, cfFunctionSignatureWithFreshReturnType, isFunctionOverloadSet, cfFunctionOverloadSet, createLiteralType, isLiteralType, cfTypeId, SymbolTableTypeWrapper, CfcTypeWrapper, Interface, StructKind, isCfcLookupType } from "./types";
+import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, Struct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStructLike, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType, stringifyType, cfFunctionSignatureParam, unsafe__cfFunctionSignatureWithFreshReturnType, isFunctionOverloadSet, cfFunctionOverloadSet, createLiteralType, isLiteralType, cfTypeId, SymbolTableTypeWrapper, CfcTypeWrapper, Interface, StructKind, isCfcLookupType } from "./types";
 import { exhaustiveCaseGuard, findAncestor, getAttributeValue, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionReturnsLiteral, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol } from "./utils";
 
@@ -29,6 +29,12 @@ export function Checker() {
 
         instantiateInterfaces(sourceFile);
         checkListFunctionsLast(sourceFile.content);
+
+        for (const decorator of sourceFile.containedScope.typedefs.decorators) {
+            if (decorator.name === "QuickInstance") {
+                QuickInstance(sourceFile);
+            }
+        }
 
         sourceFile = savedSourceFile;
         scanner = savedSourceFile?.scanner;
@@ -62,7 +68,7 @@ export function Checker() {
             }
         }
     }
-    
+
     /*
     rmme
     function installHeritage() {
@@ -1389,7 +1395,11 @@ export function Checker() {
                         }
                     }
                     else {
-                        type = getStructMemberType(type, node, propertyName);
+                        const symbolResolution = getStructMember(element, type, propertyName);
+                        if (symbolResolution) {
+                            setResolvedSymbol(element, symbolResolution)
+                            type = evaluateType(node, symbolResolution.symTabEntry.type);
+                        }
                     }
 
                     if (!type || (type.flags & TypeFlags.any)) {
@@ -1473,7 +1483,7 @@ export function Checker() {
                         if (returnTypeLiteral && returnTypeLiteral.canonical !== "any") { // fixme: if (returnTypeLiteral && !isBuiltinType) so we don't try to lookup "string" as a cfc or etc.
                             const cfc = cfcResolver({resolveFrom: sourceFile.absPath, cfcName: returnTypeLiteral.ui});
                             if (cfc) {
-                                memberFunctionSignature = cfFunctionSignatureWithFreshReturnType(memberFunctionSignature, CfcTypeWrapper(cfc.sourceFile));
+                                memberFunctionSignature = unsafe__cfFunctionSignatureWithFreshReturnType(memberFunctionSignature, CfcTypeWrapper(cfc.sourceFile));
                                 const variablesSymbol = sourceFile.containedScope.variables?.get(node.canonicalName);
                                 // keep both `variables` and `this` in sync with member functions
                                 if (variablesSymbol) {
@@ -1748,28 +1758,32 @@ export function Checker() {
         return undefined;
     }
 
-    function getStructMemberType(type: _Type, context: Node, name: string) : _Type | undefined {
-        type = getCanonicalType(type);
-        if (isIntersection(type)) {
-            return SyntheticType.any;
-            /*
-            const evaluatedMembers = type.types.map(type => getMemberType(type, context, name));
-            if (evaluatedMembers.includes(undefined)) return SyntheticType.never;
-            return cfIntersection(...(evaluatedMembers as _Type[]));
-            */
+    function getStructMember(element: Node, type: _Type, canonicalName: string) : SymbolResolution | undefined {
+        if (!isStructLike(type)) {
+            return undefined;
         }
-        else if (isStructLike(type)) {
-            const memberType = type.members.get(name);
-            if (memberType) {
-                return memberType ? evaluateType(context, memberType.type) : undefined;
-            }
-            else if (type.structKind === StructKind.symbolTableTypeWrapper && type.interfaceExtension) {
-                const interfaceSuppliedType = type.interfaceExtension.members.get(name);
-                return interfaceSuppliedType ? evaluateType(context, interfaceSuppliedType.type) : undefined;
+
+        let member = type.members.get(canonicalName);
+
+        if (!member && type.structKind === StructKind.symbolTableTypeWrapper && type.interfaceExtension) {
+            member = type.interfaceExtension.members.get(canonicalName);
+        }
+        else if (type.structKind === StructKind.cfcTypeWrapper) {
+            member = type.interfaceExtension?.members.get(canonicalName);
+            if (!member) {
+                let workingNode : SourceFile | null = type.cfc;
+                while (workingNode) {
+                    member = workingNode.containedScope.this!.get(canonicalName)
+                        ?? workingNode.containedScope.typedefs.mergedInterfaces.get("this")?.members.get(canonicalName);
+                    if (member) break;
+                    workingNode = workingNode.cfc?.extends ?? null;
+                }
             }
         }
 
-        return undefined;
+        return member
+            ? { container: element, scopeName: "__property", symTabEntry: member }
+            : undefined;
     }
 
     // specialize `externWalkupScopesToResolveSymbol` to start at the top-level of our current source file, don't resolve engine symbols, and only consider `this` scopes
@@ -2153,6 +2167,61 @@ export interface CheckerInstallable {
 }
 
 export type Checker = ReturnType<typeof Checker>;
+
+function QuickInstance(sourceFile: SourceFile) : void {
+    if (sourceFile.cfFileType !== CfFileType.cfc) return;
+
+    const methodsToAdd : SymTabEntry[] = [];
+
+    // method names matching /^scope(.*)/ get replaced with methods named /$1/
+    // also has its first param removed
+    for (const symTabEntry of sourceFile.containedScope.this!.values()) {
+        if (isFunctionSignature(symTabEntry.type) && !isFunctionOverloadSet(symTabEntry.type)) {
+            if (/^scope/i.test(symTabEntry.uiName)) {
+                (symTabEntry.type as Mutable<_Type>).flags &= ~(TypeFlags.private | TypeFlags.public | TypeFlags.protected | TypeFlags.remote);
+                
+                let freshUiName = symTabEntry.uiName.replace(/^scope/i, "");
+                freshUiName = freshUiName[0].toLowerCase() + freshUiName.slice(1);
+                
+                // fixme: can't set access flags with function sig constructor?
+                
+                const freshType = cfFunctionSignature(freshUiName, symTabEntry.type.params.slice(1), CfcTypeWrapper(sourceFile), symTabEntry.type.attrs);
+                (symTabEntry.type as Mutable<_Type>).flags |= TypeFlags.private;
+                (freshType as Mutable<_Type>).flags |= TypeFlags.public;
+
+                methodsToAdd.push({
+                    uiName: freshUiName,
+                    canonicalName: freshUiName.toLowerCase(),
+                    type: freshType,
+                    declarations: symTabEntry.declarations
+                });
+            }
+        }
+    }
+
+    // properties get "where getters",
+    // i.e. property named "column" gets a public "getter" named "whereColumn"
+    for (const symTabEntry of sourceFile.containedScope.variables!.values()) {
+        const propertyDecl = symTabEntry.declarations?.find((node) : node is Property => node.kind === NodeKind.property);
+        if (propertyDecl) {
+            let propertyName = getTriviallyComputableString(getAttributeValue(propertyDecl.attrs, "name"));
+            if (propertyName) {
+                propertyName = propertyName[0].toUpperCase() + propertyName.slice(1);
+                const param = cfFunctionSignatureParam(true, SyntheticType.string, "");
+                methodsToAdd.push({
+                    uiName: "where" + propertyName,
+                    canonicalName: "where" + propertyName.toLowerCase(),
+                    type: cfFunctionSignature("where" + propertyName, [param], CfcTypeWrapper(sourceFile), []),
+                    declarations: [propertyDecl]
+                })
+            }
+        }
+    }
+
+    for (const method of methodsToAdd) {
+        sourceFile.containedScope.this!.set(method.canonicalName, method);
+    }
+}
 
 function WeakPairMap<K0 extends Object, K1 extends Object, V>() {
     const map = new WeakMap<K0, WeakMap<K1, V>>();
