@@ -906,11 +906,11 @@ export class BiMap<K,V> {
  * if predicate returns false, set current Node to parent, and try again
  * if predicate returns "bail", return undefined
  */
-export function findAncestor(node: Node, predicate: (node: Node) => true | false | "bail") : Node | undefined {
-    return node.parent ? findSelfOrAncestor(node.parent, predicate) : undefined;
+export function findAncestor(node: Node, predicate: (node: Node) => true | false | "bail", followCfcInheritance = false) : Node | undefined {
+    return node.parent ? findSelfOrAncestor(node.parent, predicate, followCfcInheritance) : undefined;
 }
 
-export function findSelfOrAncestor(node: Node, predicate: (node: Node) => true | false | "bail") : Node | undefined {
+export function findSelfOrAncestor(node: Node, predicate: (node: Node) => true | false | "bail", followCfcInheritance = false) : Node | undefined {
     let current : Node | null = node;
     while (current) {
         const result = predicate(current);
@@ -918,7 +918,12 @@ export function findSelfOrAncestor(node: Node, predicate: (node: Node) => true |
             return current;
         }
         else if (result === false) {
-            current = current.parent;
+            if (current.kind === NodeKind.sourceFile && followCfcInheritance && current.cfc?.extends) {
+                current = current.cfc.extends;
+            }
+            else {
+                current = current.parent;
+            }
         }
         else if (result === "bail") {
             break;

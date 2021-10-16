@@ -233,9 +233,12 @@ function resetCfls(why: string) {
 	connection.console.info("[reset] -- " + why);
 	connection.console.info("[reset] libPath is: " + cflsConfig.engineLibAbsPath ?? "null");
 
+	const fileSystem = FileSystem();
 	let wireboxConfigFileAbsPath : string | null = null;
+
 	if (cflsConfig.wireboxConfigFile && workspaceRoots[0]) {
 		wireboxConfigFileAbsPath = path.join(URI.parse(workspaceRoots[0].uri).fsPath, cflsConfig.wireboxConfigFile);
+		if (!fileSystem.caseSensitive) wireboxConfigFileAbsPath = wireboxConfigFileAbsPath.toLowerCase();
 	}
 
 	const workspaceRoot = workspaceRoots[0];
@@ -243,17 +246,16 @@ function resetCfls(why: string) {
 		//project = null;
 		return;
 	}
-	
 
 	project = Project(
 		URI.parse(workspaceRoot.uri).fsPath,
-		FileSystem(),
+		fileSystem,
 		{
 			parseTypes: cflsConfig.x_types,
 			debug: true,
 			language: cflsConfig.languageVersion,
 			withWireboxResolution: cflsConfig.wireboxResolution,
-			wireboxConfigFileAbsPath: wireboxConfigFileAbsPath,
+			wireboxConfigFileCanonicalAbsPath: wireboxConfigFileAbsPath,
 		});
 
 	if (cflsConfig.engineLibAbsPath) project.addEngineLib(cflsConfig.engineLibAbsPath);

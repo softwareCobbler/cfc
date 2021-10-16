@@ -2511,7 +2511,7 @@ export function Parser(config: {language: LanguageVersion}) {
             case TokenType.LEFT_BRACKET:
             case TokenType.LEFT_PAREN:
             case TokenType.LEFT_BRACE:
-            case TokenType.LEFT_ANGLE:
+            //case TokenType.LEFT_ANGLE: part of a type, but does not START a type
             case TokenType.LEXEME:
                 return true;
             default:
@@ -2614,6 +2614,8 @@ export function Parser(config: {language: LanguageVersion}) {
             case ParseContext.blockStatements:
                 return isStartOfStatement();
             case ParseContext.typeStruct:
+                if (lookahead() === TokenType.DOT_DOT_DOT) return true;
+                // else fallthrough
             case ParseContext.typeTupleOrArrayElement:
             case ParseContext.typeParamList:
                 return isStartOfType();
@@ -4074,14 +4076,26 @@ export function Parser(config: {language: LanguageVersion}) {
         }
 
         function parseTypeStructMemberElement() {
-            const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ true);
-            if (!name) {
-                parseErrorAtCurrentToken("Expected a struct key.");
+            let name : Terminal | null;
+            let type : _Type;
+            if (lookahead() === TokenType.DOT_DOT_DOT) {
+                parseExpectedTerminal(TokenType.DOT_DOT_DOT, ParseOptions.withTrivia);
+                name = null;
+                type = parseType();
+            }
+            else {
+                name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ true);
+                // `name` is always truthy, though
+                // if (!name) {
+                //     parseErrorAtCurrentToken("Expected a struct key.");
+                // }
+
+                parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
+                type = parseType();
             }
 
-            parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
-            const type = parseType();
             parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+
             return {name, type};
         }
 
@@ -4125,7 +4139,7 @@ export function Parser(config: {language: LanguageVersion}) {
                         if (!isStructLike(def) || def.structKind !== StructKind.struct) {
                             parseErrorAtRange(new SourceRange(start, end), "Expected an interface definition");
                         }
-                        return Interface(name.token.text, isStructLike(def) ? def.members : new Map());
+                        return Interface(name.token.text, isStructLike(def) ? def.members : new Map(), isStructLike(def) ? def.instantiableSpreads : undefined);
                     }
                     else {
                         result = textToType(token);
@@ -4253,7 +4267,12 @@ export function Parser(config: {language: LanguageVersion}) {
                         parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
 
                         const members = new Map<string, SymTabEntry>();
+                        const instantiableSpreads : _Type[] = [];
                         for (const member of kvPairs) {
+                            if (member.name === null) {
+                                instantiableSpreads.push(member.type);
+                                continue;
+                            }
                             members.set(member.name.token.text.toLowerCase(), {
                                 uiName: member.name.token.text,
                                 canonicalName: member.name.token.text.toLowerCase(),
@@ -4262,7 +4281,7 @@ export function Parser(config: {language: LanguageVersion}) {
                             })
                         }
 
-                        result = Struct(members);
+                        result = Struct(members, instantiableSpreads);
                     // }
 
                     result = maybeParseArrayModifier(result);

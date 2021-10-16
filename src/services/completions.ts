@@ -215,6 +215,9 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
             let interfaceExtension : ReadonlyMap<string, SymTabEntry> | undefined = undefined;
             if (typeinfo instanceof Map) {
                 underlyingMembers = typeinfo;
+                if (workingSourceFile.cfFileType === CfFileType.cfc && workingSourceFile.containedScope.typedefs.mergedInterfaces.has("this")) {
+                    interfaceExtension = workingSourceFile.containedScope.typedefs.mergedInterfaces.get("this")!.members;
+                }
             }
             else if (isStructLike(typeinfo)) {
                 underlyingMembers = typeinfo.members;

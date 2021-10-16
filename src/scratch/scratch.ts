@@ -17,13 +17,13 @@ function projectFiddle() {
         {
             "/": {
                 "Wirebox.cfc": `
-                    /** @interface variables { x: cfc<a.b.x> } */
                     component {
                         public function mega() {
                             x.foobar();
                         }
                     }`,
                 "someFile.cfc": `
+                    /** @interface this { ... cfc<a.b.x> } */
                     /** @interface variables { _wirebox: Wirebox, getInstance: Wirebox.getInstance } */
                     /** @interface application { getInstance: Wirebox.getInstance } */
                     component {
@@ -34,8 +34,11 @@ function projectFiddle() {
                     }`,
                 "a": {
                     "b": {
-                        "x.cfc": "component { function foobar() {} }",
-                        "y.cfc": "component {}",
+                        "x.cfc": `
+                        /** @interface this { ... cfc<y> } */
+                        component { function foobar() { this.mlem(); } }
+                        `,
+                        "y.cfc": "component { function mlem() {} }",
                     },
                     "c": {
                         "x.cfc": "component extends='a.b.x' {}"
@@ -43,18 +46,17 @@ function projectFiddle() {
                 },
             }
         }
-    , "/");
+    );
 
     //let x = debugfs.readFileSync("/Child.cfc").toString().slice(102,105)
     
-    const project = Project("/", /*filesystem*/debugfs, {debug: true, parseTypes: true, language: LanguageVersion.lucee5, withWireboxResolution: true, wireboxConfigFileAbsPath: "/Wirebox.cfc"});
+    const project = Project("/", /*filesystem*/debugfs, {debug: true, parseTypes: true, language: LanguageVersion.lucee5, withWireboxResolution: true, wireboxConfigFileCanonicalAbsPath: "/Wirebox.cfc"});
     //const project = Project([path.resolve(".")], FileSystem(), {debug: true, parseTypes: true, language: LanguageVersion.lucee5});
     //const target = path.join(path.resolve("./test/"), "mxunit/framework/javaloader/JavaProxy.cfc");
     //project.addFile(target);
 
-    project.addFile("/a/c/x.cfc")
+    project.addFile("/someFile.cfc");
     project.addFile("/Wirebox.cfc");
-    //project.addFile("/someFile.cfc");
 
     const diagnostics = project.getDiagnostics("/Base.cfc");
 

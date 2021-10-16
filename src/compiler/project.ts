@@ -28,7 +28,20 @@ export interface FileSystem {
     existsSync: (path: string) => boolean,
     lstatSync: (path: string) => {isFile: () => boolean, isDirectory: () => boolean},
     join: (...args: string[]) => string,
+    normalize: (path: string) => string,
     pathSep: string,
+    caseSensitive: boolean,
+}
+
+function swapAsciiCase(s: string) {
+    const result : string[] = [];
+    for (let i = 0; i < s.length; i++) {
+        const c = s.charCodeAt(i);
+        if (65 <= c && c <= 90) result.push(String.fromCharCode(c + 32)); // upper to lower
+        else if (97 <= c && c <= 122) result.push(String.fromCharCode(c - 32)); // lower to upper
+        else result.push(s[i]);
+    }
+    return result.join("");
 }
 
 export function FileSystem() : FileSystem {
@@ -38,7 +51,9 @@ export function FileSystem() : FileSystem {
         existsSync: fs.existsSync,
         lstatSync: (path: string) => fs.lstatSync(path),
         join: path.join,
-        pathSep: path.sep
+        normalize: path.normalize,
+        pathSep: path.sep,
+        caseSensitive: !fs.existsSync(swapAsciiCase(__filename)), // if this file exists when we ask for it with a different case, then we are not case sensitive
     }
 }
 
@@ -61,7 +76,7 @@ export class DebugDirent extends fs.Dirent {
 }
 
 export type FilesystemPath = {[dir: string]: string | Buffer | FilesystemPath};
-export function DebugFileSystem(files: Readonly<FilesystemPath>, pathSepOfDebugFs: string) : FileSystem {
+export function DebugFileSystem(files: Readonly<FilesystemPath>, pathSepOfDebugFs = "/", isCaseSensitive = true) : FileSystem {
     const maybeGet = (path: string) => {
         // we expect fileSystemPath to be rooted on "/" or "\"
         const pathComponents = [
@@ -120,7 +135,9 @@ export function DebugFileSystem(files: Readonly<FilesystemPath>, pathSepOfDebugF
             const t = path.join(...args);
             return t.replace(nativeSepPattern, pathSepOfDebugFs);
         },
-        pathSep: pathSepOfDebugFs
+        normalize: (_path: string) => { throw "not implemented"; },
+        pathSep: pathSepOfDebugFs,
+        caseSensitive: isCaseSensitive
     }
 }
 
@@ -131,7 +148,7 @@ interface ProjectOptions {
     parseTypes: boolean,
     language: LanguageVersion,
     withWireboxResolution: boolean,
-    wireboxConfigFileAbsPath: string | null,
+    wireboxConfigFileCanonicalAbsPath: string | null,
 }
 
 export function Project(root: string, fileSystem: FileSystem, options: ProjectOptions) {
@@ -167,7 +184,9 @@ export function Project(root: string, fileSystem: FileSystem, options: ProjectOp
         return addFile(absPath);
     }
 
+    let depth = 0;
     function parseBindCheckWorker(sourceFile: SourceFile) : DevTimingInfo {
+        depth++;
         parser.setSourceFile(sourceFile);
         const parseStart = new Date().getTime();
         parser.parse();
@@ -186,7 +205,7 @@ export function Project(root: string, fileSystem: FileSystem, options: ProjectOp
 
         // do before checking so resolving a self-referential cfc in the checker works
         // e.g. in foo.cfc `public foo function bar() { return this; }`
-        files.set(sourceFile.absPath, {
+        files.set(canonicalizePath(sourceFile.absPath), {
             parsedSourceFile: sourceFile,
             flatTree: flattenTree(sourceFile),
             nodeMap
@@ -194,7 +213,7 @@ export function Project(root: string, fileSystem: FileSystem, options: ProjectOp
 
         const checkStart = new Date().getTime();
 
-        if (options.withWireboxResolution && sourceFile.absPath === options.wireboxConfigFileAbsPath) {
+        if (options.withWireboxResolution && sourceFile.absPath === options.wireboxConfigFileCanonicalAbsPath) {
             const wireboxInterface = constructWireboxInterface(sourceFile);
             if (wireboxInterface) {
                 if (!wireboxLib) wireboxLib = SourceFile("<<magic/wirebox>>", CfFileType.dCfm, "");
@@ -215,11 +234,14 @@ export function Project(root: string, fileSystem: FileSystem, options: ProjectOp
         checker.check(sourceFile);
         const checkElapsed = new Date().getTime() - checkStart;
 
-
+        depth--;
+        depth;
         return { parse: parseElapsed, bind: bindElapsed, check: checkElapsed };
     }
 
     function addFile(absPath: string) {
+        absPath = canonicalizePath(absPath);
+
         if (!fileSystem.existsSync(absPath)) return undefined;
         const alreadyExists = getCachedFile(absPath);
         if (alreadyExists) return alreadyExists;
@@ -320,8 +342,13 @@ export function Project(root: string, fileSystem: FileSystem, options: ProjectOp
         }
     }
 
+    function canonicalizePath<T extends string | null | undefined>(path: T) : T extends string ? string : undefined {
+        if (!path) return undefined as any;
+        return fileSystem.caseSensitive ? path : path.toLowerCase() as any;
+    }
+
     function getCachedFile(absPath: string) : CachedFile | undefined {
-        return files.get(absPath);
+        return files.get(canonicalizePath(absPath));
     }
 
     // fixme: dedup/unify this with the ones in parser/binder/checker
@@ -390,17 +417,28 @@ export function Project(root: string, fileSystem: FileSystem, options: ProjectOp
     }
 
     function getDiagnostics(absPath: string) {
-        return files.get(absPath)?.parsedSourceFile.diagnostics || [];
+        return files.get(canonicalizePath(absPath))?.parsedSourceFile.diagnostics || [];
     }
 
     function CfcResolver(args: {resolveFrom: string, cfcName: string}) {
         const specifiers = getCfcSpecifier(root, args.resolveFrom, args.cfcName);
         if (!specifiers) return undefined;
         for (const specifier of specifiers) {
-            const file = getCachedFile(specifier.path)?.parsedSourceFile ?? tryAddFile(specifier.path)?.parsedSourceFile;
-            if (file && file.containedScope.this) return {
-                sourceFile: file,
-                symbolTable: file.containedScope.this
+            const file = getCachedFile(specifier.path)?.parsedSourceFile;
+            if (file) {
+                return {
+                    sourceFile: file,
+                    symbolTable: file.containedScope.this || new Map()
+                }
+            }
+        }
+        for (const specifier of specifiers) {
+            const file =  tryAddFile(specifier.path)?.parsedSourceFile;
+            if (file) {
+                return {
+                    sourceFile: file,
+                    symbolTable: file.containedScope.this || new Map()
+                }
             }
         }
 
@@ -463,32 +501,50 @@ export function Project(root: string, fileSystem: FileSystem, options: ProjectOp
             }
         }
         else {
-            // otherwise, we have a qualified CFC
-            // check that the base name matches with the current root, and then try to resolve
-
-            // root is /X/Y/Z, cfc is "Z.foo.bar"
-            // we want paths:
-            // - "/X/Y/Z/foo/bar.cfc" 
-            // - "/X/Y/Z/Z/foo/bar.cfc"
             const canonicalCfcName = possiblyUnqualifiedCfc.toLowerCase();
+
+            // project root - '/root/', project base is 'root'; does cfc name start with path component 'root'?
+            // if so, we want to try to resolve '/root/foo/bar.cfc' as well as '/root/root/foo/bar.cfc'
             const canonicalBase = base.toLowerCase();
-            if (!canonicalCfcName.startsWith(canonicalBase)) return undefined;
+            const nameStartsWithProjectBase = canonicalCfcName.startsWith(canonicalBase);
+
             const cfcComponents = possiblyUnqualifiedCfc.split(".");
             
             if (cfcComponents.length === 0) return undefined; // just to not crash; why would this happen?
             
             cfcComponents[cfcComponents.length - 1] = cfcComponents[cfcComponents.length - 1] + ".cfc";
 
-            return [{
+            const common = {
                 canonicalName: canonicalCfcName,
                 uiName: possiblyUnqualifiedCfc,
-                path: fileSystem.join(root, ...(cfcComponents.slice(1))) // /X/Y/Z/foo/bar.cfc
-            },
-            {
-                canonicalName: canonicalCfcName,
-                uiName: possiblyUnqualifiedCfc,
-                path: fileSystem.join(root, ...cfcComponents) // /X/Y/Z/Z/foo/bar.cfc
-            }]
+            } as const;
+
+            const result = [{
+                ...common,    
+                path: fileSystem.join(root, ...nameStartsWithProjectBase ? cfcComponents.slice(1) : cfcComponents) // /root/foo/bar.cfc
+            },{
+                ...common,    
+                path: fileSystem.join(path.parse(resolveFrom).dir, ...cfcComponents)
+            }];
+
+            // magic coldbox/wirebox resolution, might want something to toggle this
+            result.push({
+                ...common,
+                path: fileSystem.join(root, "modules", ...cfcComponents) // /root/modules/foo/bar.cfc
+            });
+            result.push({
+                ...common,
+                path: fileSystem.join(path.parse(resolveFrom).dir, "modules", ...cfcComponents) // /root/modules/foo/bar.cfc
+            })
+
+            if (nameStartsWithProjectBase) {
+                result.push({
+                    ...common,
+                    path: fileSystem.join(root, ...cfcComponents) // /root/root/foo/bar.cfc
+                });
+            }
+
+            return result;
         }
 
         return undefined;
@@ -510,7 +566,7 @@ export function Project(root: string, fileSystem: FileSystem, options: ProjectOp
         getParsedSourceFile,
         getFileListing: () => [...files.keys()],
         __unsafe_dev_getChecker: () => checker,
-        __unsafe_dev_getFile: (fname: string) => files.get(fname)
+        __unsafe_dev_getFile: (fname: string) => files.get(canonicalizePath(fname))
     }
 }
 

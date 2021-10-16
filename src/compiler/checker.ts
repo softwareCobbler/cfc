@@ -1,12 +1,11 @@
 import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable } from "./node";
 import { CfcResolver, EngineSymbolResolver, LanguageVersion } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
-import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, Struct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStructLike, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType, stringifyType, cfFunctionSignatureParam, cfFunctionSignatureWithFreshReturnType, isFunctionOverloadSet, cfFunctionOverloadSet, createLiteralType, isLiteralType, cfTypeId, SymbolTableTypeWrapper, CfcTypeWrapper, Interface, StructKind } from "./types";
-import { exhaustiveCaseGuard, getAttributeValue, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionReturnsLiteral, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
+import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, Struct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStructLike, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType, stringifyType, cfFunctionSignatureParam, cfFunctionSignatureWithFreshReturnType, isFunctionOverloadSet, cfFunctionOverloadSet, createLiteralType, isLiteralType, cfTypeId, SymbolTableTypeWrapper, CfcTypeWrapper, Interface, StructKind, isCfcLookupType } from "./types";
+import { exhaustiveCaseGuard, findAncestor, getAttributeValue, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionReturnsLiteral, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol } from "./utils";
 
 const structViewCache = WeakPairMap<SymbolTable, Interface, Struct>(); // map a SymbolTable -> Interface -> Struct, used to check prior existence of a wrapping of a symbol table into a struct with a possible interface extension
-const EmptyInterface = Interface("", new Map());
 
 export function Checker() {
     let sourceFile!: SourceFile;
@@ -28,6 +27,7 @@ export function Checker() {
             sourceFile.containedScope.super = sourceFile.cfc.extends.containedScope.this;
         }
 
+        instantiateInterfaces(sourceFile);
         checkListFunctionsLast(sourceFile.content);
 
         sourceFile = savedSourceFile;
@@ -35,6 +35,34 @@ export function Checker() {
         diagnostics = savedSourceFile?.diagnostics;
     }
 
+    function instantiateInterfaces(node: Node) {
+        if (node.containedScope?.typedefs.mergedInterfaces) {
+            for (const [ifaceName, iface] of node.containedScope.typedefs.mergedInterfaces) {
+                // fixme: preserve order; all spreads happend first right now
+                const freshMembers = new Map<string, SymTabEntry>();
+                if (iface.instantiableSpreads) {
+                    for (const spread of iface.instantiableSpreads) {
+                        const type = evaluateType(node, spread);
+                        if (isStructLike(type)) {
+                            for (const [k,v] of type.members) {
+                                freshMembers.set(k,v);                                
+                            }
+                        }
+                    }
+                }
+                for (const [memberName, member] of iface.members) {
+                    if (isCfcLookupType(member.type)) {
+                        (member as Mutable<SymTabEntry>).type = evaluateType(node, member.type);
+                    }
+                    freshMembers.set(memberName, member);
+                }
+                const freshType = Interface(ifaceName, freshMembers);
+                (freshType as Mutable<Interface>).underlyingType = iface;
+                node.containedScope.typedefs.mergedInterfaces.set(ifaceName, freshType);
+            }
+        }
+    }
+    
     /*
     rmme
     function installHeritage() {
@@ -537,122 +565,162 @@ export function Checker() {
     // i.e. `l <: r` means l is substitutable for r (you can safely use an l in r's place)
     //
     function isLeftSubtypeOfRight(l: _Type, r: _Type) : boolean {
-        // a type is a subtype of itself
-        if (l === r) return true;
+        let depth = 0;
+        let tooDeep = false;
+        tooDeep ? 0 : 1;
 
-        // any is a subtype of every type; every type is a subtype of any
-        if (l.flags & TypeFlags.any || r.flags & TypeFlags.any) return true;
+        return worker(l, r);
 
-        // void is not a subtype of anything except itself and any
-        if (l.flags & TypeFlags.void || r.flags & TypeFlags.void) return false;
-
-        // it would be nice to error on this, but plenty of legacy code relies on
-        // number being assignable to boolean
-        if (l.flags & TypeFlags.numeric && r.flags & TypeFlags.boolean) return true;
-
-        if (isLiteralType(l) && isLiteralType(r)) return l.literalValue === r.literalValue;
-        if (!isLiteralType(l) && isLiteralType(r)) return false; // number is not a subtype of `0`
-
-        // numeric is a subtype of string
-        // however, string is not a subtype of numeric
-        if (l === SyntheticType.numeric && r === SyntheticType.string) {
-            return true;
-        }
-
-        //
-        // {x: number, y: number} <: {x: number}, because L has AT LEAST all the properties of R
-        // {x: number} !<: {x: number, y: number}
-        //
-        function isLeftStructSubtypeOfRightStruct(l: Struct, r: Struct) {
-            if (l.members.size < r.members.size) return false;
-            for (const [propName, rightVal] of r.members) {
-                const leftVal = l.members.get(propName);
-                if (!leftVal || !isLeftSubtypeOfRight(leftVal.type, rightVal.type)) return false;
+        function worker(l: _Type, r: _Type) : boolean {
+            if (depth > 32) {
+                debugger;
+                tooDeep = true;
+                return false;
             }
-            return true;
-        }
+            try {
+                depth++;
 
-        if (l.flags & TypeFlags.numeric && r.flags & TypeFlags.numeric) {
-            return true;
-        }
-        if (l.flags & TypeFlags.string && r.flags & TypeFlags.string) {
-            return true;
-        }
-        if (l.flags & TypeFlags.boolean && r.flags & TypeFlags.boolean) {
-            return true;
-        }
-        if (isStructLike(l) && isStructLike(r)) {
-            return isLeftStructSubtypeOfRightStruct(l, r);
-        }
-        if (isArray(l) && isArray(r)) {
-            return isLeftSubtypeOfRight(l.memberType, r.memberType);
-        }
-        if (isFunctionSignature(l) && isFunctionSignature(r)) {
-            // covariant in return type
-            if (!isLeftSubtypeOfRight(l.returns, r.returns)) return false;
+                // a type is a subtype of itself
+                if (l === r) return true;
 
-            // contravariant in parameter types
-            // also every parameter needs the same names...?
+                // any is a subtype of every type; every type is a subtype of any
+                if (l.flags & TypeFlags.any || r.flags & TypeFlags.any) return true;
 
-            const hasSpread = !!(r.params.length > 0 && r.params[r.params.length-1].flags & TypeFlags.spread);
-            if (!hasSpread && l.params.length != r.params.length) return false;
+                // void is not a subtype of anything except itself and any
+                if (l.flags & TypeFlags.void || r.flags & TypeFlags.void) return false;
 
-            for (let i = 0; i < l.params.length; i++) {
-                // if the arg in the right side is a spread, just check remaining left types against the (un-array-wrapped) spread type
-                if (r.params[i].flags & TypeFlags.spread) {
-                    const rType = r.params[i].type;
-                    const spreadType = isArray(rType) ? rType.memberType : null;
-                    if (!spreadType) return false; // all spread types must be arrays, we should have caught this before getting here
-                    for (let j = i; j < l.params.length; j++) {
-                        const lpt = l.params[i].type;
-                        // contravariant, flip left/right
-                        if (!isLeftSubtypeOfRight(spreadType, lpt)) return false;
-                    }
+                // it would be nice to error on this, but plenty of legacy code relies on
+                // number being assignable to boolean
+                if (l.flags & TypeFlags.numeric && r.flags & TypeFlags.boolean) return true;
 
-                    break;
+                if (isLiteralType(l) && isLiteralType(r)) return l.literalValue === r.literalValue;
+                if (!isLiteralType(l) && isLiteralType(r)) return false; // number is not a subtype of `0`
+
+                // numeric is a subtype of string
+                // however, string is not a subtype of numeric
+                if (l === SyntheticType.numeric && r === SyntheticType.string) {
+                    return true;
                 }
 
-                const lpt = l.params[i].type;
-                const rpt = r.params[i].type;
-                // contravariant, flip left/right
-                if (!isLeftSubtypeOfRight(rpt, lpt)) return false;
-            }
-            return true;
-        }
+                //
+                // {x: number, y: number} <: {x: number}, because L has AT LEAST all the properties of R
+                // {x: number} !<: {x: number, y: number}
+                //
+                function isLeftStructSubtypeOfRightStruct(l: Struct, r: Struct) {
+                    // the outer types may be different wrappers for the same underlying struct
+                    // e.g. a SymbolTableWrapper around `this` from within a CFC, and a CFC wrapper wrapping the same `this` but for a reference from another file
+                    if (l.members === r.members) return true;
 
-        //
-        // S|T <: U     iff S <: U && T <: U   (e.g `U = S|T` is valid only if both S and T are subtypes of U)
-        // U   <: S|T   iff U <: S || U <: T   (e.g `S|T = U` is valid if U is either an S or a T)
-        //
-        // S&T <: U     iff S <: U || T <: U   (e.g `U = S&T` is valid if either S or T is a subtype of U)
-        // U   <: S&T   iff U <: S && U <: T   (e.g `S&T = U` is valid only if U is a subtype of both S and T)
-        //
-        if (isUnion(l)) {
-            for (const leftConstituent of l.types) {
-                if (!isLeftSubtypeOfRight(leftConstituent, r)) return false;
-            }
-            return true;
-        }
-        if (isUnion(r)) {
-            for (const rightConstituent of r.types) {
-                if (isLeftSubtypeOfRight(l, rightConstituent)) return true;
-            }
-            return false;
-        }
-        if (isIntersection(l)) {
-            for (const leftConstituent of l.types) {
-                if (isLeftSubtypeOfRight(leftConstituent, r)) return true;
-            }
-            return false;
-        }
-        if (isIntersection(r)) {
-            for (const rightConstituent of r.types) {
-                if (!isLeftSubtypeOfRight(l, rightConstituent)) return false;
-            }
-            return true;
-        }
+                    if (l.members.size < r.members.size) return false;
 
-        return false;
+                    // if both types are CFCs, we compare by nominal inheritance
+                    // we probably need to fix that this is valid CF:
+                    /*
+                        // Parent.cfc
+                        component {
+                            Parent function init() { return this; }
+                        }
+                        // Child.cfc
+                        component {
+                            Child function init() { return super.init(); } // super.init : Parent, but Parent :> Child, we could probably treat "super.init as this.init"
+                        }
+                    */
+                    if (l.structKind === StructKind.cfcTypeWrapper && r.structKind === StructKind.cfcTypeWrapper) {
+                        return !!findAncestor(l.cfc, (node) => node === r.cfc, /*followCfcInheritance*/ true);
+                    }
+
+                    for (const [propName, rightVal] of r.members) {
+                        const leftVal = l.members.get(propName);
+                        if (!leftVal || !worker(leftVal.type, rightVal.type)) return false;
+                    }
+                    return true;
+                }
+
+                if (l.flags & TypeFlags.numeric && r.flags & TypeFlags.numeric) {
+                    return true;
+                }
+                if (l.flags & TypeFlags.string && r.flags & TypeFlags.string) {
+                    return true;
+                }
+                if (l.flags & TypeFlags.boolean && r.flags & TypeFlags.boolean) {
+                    return true;
+                }
+                if (isStructLike(l) && isStructLike(r)) {
+                    return isLeftStructSubtypeOfRightStruct(l, r);
+                }
+                if (isArray(l) && isArray(r)) {
+                    return worker(l.memberType, r.memberType);
+                }
+                if (isFunctionSignature(l) && isFunctionSignature(r)) {
+                    // covariant in return type
+                    if (!worker(l.returns, r.returns)) return false;
+
+                    // contravariant in parameter types
+                    // also every parameter needs the same names...?
+
+                    const hasSpread = !!(r.params.length > 0 && r.params[r.params.length-1].flags & TypeFlags.spread);
+                    if (!hasSpread && l.params.length != r.params.length) return false;
+
+                    for (let i = 0; i < l.params.length; i++) {
+                        // if the arg in the right side is a spread, just check remaining left types against the (un-array-wrapped) spread type
+                        if (r.params[i].flags & TypeFlags.spread) {
+                            const rType = r.params[i].type;
+                            const spreadType = isArray(rType) ? rType.memberType : null;
+                            if (!spreadType) return false; // all spread types must be arrays, we should have caught this before getting here
+                            for (let j = i; j < l.params.length; j++) {
+                                const lpt = l.params[i].type;
+                                // contravariant, flip left/right
+                                if (!worker(spreadType, lpt)) return false;
+                            }
+
+                            break;
+                        }
+
+                        const lpt = l.params[i].type;
+                        const rpt = r.params[i].type;
+                        // contravariant, flip left/right
+                        if (!worker(rpt, lpt)) return false;
+                    }
+                    return true;
+                }
+                //
+                // S|T <: U     iff S <: U && T <: U   (e.g `U = S|T` is valid only if both S and T are subtypes of U)
+                // U   <: S|T   iff U <: S || U <: T   (e.g `S|T = U` is valid if U is either an S or a T)
+                //
+                // S&T <: U     iff S <: U || T <: U   (e.g `U = S&T` is valid if either S or T is a subtype of U)
+                // U   <: S&T   iff U <: S && U <: T   (e.g `S&T = U` is valid only if U is a subtype of both S and T)
+                //
+                if (isUnion(l)) {
+                    for (const leftConstituent of l.types) {
+                        if (!worker(leftConstituent, r)) return false;
+                    }
+                    return true;
+                }
+                if (isUnion(r)) {
+                    for (const rightConstituent of r.types) {
+                        if (worker(l, rightConstituent)) return true;
+                    }
+                    return false;
+                }
+                if (isIntersection(l)) {
+                    for (const leftConstituent of l.types) {
+                        if (worker(leftConstituent, r)) return true;
+                    }
+                    return false;
+                }
+                if (isIntersection(r)) {
+                    for (const rightConstituent of r.types) {
+                        if (!worker(l, rightConstituent)) return false;
+                    }
+                    return true;
+                }
+
+                return false;
+            }
+            finally {
+                depth--;
+            }
+        }
     }
 
     /*
@@ -1149,7 +1217,7 @@ export function Checker() {
     // sake of completions; a "scope" in CF is essentially a struct, but not quite; and vice versa; so the abstraction is not perfect but it's close
     // we cache and reuse already-wrapped sybmol tables so that we can compare types by identity
     function structViewOfScope(scopeContents: SymbolTable, interfaceExtension?: Interface) : Struct {
-        if (!interfaceExtension) interfaceExtension = EmptyInterface;
+        if (!interfaceExtension) interfaceExtension = SyntheticType.EmptyInterface;
         if (structViewCache.has(scopeContents, interfaceExtension)) {
             return structViewCache.get(scopeContents, interfaceExtension)!;
         }
@@ -1200,8 +1268,8 @@ export function Checker() {
                             // warn about local/arguments use outside of function
                             return;
                         }
-                        const maybeInterfaceExtension = walkupToFindInterfaceDefinition(name, containingFunction);
-                        setCachedEvaluatedNodeType(node, structViewOfScope(containingFunction.containedScope![name]!, maybeInterfaceExtension));
+                        const possiblyEmptyInterfaceExtension = walkupToFindInterfaceDefinition(name, containingFunction);
+                        setCachedEvaluatedNodeType(node, structViewOfScope(containingFunction.containedScope![name]!, possiblyEmptyInterfaceExtension));
                         break;
                     }
                     case "variables":
@@ -1211,12 +1279,14 @@ export function Checker() {
                         if (sourceFile.cfFileType !== CfFileType.cfc) {
                             return;
                         }
-                        const maybeInterfaceExtension = walkupToFindInterfaceDefinition(name, node);
-                        setCachedEvaluatedNodeType(node, structViewOfScope(sourceFile.containedScope[name]!, maybeInterfaceExtension));
+                        const possiblyEmptyInterfaceExtension = walkupToFindInterfaceDefinition(name, node);
+                        setCachedEvaluatedNodeType(node, structViewOfScope(sourceFile.containedScope[name]!, possiblyEmptyInterfaceExtension));
+                        break;
                     }
                     case "application": {
-                        const maybeInterfaceExtension = walkupToFindInterfaceDefinition(name, node);
-                        setCachedEvaluatedNodeType(node, structViewOfScope(sourceFile.containedScope.application!, maybeInterfaceExtension));
+                        const possiblyEmptyInterfaceExtension = walkupToFindInterfaceDefinition(name, node);
+                        setCachedEvaluatedNodeType(node, structViewOfScope(sourceFile.containedScope.application!, possiblyEmptyInterfaceExtension));
+                        break;
                     }
                 }
             }
@@ -1311,7 +1381,7 @@ export function Checker() {
                             ? walkupThisToResolveSymbol(propertyName)
                             : walkupSuperToResolveSymbol(propertyName);
                         if (symbol) {
-                            type = symbol.symTabEntry.type;
+                            type = evaluateType(node, symbol.symTabEntry.type);
                             setResolvedSymbol(element, symbol);
                         }
                         else {

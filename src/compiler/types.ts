@@ -184,7 +184,8 @@ export type Struct = DefaultStruct | Interface | CfcTypeWrapper | SymbolTableTyp
 
 interface StructBase extends _Type {
     structKind: StructKind,
-    readonly members: ReadonlyMap<string, SymTabEntry>,
+    readonly members: ReadonlyMap<string, Readonly<SymTabEntry>>,
+    readonly instantiableSpreads?: readonly _Type[],
 }
 
 export interface DefaultStruct extends StructBase {
@@ -211,11 +212,15 @@ export interface SymbolTableTypeWrapper extends StructBase {
     readonly interfaceExtension?: Readonly<Interface>
 }
 
-export function Struct(members: ReadonlyMap<string, SymTabEntry>) : DefaultStruct {
+export function Struct(members: ReadonlyMap<string, SymTabEntry>, instantiableSpreads?: readonly _Type[]) : DefaultStruct {
     const type : DefaultStruct = {
         flags: TypeFlags.struct,
         structKind: StructKind.struct,
         members,
+    }
+
+    if (instantiableSpreads && instantiableSpreads.length > 0) {
+        (type as Mutable<Struct>).instantiableSpreads = instantiableSpreads;
     }
 
     if (debugTypeModule) {
@@ -225,12 +230,16 @@ export function Struct(members: ReadonlyMap<string, SymTabEntry>) : DefaultStruc
     return type;
 }
 
-export function Interface(name: string, members: ReadonlyMap<string, SymTabEntry>) : Interface {
+export function Interface(name: string, members: ReadonlyMap<string, SymTabEntry>, instantiableSpreads?: readonly _Type[]) : Interface {
     const type : Interface = {
         flags: TypeFlags.struct,
         structKind: StructKind.interface,
         name,
         members,
+    }
+
+    if (instantiableSpreads && instantiableSpreads.length > 0) {
+        (type as Mutable<Interface>).instantiableSpreads = instantiableSpreads;
     }
 
     if (debugTypeModule) {
@@ -444,13 +453,23 @@ export function cfTypeConstructor(params: cfTypeConstructorParam[], body: _Type)
     return type;
 }
 
-export function CfcLookup(param: _Type) {
-        return cfTypeConstructorInvocation(SyntheticType.cfcLookupType, [param]);
+export type CfcLookupType = cfTypeConstructorInvocation & {params: [/*fixme: LiteralType*/ _Type], __tag: "CfcLookupType"};
+
+export function CfcLookup(param: _Type) : CfcLookupType {
+        return cfTypeConstructorInvocation(SyntheticType.cfcLookupType, [param]) as CfcLookupType;
 }
 
 export function isTypeConstructor(t: _Type) : t is cfTypeConstructor {
     t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.typeConstructor);
+}
+
+export function isCfcLookupType(t: _Type) : t is CfcLookupType {
+    return isTypeConstructorInvocation(t) && t.left === SyntheticType.cfcLookupType;
+}
+
+export function getCfcLookupTarget(t: CfcLookupType) : string {
+    return t.params[0].literalValue! as string;
 }
 
 export interface cfTypeConstructorParam extends _Type {
@@ -640,8 +659,6 @@ export const SyntheticType = (function() {
         return v;
     }
 
-    const emptyStruct = struct();
-
     const never : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.never
     } as _Type;
@@ -656,8 +673,8 @@ export const SyntheticType = (function() {
         never: createType(never),
         struct, // this is a function
         anyFunction: anyFunction, // already created via call to cfFunctionSignature
-        emptyStruct, // already created via a call to cfStruct()
-        cfcLookupType: cfTypeConstructor([], any) // param and body are meaningless here, we just want a single type constructor that says "hey, lookup the name of this as a cfc as a type"
+        cfcLookupType: cfTypeConstructor([], any), // param and body are meaningless here, we just want a single type constructor that says "hey, lookup the name of this as a cfc as a type"
+        EmptyInterface: Interface("", new Map())
     } as const;
 
     return results;
@@ -718,9 +735,9 @@ function typeFromStringifiedJavaLikeTypename(typename: string | null) : _Type {
         case "boolean": return SyntheticType.boolean;
         case "function": return SyntheticType.anyFunction;
         case "numeric": return SyntheticType.numeric;
-        case "query": return SyntheticType.emptyStruct; // @fixme: have real query type
+        case "query": return SyntheticType.EmptyInterface; // @fixme: have real query type
         case "string": return SyntheticType.string;
-        case "struct": return SyntheticType.emptyStruct;
+        case "struct": return SyntheticType.EmptyInterface;
         case "void": return SyntheticType.void_;
         default: return SyntheticType.any; // @fixme: should be CFC<typename>, which will be resolved to a CFC during checking phase (could also be a java class...)
     }
