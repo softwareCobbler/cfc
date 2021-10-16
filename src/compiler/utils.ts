@@ -702,15 +702,13 @@ export function binarySearch<T>(vs: T[], comparator: (v: T) => number) : number 
         return -1;
     }
 
-    function mid(a: number, b: number, floorOrCeil: 'f' | 'c') {
-        return floorOrCeil === 'f'
-            ? Math.floor((a+b)/2)
-            : Math.ceil((a+b)/2);
+    function mid(a: number, b: number) {
+        return Math.floor((a+b)/2);
     }
 
     let floor = 0;
     let ceil = vs.length - 1;
-    let index = mid(floor, ceil, 'f');
+    let index = mid(floor, ceil);
 
     while (floor <= ceil) {
         const compare = comparator(vs[index]);
@@ -728,13 +726,13 @@ export function binarySearch<T>(vs: T[], comparator: (v: T) => number) : number 
         else if (compare === -1) {
             // T is less than target, move floor
             floor = index+1;
-            index = mid(floor, ceil, 'f');
+            index = mid(floor, ceil);
             continue;
         }
         else if (compare === 1) {
             // T is more than target, move ceil
             ceil = index-1;
-            index = mid(floor, ceil, 'f');
+            index = mid(floor, ceil);
         }
     }
 

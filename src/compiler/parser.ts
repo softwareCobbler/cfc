@@ -803,13 +803,14 @@ export function Parser(config: {language: LanguageVersion}) {
     const enum ComponentSyntaxType { tag = 1, script = 2 }; // start at non-zero
     const enum ComponentOrInterface { component = 1, interface = 2 };
 
-    interface ComponentType {
+    interface ComponentPreamble {
         primarySyntax: ComponentSyntaxType,
         type: ComponentOrInterface,
         typedefs: TypeShim[],
+        preamble: Node[],
     }
 
-    function parseComponentPreamble() : ComponentType | null {
+    function parseComponentPreamble() : ComponentPreamble | null {
         setScannerMode(ScannerMode.allow_both);
         const preamble : Node[] = []; // not certain, but probably just {Comment | ImportStatement}
 
@@ -869,6 +870,7 @@ export function Parser(config: {language: LanguageVersion}) {
                 }
                 case TokenType.FORWARD_SLASH_STAR: {
                     const comment = parseScriptMultiLineComment();
+                    preamble.push(comment);
                     if (comment.flags & NodeFlags.docBlock) {
                         parseDocBlockFromPreParsedComment(comment);
                         if (lastDocBlock) {
@@ -930,7 +932,8 @@ export function Parser(config: {language: LanguageVersion}) {
             return {
                 primarySyntax: syntaxType,
                 type: componentOrInterface,
-                typedefs
+                typedefs,
+                preamble,
             };
         }
         else return null;
@@ -973,11 +976,12 @@ export function Parser(config: {language: LanguageVersion}) {
                     updateParseContext(ParseContext.cfcPsuedoConstructor);
                 }
 
+                sourceFile.content.push(...componentInfo.preamble);
                 if (componentInfo.primarySyntax === ComponentSyntaxType.tag) {
-                    sourceFile.content = parseTags();
+                    sourceFile.content.push(...parseTags());
                 }
                 else {
-                    sourceFile.content = parseScript();
+                    sourceFile.content.push(...parseScript());
                 }
 
                 // extract parsed types into working node's typedefs

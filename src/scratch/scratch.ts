@@ -4,7 +4,7 @@
 // rebuild and then run the debugger
 import { Scanner, Parser, Binder, NilDCfm, NilCfc, NilCfm, SourceFile } from "../compiler";
 import { CfFileType } from "../compiler/scanner";
-import { binarySearch, cfmOrCfc, findNodeInFlatSourceMap, flattenTree, recursiveGetFiles } from "../compiler/utils";
+import { binarySearch, cfmOrCfc, findNodeInFlatSourceMap, flattenTree, isExpressionContext, recursiveGetFiles } from "../compiler/utils";
 import { Checker } from "../compiler/checker";
 import { DebugFileSystem, FileSystem, LanguageVersion, Project } from "../compiler/project";
 import { getCompletions } from "../services/completions";
@@ -23,15 +23,7 @@ function projectFiddle() {
                         }
                     }`,
                 "someFile.cfc": `
-                    /** @interface this { ... cfc<a.b.x> } */
-                    /** @interface variables { _wirebox: Wirebox, getInstance: Wirebox.getInstance } */
-                    /** @interface application { getInstance: Wirebox.getInstance } */
-                    component {
-                        function foo() {
-                            application.getInstance("a.b.x");
-                            application.getOtherInstance();
-                        }
-                    }`,
+                    /** @interface this { ... cfc<a.b.  */ component {}`,
                 "a": {
                     "b": {
                         "x.cfc": `
@@ -56,6 +48,10 @@ function projectFiddle() {
     //project.addFile(target);
 
     project.addFile("/someFile.cfc");
+    const node = project.getNodeToLeftOfCursor("/someFile.cfc", 55);
+    const isexpr = node ? isExpressionContext(node) : false;
+    console.log(isexpr);
+    
     project.addFile("/Wirebox.cfc");
 
     const diagnostics = project.getDiagnostics("/Base.cfc");

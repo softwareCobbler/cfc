@@ -376,7 +376,8 @@ export function Binder() {
                 return;
             case CfTag.TagType.comment:
             case CfTag.TagType.text:
-                throw "These should be dealt with prior to binding.";
+                // no-op
+                return;
             default:
                 exhaustiveCaseGuard(node);
         }

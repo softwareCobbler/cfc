@@ -75,8 +75,35 @@ export class DebugDirent extends fs.Dirent {
     isSocket() { return false; }
 }
 
-export type FilesystemPath = {[dir: string]: string | Buffer | FilesystemPath};
-export function DebugFileSystem(files: Readonly<FilesystemPath>, pathSepOfDebugFs = "/", isCaseSensitive = true) : FileSystem {
+export type FileSystemNode = {[dir: string]: string | Buffer | FileSystemNode}; // just for dev/debug
+
+export function pushFsNode(fsNode: FileSystemNode, path: string, text: string | Buffer, pathSep = "/") { // just for dev/debug
+    const splitPath = path.split(pathSep);
+    let workingNode : string | Buffer | FileSystemNode | undefined = fsNode;
+    for (let i = 0; i < splitPath.length - 1; i++) {
+        if (!workingNode || isLeaf(workingNode)) throw "bad path - " + path;
+        const name = splitPath[i];
+        if (workingNode[name]) {
+            workingNode = workingNode[splitPath[i]];
+        }
+        else {
+            workingNode[name] = {};
+        }
+    }
+
+    if (!workingNode || isLeaf(workingNode)) throw "bad path - " + path;
+
+    workingNode[splitPath[splitPath.length - 1]] = text;
+
+    function isLeaf(v: string | Buffer | FileSystemNode) : v is string | Buffer {
+        return (typeof v === "string") || (v instanceof Buffer);
+    }
+}
+
+export function DebugFileSystem() : FileSystem;
+export function DebugFileSystem(files: Readonly<FileSystemNode>, pathSepOfDebugFs?: string, isCaseSensitive?: boolean) : FileSystem;
+export function DebugFileSystem(files?: Readonly<FileSystemNode>, pathSepOfDebugFs = "/", isCaseSensitive = true) : FileSystem {
+    if (!files) files = {"/": {}};
     const maybeGet = (path: string) => {
         // we expect fileSystemPath to be rooted on "/" or "\"
         const pathComponents = [
@@ -85,7 +112,7 @@ export function DebugFileSystem(files: Readonly<FilesystemPath>, pathSepOfDebugF
         ];
         let working = files;
         while (pathComponents.length > 0) {
-            const next = working[pathComponents.shift()!];
+            const next = working?.[pathComponents.shift()!];
             if (!next) {
                 return undefined;
             }
@@ -99,11 +126,11 @@ export function DebugFileSystem(files: Readonly<FilesystemPath>, pathSepOfDebugF
         return working;
     }
 
-    function isFile(v: string | Buffer | FilesystemPath | undefined) : v is string | Buffer {
+    function isFile(v: string | Buffer | FileSystemNode | undefined) : v is string | Buffer {
         return (typeof v === "string") || v instanceof Buffer;
     }
 
-    function isDir(v: string | Buffer | FilesystemPath | undefined) : v is FilesystemPath {
+    function isDir(v: string | Buffer | FileSystemNode | undefined) : v is FileSystemNode {
         return !!v && !isFile(v);
     }
 
@@ -143,7 +170,7 @@ export function DebugFileSystem(files: Readonly<FilesystemPath>, pathSepOfDebugF
 
 export const enum LanguageVersion { acf2018 = 1, lucee5 };
 
-interface ProjectOptions {
+export interface ProjectOptions {
     debug: boolean,
     parseTypes: boolean,
     language: LanguageVersion,

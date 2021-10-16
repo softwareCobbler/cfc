@@ -265,7 +265,6 @@ describe("MX-Unit smoke test", () => {
             const absPath = path.resolve(__dirname, fileBaseName);
             const textBuffer = fs.readFileSync(absPath);
             const sourceFile = SourceFile(absPath, cfmOrCfc(absPath)!, textBuffer);
-            sourceFile.libRefs.push(stdLib);
             parser.setSourceFile(sourceFile).parse();
 
             flattenTree(sourceFile); // just make sure it doesn't throw

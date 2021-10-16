@@ -5,7 +5,7 @@ import { IndexedAccess, NodeKind } from "../src/compiler/node";
 import { findNodeInFlatSourceMap, getTriviallyComputableString } from "../src/compiler/utils";
 import * as TestLoader from "./TestLoader";
 import { CompletionItem, getCompletions } from "../src/services/completions";
-import { LanguageVersion } from "../src/compiler/project";
+import { ProjectOptions, LanguageVersion, FileSystemNode, pushFsNode } from "../src/compiler/project";
 
 const parser = Parser({language: LanguageVersion.acf2018}).setDebug(true);
 const binder = Binder().setDebug(true);
@@ -19,12 +19,14 @@ function assertDiagnosticsCount(text: string, cfFileType: CfFileType, count: num
 }
 
 function assertDiagnosticsCountWithProject(fs: FileSystem, diagnosticsTargetFile: string, count: number, language = LanguageVersion.acf2018) {
-    const project = Project(["/"], fs, {debug: true, parseTypes: true, language});
+    const project = Project("/", fs, {debug: true, parseTypes: true, language, wireboxConfigFileCanonicalAbsPath: null, withWireboxResolution: false});
     project.addFile(diagnosticsTargetFile);
     assert.strictEqual(project.getDiagnostics(diagnosticsTargetFile).length, count, `Expected ${count} errors.`);
 }
 
 describe("general smoke test for particular constructs", () => {
+    const commonProjectOptions : ProjectOptions = {debug: true, parseTypes: true, language: LanguageVersion.acf2018, wireboxConfigFileCanonicalAbsPath: null, withWireboxResolution: false};
+
     it("Should accept `new` expression in an expression context", () => {
         assertDiagnosticsCount(`<cfset x = {v: new foo.bar().someMethod()}>`, CfFileType.cfm, 0);
     });
@@ -223,58 +225,61 @@ describe("general smoke test for particular constructs", () => {
         assert.strictEqual(node?.parent?.parent?.kind, NodeKind.functionDefinition);
     });
     it("Should issue errors on redeclaration of variables already present in arguments scope", () => {
-        const dfs = DebugFileSystem([
-            ["/a.cfm", `
-                <cfscript>
-                    function foo(a, b, c) {
-                        for (var a in b) {}
-                        for (var b = 42; b == 42; g) {}
-                        var c = 42;
-                    }
-                    function bar(a,b,c) {
-                        function foo() {
+        const dfs = DebugFileSystem({
+            "/": {
+                "a.cfm": `
+                    <cfscript>
+                        function foo(a, b, c) {
                             for (var a in b) {}
                             for (var b = 42; b == 42; g) {}
                             var c = 42;
                         }
-                    }
-                    function outer() {
-                        var foo = (a,b,c) => {
-                            for (var a in b) {}
-                            for (var b = 42; b == 42; g) {}
-                            var c = 42;
-                        }
-                        var bar = (a,b,c) => {
-                            var inner = () => {
+                        function bar(a,b,c) {
+                            function foo() {
                                 for (var a in b) {}
                                 for (var b = 42; b == 42; g) {}
                                 var c = 42;
                             }
                         }
-                    }
-                </cfscript>
-            `],
-        ], "/");
+                        function outer() {
+                            var foo = (a,b,c) => {
+                                for (var a in b) {}
+                                for (var b = 42; b == 42; g) {}
+                                var c = 42;
+                            }
+                            var bar = (a,b,c) => {
+                                var inner = () => {
+                                    for (var a in b) {}
+                                    for (var b = 42; b == 42; g) {}
+                                    var c = 42;
+                                }
+                            }
+                        }
+                    </cfscript>
+                `
+            }
+        });
         assertDiagnosticsCountWithProject(dfs, "/a.cfm", 6);
     });
     // eventually we will support this but for now we can't error on what is actually valid code
     it("Should not issue an error on an array member lookup", () => {
-        const dfs = DebugFileSystem([
-            ["/a.cfm", `
+        const dfs = DebugFileSystem({
+            "/": {
+                "a.cfm": `
                 <cfscript>
                     function foo(array a) {
                         return a.len();
                     }
                 </cfscript>
-            `],
-        ], "/");
+            `},
+        });
         assertDiagnosticsCountWithProject(dfs, "/a.cfm", 0);
     });
     it("Should offer completions for functions within a CFC", () => {
         const testCase = TestLoader.loadCompletionAtTest("./test/sourcefiles/cfc_function_completion.cfc");
 
-        const fs = DebugFileSystem([["/a.cfc", testCase.sourceText]], "/");
-        const project = Project(["/"], fs, {debug: true, parseTypes: true, language: LanguageVersion.acf2018});
+        const fs = DebugFileSystem({"/": {"a.cfc": testCase.sourceText}});
+        const project = Project("/", fs, commonProjectOptions);
         project.addFile("/a.cfc");
 
         const completions = getCompletions(project, "/a.cfc", testCase.index, null);
@@ -288,11 +293,13 @@ describe("general smoke test for particular constructs", () => {
         const cfc = TestLoader.loadCompletionAtTest("./test/sourcefiles/cfc_function_completion.cfc");
         const cfm = TestLoader.loadCompletionAtTest("./test/sourcefiles/cfc_function_completion.cfc");
 
-        const fs = DebugFileSystem([
-            ["/cfc_function_completion.cfc", cfc.sourceText],
-            ["/cfc_function_completion.cfm", cfm.sourceText]
-        ], "/");
-        const project = Project(["/"], fs, {debug: true, parseTypes: true, language: LanguageVersion.acf2018});
+        const fs = DebugFileSystem({
+            "/": {
+                "cfc_function_completion.cfc": cfc.sourceText,
+                "cfm_function_completion.cfm": cfm.sourceText,
+            }
+        });
+        const project = Project("/", fs, commonProjectOptions);
         project.addFile("/cfc_function_completion.cfc");
         project.addFile("/cfc_function_completion.cfm");
 
@@ -304,129 +311,131 @@ describe("general smoke test for particular constructs", () => {
         assert.strictEqual(justLabels.includes("bar"), true, "completions includes `bar`");
     });
     it("Should accept argumentCollection as meeting the named argument requirements for a function call", () => {
-        const dfs = DebugFileSystem([
-            ["/a.cfc", `
+        const fsRoot : FileSystemNode = {"/": {}};
+        pushFsNode(fsRoot, "/a.cfc", `
                 component {
                     function foo(required a, required b) {
                         foo(argumentCollection=arguments);
                     }
-                }
-            `],
-        ], "/");
+                }`
+        );
+        const dfs = DebugFileSystem(fsRoot);
         assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);
     });
     it("Should issue diagnostic on call expression with less than the required number of arguments.", () => {
-        const dfs = DebugFileSystem([
-            ["/a.cfc", `
-                component {
-                    function foo(required a, required b) {
-                        foo(42);
-                    }
-                }
-            `],
-        ], "/");
+        const dfs = DebugFileSystem({
+            "/": {
+                "a.cfc": `
+                    component {
+                        function foo(required a, required b) {
+                            foo(42);
+                        }
+                    }`
+            }
+        });
         assertDiagnosticsCountWithProject(dfs, "/a.cfc", 1);
     });
     it("Should accept a decimal number as a function argument", () => {
-        const dfs = DebugFileSystem([
-            ["/a.cfm", `<cfset foo(.42)>`],
-        ], "/");
+        const dfs = DebugFileSystem({"/": {"a.cfm": "<cfset foo(.42)>"}})
         assertDiagnosticsCountWithProject(dfs, "/a.cfm", 0);
     });
     it("Should accept a variable declaration as a loose statement after an if predicate", () => {
         // really the issue we are checking for is that we parse the semicolon after `var y = z`, so that we see the 'else' following it
-        const dfs = DebugFileSystem([
-            ["/a.cfm", `
-            <cfscript>
-                function foo() {
-                    if (x) var y = z;
-                    else 42;
-                }
-            </cfscript>`],
-        ], "/");
+        const dfs = DebugFileSystem({
+            "/": {
+                "a.cfm": `
+                <cfscript>
+                    function foo() {
+                        if (x) var y = z;
+                        else 42;
+                    }
+                </cfscript>
+                `
+            }
+        })
         assertDiagnosticsCountWithProject(dfs, "/a.cfm", 0);
     });
     it("Should parse param as a sugared tag expression.", () => {
-        const dfs = DebugFileSystem([
-            ["/a.cfc", `
+        const fsRoot : FileSystemNode = {"/": {}};
+        pushFsNode(fsRoot, "/a.cfc", 
+            `
                 component {
                     param name="foo" default="lel";
-                }`]],
-            "/");
+                }`);
+        const dfs = DebugFileSystem(fsRoot);
         assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);
     });
     it("Should parse catch bindings as either string or dotted path.", () => {
-        const dfs = DebugFileSystem([
-            ["/a.cfc", `
-                component {
-                    try {}
-                    catch ("a.b.c" e) {}
+        const fsRoot : FileSystemNode = {"/": {}};
+        pushFsNode(fsRoot, "/a.cfc", `
+            component {
+                try {}
+                catch ("a.b.c" e) {}
 
-                    try {}
-                    catch (a.b.c e) {}
+                try {}
+                catch (a.b.c e) {}
 
-                    try {}
-                    catch ('a.b.c' e) {}
+                try {}
+                catch ('a.b.c' e) {}
 
-                    try {}
-                    catch('#abc#' e) {}
+                try {}
+                catch('#abc#' e) {}
 
-                    try {}
-                    catch(e e) {}
-                }`]],
-            "/");
+                try {}
+                catch(e e) {}
+            }`);
+        const dfs = DebugFileSystem(fsRoot);
         assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);
     });
     it("Should not error on reserved keywords when used in contextually valid positions.", () => {
-        const dfs = DebugFileSystem([
-            ["/a.cfc", `
-                component {
-                    s = {
-                        final: 42,
-                        default: 42
-                    };
-                    call(final=42, default=42);
-                }`]],
-            "/");
+        const fsRoot : FileSystemNode = {"/": {}};
+        pushFsNode(fsRoot, "/a.cfc", `
+            component {
+                s = {
+                    final: 42,
+                    default: 42
+                };
+                call(final=42, default=42);
+            }`);
+        const dfs = DebugFileSystem(fsRoot);
         assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);
     });
     it("Should error on quoted named call argument names in Adobe; in Lucee it is OK", () => {
-        const dfs = DebugFileSystem([
-            ["/a.cfc", `
-                component {
-                    someCall("quotedArgName" = 42);
-                    someCall("quotedArg");
-                }`]],
-            "/");
+        const fsRoot : FileSystemNode = {"/": {}};
+        pushFsNode(fsRoot, "/a.cfc", `
+            component {
+                someCall("quotedArgName" = 42);
+                someCall("quotedArg");
+            }`);
+        const dfs = DebugFileSystem(fsRoot);
         assertDiagnosticsCountWithProject(dfs, "/a.cfc", 1, LanguageVersion.acf2018);
         assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0, LanguageVersion.lucee5);
     });
     it("Should not require a required && defaulted parameter", () => {
-        const dfs = DebugFileSystem([
-            ["/a.cfc", `
-                component {
-                    function foo(required arg = 0) {}
-                    foo();
-                }`]],
-            "/");
+        const fsRoot : FileSystemNode = {"/": {}};
+        pushFsNode(fsRoot, "/a.cfc", `
+            component {
+                function foo(required arg = 0) {}
+                foo();
+            }`);
+        const dfs = DebugFileSystem(fsRoot);
         assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);
     });
     it("Should not typecheck a call expression to a built-in function", () => {
-        const fname = "a.cfm";
-        const debugfs = DebugFileSystem([
-            [fname, `
-                <cfscript>
-                    dateFormat(); // should require one param, but we're not type checking this yet
+        const fsRoot : FileSystemNode = {"/": {}};
+        pushFsNode(fsRoot, "/a.cfm", `
+            <cfscript>
+                dateFormat(); // should require one param, but we're not type checking this yet
 
-                    function foo(string dateFormat) {
-                        dateFormat(42); // built-in should be "more visible" in a call-expression position than the argument named dateFormat
-                    }
-                </cfscript>
-            `],
-            ["lib.d.cfm", `@declare function dateFormat(required date date, string mask) xtype="any";`],
-        ], "/");
-    
-        const project = Project(["/"], /*filesystem*/debugfs, {debug: true, parseTypes: true, language: LanguageVersion.acf2018});
+                function foo(string dateFormat) {
+                    dateFormat(42); // built-in should be "more visible" in a call-expression position than the argument named dateFormat
+                }
+            </cfscript>`);
+        pushFsNode(fsRoot, "/lib.d.cfm", `@declare function dateFormat(required date date, string mask) xtype="any";`);
+
+        const dfs = DebugFileSystem(fsRoot);
+
+        const project = Project("/", /*filesystem*/dfs, commonProjectOptions);
         project.addEngineLib("lib.d.cfm");
         project.addFile("a.cfm");
     
@@ -436,10 +445,9 @@ describe("general smoke test for particular constructs", () => {
     });
     it("Should offer completions for methods in parent components", () => {
         const files = TestLoader.loadMultiFileTest("./test/sourcefiles/returntypeCompletions.cfm");
-        const fileSys : [string, string][] = [];
 
         // for the completions tests, we want to strip the completions marker before adding it to the compiler host
-        const testTargets = {
+        const completionsTestTargets = {
             ...(() => {
                 const name = "/foo/Child.cfc";
                 const completionsAt = TestLoader.loadCompletionAtTestFromSource(files[name]);
@@ -472,18 +480,19 @@ describe("general smoke test for particular constructs", () => {
             })()
         };
 
+        const fsRoot : FileSystemNode = {"/": {}};
         for (const absPath of Object.keys(files)) {
-            if (testTargets.hasOwnProperty(absPath)) fileSys.push([absPath, testTargets[absPath as keyof typeof testTargets].sourceText]);
-            else fileSys.push([absPath, files[absPath]]);
+            if (completionsTestTargets.hasOwnProperty(absPath)) pushFsNode(fsRoot, absPath, completionsTestTargets[absPath as keyof typeof completionsTestTargets].sourceText);
+            else pushFsNode(fsRoot, absPath, files[absPath]);
         }
 
-        const debugFs = DebugFileSystem(fileSys, "/");
-        const project = Project(["/"], /*filesystem*/debugFs, {debug: true, parseTypes: true, language: LanguageVersion.acf2018});
-        for (const [absPath, _] of fileSys) project.addFile(absPath);
+        const debugFs = DebugFileSystem(fsRoot);
+        const project = Project("/", /*filesystem*/debugFs, commonProjectOptions);
+//        for (const [absPath, _] of fsRoot) project.addFile(absPath);
 
-        for (const absPath of Object.keys(testTargets) as (keyof typeof testTargets)[]) {
-            const completions = getCompletions(project, absPath, testTargets[absPath].index, ".");
-            testTargets[absPath].check(completions);
+        for (const absPath of Object.keys(completionsTestTargets) as (keyof typeof completionsTestTargets)[]) {
+            const completions = getCompletions(project, absPath, completionsTestTargets[absPath].index, ".");
+            completionsTestTargets[absPath].check(completions);
         }
     })
 });
