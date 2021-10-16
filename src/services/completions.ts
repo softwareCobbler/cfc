@@ -205,9 +205,7 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
         let typeinfo : _Type | SymbolTable | undefined = project.__unsafe_dev_getChecker().getCachedEvaluatedNodeType(node.parent.parent, parsedSourceFile);
         
         // the first symbol table we get is a cfStruct or null; after that, we will start getting actual symbol tables
-        // we can check the first cfstruct we get for "cfc-ness"
-        const forCfcCompletions = parsedSourceFile.cfFileType === CfFileType.cfc;
-        const sourceFileIsCfcDescendantOfSymbolTableFile = typeinfo.cfc ? cfcIsDescendantOf(typeinfo.cfc, parsedSourceFile) : false;
+        const parsedSourceFileIsDescendantOfTypeinfoCfc = typeinfo.cfc ? cfcIsDescendantOf(typeinfo.cfc, parsedSourceFile) : false;
 
         let workingSourceFile = typeinfo.cfc ?? parsedSourceFile;
         const result : CompletionItem[] = [];
@@ -215,7 +213,9 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
         while (typeinfo) {
             let underlyingMembers : ReadonlyMap<string, SymTabEntry>;
             let interfaceExtension : ReadonlyMap<string, SymTabEntry> | undefined = undefined;
+            let typeinfoSourceFileIsCfc = false;
             if (typeinfo instanceof Map) {
+                typeinfoSourceFileIsCfc = true; // we got a symboltable, which we only get in cases of climbing into a parent CFC
                 underlyingMembers = typeinfo;
                 if (workingSourceFile.cfFileType === CfFileType.cfc && workingSourceFile.containedScope.typedefs.mergedInterfaces.has("this")) {
                     interfaceExtension = workingSourceFile.containedScope.typedefs.mergedInterfaces.get("this")!.members;
@@ -223,6 +223,7 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
             }
             else if (isStructLike(typeinfo)) {
                 underlyingMembers = typeinfo.members;
+                typeinfoSourceFileIsCfc = typeinfo.structKind === StructKind.cfcTypeWrapper;
                 if (typeinfo.structKind === StructKind.symbolTableTypeWrapper) interfaceExtension = (typeinfo as SymbolTableTypeWrapper).interfaceExtension?.members;
             }
             else {
@@ -230,8 +231,10 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
             }
 
             const runOne = (symTabEntry: SymTabEntry) => {
-                if (symTabEntry.canonicalName === "init" && forCfcCompletions) return;
-                if (forCfcCompletions && isFunctionSignature(symTabEntry.type) && !isPublicMethod(symTabEntry.type) && !sourceFileIsCfcDescendantOfSymbolTableFile) return;
+                if (symTabEntry.canonicalName === "init" && typeinfoSourceFileIsCfc) return; // don't need to show init, we can still check its signature though?
+                if ( typeinfoSourceFileIsCfc && isFunctionSignature(symTabEntry.type) && !isPublicMethod(symTabEntry.type)) {
+                    if (!parsedSourceFileIsDescendantOfTypeinfoCfc) return; // don't offer completions for non-public members for non-descendants
+                }
                 result.push({
                     label: symTabEntry.uiName,
                     kind: isFunctionSignature(symTabEntry.type)
@@ -244,8 +247,8 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
             underlyingMembers.forEach(runOne);
             interfaceExtension?.forEach(runOne);
 
-            // if our first symbol was for a cfc exported/public symbol, then we can climb the hierarchy and offer public members of parent components, too
-            if (forCfcCompletions && workingSourceFile.cfc?.extends) {
+            // climb the hierarchy and offer public members of parent components, too
+            if (workingSourceFile.cfc?.extends) {
                 workingSourceFile = workingSourceFile.cfc.extends;
                 typeinfo = workingSourceFile.containedScope.this; // the first typeinfo was guaranteed to be a Struct; from here and for every subsequent iteration, we get a SymbolTable instaed
             }

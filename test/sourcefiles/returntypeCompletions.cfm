@@ -24,7 +24,7 @@ component extends="Base" {
 //// @file="/foo/Child2.cfc"
 component extends="Base" {
     public function someChildMethod() {
-        so|<<<<
+        so|<<<< // should get someChildMethod, shouldBeNotExportedBecauseItIsPrivate, Base::someBaseMethod, Top::shouldReturnRootSibling
     }
     private function shouldBeNotExportedBecauseItIsPrivate() {}
 }

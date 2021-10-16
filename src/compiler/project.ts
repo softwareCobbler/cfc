@@ -78,17 +78,26 @@ export class DebugDirent extends fs.Dirent {
 export type FileSystemNode = {[dir: string]: string | Buffer | FileSystemNode}; // just for dev/debug
 
 export function pushFsNode(fsNode: FileSystemNode, path: string, text: string | Buffer, pathSep = "/") { // just for dev/debug
+    let workingNode : string | Buffer | FileSystemNode | undefined;
+
+    if (path.startsWith(pathSep)) {
+        path = path.slice(1);
+        workingNode = fsNode[pathSep];
+    }
+    else {
+        workingNode = fsNode;
+    }
+
     const splitPath = path.split(pathSep);
-    let workingNode : string | Buffer | FileSystemNode | undefined = fsNode;
+
     for (let i = 0; i < splitPath.length - 1; i++) {
         if (!workingNode || isLeaf(workingNode)) throw "bad path - " + path;
         const name = splitPath[i];
-        if (workingNode[name]) {
-            workingNode = workingNode[splitPath[i]];
-        }
-        else {
+        
+        if (!workingNode[name]) {
             workingNode[name] = {};
         }
+        workingNode = workingNode[name];
     }
 
     if (!workingNode || isLeaf(workingNode)) throw "bad path - " + path;
