@@ -1,7 +1,7 @@
 import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, ConditionalSubtype, SymbolTable, TypeShim, Property, ParamStatement, ParamStatementSubType, typedefs } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
-import { SyntheticType, _Type, extractCfFunctionSignature, isFunctionSignature, Interface } from "./types";
+import { SyntheticType, _Type, extractCfFunctionSignature, isFunctionSignature, Interface, isInterface } from "./types";
 import { LanguageVersion } from "./project";
 
 export function Binder() {
@@ -484,8 +484,11 @@ export function Binder() {
                 canonicalName,
                 declarations: [declaringNode],
                 type: type ?? SyntheticType.any,
-                declaredType: declaredType ?? null
-            };
+            }
+
+            if (declaredType) {
+                symTabEntry.declaredType = declaredType;
+            }
 
             symTab.set(canonicalName, symTabEntry);
         }
@@ -1364,12 +1367,20 @@ export function Binder() {
                 if (isFunctionSignature(node.type)) {
                     addFreshSymbolToTable(sourceFile.containedScope!.__declaration!, node.type.uiName, node, node.type);
                 }
+                else if (isInterface(node.type)) {
+                    if (!sourceFile.containedScope.typedefs.interfaces.has(node.type.name)) {
+                        sourceFile.containedScope.typedefs.interfaces.set(node.type.name, []);
+                    }
+                    sourceFile.containedScope.typedefs.interfaces.get(node.type.name)!.push(node.type);
+                }
             }
             else {
                 errorAtRange(node.range, "Illegal non-declaration in declaration file.");
                 continue;
             }
         }
+
+        bindTypedefs(sourceFile);
     }
 
 

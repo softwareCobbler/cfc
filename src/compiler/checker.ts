@@ -1,11 +1,12 @@
-import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, Property } from "./node";
-import { CfcResolver, EngineSymbolResolver, LanguageVersion } from "./project";
+import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, Property, hasDeclaredType } from "./node";
+import { CfcResolver, EngineSymbolResolver, LanguageVersion, LibTypeResolver } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
-import { cfFunctionSignature, cfIntersection, cfCachedTypeConstructorInvocation, cfTypeConstructor, Struct, cfUnion, SyntheticType, TypeFlags, cfArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStructLike, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType, stringifyType, cfFunctionSignatureParam, unsafe__cfFunctionSignatureWithFreshReturnType, isFunctionOverloadSet, cfFunctionOverloadSet, createLiteralType, isLiteralType, cfTypeId, SymbolTableTypeWrapper, CfcTypeWrapper, Interface, StructKind, isCfcLookupType } from "./types";
+import { cfFunctionSignature, cfIntersection, Struct, cfUnion, SyntheticType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStructLike, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType, stringifyType, cfFunctionSignatureParam, unsafe__cfFunctionSignatureWithFreshReturnType, isFunctionOverloadSet, cfFunctionOverloadSet, createLiteralType, isLiteralType, cfTypeId, SymbolTableTypeWrapper, CfcTypeWrapper, Interface, StructKind, isCfcLookupType, isInstantiatedArray, isInterface, createType, } from "./types";
 import { exhaustiveCaseGuard, findAncestor, getAttributeValue, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionReturnsLiteral, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol } from "./utils";
 
 const structViewCache = WeakPairMap<SymbolTable, Interface, Struct>(); // map a SymbolTable -> Interface -> Struct, used to check prior existence of a wrapping of a symbol table into a struct with a possible interface extension
+const reinstantiationContext = SourceFile("", CfFileType.cfc, ""); // an empty type reinstantiation context, no symbols are visible; reinstantiation relies entirely on capture contexts attached the "reinstantiable"
 
 export function Checker() {
     let sourceFile!: SourceFile;
@@ -44,6 +45,10 @@ export function Checker() {
     function instantiateInterfaces(node: Node) {
         if (node.containedScope?.typedefs.mergedInterfaces) {
             for (const [ifaceName, iface] of node.containedScope.typedefs.mergedInterfaces) {
+                if (iface.typeParams) {
+                    // we can't instantiate a generic interface without type args
+                    continue;
+                }
                 // fixme: preserve order; all spreads happend first right now
                 const freshMembers = new Map<string, SymTabEntry>();
                 if (iface.instantiableSpreads) {
@@ -531,7 +536,6 @@ export function Checker() {
         return cfUnion(membersBuilder, flags);
     }
 
-    function unsafeAssertTypeKind<T extends _Type>(_type: _Type) : asserts _type is T {}
 
     /**
      * `to = assignThis` is a valid assignment if `assignThis` is a subtype of `to`
@@ -574,16 +578,22 @@ export function Checker() {
         let depth = 0;
         let tooDeep = false;
         tooDeep ? 0 : 1; // yes compiler this is used
+        const runningComparisonMap = new Map<_Type, _Type>();
 
         return worker(l, r);
 
         function worker(l: _Type, r: _Type) : boolean {
+            if (runningComparisonMap.get(l) === r) {
+                // we're already comparing these types
+                return true;
+            }
             if (depth > 32) {
                 //debugger;
                 tooDeep = true;
                 return false;
             }
             try {
+                runningComparisonMap.set(l,r);
                 depth++;
 
                 // a type is a subtype of itself
@@ -719,6 +729,21 @@ export function Checker() {
                         if (!worker(l, rightConstituent)) return false;
                     }
                     return true;
+                }
+                
+                // can we instantiate these any further?
+                let didReinstantiate = false;
+                if (isTypeConstructorInvocation(l)) {
+                    didReinstantiate = true;
+                    l = evaluateType(reinstantiationContext, l);
+                }
+                if (isTypeConstructorInvocation(r)) {
+                    didReinstantiate = true;
+                    r = evaluateType(reinstantiationContext, r);
+                }
+
+                if (didReinstantiate) {
+                    return worker(l,r);
                 }
 
                 return false;
@@ -1149,16 +1174,21 @@ export function Checker() {
         // }
 
         //if (node.finalModifier) rhsType.flags |= TypeFlags.final; // need to clone the type
-        
-        if (symbol && symbol.declaredType) {
-            if (!isAssignable(rhsType, symbol.declaredType)) {
+
+        if (symbol && hasDeclaredType(symbol)) {
+            const instantiatedDeclaredType = getInstantiatedDeclaredType(node, symbol);
+            if (!isAssignable(rhsType, instantiatedDeclaredType)) {
                 const l = stringifyType(symbol.declaredType);
                 const r = stringifyType(rhsType);
                 typeErrorAtNode(assignabilityErrorNode, `Type '${r}' is not assignable to type '${l}'`);
             }
         }
 
-        setCachedEvaluatedFlowType(lValue.flow!, name.canonical, rhsType);
+        setCachedEvaluatedFlowType(lValue.flow!, name.canonical, rhsType); // hm, rhs type or instantiated declared type?
+    }
+
+    function getInstantiatedDeclaredType(contextNode: Node, symbol: SymTabEntry & {declaredType: _Type}) : _Type {
+        return symbol.instantiatedDeclaredType || (symbol.instantiatedDeclaredType = evaluateType(contextNode, symbol.declaredType));
     }
 
     // fixme: needs to take a SourceFile arg or that defaults to our current or ...
@@ -1305,7 +1335,7 @@ export function Checker() {
             const resolvedSymbol = walkupScopesToResolveSymbol(node, name); // really we want the flow type
 
             if (resolvedSymbol) {
-                const evaluatedType = evaluateType(node, resolvedSymbol.symTabEntry.declaredType ?? resolvedSymbol.symTabEntry.type);
+                const evaluatedType = resolvedSymbol.symTabEntry.instantiatedDeclaredType ?? evaluateType(resolvedSymbol.container, resolvedSymbol.symTabEntry.type);
                 setCachedEvaluatedNodeType(node, evaluatedType);
                 setResolvedSymbol(node, resolvedSymbol);
             }
@@ -1610,7 +1640,7 @@ export function Checker() {
     //
     // type lookup
     //
-    function walkUpContainersToFindType(context: Node, type: cfTypeId) : _Type | undefined {
+    function walkUpContainersToResolveType(context: Node, type: cfTypeId) : _Type | undefined {
         let node : Node | null = context;
         const typeName = type.name;
 
@@ -1623,11 +1653,11 @@ export function Checker() {
                 }
                 if (node.kind === NodeKind.sourceFile) {
                     for (const lib of node.libRefs.values()) {
-                        if (lib.containedScope.typedefs.interfaces.has(type.name)) {
-                            return lib.containedScope.typedefs.interfaces.get(type.name)![0]; // no interface merging in libraries (or at least autogen'd libraries) yet
+                        if (lib.containedScope.typedefs.mergedInterfaces.has(type.name)) {
+                            return lib.containedScope.typedefs.mergedInterfaces.get(type.name)!;
                         }
                     }
-                    break;
+                    return libTypeResolver(type.name);
                 }
                 else {
                     node = node.containedScope.parentContainer;
@@ -1707,7 +1737,7 @@ export function Checker() {
 
     function checkArrayLiteral(node: ArrayLiteral) {
         checkList(node.members);
-        setCachedEvaluatedNodeType(node, cfArray(unionify(node.members.map(member => getCachedEvaluatedNodeType(member)))));
+        setCachedEvaluatedNodeType(node, evaluateType(node, UninstantiatedArray(unionify(node.members.map(member => getCachedEvaluatedNodeType(member))))));
     }
 
     function checkArrayLiteralInitializerMember(node: ArrayLiteralInitializerMember) {
@@ -1800,6 +1830,7 @@ export function Checker() {
     }
 
     let cfcResolver! : CfcResolver;
+    let libTypeResolver : LibTypeResolver;
     let walkupScopesToResolveSymbol! : (base: Node, canonicalName: string) => SymbolResolution | undefined;
     function install(installables: Partial<CheckerInstallable>) {
         for (const key of Object.keys(installables) as (keyof CheckerInstallable)[]) {
@@ -1809,6 +1840,9 @@ export function Checker() {
                     break;
                 case "EngineSymbolResolver":
                     walkupScopesToResolveSymbol = (baseNode: Node, canonicalName: string) => externWalkupScopesToResolveSymbol(baseNode, canonicalName, installables[key]!);
+                    break;
+                case "LibTypeResolver":
+                    libTypeResolver = installables[key]!;
                     break;
                 default: exhaustiveCaseGuard(key);
             }
@@ -1832,7 +1866,7 @@ export function Checker() {
             status: TypeCache_Status.resolving | TypeCache_Status.noCache
         }
         
-        function setCachedTypeConstructorInvocation(typeFunction: cfTypeConstructor, args: readonly _Type[], val: "PENDING" | _Type) : void {
+        function setCachedTypeConstructorInvocation(typeFunction: _Type, args: readonly _Type[], val: "PENDING" | _Type) : void {
             function getChildTrieMapOrNull(thisLevel: NodeTrie, type: _Type) : NodeTrie | null {
                 const result = thisLevel.get(type);
                 if (result && typeof result === "object") {
@@ -1886,8 +1920,8 @@ export function Checker() {
             }
         }
 
-        function getCachedTypeConstructorInvocation(typeFunction: cfTypeConstructor, args: readonly _Type[]) : TypeCache_Resolution {
-            let trieDescender = typeConstructorInvocationCacheTrie.get(typeFunction);
+        function getCachedTypeConstructorInvocation(typeConstructor: _Type, args: readonly _Type[]) : TypeCache_Resolution {
+            let trieDescender = typeConstructorInvocationCacheTrie.get(typeConstructor);
             for (let i = 0; i < args.length; i++) {
                 if (!trieDescender) {
                     return {status: TypeCache_Status.noCache};
@@ -1913,54 +1947,56 @@ export function Checker() {
             }
         }
 
-        function evaluateType(context: Node, type: _Type | null, typeParamMap: Map<string, _Type> = new Map(), depth = 0) : _Type {
+        function evaluateType(context: Node, type: _Type | null) : _Type {
+            let depth = 0;
+
             return typeWorker(type);
 
-            // here args[n] should already have been evaluated
-            function invokeTypeConstructor(typeFunction: cfTypeConstructor, args: readonly _Type[]) : _Type {
-                if (args.includes(SyntheticType.never)) {
-                    return SyntheticType.never;
-                }
+            // // here args[n] should already have been evaluated
+            // function invokeTypeConstructor(typeFunction: TypeConstructor, args: readonly _Type[]) : _Type {
+            //     if (args.includes(SyntheticType.never)) {
+            //         return SyntheticType.never;
+            //     }
 
-                try {
-                    depth++;
+            //     try {
+            //         depth++;
 
-                    if (typeFunction.params.length !== args.length) {
-                        // hit this once by writing @type U<T>
-                        // when only @type T<U> was valid;
-                        // need some type checking of the type system
-                        throw "args.length !== typeFunction.params.length"
-                    }
+            //         if (typeFunction.params.length !== args.length) {
+            //             // hit this once by writing @type U<T>
+            //             // when only @type T<U> was valid;
+            //             // need some type checking of the type system
+            //             throw "args.length !== typeFunction.params.length"
+            //         }
                 
-                    const cached = getCachedTypeConstructorInvocation(typeFunction, args);
-                    if (cached.status === TypeCache_Status.resolved) {
-                        return cached.value;
-                    }
+            //         const cached = getCachedTypeConstructorInvocation(typeFunction, args);
+            //         if (cached.status === TypeCache_Status.resolved) {
+            //             return cached.value;
+            //         }
                 
-                    const typeParamMap = new Map(typeFunction.capturedParams.entries());
-                    // extend constructor's captured environment with the argument list
-                    for (let i = 0; i < typeFunction.params.length; i++) {
-                        typeParamMap.set(typeFunction.params[i].name, args[i]);
-                    }
+            //         const typeParamMap = new Map(typeFunction.capturedParams.entries());
+            //         // extend constructor's captured environment with the argument list
+            //         for (let i = 0; i < typeFunction.params.length; i++) {
+            //             typeParamMap.set(typeFunction.params[i].name, args[i]);
+            //         }
                 
-                    // say our current evaluation is for `T<U>`
-                    // set `T<U>` to "PENDING" so that we have something to check for to not recurse infinitely on something like `T<U> = {foo: T<U>}`
-                    setCachedTypeConstructorInvocation(typeFunction, args, "PENDING");
-                    const result = evaluateType(context, typeFunction.body, typeParamMap, depth+1);
-                    setCachedTypeConstructorInvocation(typeFunction, args, result);
+            //         // say our current evaluation is for `T<U>`
+            //         // set `T<U>` to "PENDING" so that we have something to check for to not recurse infinitely on something like `T<U> = {foo: T<U>}`
+            //         setCachedTypeConstructorInvocation(typeFunction, args, "PENDING");
+            //         const result = evaluateType(context, typeFunction.body, typeParamMap, depth+1);
+            //         setCachedTypeConstructorInvocation(typeFunction, args, result);
             
-                    if (isTypeConstructor(result)) {
-                        // if a type constructor returned a type constructor, extend the new type constructor's environment
-                        // with the parent's environment + the args to the parent's invocation
-                        // inner most names shadows outer names if there are name conflicts
-                        // result.capturedParams = typeParamMap;
-                    }
-                    return result;
-                }
-                finally {
-                    depth--;
-                }
-            }
+            //         if (isTypeConstructor(result)) {
+            //             // if a type constructor returned a type constructor, extend the new type constructor's environment
+            //             // with the parent's environment + the args to the parent's invocation
+            //             // inner most names shadows outer names if there are name conflicts
+            //             // result.capturedParams = typeParamMap;
+            //         }
+            //         return result;
+            //     }
+            //     finally {
+            //         depth--;
+            //     }
+            // }
             
             function evaluateIntersection(types: _Type[]) : _Type {
                 if (types.includes(SyntheticType.never)) {
@@ -2013,12 +2049,18 @@ export function Checker() {
                 }
             }
 
-            function typeWorker(type: Readonly<_Type> | null) : _Type {
+            function typeWorker(type: Readonly<_Type> | null, capturedContext: ReadonlyMap<string, _Type> | undefined = type?.capturedContext) : _Type {
+                if (depth > 64) {
+                    return SyntheticType.never;
+                }
                 try {
                     depth++;
                 
                     if (!type) return SyntheticType.any;
                     
+                    if (isInstantiatedArray(type)) {
+                        return type;
+                    }
                     if (isIntersection(type)) {
                         return evaluateIntersection(type.types);
                     }
@@ -2048,22 +2090,29 @@ export function Checker() {
                         }
                         return SyntheticType.struct(evaluatedStructContents);*/
                     }
-                    if (isFunctionSignature(type)) {
-                        // need a more lean version of functionParameter
-                        /*
+                    if (isFunctionSignature(type) && !isFunctionOverloadSet(type)) {
                         const params : cfFunctionSignatureParam[] = [...type.params];
                         for (let i = 0; i < type.params.length; i++) {
-                            if (!params[i].type) {
-                                throw "no type for parameter " + i; /// can we get here? parser / binder should convert this to any before we get here...
-                            }
                             params[i].type = typeWorker(params[i].type!);
                         }
-                        const returns = typeWorker(type.returns);
-                        return cfFunctionSignature(type.uiName, params, returns);*/
-                        return type;
+                        const returns = typeWorker(type.returns, capturedContext);
+                        return cfFunctionSignature(type.uiName, params, returns, type.attrs);
                     }
                     if (isTypeConstructorInvocation(type)) {
-                        if (type.left === SyntheticType.cfcLookupType) {
+                        
+
+                        if (isInterface(type.left)) {
+                            const result = instantiateInterface(type.left, type.args);
+                            if (result.status === TypeCache_Status.resolving) {
+                                if (capturedContext) {
+                                    return createType({...type, capturedContext});
+                                }
+                                return type;
+                            }
+                            else return result.value;
+                        }
+
+                        if (isCfcLookupType(type)) {
                             const literalType = type.args[0];
                             if (literalType && isLiteralType(literalType) && literalType.flags & TypeFlags.string) {
                                 const resolvedCfc = cfcResolver({resolveFrom: sourceFile.absPath, cfcName: literalType.literalValue as string})
@@ -2073,44 +2122,64 @@ export function Checker() {
                                     return freshType;
                                 }
                             }
+
+                            return SyntheticType.any;
                         }
 
-                        const typeConstructor = typeWorker(type.left);
-                        if (typeConstructor.flags & TypeFlags.never) {
-                            return typeConstructor;
-                        }
-
-                        unsafeAssertTypeKind<cfTypeConstructor>(typeConstructor);
-
-                        if (type.args.length === 0) {
-                            //typeErrorAtNode(type.left, `_Type argument list cannot be empty.`);
-                            return SyntheticType.never;
-                        }
-                        if (typeConstructor.params.length != type.args.length) {
-                            //typeErrorAtNode(type.left, `_Type requires ${typeConstructor.params.length} arguments.`);
-                            return SyntheticType.never;
-                        }
-
-                        const args : _Type[] = [];
-                        for (const arg of type.args) {
-                            if (isTypeId(arg)) {
-                                args.push(typeWorker(typeParamMap.get(arg.name) || walkUpContainersToFindType(context, arg) || SyntheticType.any));
+                        if (isTypeId(type.left)) {
+                            const constructor = capturedContext?.get(type.left.name) || walkUpContainersToResolveType(context, type.left) || null;
+                            if (constructor && isInterface(constructor)) {
+                                const result = instantiateInterface(constructor, type.args);
+                                if (result.status === TypeCache_Status.resolving) {
+                                    if (capturedContext) { // a new type (by identity), which holds onto the capture context, running it through the instantiator again should find a resolved cached version 
+                                        return createType({...type, capturedContext});
+                                    }
+                                    return type;
+                                }
+                                else return result.value;
                             }
-                            else {
-                                args.push(typeWorker(arg));
-                            }
+
+                            return SyntheticType.any;
                         }
+
+                        return SyntheticType.any;
+
+                        // const typeConstructor = typeWorker(type.left);
+                        // if (typeConstructor.flags & TypeFlags.never) {
+                        //     return typeConstructor;
+                        // }
+
+                        // unsafeAssertTypeKind<TypeConstructor>(typeConstructor);
+
+                        // if (type.args.length === 0) {
+                        //     //typeErrorAtNode(type.left, `_Type argument list cannot be empty.`);
+                        //     return SyntheticType.never;
+                        // }
+                        // if (typeConstructor.params.length != type.args.length) {
+                        //     //typeErrorAtNode(type.left, `_Type requires ${typeConstructor.params.length} arguments.`);
+                        //     return SyntheticType.never;
+                        // }
+
+                        // const args : _Type[] = [];
+                        // for (const arg of type.args) {
+                        //     if (isTypeId(arg)) {
+                        //         args.push(typeWorker(typeParamMap?.get(arg.name) || walkUpContainersToResolveType(context, arg) || SyntheticType.any));
+                        //     }
+                        //     else {
+                        //         args.push(typeWorker(arg));
+                        //     }
+                        // }
             
-                        const cachedTypeCall = getCachedTypeConstructorInvocation(typeConstructor as cfTypeConstructor, args);
-                        if (cachedTypeCall.status === TypeCache_Status.resolved) {
-                            return cachedTypeCall.value;
-                        }
-                        else if (cachedTypeCall.status === TypeCache_Status.resolving) {
-                            return cfCachedTypeConstructorInvocation(typeConstructor as cfTypeConstructor, args);
-                        }
-                        else {
-                            return invokeTypeConstructor(typeConstructor as cfTypeConstructor, args);
-                        }
+                        // const cachedTypeCall = getCachedTypeConstructorInvocation(typeConstructor as TypeConstructor, args);
+                        // if (cachedTypeCall.status === TypeCache_Status.resolved) {
+                        //     return cachedTypeCall.value;
+                        // }
+                        // else if (cachedTypeCall.status === TypeCache_Status.resolving) {
+                        //     return cfCachedTypeConstructorInvocation(typeConstructor as TypeConstructor, args);
+                        // }
+                        // else {
+                        //     return SyntheticType.never;//invokeTypeConstructor(typeConstructor as TypeConstructor, args);
+                        // }
                     }
                     if (isCachedTypeConstructorInvocation(type)) {
                         const cachedTypeCall = getCachedTypeConstructorInvocation(type.left, type.args);
@@ -2118,6 +2187,9 @@ export function Checker() {
                             return cachedTypeCall.value;
                         }
                         else if (cachedTypeCall.status === TypeCache_Status.resolving) {
+                            if (capturedContext) {
+                                return createType({...type, capturedContext});
+                            }
                             return type;
                         }
                         else {
@@ -2126,7 +2198,7 @@ export function Checker() {
                     }
                     if (isTypeId(type)) {
                         // @fixme: should error if we can't find it; and return never ?
-                        let result = typeParamMap.get(type.name) || walkUpContainersToFindType(context, type) || null;
+                        let result = capturedContext?.get(type.name) || walkUpContainersToResolveType(context, type) || null;
                         if (!result) return SyntheticType.any;
                         if (type.indexChain) {
                             for (const name of type.indexChain) {
@@ -2138,12 +2210,60 @@ export function Checker() {
                         
                         return typeWorker(result);
                     }
-
                     // a type not requiring evaluation: number, string, boolean,
                     return type;
                 }
                 finally {
                     depth--;
+                }
+
+                type InterfaceInstantiationResult =
+                    | {status: TypeCache_Status.resolved, value: _Type}
+                    | {status: TypeCache_Status.resolving} // for something like interface X<T> { v: X<T> }, X<T> is already resolving when we instantiate v
+
+                function instantiateInterface(iface: Interface, args?: _Type[]) : InterfaceInstantiationResult {
+                    let argMap : Map<string, _Type>;
+
+                    if (iface.typeParams) {
+                        if (!args || args.length !== iface.typeParams.length) {
+                            return {status: TypeCache_Status.resolved, value: SyntheticType.never};
+                        }
+                        argMap = new Map<string, _Type>();
+                        for (let i = 0; i < iface.typeParams.length; i++) {
+                            const name = iface.typeParams[i].name;
+                            const type = typeWorker(args[i], capturedContext);
+                            argMap.set(name, type);
+                        }
+                    }
+                    else {
+                        return {status: TypeCache_Status.resolved, value: iface}; // shouldn't have gotten here though, why instantiate a non-generic
+                    }
+
+                    const instantiatedArgsArray = [...argMap.values()];
+                    const cached = getCachedTypeConstructorInvocation(iface, instantiatedArgsArray);
+                    if (cached.status === TypeCache_Status.resolved) {
+                        return cached;
+                    }
+                    else if (cached.status === TypeCache_Status.resolving) {
+                        return {status: cached.status};
+                    }
+                
+                    // say our current evaluation is for `T<U>`
+                    // set `T<U>` to "PENDING" so that we have something to check for to not recurse infinitely on something like `T<U> = {foo: T<U>}`
+                    setCachedTypeConstructorInvocation(iface, instantiatedArgsArray, "PENDING");
+
+                    const instantiatedMembers = new Map<string, SymTabEntry>();
+                    for (const [name, symTabEntry] of iface.members) {
+                        const freshType = typeWorker(symTabEntry.type, argMap);
+                        instantiatedMembers.set(name, {...symTabEntry, type: freshType});
+                    }
+
+                    const result = Struct(instantiatedMembers, iface.indexSignature);
+                    (result as Mutable<_Type>).underlyingType = iface;
+
+                    setCachedTypeConstructorInvocation(iface, instantiatedArgsArray, result);
+
+                    return {status: TypeCache_Status.resolved, value: result};
                 }
             }
         }
@@ -2163,7 +2283,8 @@ export function Checker() {
 
 export interface CheckerInstallable {
     CfcResolver: CfcResolver,
-    EngineSymbolResolver: EngineSymbolResolver
+    EngineSymbolResolver: EngineSymbolResolver,
+    LibTypeResolver: LibTypeResolver
 }
 
 export type Checker = ReturnType<typeof Checker>;

@@ -27,9 +27,9 @@ import {
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, TypeShim, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
-import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, Mutable, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath } from "./utils";
-import { cfIndexedType, Interface, cfIntersection, extractCfFunctionSignature, isIntersection, isStructLike, isTypeId, isUnion, cfTypeConstructorParam, cfTypeConstructorInvocation, CfcLookup, createLiteralType, Decorator } from "./types";
-import { _Type, cfArray, Struct, StructKind, cfTuple, cfFunctionSignature, cfTypeId, cfUnion, SyntheticType, cfFunctionSignatureParam } from "./types";
+import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath } from "./utils";
+import { cfIndexedType, Interface, cfIntersection, extractCfFunctionSignature, isIntersection, isStructLike, isTypeId, isUnion, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, Decorator, TypeConstructor, IndexSignature } from "./types";
+import { _Type, UninstantiatedArray, Struct, StructKind, cfTuple, cfFunctionSignature, cfTypeId, cfUnion, SyntheticType, cfFunctionSignatureParam } from "./types";
 import { LanguageVersion } from "./project";
 
 let debugParseModule = false;
@@ -647,9 +647,12 @@ export function Parser(config: {language: LanguageVersion}) {
             let lastDocBlock : Comment | null = null;
             while (true) {
                 switch (lookahead()) {
-                    case TokenType.DBL_FORWARD_SLASH:
-                        result.push(parseScriptSingleLineComment());
+                    case TokenType.DBL_FORWARD_SLASH: {
+                        const comment = parseScriptSingleLineComment();
+                        result.push(comment);
+                        parseTypeAnnotationsFromPreParsedTrivia(comment);
                         continue;
+                    }
                     case TokenType.FORWARD_SLASH_STAR: {
                         const comment = parseScriptMultiLineComment();
                         if (comment.flags & NodeFlags.docBlock) lastDocBlock = comment;
@@ -2947,10 +2950,22 @@ export function Parser(config: {language: LanguageVersion}) {
     //     return extractScriptFunctionParams(params);
     // }
 
-    function parseFunctionTypeParameters() : cfFunctionSignatureParam[] {
-        const params = tryParseFunctionDefinitionParameters(/*speculative*/ false, /*asDeclaration*/ true);
-        return params.map(param => cfFunctionSignatureParam(param.required, param.type ?? SyntheticType.any, param.uiName));
+    function parseFunctionTypeParametersArrowLike() : cfFunctionSignatureParam[] {
+        const args : {name: Terminal, optional: boolean, type: _Type}[] = [];
+        while (lookahead() !== TokenType.RIGHT_PAREN && lookahead() !== TokenType.EOF) {
+            const name = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
+            const optional = !!parseOptionalTerminal(TokenType.QUESTION_MARK, ParseOptions.withTrivia);
+            parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
+            const type = parseType();
+            args.push({name, optional, type});
+        }
+        return args.map((arg) => cfFunctionSignatureParam(!arg.optional, arg.type, arg.name.token.text));
     }
+
+    // function parseFunctionTypeParameters() : cfFunctionSignatureParam[] {
+    //     const params = tryParseFunctionDefinitionParameters(/*speculative*/ false, /*asDeclaration*/ true);
+    //     return params.map(param => cfFunctionSignatureParam(param.required, param.type ?? SyntheticType.any, param.uiName));
+    // }
 
     // speculative overload is last in overload set so speculation-forwarder can see it
     // this might not be maintainable in the long run ? the alternative is to not overload, and
@@ -3890,6 +3905,7 @@ export function Parser(config: {language: LanguageVersion}) {
     }
 
     /**
+     * fixme: unify this method with the docBlock parser
      * every call to this method clears the last known trivia-bound type annotation,
      * and sets it to the final type annotation of the current trivia collection, if it exists
      */
@@ -3953,57 +3969,182 @@ export function Parser(config: {language: LanguageVersion}) {
                 parseTrivia();
             }
             if (next().text === "@") {
-                const contextualKeyword = next();
+                const contextualKeyword = peek();
                 if (contextualKeyword.text === "declare") {
-                    parseTrivia();
+                    next(), parseTrivia();
                     const declarationSpecifier = peek();
                     if (declarationSpecifier.text === "function") {
                         const decl = tryParseNamedFunctionDefinition(/*speculative*/ false, /*asDeclaration*/ true);
                         const signature = extractCfFunctionSignature(decl, /*asDeclaration*/true);
                         result.push(TypeShim("typedef", signature));
                     }
-                    else if (declarationSpecifier.text === "global") {
-                        parseErrorAtRange(contextualKeyword.range, "Global declarations are not yet supported. This would be for the cgi and etc. scopes.");
-                        next();
-                    }
+                    // else if (declarationSpecifier.text === "global") {
+                    //     parseErrorAtRange(contextualKeyword.range, "Global declarations are not yet supported. This would be for the cgi and etc. scopes.");
+                    //     next();
+                    // }
                     else {
                         parseErrorAtRange(contextualKeyword.range, "Invalid declaration specifier.");
                         next();
                     }
                 }
+                else if (contextualKeyword.text === "interface") {
+                    const ifaceDef = parseType();
+                    result.push(TypeShim("typedef", ifaceDef));
+                }
                 else if (contextualKeyword.text === "type") {
-                    parseTrivia();
+                    next(), parseTrivia();
                     
-                    const nameIfIsTypeConstructorOrAlias = SpeculationHelper.speculate(() => {
-                        const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
-                        if (lookahead() === TokenType.EQUAL) {
-                            return name;
-                        }
-                        else return null;
-                    });
+                    // we can have an annotation, or a declaration here
+                    // an annotation is like `@type {foo:bar}`, annotating the subsequent construct with type `{foo: bar}`
+                    // a declaration is like `@type foo = bar` or `@type foo<T, etc> = bar<T, etc>`
+                    // requires some lookahead:
+                    // @type T                      -- annotation
+                    // @type T = ...                -- alias
+                    // @type T<U>                   -- annotation (type constructor invocation)
+                    // @type T<U [= default]> = ... -- alias (type constructor definition)
 
-                    //
-                    // an assignment generates an alias for the type on the RHS
-                    // `@type foo = bar` is an alias declaration
-                    // `@type {foo:bar}` is an annotation to be attached to a subsequent node
-                    //
-                    if (nameIfIsTypeConstructorOrAlias) {
-                        parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
-                        let type = parseType();
-                        (type as Mutable<_Type>).name = nameIfIsTypeConstructorOrAlias.token.text;
-                        result.push(TypeShim("typedef", type));
+                    function parseTypeAliasDefOrAnnotation() {
+                        if (lookahead() === TokenType.LEXEME) {
+                            const enum SpeculationResult_t { definiteNonGenericAliasDef, indefiniteGeneric };
+                            type SpeculationResult =
+                                | {resultKind: SpeculationResult_t.indefiniteGeneric, name: string}
+                                | {resultKind: SpeculationResult_t.definiteNonGenericAliasDef, nonGenericAliasDef: TypeShim}
+                                | null;
+
+                            const possibleAliasDef = SpeculationHelper.speculate(() : SpeculationResult => {
+                                const name = parseOptionalTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
+                                if (name) {
+                                    if (lookahead() === TokenType.LEFT_ANGLE) {
+                                        parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
+                                        return {resultKind: SpeculationResult_t.indefiniteGeneric, name: name.token.text};
+                                    }
+                                    else if (lookahead() === TokenType.EQUAL) {
+                                        parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
+                                        return {resultKind: SpeculationResult_t.definiteNonGenericAliasDef, nonGenericAliasDef: TypeShim("typedef", parseType(), name.token.text)};
+                                    }
+                                }
+                                return null;
+                            });
+
+                            if (!possibleAliasDef) {
+                                return TypeShim("annotation", parseType());
+                            }
+                            else if (possibleAliasDef.resultKind === SpeculationResult_t.definiteNonGenericAliasDef) {
+                                return possibleAliasDef.nonGenericAliasDef;
+                            }
+                            else {
+                                // after parsing the param/arg list and an optional equals token, both will be false, or exactly one will be true
+                                // if both are false, it implies a constructorInvocation
+                                let isDefiniteConstructorDefinition = false;
+                                let isDefiniteConstructorInvocation = false;
+
+                                const paramsOrArgs : {element: _Type, default?: _Type}[] = [];
+
+                                while (lookahead() !== TokenType.RIGHT_ANGLE && lookahead() !== TokenType.EOF) {
+                                    if (isDefiniteConstructorDefinition) {
+                                        // fixme: types don't have ranges
+                                        const start = pos();
+                                        let element = parseType();
+                                        const end = pos();
+                                        if (!isTypeId(element)) {
+                                            parseErrorAtRange(new SourceRange(start, end), "A generic type alias parameter's names must be identifiers.");
+                                            element = cfTypeId("<<ERROR-TYPE>>");
+                                        }
+                                        if (lookahead() === TokenType.EQUAL) {
+                                            parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
+                                            paramsOrArgs.push({element, default: parseType()});
+                                        }
+                                        else {
+                                            paramsOrArgs.push({element});
+                                        }
+                                    }
+                                    else if (isDefiniteConstructorInvocation) {
+                                        paramsOrArgs.push({element: parseType()});
+                                    }
+                                    else {
+                                        const element = parseType();
+                                        if (isTypeId(element)) {
+                                            if (lookahead() === TokenType.EQUAL) {
+                                                // something like X<T=U> is a definite constructor definition
+                                                isDefiniteConstructorDefinition = true;
+                                                parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
+                                                paramsOrArgs.push({element, default: parseType()});
+                                            }
+                                            else {
+                                                paramsOrArgs.push({element});
+                                            }
+                                        }
+                                        else {
+                                            // something like X<{P:T}> is a definite invocation
+                                            isDefiniteConstructorInvocation = true;
+                                            paramsOrArgs.push({element});
+                                        }
+                                    }
+                                }
+
+                                parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);
+
+                                if (isDefiniteConstructorDefinition) {
+                                    parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
+                                }
+                                else {
+                                    isDefiniteConstructorDefinition = !isDefiniteConstructorInvocation && !!parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
+                                }
+
+                                if (isDefiniteConstructorInvocation || !isDefiniteConstructorDefinition) {
+                                    return TypeShim("annotation", TypeConstructorInvocation(cfTypeId(possibleAliasDef.name), paramsOrArgs.map(arg => arg.element)));
+                                }
+                                else /* isDefiniteConstructorDefinition */ {
+                                    return TypeShim(
+                                        "typedef",
+                                        TypeConstructor(
+                                            paramsOrArgs.map(param => TypeConstructorParam((param.element as cfTypeId).name, param.default)),
+                                            parseType()),
+                                        possibleAliasDef.name
+                                    );
+                                }
+                            }
+                        }
+                        else {
+                            return TypeShim("annotation", parseType());
+                        }
+                            
                     }
-                    // a non-definition is a type-to-term assignment, it will be bound to the next non-trivia/non-type production
-                    // like 
-                    // <!--- @type Query<Schema> --->
-                    // <cfquery name="q"> <!--- q has type `Query<Schema>` --->
-                    //
-                    else {
-                        const type = parseType();
-                        result.push(TypeShim("annotation", type));
-                    }
+
+                    result.push(parseTypeAliasDefOrAnnotation());
+
+
+                    // const nameIfIsTypeConstructorOrAlias = SpeculationHelper.speculate(() => {
+                    //     const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
+                    //     if (lookahead() === TokenType.EQUAL) {
+                    //         return name;
+                    //     }
+                    //     else return null;
+                    // });
+
+                    // //
+                    // // an assignment generates an alias for the type on the RHS
+                    // // `@type foo = bar` is an alias declaration
+                    // // `@type {foo:bar}` is an annotation to be attached to a subsequent node
+                    // //
+                    // if (nameIfIsTypeConstructorOrAlias) {
+                    //     parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
+                    //     let type = parseType();
+                    //     (type as Mutable<_Type>).name = nameIfIsTypeConstructorOrAlias.token.text;
+                    //     result.push(TypeShim("typedef", type));
+                    // }
+                    // // a non-definition is a type-to-term assignment, it will be bound to the next non-trivia/non-type production
+                    // // like 
+                    // // <!--- @type Query<Schema> --->
+                    // // <cfquery name="q"> <!--- q has type `Query<Schema>` --->
+                    // //
+                    // else {
+                    //     const type = parseType();
+                    //     result.push(TypeShim("annotation", type));
+                    // }
                 }
                 else {
+                    next(), parseTrivia();
                     // parse error ? if skipUnrecognized === false?
                 }
             }
@@ -4036,19 +4177,20 @@ export function Parser(config: {language: LanguageVersion}) {
             }
         }
 
-        function parseTypeParam() : cfTypeConstructorParam {
-            const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
-            const equal = parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
-            if (equal) {
-                const defaultType = parseType();
-                parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
-                return cfTypeConstructorParam(name.token.text, defaultType);
-            }
-            else {
-                parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
-                return cfTypeConstructorParam(name.token.text);
-            }
-        }
+        // rmme 10/17/21
+        // function parseTypeParam() : TypeConstructorParam {
+        //     const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
+        //     const equal = parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
+        //     if (equal) {
+        //         const defaultType = parseType();
+        //         parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+        //         return TypeConstructorParam(name.token.text, defaultType);
+        //     }
+        //     else {
+        //         parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+        //         return TypeConstructorParam(name.token.text);
+        //     }
+        // }
 
 
         function maybeParseArrayModifier(type: _Type) : _Type {
@@ -4073,7 +4215,7 @@ export function Parser(config: {language: LanguageVersion}) {
                         }
                         else {
                             parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
-                            type = cfArray(type);
+                            type = UninstantiatedArray(type);
                             continue outer;
                         }
                     default:
@@ -4090,13 +4232,53 @@ export function Parser(config: {language: LanguageVersion}) {
             return type;
         }
 
-        function parseTypeStructMemberElement() {
+        const enum StructMemberParseResult_t { keyTypePair, spread, indexSignature };
+        type StructMemberParseResult =
+            | {resultKind: StructMemberParseResult_t.keyTypePair, name: Terminal, type: _Type}
+            | {resultKind: StructMemberParseResult_t.indexSignature, indexSignature: IndexSignature}
+            | {resultKind: StructMemberParseResult_t.spread, type: _Type };
+
+        function parseTypeStructMemberElement() : StructMemberParseResult {
             let name : Terminal | null;
             let type : _Type;
+
             if (lookahead() === TokenType.DOT_DOT_DOT) {
                 parseExpectedTerminal(TokenType.DOT_DOT_DOT, ParseOptions.withTrivia);
                 name = null;
                 type = parseType();
+                parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+                return {
+                    resultKind: StructMemberParseResult_t.spread,
+                    type
+                }
+            }
+            else if (lookahead() === TokenType.LEFT_BRACKET) {
+                parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
+                const name = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia).token.text;
+                parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
+
+                const start = pos();
+                let indexType = parseType();
+                const end = pos();
+
+                if (indexType !== SyntheticType.string && indexType !== SyntheticType.numeric) {
+                    parseErrorAtRange(new SourceRange(start, end), "An index signature parameter type must be 'string' or 'numeric'");
+                    type = SyntheticType.numeric;
+                }
+
+                parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
+                parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
+                type = parseType();
+                parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+
+                return {
+                    resultKind: StructMemberParseResult_t.indexSignature,
+                    indexSignature: {
+                        name,
+                        indexType,
+                        type
+                    }
+                }
             }
             else {
                 name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ true);
@@ -4107,11 +4289,15 @@ export function Parser(config: {language: LanguageVersion}) {
 
                 parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
                 type = parseType();
+
+                parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+
+                return {
+                    resultKind: StructMemberParseResult_t.keyTypePair,
+                    name,
+                    type
+                }
             }
-
-            parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
-
-            return {name, type};
         }
 
         let savedScannerState : ScannerState | null = null;
@@ -4148,13 +4334,37 @@ export function Parser(config: {language: LanguageVersion}) {
 
                     if (!isInSomeContext(ParseContext.interface) && terminal.token.text === "interface") {
                         const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ false);
+                        let typeParams : TypeConstructorParam[] | undefined;
+                        if (lookahead() === TokenType.LEFT_ANGLE) {
+                            parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
+                            typeParams = parseList(ParseContext.typeParamList, parseTypeListElement);
+                            parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);
+                        }
+
                         const start = pos();
                         const def = doInExtendedContext(ParseContext.interface, parseType);
                         const end = pos();
+
                         if (!isStructLike(def) || def.structKind !== StructKind.struct) {
                             parseErrorAtRange(new SourceRange(start, end), "Expected an interface definition");
                         }
-                        return Interface(name.token.text, isStructLike(def) ? def.members : new Map(), isStructLike(def) ? def.instantiableSpreads : undefined);
+
+                        let members : ReadonlyMap<string, Readonly<SymTabEntry>> | undefined;
+                        let indexSignature : IndexSignature | undefined;
+                        let spreads : readonly _Type[] | undefined;
+
+                        if (isStructLike(def)) {
+                            members = def.members;
+                            indexSignature = def.indexSignature;
+                            spreads = def.instantiableSpreads;
+                        }
+
+                        return Interface(
+                            name.token.text,
+                            members ?? new Map(),
+                            typeParams,
+                            indexSignature,
+                            spreads);
                     }
                     else {
                         result = textToType(terminal.token);
@@ -4185,9 +4395,15 @@ export function Parser(config: {language: LanguageVersion}) {
 
                             if (lookahead() === TokenType.LEFT_ANGLE) {
                                 parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
-                                const typeParams = parseList(ParseContext.typeParamList, parseTypeParam);
+                                const args : _Type[] = [];
+                                while (lookahead() !== TokenType.RIGHT_ANGLE && lookahead() !== TokenType.EOF) {
+                                    args.push(parseType());
+                                    if (lookahead() !== TokenType.RIGHT_ANGLE) {
+                                        parseExpectedTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+                                    }
+                                }
                                 parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);
-                                result = cfTypeConstructorInvocation(result, typeParams);
+                                result = TypeConstructorInvocation(result, args);
                             }
                         }
 
@@ -4205,18 +4421,11 @@ export function Parser(config: {language: LanguageVersion}) {
                         const lexeme = next();
                         parseTrivia();
                         
-                        if (lookahead() === TokenType.COLON) {
+                        if (lookahead() === TokenType.COLON || lookahead() === TokenType.QUESTION_MARK && peek(1).type === TokenType.COLON) {
                             // this is a non-type name, used to give a name to an inline function type signature parameter,
                             // i.e, (foo : any) => any
                             //       ^^^^^
                             return TypeOrParam.param;
-                        }
-                        else if (lexeme.text === "required") {
-                            next();
-                            parseTrivia();
-                            if (lookahead() === TokenType.COLON) {
-                                return TypeOrParam.param;
-                            }
                         }
                         else if (lexeme.type === TokenType.RIGHT_PAREN && peek().type === TokenType.EQUAL_RIGHT_ANGLE) {
                             // got `() => `
@@ -4233,7 +4442,7 @@ export function Parser(config: {language: LanguageVersion}) {
                         break;
                     }
                     else {
-                        const params = parseFunctionTypeParameters();// parseFunctionDeclarationParameters();
+                        const params = parseFunctionTypeParametersArrowLike();
                         parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
                         parseExpectedTerminal(TokenType.EQUAL_RIGHT_ANGLE, ParseOptions.withTrivia);
                         const returnType = parseType();
@@ -4283,20 +4492,27 @@ export function Parser(config: {language: LanguageVersion}) {
 
                         const members = new Map<string, SymTabEntry>();
                         const instantiableSpreads : _Type[] = [];
+                        let indexSignature : IndexSignature | undefined = undefined;
                         for (const member of kvPairs) {
-                            if (member.name === null) {
+                            if (member.resultKind === StructMemberParseResult_t.spread) {
                                 instantiableSpreads.push(member.type);
                                 continue;
                             }
-                            members.set(member.name.token.text.toLowerCase(), {
-                                uiName: member.name.token.text,
-                                canonicalName: member.name.token.text.toLowerCase(),
-                                declarations: null,
-                                type: member.type,
-                            })
+                            else if (member.resultKind === StructMemberParseResult_t.indexSignature) {
+                                indexSignature = member.indexSignature;
+                                continue;
+                            }
+                            else {
+                                members.set(member.name.token.text.toLowerCase(), {
+                                    uiName: member.name.token.text,
+                                    canonicalName: member.name.token.text.toLowerCase(),
+                                    declarations: null,
+                                    type: member.type,
+                                })
+                            }
                         }
 
-                        result = Struct(members, instantiableSpreads);
+                        result = Struct(members, indexSignature, instantiableSpreads);
                     // }
 
                     result = maybeParseArrayModifier(result);

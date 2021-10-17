@@ -22,8 +22,22 @@ function projectFiddle() {
                             x.foobar();
                         }
                     }`,
+                "lib.d.cfm": `
+                    @interface Array<T> {
+                        //[index: numeric]: T,
+                        //len: () => numeric,
+                        //toList: (sep?: string) => string,
+                        append: (val: T) => T[]
+                    }
+                `,
                 "someFile.cfc": `
-                    /** @interface this { ... cfc<a.b.  */ component {}`,
+                    component {
+                        function foo() {
+                            // @type {x:1, y: string}[]
+                            var x = [{x:1}];
+                        }
+                    }
+                    `,
                 "a": {
                     "b": {
                         "x.cfc": `
@@ -47,6 +61,7 @@ function projectFiddle() {
     //const target = path.join(path.resolve("./test/"), "mxunit/framework/javaloader/JavaProxy.cfc");
     //project.addFile(target);
 
+    project.addEngineLib("/lib.d.cfm");
     project.addFile("/someFile.cfc");
     const node = project.getNodeToLeftOfCursor("/someFile.cfc", 55);
     const isexpr = node ? isExpressionContext(node) : false;

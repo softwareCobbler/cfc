@@ -208,7 +208,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
 
     binder.setLang(options.language);
     checker.setLang(options.language);
-    checker.install({CfcResolver, EngineSymbolResolver});
+    checker.install({CfcResolver, EngineSymbolResolver, LibTypeResolver});
 
     type FileCache = Map<AbsPath, CachedFile>;
     const files : FileCache = new Map();
@@ -221,9 +221,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         return addFile(absPath);
     }
 
-    let depth = 0;
     function parseBindCheckWorker(sourceFile: SourceFile) : DevTimingInfo {
-        depth++;
         parser.setSourceFile(sourceFile);
         const parseStart = new Date().getTime();
         parser.parse();
@@ -254,7 +252,8 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             const wireboxInterface = constructWireboxInterface(sourceFile);
             if (wireboxInterface) {
                 if (!wireboxLib) wireboxLib = SourceFile("<<magic/wirebox>>", CfFileType.dCfm, "");
-                wireboxLib.containedScope.typedefs.interfaces.set("Wirebox", [wireboxInterface]);
+                // put on merged interfaces because we're done with, we merged it as part of building it here (well really there is no mergin to do)
+                wireboxLib.containedScope.typedefs.mergedInterfaces.set("Wirebox", wireboxInterface);
             }
             else {
                 wireboxLib = null;
@@ -271,8 +270,6 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         checker.check(sourceFile);
         const checkElapsed = new Date().getTime() - checkStart;
 
-        depth--;
-        depth;
         return { parse: parseElapsed, bind: bindElapsed, check: checkElapsed };
     }
 
@@ -622,6 +619,12 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         return engineLib.parsedSourceFile.containedScope.__declaration.get(canonicalName);
     }
 
+    // resolve types (right now, just interfaces) from *the* lib file
+    function LibTypeResolver(name: string) : _Type | undefined {
+        if (!engineLib) return undefined;
+        return engineLib.parsedSourceFile.containedScope.typedefs.mergedInterfaces.get(name);
+    }
+
     return {
         addFile,
         addEngineLib,
@@ -639,6 +642,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
 export type Project = ReturnType<typeof Project>;
 export type CfcResolver = (args: {resolveFrom: string, cfcName: string}) => {sourceFile: SourceFile, symbolTable: ReadonlyMap<string, SymTabEntry>} | undefined;
 export type EngineSymbolResolver = (name: string) => SymTabEntry | undefined;
+export type LibTypeResolver = (name: string) => _Type | undefined;
 
 export interface ComponentSpecifier {
     canonicalName: string,

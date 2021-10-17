@@ -1,6 +1,6 @@
 import { Scanner, SourceRange, TokenType, Token, NilToken, TokenTypeUiString, CfFileType } from "./scanner";
 import { getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, Mutable } from "./utils";
-import { Decorator, Interface, _Type } from "./types";
+import type { Decorator, Interface, _Type } from "./types";
 
 let debug = false;
 let nextNodeId : NodeId = 0;
@@ -146,7 +146,12 @@ export interface SymTabEntry {
     canonicalName: string,
     declarations: Node[] | null,
     type: _Type,
-    declaredType?: _Type | null,
+    declaredType?: _Type,
+    instantiatedDeclaredType?: _Type
+}
+
+export function hasDeclaredType(symbol: SymTabEntry) : symbol is SymTabEntry & {declaredType: _Type} {
+    return !!symbol.declaredType;
 }
 
 export type SymbolTable = Map<string, SymTabEntry>;
@@ -319,7 +324,7 @@ export interface SymTabResolution {
 }
 
 export interface SymbolResolution extends SymTabResolution {
-    container: Node | null
+    container: Node
 }
 
 
@@ -2351,10 +2356,16 @@ export interface TypeShim extends NodeBase {
     type: _Type
 }
 
-export function TypeShim(what: TypeShim["what"], type: _Type) : TypeShim {
+export function TypeShim(what: "typedef", type: _Type, name?: string) : TypeShim;
+export function TypeShim(what: "annotation" | "decorator", type: _Type) : TypeShim;
+export function TypeShim(what: TypeShim["what"], type: _Type, name?: string) : TypeShim {
     const v = NodeBase<TypeShim>(NodeKind.typeShim, SourceRange.Nil());
     v.type = type;
     v.what = what;
+
+    if (what === "typedef" && typeof name === "string") {
+        (type as Mutable<_Type>).name = name;
+    }
     return v;
 }
 

@@ -1,4 +1,5 @@
-import { ArrowFunctionDefinition, CfTag, DottedPath, FunctionDefinition, NodeKind, Script, SourceFile, SymbolTable, SymTabEntry, Tag, TagAttribute, } from "./node";
+import type { ArrowFunctionDefinition, CfTag, DottedPath, FunctionDefinition, Script, SourceFile, SymbolTable, SymTabEntry, Tag, TagAttribute } from "./node";
+import { NodeKind } from "./node";
 import { exhaustiveCaseGuard, getAttributeValue, getTriviallyComputableString, Mutable } from "./utils";
 
 let debugTypeModule = true;
@@ -68,7 +69,7 @@ const TypeKindUiString : Record<TypeFlags, string> = {
     [TypeFlags.typeConstructorInvocation]:       "type-constructor-invocation",           // typename | typename<type-list> where `typename` is shorthand for `typename<>` with 0 args
     [TypeFlags.cachedTypeConstructorInvocation]: "cached-type-constructor-invocation",    // same as a type call but we can see that is cached; sort of a "type call closure" with inital args captured
     [TypeFlags.typeConstructor]:                 "type-constructor",    // type<type-list, ...> => type
-    [TypeFlags.typeConstructorParam]:            "type-function-param", // type param in a type function
+    [TypeFlags.typeConstructorParam]:            "type-constructor-param", // type param in a type function
     [TypeFlags.typeId]:                          "type-id",             // name of non-builtin type, e.g, "T"
     [TypeFlags.never]:                           "never",
     [TypeFlags.final]:                           "final",
@@ -121,7 +122,8 @@ export interface _Type {
     readonly underlyingType?: _Type,
     readonly types?: _Type[],
     readonly cfc?: Readonly<SourceFile>, // kludge for connecting a cfstruct that represents a cfc to its cfc
-    readonly literalValue?: string | number
+    readonly literalValue?: string | number,
+    readonly capturedContext?: ReadonlyMap<string, _Type>,
 }
 
 export function getCanonicalType(type: _Type) {
@@ -135,26 +137,28 @@ export function getCanonicalType(type: _Type) {
     return SyntheticType.any;
 }
 
-export interface cfArray extends _Type {
+export interface UninstantiatedArray extends _Type {
     memberType: _Type
 }
 
-export function cfArray(memberType: _Type) : cfArray {
-    const type = {
-        flags: TypeFlags.array,
-        memberType
-    };
-
-    if (debugTypeModule) {
-        addDebugTypeInfo(type);
-    }
-
-    return type;
+const arrayTypeID = cfTypeId("Array");
+export function UninstantiatedArray(memberType: _Type) : TypeConstructorInvocation {
+    return TypeConstructorInvocation(arrayTypeID, [memberType]);
 }
 
-export function isArray(t: _Type) : t is cfArray {
+export function isArray(t: _Type) : t is UninstantiatedArray {
     t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.array);
+}
+
+export function isInstantiatedArray(t: _Type) {
+    return !!(t.flags & TypeFlags.struct) // instantiated type is a struct
+        && !!(t.underlyingType && isStructLike(t.underlyingType) && (t as Struct).structKind === StructKind.interface && (t as Interface).name === "Array") // the directly underlying type is the Array interface
+        //&& !!(getCanonicalType(t).flags & TypeFlags.array) -- if we have an Array interface instantiation, we know the canonical type is an
+}
+
+export function isUninstantiatedArray(t: _Type) : t is UninstantiatedArray {
+    return !isInstantiatedArray(t);
 }
 
 export interface cfTuple extends _Type {
@@ -183,19 +187,23 @@ export const enum StructKind { struct, interface, cfcTypeWrapper, symbolTableTyp
 
 export type Struct = DefaultStruct | Interface | CfcTypeWrapper | SymbolTableTypeWrapper;
 
+export type IndexSignature = {name: string, indexType: _Type, type: _Type};
+
 interface StructBase extends _Type {
-    structKind: StructKind,
+    readonly structKind: StructKind,
     readonly members: ReadonlyMap<string, Readonly<SymTabEntry>>,
+    readonly indexSignature?: IndexSignature,
     readonly instantiableSpreads?: readonly _Type[],
 }
 
 export interface DefaultStruct extends StructBase {
-    structKind: StructKind.struct,
+    readonly structKind: StructKind.struct,
 }
 
 export interface Interface extends StructBase {
-    structKind: StructKind.interface,
-    readonly name: string
+    readonly structKind: StructKind.interface,
+    readonly name: string,
+    readonly typeParams?: readonly TypeConstructorParam[],
 }
 
 export interface CfcTypeWrapper extends StructBase {
@@ -214,13 +222,16 @@ export interface SymbolTableTypeWrapper extends StructBase {
     readonly interfaceExtension?: Readonly<Interface>
 }
 
-export function Struct(members: ReadonlyMap<string, SymTabEntry>, instantiableSpreads?: readonly _Type[]) : DefaultStruct {
+export function Struct(members: ReadonlyMap<string, SymTabEntry>, indexSignature?: IndexSignature, instantiableSpreads?: readonly _Type[]) : DefaultStruct {
     const type : DefaultStruct = {
         flags: TypeFlags.struct,
         structKind: StructKind.struct,
         members,
     }
 
+    if (indexSignature) {
+        (type as Mutable<Struct>).indexSignature = indexSignature;
+    }
     if (instantiableSpreads && instantiableSpreads.length > 0) {
         (type as Mutable<Struct>).instantiableSpreads = instantiableSpreads;
     }
@@ -232,12 +243,19 @@ export function Struct(members: ReadonlyMap<string, SymTabEntry>, instantiableSp
     return type;
 }
 
-export function Interface(name: string, members: ReadonlyMap<string, SymTabEntry>, instantiableSpreads?: readonly _Type[]) : Interface {
+export function Interface(name: string, members: ReadonlyMap<string, SymTabEntry>, typeParams?: readonly TypeConstructorParam[], indexSignature?: IndexSignature, instantiableSpreads?: readonly _Type[]) : Interface {
     const type : Interface = {
         flags: TypeFlags.struct,
         structKind: StructKind.interface,
         name,
         members,
+    }
+
+    if (typeParams && typeParams.length > 0) {
+        (type as Mutable<Interface>).typeParams = typeParams;
+    }
+    if (indexSignature) {
+        (type as Mutable<Interface>).indexSignature = indexSignature;
     }
 
     if (instantiableSpreads && instantiableSpreads.length > 0) {
@@ -297,6 +315,11 @@ export function SymbolTableTypeWrapper(symbolTable: Readonly<SymbolTable>, inter
 export function isStructLike(t: _Type) : t is Struct {
     t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.struct);
+}
+
+// fixme: narrowing on `structKind` not working?
+export function isInterface(t: _Type) : t is Interface {
+    return isStructLike(t) && t.structKind === StructKind.interface;
 }
 
 export interface cfFunctionSignature extends _Type {
@@ -390,12 +413,12 @@ export function isFunctionSignatureParam(t: _Type) : t is cfFunctionSignaturePar
     return !!(t.flags & TypeFlags.functionSignatureParam);
 }
 
-export interface cfTypeConstructorInvocation extends _Type {
+export interface TypeConstructorInvocation extends _Type {
     left: _Type,
     args: _Type[]
 }
 
-export function cfTypeConstructorInvocation(left: _Type, args: _Type[]) : cfTypeConstructorInvocation {
+export function TypeConstructorInvocation(left: _Type, args: _Type[]) : TypeConstructorInvocation {
     const type = {
         flags: TypeFlags.typeConstructorInvocation,
         left,
@@ -409,17 +432,17 @@ export function cfTypeConstructorInvocation(left: _Type, args: _Type[]) : cfType
     return type;
 }
 
-export function isTypeConstructorInvocation(t: _Type) : t is cfTypeConstructorInvocation {
+export function isTypeConstructorInvocation(t: _Type) : t is TypeConstructorInvocation {
     t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.typeConstructorInvocation);
 }
 
 export interface cfCachedTypeConstructorInvocation extends _Type {
-    left: cfTypeConstructor,
+    left: TypeConstructor,
     args: _Type[],
 }
 
-export function cfCachedTypeConstructorInvocation(left: cfTypeConstructor, args: _Type[]) : cfCachedTypeConstructorInvocation {
+export function cfCachedTypeConstructorInvocation(left: TypeConstructor, args: _Type[]) : cfCachedTypeConstructorInvocation {
     const type = {
         flags: TypeFlags.cachedTypeConstructorInvocation,
         left,
@@ -438,14 +461,14 @@ export function isCachedTypeConstructorInvocation(t: _Type) : t is cfCachedTypeC
     return !!(t.flags & TypeFlags.cachedTypeConstructorInvocation);
 }
 
-export interface cfTypeConstructor extends _Type {
-    readonly params: readonly cfTypeConstructorParam[],
+export interface TypeConstructor extends _Type {
+    readonly params: readonly TypeConstructorParam[],
     readonly capturedParams: ReadonlyMap<string, _Type>, // "in context Γ extended with (T0,...,Tn)"; so @type Foo = <T> => <U> => (can see T, U here)
     readonly body: _Type,
 }
 
-export function cfTypeConstructor(params: cfTypeConstructorParam[], body: _Type) : cfTypeConstructor {
-    const type = {
+export function TypeConstructor(params: TypeConstructorParam[], body: _Type) : TypeConstructor {
+    const type : TypeConstructor = {
         flags: TypeFlags.typeConstructor,
         params,
         capturedParams: new Map<string, _Type>(),
@@ -459,13 +482,13 @@ export function cfTypeConstructor(params: cfTypeConstructorParam[], body: _Type)
     return type;
 }
 
-export type CfcLookupType = cfTypeConstructorInvocation & {params: [/*fixme: LiteralType*/ _Type], __tag: "CfcLookupType"};
+export type CfcLookupType = TypeConstructorInvocation & {params: [/*fixme: LiteralType*/ _Type], __tag: "CfcLookupType"};
 
 export function CfcLookup(param: _Type) : CfcLookupType {
-        return cfTypeConstructorInvocation(SyntheticType.cfcLookupType, [param]) as CfcLookupType;
+        return TypeConstructorInvocation(SyntheticType.cfcLookupType, [param]) as CfcLookupType;
 }
 
-export function isTypeConstructor(t: _Type) : t is cfTypeConstructor {
+export function isTypeConstructor(t: _Type) : t is TypeConstructor {
     t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.typeConstructor);
 }
@@ -478,14 +501,14 @@ export function getCfcLookupTarget(t: CfcLookupType) : string {
     return t.params[0].literalValue! as string;
 }
 
-export interface cfTypeConstructorParam extends _Type {
+export interface TypeConstructorParam extends _Type {
     //extendsType: Type | null,
     name: string,
     defaultType?: _Type
 }
 
-export function cfTypeConstructorParam(name: string, defaultType?: _Type) {
-    const type : cfTypeConstructorParam = {
+export function TypeConstructorParam(name: string, defaultType?: _Type) {
+    const type : TypeConstructorParam = {
         flags: TypeFlags.typeConstructorParam,
         name
     }
@@ -501,7 +524,7 @@ export function cfTypeConstructorParam(name: string, defaultType?: _Type) {
     return type;
 }
 
-export function isTypeConstructorParam(t: _Type) : t is cfTypeConstructorParam {
+export function isTypeConstructorParam(t: _Type) : t is TypeConstructorParam {
     t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.typeConstructorParam);
 }
@@ -646,13 +669,7 @@ export const SyntheticType = (function() {
         flags: TypeFlags.synthetic | TypeFlags.any,
     } as _Type;
     (any as Mutable<_Type>).underlyingType = any;
-
-    const anyFunction = (() => {
-        const spreadParam = cfFunctionSignatureParam(false, cfArray(any), "args");
-        (spreadParam as Mutable<_Type>).flags |= TypeFlags.spread;
-        return cfFunctionSignature("", [spreadParam], any, []);
-    })();
-
+    
     const void_ : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.void,
     } as _Type;
@@ -663,11 +680,24 @@ export const SyntheticType = (function() {
     } as _Type;
     (string as Mutable<_Type>).underlyingType = string;
 
-
     const numeric : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.numeric | TypeFlags.string,
     } as _Type;
     (numeric as Mutable<_Type>).underlyingType = numeric;
+
+    const ArrayInterface = Interface(
+        "Array",
+        new Map<string, SymTabEntry>(),
+        [TypeConstructorParam("T", any)],
+        {name: "index", indexType: numeric, type: any});
+
+    // we need an instantiated any[]
+
+    const anyFunction = (() => {
+        const spreadParam = cfFunctionSignatureParam(false, /*should be the builtin instantiated any[]*/ any, "args");
+        (spreadParam as Mutable<_Type>).flags |= TypeFlags.spread;
+        return cfFunctionSignature("", [spreadParam], any, []);
+    })();
 
     const boolean : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.boolean,
@@ -694,14 +724,15 @@ export const SyntheticType = (function() {
         never: createType(never),
         struct, // this is a function
         anyFunction: anyFunction, // already created via call to cfFunctionSignature
-        cfcLookupType: cfTypeConstructor([], any), // param and body are meaningless here, we just want a single type constructor that says "hey, lookup the name of this as a cfc as a type"
-        EmptyInterface: Interface("", new Map())
+        cfcLookupType: TypeConstructor([], any), // param and body are meaningless here, we just want a single type constructor that says "hey, lookup the name of this as a cfc as a type"
+        EmptyInterface: Interface("", new Map()),
+        ArrayInterface: ArrayInterface,
     } as const;
 
     return results;
 })();
 
-function createType(type: _Type) {
+export function createType(type: _Type) {
     if (debugTypeModule) addDebugTypeInfo(type);
     return type;
 }
@@ -753,7 +784,7 @@ function typeFromJavaLikeTypename(dottedPath: DottedPath | null) : _Type {
 function typeFromStringifiedJavaLikeTypename(typename: string | null) : _Type {
     if (typename === null) return SyntheticType.any;
     switch (typename.toLowerCase()) {
-        case "array": return cfArray(SyntheticType.any);
+        case "array": return UninstantiatedArray(SyntheticType.any);
         case "boolean": return SyntheticType.boolean;
         case "function": return SyntheticType.anyFunction;
         case "numeric": return SyntheticType.numeric;

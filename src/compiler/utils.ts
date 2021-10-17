@@ -1270,7 +1270,7 @@ export function walkupScopesToResolveSymbol(base: Node,
                 }
                 
                 return engineSymbol
-                    ? {scopeName: "__cfEngine", symTabEntry: engineSymbol, container: null}
+                    ? {scopeName: "__cfEngine", symTabEntry: engineSymbol, container: node} // fixme - this container is not super accurate, but better than null
                     : undefined;
             }
 

@@ -537,7 +537,7 @@
 @declare function quarter(required date date) xtype="any";
 @declare function query() xtype="any";
 @declare function queryAddColumn(required query query, required string column_name, string datatype, required array array_name) xtype="any";
-@declare function queryAddRow(required query query, Numeric / Array / Struct number/row(s)) xtype="any";
+@declare function queryAddRow(required query query) xtype="any";
 @declare function queryAppend(required query query1, required query query2) xtype="any";
 @declare function queryClear(required query query) xtype="any";
 @declare function queryColumnArray(required query query) xtype="any";
@@ -752,3 +752,7 @@
 @declare function xmlValidate(required any xmlDoc, string validator) xtype="any";
 @declare function year(required date date) xtype="any";
 @declare function yesNoFormat(required any value) xtype="any";
+
+@interface Array<T> {
+    append: (val: T) => T[]
+}
