@@ -503,4 +503,16 @@ describe("general smoke test for particular constructs", () => {
             completionsTestTargets[absPath].check(completions);
         }
     })
+    it("Unparenthesized arrow functions illegal in Lucce", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+        pushFsNode(fsRoot, "/a.cfc", `component { x = v => 42; }`);
+        const luceeProject = Project("/", DebugFileSystem(fsRoot), {...commonProjectOptions, language: LanguageVersion.lucee5});
+        const acfProject = Project("/", DebugFileSystem(fsRoot), {...commonProjectOptions, language: LanguageVersion.acf2018});
+
+        luceeProject.addFile("/a.cfc");
+        acfProject.addFile("/a.cfc");
+
+        assert.strictEqual(luceeProject.getDiagnostics("/a.cfc").length, 1, "Lucee project got an error");
+        assert.strictEqual(acfProject.getDiagnostics("/a.cfc").length, 0, "acf project did not get an error");
+    })
 });

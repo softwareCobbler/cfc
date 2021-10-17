@@ -4,6 +4,9 @@ A language plugin to see how far we can push ColdFusion language tooling.
 
 If we are marking a tag, expression or statement as an error and you know it shouldn't (or it isn't and it should), please let me know [on github](https://github.com/softwareCobbler/cfc).
 
+1.0.29
+- Issue a diagnostic on unparenthesized single-argument arrow functions when in Lucee language mode
+
 1.0.28
 - Experimental coldbox/wirebox module resolution, with some autocomplete support for `getInstance`
   - we parse and understand a subset of the Wirebox configuration file syntax (well, right now we only support the `mapDirectory` initiator, but that can be improved)

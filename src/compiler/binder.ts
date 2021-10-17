@@ -1032,6 +1032,12 @@ export function Binder() {
 
     // fixme: make more explicit that we grab signatures here for cfc member functions
     function bindFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {
+        if (node.kind === NodeKind.arrowFunctionDefinition && langVersion === LanguageVersion.lucee5) {
+            if (node.params.length === 1 && !node.parens) {
+                errorAtRange(node.params[0].range, "Arrow function parameter lists must always be parenthesized.")
+            }
+        }
+
         const signature = extractCfFunctionSignature(node);
         if (isHoistableFunctionDefinition(node) && typeof node.canonicalName === "string") {
             // lucee appears to not err on the following, but acf does
