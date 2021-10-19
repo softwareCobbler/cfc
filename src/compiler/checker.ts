@@ -1400,6 +1400,9 @@ export function Checker() {
                             setResolvedSymbol(element, symbolResolution)
                             type = evaluateType(node, symbolResolution.symTabEntry.type);
                         }
+                        else {
+                            type = undefined;
+                        }
                     }
 
                     if (!type || (type.flags & TypeFlags.any)) {
