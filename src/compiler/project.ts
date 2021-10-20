@@ -515,10 +515,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     function getCfcSpecifier(resolveFrom: string, possiblyUnqualifiedCfc: string) : ComponentSpecifier[] | undefined {
         resolveFrom = canonicalizePath(resolveFrom);
         if (projectRoot.startsWith(resolveFrom)) return;
-        const isUnqualified = !/\./.test(possiblyUnqualifiedCfc);
         const base = path.parse(projectRoot).base; // Z in X/Y/Z, assuming Z is some root we're interested in
-        const rel = path.relative(projectRoot, resolveFrom);
-        const {dir} = path.parse(rel); // A/B/C in X/Y/Z/A/B/C, where X/Y/Z is the root
         // if it is unqualifed, we prepend the full path from root and lookup from that
         // with root of "X/", a file of "X/Y/Z/foo.cfm" calling "new Bar()" looks up "X.Y.Z.Bar"
 
@@ -529,10 +526,16 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
 
             while (components.length > 0) {
                 components.pop();
-                const maybeModulesPath = fileSystem.normalize(fileSystem.join(...components, "modules"));
-                if (!maybeModulesPath.startsWith(projectRoot)) break; // should never happen ? i.e. we've climbed out of project root?
+                const workingPath = fileSystem.normalize(fileSystem.join(...components));
+
+                if (!workingPath.startsWith(projectRoot)) break; // should never happen ? i.e. we've climbed out of project root?
+
+                const maybeModulesPath = fileSystem.join(workingPath, "modules");
                 if (fileSystem.existsSync(maybeModulesPath)) {
                     result.push(maybeModulesPath);
+                }
+                if (components[components.length-1] === "modules_app") { // we'll treat some/path/modules_app/ as a root
+                    result.push(workingPath);
                 }
             }
 
@@ -542,78 +545,56 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         const parentModulesFolders = findParentModulesFolders(resolveFrom);
         parentModulesFolders;
 
-        if (isUnqualified) {
-            if (resolveFrom.startsWith(projectRoot)) {
-                const cfcName = [base, ...dir.split(fileSystem.pathSep), possiblyUnqualifiedCfc].filter(e => e !== "").join("."); // filter out possibly empty base and dirs; e.g. root is '/' so path.parse(root).base is ''
-                const xname = [base, possiblyUnqualifiedCfc].filter(e => e !== "").join(".");
-                return [
-                    {
-                        canonicalName: cfcName.toLowerCase(),
-                        uiName: cfcName,
-                        path: fileSystem.join(projectRoot, dir, possiblyUnqualifiedCfc + ".cfc")
-                    },
-                    {
-                        canonicalName: xname.toLowerCase(),
-                        uiName: xname,
-                        path: fileSystem.join(projectRoot, possiblyUnqualifiedCfc + ".cfc")
-                    },
-                ];
-            }
+        const canonicalCfcName = possiblyUnqualifiedCfc.toLowerCase();
+
+        // project root - '/root/', project base is 'root'; does cfc name start with path component 'root'?
+        // if so, we want to try to resolve '/root/foo/bar.cfc' as well as '/root/root/foo/bar.cfc'
+        const canonicalBase = base.toLowerCase();
+        const nameStartsWithProjectBase = canonicalCfcName.startsWith(canonicalBase);
+
+        const cfcComponents = possiblyUnqualifiedCfc.split(".");
+        
+        if (cfcComponents.length === 0) return undefined; // just to not crash; why would this happen?
+        
+        cfcComponents[cfcComponents.length - 1] = cfcComponents[cfcComponents.length - 1] + ".cfc";
+
+        const common = {
+            canonicalName: canonicalCfcName,
+            uiName: possiblyUnqualifiedCfc,
+        } as const;
+
+        const result = [{
+            ...common,    
+            path: fileSystem.join(projectRoot, ...nameStartsWithProjectBase ? cfcComponents.slice(1) : cfcComponents) // /root/foo/bar.cfc
+        },{
+            ...common,    
+            path: fileSystem.join(path.parse(resolveFrom).dir, ...cfcComponents)
+        }];
+
+        // magic coldbox/wirebox resolution, might want something to toggle this
+        for (const coldboxModulePath of parentModulesFolders) {
+            result.push({
+                ...common,
+                path: path.join(coldboxModulePath, ...cfcComponents)
+            });    
         }
-        else {
-            const canonicalCfcName = possiblyUnqualifiedCfc.toLowerCase();
+        // result.push({
+        //     ...common,
+        //     path: fileSystem.join(projectRoot, "modules", ...cfcComponents) // /root/modules/foo/bar.cfc
+        // });
+        // result.push({
+        //     ...common,
+        //     path: fileSystem.join(path.parse(resolveFrom).dir, "modules", ...cfcComponents) // /root/modules/foo/bar.cfc
+        // })
 
-            // project root - '/root/', project base is 'root'; does cfc name start with path component 'root'?
-            // if so, we want to try to resolve '/root/foo/bar.cfc' as well as '/root/root/foo/bar.cfc'
-            const canonicalBase = base.toLowerCase();
-            const nameStartsWithProjectBase = canonicalCfcName.startsWith(canonicalBase);
-
-            const cfcComponents = possiblyUnqualifiedCfc.split(".");
-            
-            if (cfcComponents.length === 0) return undefined; // just to not crash; why would this happen?
-            
-            cfcComponents[cfcComponents.length - 1] = cfcComponents[cfcComponents.length - 1] + ".cfc";
-
-            const common = {
-                canonicalName: canonicalCfcName,
-                uiName: possiblyUnqualifiedCfc,
-            } as const;
-
-            const result = [{
-                ...common,    
-                path: fileSystem.join(projectRoot, ...nameStartsWithProjectBase ? cfcComponents.slice(1) : cfcComponents) // /root/foo/bar.cfc
-            },{
-                ...common,    
-                path: fileSystem.join(path.parse(resolveFrom).dir, ...cfcComponents)
-            }];
-
-            // magic coldbox/wirebox resolution, might want something to toggle this
-            for (const coldboxModulePath of parentModulesFolders) {
-                result.push({
-                    ...common,
-                    path: path.join(coldboxModulePath, ...cfcComponents)
-                });    
-            }
-            // result.push({
-            //     ...common,
-            //     path: fileSystem.join(projectRoot, "modules", ...cfcComponents) // /root/modules/foo/bar.cfc
-            // });
-            // result.push({
-            //     ...common,
-            //     path: fileSystem.join(path.parse(resolveFrom).dir, "modules", ...cfcComponents) // /root/modules/foo/bar.cfc
-            // })
-
-            if (nameStartsWithProjectBase) {
-                result.push({
-                    ...common,
-                    path: fileSystem.join(projectRoot, ...cfcComponents) // /root/root/foo/bar.cfc
-                });
-            }
-
-            return result;
+        if (nameStartsWithProjectBase) {
+            result.push({
+                ...common,
+                path: fileSystem.join(projectRoot, ...cfcComponents) // /root/root/foo/bar.cfc
+            });
         }
 
-        return undefined;
+        return result;
     }
 
     function EngineSymbolResolver(canonicalName: string) : SymTabEntry | undefined {
