@@ -27,16 +27,30 @@ function projectFiddle() {
                         //[index: numeric]: T,
                         //len: () => numeric,
                         //toList: (sep?: string) => string,
-                        append: (val: T) => T[]
+                        //append: (val: T) => T[],
+                        //map: <U>(m: (e: T, i?: number, a?: T[]) => U) => T[]
+                        id: <U>(mapper: (e: T) => U) => U
                     }
                 `,
                 "someFile.cfc": `
-                    component {
-                        function foo() {
-                            // @type {x:1, y: string}[]
-                            var x = [{x:1}];
-                        }
-                    }
+                    /**
+                     */
+                    <cfcomponent>
+                        <cffunction name="my_callback">
+                            <cfargument name="some_arg" type="a.b.c">
+                        </cffunction>
+
+                        <cffunction name="doit">
+                            <cfscript>
+                                function foo() {
+                                    // @type string[]
+                                    var x = [];
+        
+                                    var xxx = x.id((e) => [e]);
+                                }
+                            </cfscript>
+                        </cffunction>
+                    </cfcomponent>
                     `,
                 "a": {
                     "b": {
@@ -63,12 +77,6 @@ function projectFiddle() {
 
     project.addEngineLib("/lib.d.cfm");
     project.addFile("/someFile.cfc");
-    const node = project.getNodeToLeftOfCursor("/someFile.cfc", 55);
-    const isexpr = node ? isExpressionContext(node) : false;
-    console.log(isexpr);
-    
-    project.addFile("/Wirebox.cfc");
-
     const diagnostics = project.getDiagnostics("/Base.cfc");
 
     //const x = project.getInterestingNodeToLeftOfCursor("/someFile.cfc", 378);

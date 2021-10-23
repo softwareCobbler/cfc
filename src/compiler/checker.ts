@@ -1,7 +1,7 @@
 import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, Property, hasDeclaredType } from "./node";
 import { CfcResolver, EngineSymbolResolver, LanguageVersion, LibTypeResolver } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
-import { cfFunctionSignature, cfIntersection, Struct, cfUnion, SyntheticType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStructLike, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, isTypeConstructor, getCanonicalType, stringifyType, cfFunctionSignatureParam, unsafe__cfFunctionSignatureWithFreshReturnType, isFunctionOverloadSet, cfFunctionOverloadSet, createLiteralType, isLiteralType, cfTypeId, SymbolTableTypeWrapper, CfcTypeWrapper, Interface, StructKind, isCfcLookupType, isInstantiatedArray, isInterface, createType, } from "./types";
+import { cfFunctionSignature, cfIntersection, Struct, cfUnion, SyntheticType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStructLike, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, getCanonicalType, stringifyType, cfFunctionSignatureParam, unsafe__cfFunctionSignatureWithFreshReturnType, isFunctionOverloadSet, cfFunctionOverloadSet, isLiteralType, cfTypeId, SymbolTableTypeWrapper, CfcTypeWrapper, Interface, StructKind, isCfcLookupType, isInstantiatedArray, isInterface, createType, createLiteralType, isUninstantiatedArray, isGenericFunctionSignature, TypeConstructor, typeFromJavaLikeTypename, } from "./types";
 import { exhaustiveCaseGuard, findAncestor, getAttributeValue, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionReturnsLiteral, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol } from "./utils";
 
@@ -210,15 +210,18 @@ export function Checker() {
                 }
                 return;
             case NodeKind.simpleStringLiteral:
-                setCachedEvaluatedNodeType(node, createLiteralType(node.textSpan.text));
+                setCachedEvaluatedNodeType(node, SyntheticType.string);
                 return;
             case NodeKind.interpolatedStringLiteral:
                 checkList(node.elements);
                 setCachedEvaluatedNodeType(node, SyntheticType.string);
                 return;
-            case NodeKind.numericLiteral:
-                setCachedEvaluatedNodeType(node, SyntheticType.numeric);
+            case NodeKind.numericLiteral: {
+                const val = parseFloat(node.literal.token.text);
+                if (!isNaN(val)) setCachedEvaluatedNodeType(node, createLiteralType(val));
+                else setCachedEvaluatedNodeType(node, SyntheticType.numeric);
                 return;
+            }
             case NodeKind.booleanLiteral:
                 setCachedEvaluatedNodeType(node, SyntheticType.boolean);
                 return;
@@ -542,8 +545,8 @@ export function Checker() {
      * @param assignThis 
      * @param to 
      */
-    function isAssignable(assignThis: _Type, to: _Type) : boolean {
-        return isLeftSubtypeOfRight(assignThis, to);
+    function isAssignable(assignThis: _Type, to: _Type, sourceIsLiteralExpr = false) : boolean {
+        return isLeftSubtypeOfRight(assignThis, to, sourceIsLiteralExpr);
     }
 
     //
@@ -574,7 +577,7 @@ export function Checker() {
     // subtype has the common meaning; however it is maybe helpful to note that "sub" also means "substitutable" in addition to "a descendant in a heirarchy"
     // i.e. `l <: r` means l is substitutable for r (you can safely use an l in r's place)
     //
-    function isLeftSubtypeOfRight(l: _Type, r: _Type) : boolean {
+    function isLeftSubtypeOfRight(l: _Type, r: _Type, sourceIsLiteralExpr = false) : boolean {
         let depth = 0;
         let tooDeep = false;
         tooDeep ? 0 : 1; // yes compiler this is used
@@ -627,7 +630,9 @@ export function Checker() {
                     // e.g. a SymbolTableWrapper around `this` from within a CFC, and a CFC wrapper wrapping the same `this` but for a reference from another file
                     if (l.members === r.members) return true;
 
+                    if (sourceIsLiteralExpr && l.members.size !== r.members.size) return false; // barring optional properties...
                     if (l.members.size < r.members.size) return false;
+
 
                     // if both types are CFCs, we compare by nominal inheritance
                     // we probably need to fix that this is valid CF:
@@ -662,11 +667,20 @@ export function Checker() {
                     return true;
                 }
                 if (isStructLike(l) && isStructLike(r)) {
+                    if (isInstantiatedArray(l) && isInstantiatedArray(r) && sourceIsLiteralExpr) {
+                        return worker(l.memberType, r.memberType);
+                    }
                     return isLeftStructSubtypeOfRightStruct(l, r);
                 }
-                if (isArray(l) && isArray(r)) {
-                    return worker(l.memberType, r.memberType);
-                }
+                // rmme 10/22/21
+                // if (isArray(l) && isArray(r)) { // these will be "instantiated" arrays, which are structlike; we'll never hit this
+                //     if (sourceIsLiteralExpr) {
+                //         return worker(l.memberType, r.memberType);
+                //     }
+                //     else {
+                //         return worker(l.memberType, r.memberType);
+                //     }
+                // }
                 if (isFunctionSignature(l) && isFunctionSignature(r)) {
                     // covariant in return type
                     if (!worker(l.returns, r.returns)) return false;
@@ -797,7 +811,7 @@ export function Checker() {
 
     function checkCallExpression(node: CallExpression) {
         checkNode(node.left);
-        checkList(node.args);
+        
 
         // the resolved symbol may shadow a built-in always-visible engine symbol
         // function call identifiers always call the built-in if it names a built-in
@@ -818,6 +832,7 @@ export function Checker() {
         const sig = getCachedEvaluatedNodeType(node.left);
 
         if (isFunctionOverloadSet(sig)) {
+            checkList(node.args);
             const overloads = chooseOverload(sig, node.args);
             if (overloads.length !== 1) {
                 setCachedEvaluatedNodeType(node, SyntheticType.any);
@@ -827,8 +842,158 @@ export function Checker() {
             }
         }
         else if (isFunctionSignature(sig)) {
+            checkList(node.args);
             checkCallLikeArguments(sig, node);
             setCachedEvaluatedNodeType(node, sig.returns);
+        }
+        else if (isGenericFunctionSignature(sig)) {
+            const typeParamMap = new Map<string, _Type | undefined>();
+            const definitelyResolvedTypeParamMap = new Map<string, _Type>();
+            const pushResolution = (name: string, type: _Type) => {
+                typeParamMap.set(name, type);
+                definitelyResolvedTypeParamMap.set(name, type);
+            }
+
+            for (const p of sig.params) typeParamMap.set(p.name, undefined);
+            for (let i = 0; i < sig.body.params.length; i++) {
+                const sigParamType = sig.body.params[i].type;
+                const callSiteArg = node.args[i];
+
+                if (isFunctionSignature(sigParamType)) {
+                    const isGenericInReturnPosition = isTypeId(sigParamType.returns) && typeParamMap.has(sigParamType.returns.name);
+                    let argType : _Type | undefined;
+
+                    if (isGenericInReturnPosition && (callSiteArg.expr.kind === NodeKind.functionDefinition || callSiteArg.expr.kind === NodeKind.arrowFunctionDefinition)) {
+                        for (let j = 0; j < callSiteArg.expr.params.length; j++) {
+                            const resolutions = resolveGenericFunctionTypeParams(
+                                typeParamMap,
+                                sigParamType.params[j].type,
+                                evaluateType(callSiteArg, typeFromJavaLikeTypename(callSiteArg.expr.params[j].javaLikeTypename)));
+                            if (resolutions) {
+                                for (const [k,v] of resolutions) {
+                                    if (v) {
+                                        pushResolution(k,v);
+                                    }
+                                }
+                            }
+                        }
+
+                        for (let j = 0; j < callSiteArg.expr.params.length; j++) {
+                            const argScopeSymTabEntry = callSiteArg.expr.containedScope!.arguments!.get(callSiteArg.expr.params[j].canonicalName)!;
+                            argScopeSymTabEntry.type = evaluateType(callSiteArg, sigParamType.params[j].type, definitelyResolvedTypeParamMap);
+                        }
+
+                        if (callSiteArg.expr.fromTag) {
+                            // not possible, can't have a tag expr in an inline function expression, like `needsACallback(<cffunction>....)`
+                        }
+                        else {
+                            checkNode(callSiteArg.expr.body);
+                            if (callSiteArg.expr.kind === NodeKind.arrowFunctionDefinition && callSiteArg.expr.body.kind !== NodeKind.block) {
+                                const returnType = getCachedEvaluatedNodeType(callSiteArg.expr.body);
+                                pushResolution((sigParamType.returns as cfTypeId).name, returnType);
+                            }
+                        }
+                    }
+                    else {
+                        checkNode(callSiteArg.expr);
+                        argType = getCachedEvaluatedNodeType(callSiteArg.expr);
+                    }
+
+                    console.log(argType);
+                }
+                else {
+                    checkNode(callSiteArg);
+                    const argType = getCachedEvaluatedNodeType(node.args[i])
+                    const resolutions = resolveGenericFunctionTypeParams(typeParamMap, sigParamType, argType);
+                    if (resolutions) {
+                        for (const [k,v] of resolutions) {
+                            if (v) typeParamMap.set(k,v)
+                        }
+                    }
+                }
+            }
+
+            function widenToCommonType(t: _Type, u: _Type) : _Type | undefined {
+                if (isLiteralType(t) && isLiteralType(u)) {
+                    if (t.flags & TypeFlags.string && u.flags & TypeFlags.string) return SyntheticType.string;
+                    if (t.flags & TypeFlags.numeric && u.flags & TypeFlags.numeric) return SyntheticType.numeric;
+                }
+                return undefined;
+            }
+
+            function resolveGenericFunctionTypeParams(unifiees: ReadonlyMap<string, _Type | undefined>, target: _Type, source: _Type) : ReadonlyMap<string, _Type | undefined> | undefined {
+                if (isTypeId(target)) {
+                    if (unifiees.has(target.name)) {
+                        if (!unifiees.get(target.name)) {
+                            return new Map([[target.name, source]]);
+                        }
+
+                        const resolvedTarget = unifiees.get(target.name)!;
+                        if (!isAssignable(source, resolvedTarget, /*sourceIsLiteralExpr*/ false)) {
+                            const widerType = widenToCommonType(source, resolvedTarget);
+                            if (widerType) {
+                                return new Map([[target.name, widerType]]);
+                            }
+                            else {
+                                throw "unassignable from source to resolved generic --- that means T was resolved but now we have a different T?"
+                            }
+                        }
+
+                        return undefined;
+                    }
+                    else {
+                        throw "these types are closed -- we're not looking up arbitrary generic type IDs, they should have been resolved already during the containing type's instantiation"
+                    }
+                }
+                else if (isUninstantiatedArray(target) && isInstantiatedArray(source)) {
+                    const memberTypeOfUninstantiatedArray = target.args[0]; // because T[] is Array<T>, T[][] is Array<Array<T>> etc
+                    return resolveGenericFunctionTypeParams(unifiees, memberTypeOfUninstantiatedArray, source.memberType);
+                }
+                else if (isStructLike(target) && isStructLike(source)) {
+                    if (target.structKind === StructKind.cfcTypeWrapper && source.structKind === StructKind.cfcTypeWrapper) {
+                        // uh, cfcs can't be generic?
+                        return undefined;
+                    }
+                    if (source.members.size < target.members.size) {
+                        return undefined;
+                    }
+                    const freshResolutions = new Map<string, _Type | undefined>([...unifiees]);
+                    for (const [name, symTabEntry] of target.members) {
+                        const targetType = symTabEntry.type;
+                        if (!source.members.has(name)) return;
+                        const result = resolveGenericFunctionTypeParams(freshResolutions, targetType, source.members.get(name)!.type);
+                        if (result) {
+                            for (const [k,v] of result) freshResolutions.set(k,v);
+                        }
+                    }
+
+                    return freshResolutions;
+                }
+                else if (isFunctionSignature(target) && isFunctionSignature(source)) {
+                    if (target.params.length !== source.params.length) return undefined;
+
+                    const freshResolutions = new Map<string, _Type | undefined>([...unifiees]);
+
+                    for (let i = 0; i < target.params.length; i++) {
+                        const targetParamType = target.params[i].type;
+                        const sourceParamType = source.params[i].type;
+                        const result = resolveGenericFunctionTypeParams(unifiees, targetParamType, sourceParamType);
+                        if (result) {
+                            for (const[k,v] of result) freshResolutions.set(k,v);
+                        }
+                    }
+
+                    const returnTypeResolution = resolveGenericFunctionTypeParams(unifiees, target.returns, source.returns);
+                    if (returnTypeResolution) {
+                        for (const[k,v] of returnTypeResolution) freshResolutions.set(k,v);
+                    }
+
+                    return freshResolutions;
+                }
+                else {
+                    return undefined;
+                }
+            }
         }
         else if (sig.flags & TypeFlags.any) {
             return;
@@ -1143,15 +1308,18 @@ export function Checker() {
         }
 
         let rhsType : _Type | undefined = undefined;
+        let rhsExpr : Node | undefined = undefined;
         let assignabilityErrorNode : Node;
 
         if (node.expr.kind === NodeKind.binaryOperator) {
             checkNode(node.expr.right);
+            rhsExpr = node.expr.right;
             rhsType = getCachedEvaluatedNodeType(node.expr.right);
             assignabilityErrorNode = node.expr.right;
         }
         else if (isForInit && node.parent?.kind === NodeKind.for && node.parent.subType === ForSubType.forIn && node === node.parent.init) {
             rhsType = getCachedEvaluatedNodeType(node.parent.expr); // `for (x in y)`, x gets its type from `y`
+            rhsExpr = node.parent.expr;
             assignabilityErrorNode = node;
         }
         else {
@@ -1175,9 +1343,22 @@ export function Checker() {
 
         //if (node.finalModifier) rhsType.flags |= TypeFlags.final; // need to clone the type
 
+        function isLiteralExpr(node: Node) {
+            switch (node.kind) {
+                case NodeKind.arrayLiteral:
+                case NodeKind.structLiteral:
+                case NodeKind.simpleStringLiteral:
+                case NodeKind.booleanLiteral:
+                case NodeKind.numericLiteral:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         if (symbol && hasDeclaredType(symbol)) {
             const instantiatedDeclaredType = getInstantiatedDeclaredType(node, symbol);
-            if (!isAssignable(rhsType, instantiatedDeclaredType)) {
+            if (!isAssignable(rhsType, instantiatedDeclaredType, isLiteralExpr(rhsExpr))) {
                 const l = stringifyType(symbol.declaredType);
                 const r = stringifyType(rhsType);
                 typeErrorAtNode(assignabilityErrorNode, `Type '${r}' is not assignable to type '${l}'`);
@@ -1187,6 +1368,7 @@ export function Checker() {
         setCachedEvaluatedFlowType(lValue.flow!, name.canonical, rhsType); // hm, rhs type or instantiated declared type?
     }
 
+    // fixme: SymTabEntry has a "container" property, which should be the context, so probably this should be just a single arg function
     function getInstantiatedDeclaredType(contextNode: Node, symbol: SymTabEntry & {declaredType: _Type}) : _Type {
         return symbol.instantiatedDeclaredType || (symbol.instantiatedDeclaredType = evaluateType(contextNode, symbol.declaredType));
     }
@@ -1216,17 +1398,8 @@ export function Checker() {
     }
 
     function setCachedEvaluatedNodeType(node: Node, type: _Type) {
-        if (isTypeConstructor(type) 
-            || isTypeConstructorInvocation(type)
-            || isCachedTypeConstructorInvocation(type)) {
-            typeErrorAtNode(node, "_Type is not concrete.");
-            sourceFile.cachedNodeTypes.set(node.nodeId, SyntheticType.any);
-            return SyntheticType.any;
-        }
-        else {
-            sourceFile.cachedNodeTypes.set(node.nodeId, type);
-            return type;
-        }
+        sourceFile.cachedNodeTypes.set(node.nodeId, type);
+        return type;
     }
 
     function getSymbolImpl(node: Node | null, workingSourceFile: SourceFile) : SymbolResolution | undefined {
@@ -1335,7 +1508,9 @@ export function Checker() {
             const resolvedSymbol = walkupScopesToResolveSymbol(node, name); // really we want the flow type
 
             if (resolvedSymbol) {
-                const evaluatedType = resolvedSymbol.symTabEntry.instantiatedDeclaredType ?? evaluateType(resolvedSymbol.container, resolvedSymbol.symTabEntry.type);
+                const evaluatedType = hasDeclaredType(resolvedSymbol.symTabEntry)
+                    ? getInstantiatedDeclaredType(resolvedSymbol.container, resolvedSymbol.symTabEntry)
+                    : evaluateType(resolvedSymbol.container, resolvedSymbol.symTabEntry.type);
                 setCachedEvaluatedNodeType(node, evaluatedType);
                 setResolvedSymbol(node, resolvedSymbol);
             }
@@ -1389,6 +1564,8 @@ export function Checker() {
         checkNode(node.root);
 
         let type : _Type | undefined = getCachedEvaluatedNodeType(node.root);
+        let symbol : SymbolResolution | undefined;
+
         if (!type || type.flags & TypeFlags.any) {
             return;
         }
@@ -1413,7 +1590,7 @@ export function Checker() {
                         type = undefined;
                     }
                     else if (walkupInheritance) {
-                        const symbol = (node.root as Identifier).canonicalName === "this"
+                        symbol = (node.root as Identifier).canonicalName === "this"
                             ? walkupThisToResolveSymbol(propertyName)
                             : walkupSuperToResolveSymbol(propertyName);
                         if (symbol) {
@@ -1425,10 +1602,10 @@ export function Checker() {
                         }
                     }
                     else {
-                        const symbolResolution = getStructMember(element, type, propertyName);
-                        if (symbolResolution) {
-                            setResolvedSymbol(element, symbolResolution)
-                            type = evaluateType(node, symbolResolution.symTabEntry.type);
+                        symbol = getStructMember(element, type, propertyName);
+                        if (symbol) {
+                            setResolvedSymbol(element, symbol);
+                            type = evaluateType(node, symbol.symTabEntry.type);
                         }
                         else {
                             type = undefined;
@@ -1458,6 +1635,9 @@ export function Checker() {
             }
 
             setCachedEvaluatedNodeType(node, type); // in `a.b.c`, the whole indexedAccess expression type is typeof c
+            if (symbol) {
+                setResolvedSymbol(node, symbol);
+            }
         }
         else {
             setCachedEvaluatedNodeType(node, SyntheticType.any);
@@ -1950,10 +2130,10 @@ export function Checker() {
             }
         }
 
-        function evaluateType(context: Node, type: _Type | null) : _Type {
+        function evaluateType(context: Node, type: _Type | null, typeParamMap: ReadonlyMap<string, _Type> = type?.capturedContext ?? new Map(), partiallyApplyGenericFunctionSigs = false) : _Type {
             let depth = 0;
 
-            return typeWorker(type);
+            return typeWorker(type, typeParamMap, partiallyApplyGenericFunctionSigs);
 
             // // here args[n] should already have been evaluated
             // function invokeTypeConstructor(typeFunction: TypeConstructor, args: readonly _Type[]) : _Type {
@@ -2052,7 +2232,10 @@ export function Checker() {
                 }
             }
 
-            function typeWorker(type: Readonly<_Type> | null, capturedContext: ReadonlyMap<string, _Type> | undefined = type?.capturedContext) : _Type {
+            function typeWorker(type: Readonly<_Type> | null,
+                                typeParamMap: ReadonlyMap<string, _Type> | undefined = type?.capturedContext,
+                                partiallyApplyGenericFunctionSigs = false,
+                                lookupDeferrals?: ReadonlySet<string>) : _Type {
                 if (depth > 64) {
                     return SyntheticType.never;
                 }
@@ -2093,13 +2276,27 @@ export function Checker() {
                         }
                         return SyntheticType.struct(evaluatedStructContents);*/
                     }
-                    if (isFunctionSignature(type) && !isFunctionOverloadSet(type)) {
-                        const params : cfFunctionSignatureParam[] = [...type.params];
-                        for (let i = 0; i < type.params.length; i++) {
-                            params[i].type = typeWorker(params[i].type!);
+                    if ((isGenericFunctionSignature(type) && partiallyApplyGenericFunctionSigs) || isFunctionSignature(type) && !isFunctionOverloadSet(type)) {
+                        const sig = isGenericFunctionSignature(type) ? type.body : type;
+                        const updatedLookupDeferrals = isGenericFunctionSignature(type)
+                            ? new Set(
+                                ...type.params.map(param => param.name),
+                                ...(lookupDeferrals ?? [])
+                            )
+                            : lookupDeferrals;
+
+                        const params : cfFunctionSignatureParam[] = [];
+                        for (let i = 0; i < sig.params.length; i++) {
+                            params.push(
+                                cfFunctionSignatureParam(
+                                    !(sig.params[i].flags & TypeFlags.optional),
+                                    typeWorker(sig.params[i].type,
+                                        typeParamMap, partiallyApplyGenericFunctionSigs, updatedLookupDeferrals),
+                                    sig.params[i].uiName));
                         }
-                        const returns = typeWorker(type.returns, capturedContext);
-                        return cfFunctionSignature(type.uiName, params, returns, type.attrs);
+                        const returns = typeWorker(sig.returns, typeParamMap, partiallyApplyGenericFunctionSigs, updatedLookupDeferrals);
+                        const freshSignature = cfFunctionSignature(sig.uiName, params, returns, sig.attrs);
+                        return isGenericFunctionSignature(type) ? TypeConstructor(type.params, freshSignature) : freshSignature;
                     }
                     if (isTypeConstructorInvocation(type)) {
                         
@@ -2107,8 +2304,8 @@ export function Checker() {
                         if (isInterface(type.left)) {
                             const result = instantiateInterface(type.left, type.args);
                             if (result.status === TypeCache_Status.resolving) {
-                                if (capturedContext) {
-                                    return createType({...type, capturedContext});
+                                if (typeParamMap) {
+                                    return createType({...type, capturedContext: typeParamMap});
                                 }
                                 return type;
                             }
@@ -2126,16 +2323,16 @@ export function Checker() {
                                 }
                             }
 
-                            return SyntheticType.any;
+                            return SyntheticType.any;  // fixme: "warning: CFC 'x.y.z' has type 'any' because its .cfc file could not be resolved. We tried looking in the following paths..."
                         }
 
                         if (isTypeId(type.left)) {
-                            const constructor = capturedContext?.get(type.left.name) || walkUpContainersToResolveType(context, type.left) || null;
+                            const constructor = typeParamMap?.get(type.left.name) || walkUpContainersToResolveType(context, type.left) || null;
                             if (constructor && isInterface(constructor)) {
                                 const result = instantiateInterface(constructor, type.args);
                                 if (result.status === TypeCache_Status.resolving) {
-                                    if (capturedContext) { // a new type (by identity), which holds onto the capture context, running it through the instantiator again should find a resolved cached version 
-                                        return createType({...type, capturedContext});
+                                    if (typeParamMap) { // a new type (by identity), which holds onto the capture context, running it through the instantiator again should find a resolved cached version 
+                                        return createType({...type, capturedContext: typeParamMap});
                                     }
                                     return type;
                                 }
@@ -2190,8 +2387,8 @@ export function Checker() {
                             return cachedTypeCall.value;
                         }
                         else if (cachedTypeCall.status === TypeCache_Status.resolving) {
-                            if (capturedContext) {
-                                return createType({...type, capturedContext});
+                            if (typeParamMap) {
+                                return createType({...type, capturedContext: typeParamMap});
                             }
                             return type;
                         }
@@ -2199,9 +2396,9 @@ export function Checker() {
                             throw "expected resolved or resolving cache result but got none";
                         }
                     }
-                    if (isTypeId(type)) {
+                    if (isTypeId(type) && !lookupDeferrals?.has(type.name)) {
                         // @fixme: should error if we can't find it; and return never ?
-                        let result = capturedContext?.get(type.name) || walkUpContainersToResolveType(context, type) || null;
+                        let result = typeParamMap?.get(type.name) || walkUpContainersToResolveType(context, type) || null;
                         if (!result) return SyntheticType.any;
                         if (type.indexChain) {
                             for (const name of type.indexChain) {
@@ -2234,12 +2431,12 @@ export function Checker() {
                         argMap = new Map<string, _Type>();
                         for (let i = 0; i < iface.typeParams.length; i++) {
                             const name = iface.typeParams[i].name;
-                            const type = typeWorker(args[i], capturedContext);
+                            const type = typeWorker(args[i], typeParamMap); // fixme: is this always just typeID->type lookup?
                             argMap.set(name, type);
                         }
                     }
                     else {
-                        return {status: TypeCache_Status.resolved, value: iface}; // shouldn't have gotten here though, why instantiate a non-generic
+                        return {status: TypeCache_Status.resolved, value: iface}; // shouldn't have gotten here though, why instantiate a non-generic, it always already is
                     }
 
                     const instantiatedArgsArray = [...argMap.values()];
@@ -2257,12 +2454,16 @@ export function Checker() {
 
                     const instantiatedMembers = new Map<string, SymTabEntry>();
                     for (const [name, symTabEntry] of iface.members) {
-                        const freshType = typeWorker(symTabEntry.type, argMap);
+                        const freshType = typeWorker(symTabEntry.type, argMap, true);
                         instantiatedMembers.set(name, {...symTabEntry, type: freshType});
                     }
 
                     const result = Struct(instantiatedMembers, iface.indexSignature);
                     (result as Mutable<_Type>).underlyingType = iface;
+                    if (iface.name === "Array") {
+                        // should always have a "T", although we need to enforce user defined interfaces to have always be Array<T>
+                        (result as Mutable<_Type>).memberType = argMap.get("T") ?? SyntheticType.any;
+                    }
 
                     setCachedTypeConstructorInvocation(iface, instantiatedArgsArray, result);
 

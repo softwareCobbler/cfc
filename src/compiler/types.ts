@@ -124,21 +124,22 @@ export interface _Type {
     readonly cfc?: Readonly<SourceFile>, // kludge for connecting a cfstruct that represents a cfc to its cfc
     readonly literalValue?: string | number,
     readonly capturedContext?: ReadonlyMap<string, _Type>,
+    readonly memberType?: _Type,
 }
 
 export function getCanonicalType(type: _Type) {
     while (true) {
         if (type.underlyingType && type === type.underlyingType) return type;
-        else if (type.flags & TypeFlags.derived) type = type.underlyingType!;
-        else if (!(type.flags & TypeFlags.derived)) return type;
-        else break;
+        if (!type.underlyingType) return type;
+        type = type.underlyingType;
     }
     // this is an error case; I don't beleive we should ever get here; a type should always have a canonical type
     return SyntheticType.any;
 }
 
-export interface UninstantiatedArray extends _Type {
-    memberType: _Type
+export interface UninstantiatedArray extends TypeConstructorInvocation {
+    left: cfTypeId,
+    args: [_Type]
 }
 
 const arrayTypeID = cfTypeId("Array");
@@ -146,14 +147,18 @@ export function UninstantiatedArray(memberType: _Type) : TypeConstructorInvocati
     return TypeConstructorInvocation(arrayTypeID, [memberType]);
 }
 
-export function isArray(t: _Type) : t is UninstantiatedArray {
+export function isArray(t: _Type) : t is UninstantiatedArray { // fixme: should be instantiated?
     t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.array);
 }
 
-export function isInstantiatedArray(t: _Type) {
+interface InstantiatedArray extends _Type {
+    memberType: _Type
+}
+
+export function isInstantiatedArray(t: _Type) : t is InstantiatedArray {
     return !!(t.flags & TypeFlags.struct) // instantiated type is a struct
-        && !!(t.underlyingType && isStructLike(t.underlyingType) && (t as Struct).structKind === StructKind.interface && (t as Interface).name === "Array") // the directly underlying type is the Array interface
+        && !!(t.underlyingType && isStructLike(t.underlyingType) && t.underlyingType.structKind === StructKind.interface && t.underlyingType.name === "Array") // the directly underlying type is the Array interface
         //&& !!(getCanonicalType(t).flags & TypeFlags.array) -- if we have an Array interface instantiation, we know the canonical type is an
 }
 
@@ -385,6 +390,14 @@ export function isFunctionOverloadSet(t: _Type) : t is cfFunctionOverloadSet {
     return !!(t.flags & TypeFlags.functionSignature) && !!(t as cfFunctionOverloadSet).overloads;
 }
 
+export interface GenericFunctionSignature extends TypeConstructor{
+    readonly body: cfFunctionSignature
+}
+
+export function isGenericFunctionSignature(t: _Type) : t is GenericFunctionSignature {
+    return isTypeConstructor(t) && isFunctionSignature(t.body);
+}
+
 // names are part of the type signature because a caller can specify named arguments
 export interface cfFunctionSignatureParam extends _Type {
     type: _Type,
@@ -467,7 +480,7 @@ export interface TypeConstructor extends _Type {
     readonly body: _Type,
 }
 
-export function TypeConstructor(params: TypeConstructorParam[], body: _Type) : TypeConstructor {
+export function TypeConstructor(params: readonly TypeConstructorParam[], body: _Type) : TypeConstructor {
     const type : TypeConstructor = {
         flags: TypeFlags.typeConstructor,
         params,
@@ -484,8 +497,14 @@ export function TypeConstructor(params: TypeConstructorParam[], body: _Type) : T
 
 export type CfcLookupType = TypeConstructorInvocation & {params: [/*fixme: LiteralType*/ _Type], __tag: "CfcLookupType"};
 
-export function CfcLookup(param: _Type) : CfcLookupType {
-        return TypeConstructorInvocation(SyntheticType.cfcLookupType, [param]) as CfcLookupType;
+export function CfcLookup(param: _Type | string) : CfcLookupType {
+        if (typeof param === "string") {
+            const paramAsLiteralStringType = createLiteralType(param);
+            return TypeConstructorInvocation(SyntheticType.cfcLookupType, [paramAsLiteralStringType]) as CfcLookupType;
+        }
+        else {
+            return TypeConstructorInvocation(SyntheticType.cfcLookupType, [param]) as CfcLookupType;
+        }
 }
 
 export function isTypeConstructor(t: _Type) : t is TypeConstructor {
@@ -669,7 +688,7 @@ export const SyntheticType = (function() {
         flags: TypeFlags.synthetic | TypeFlags.any,
     } as _Type;
     (any as Mutable<_Type>).underlyingType = any;
-    
+
     const void_ : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.void,
     } as _Type;
@@ -685,11 +704,17 @@ export const SyntheticType = (function() {
     } as _Type;
     (numeric as Mutable<_Type>).underlyingType = numeric;
 
-    const ArrayInterface = Interface(
-        "Array",
-        new Map<string, SymTabEntry>(),
-        [TypeConstructorParam("T", any)],
-        {name: "index", indexType: numeric, type: any});
+    // wip:
+    // the array interface could maybe be a builtin?
+    // instead and for now, we recognize `T[]` and `Array<T>` as being single argument type constructors,
+    // with the constructor being the "Array" interface, which we assume is declared somewhere in a library file at time of lookup
+    // if we had a single global "ArrayInterface", extending it via a library would have us lose the Object identity property,
+    // or rather change it in every compilation unit
+    // const ArrayInterface = Interface(
+    //     "Array",
+    //     new Map<string, SymTabEntry>(),
+    //     [TypeConstructorParam("T", any)],
+    //     {name: "index", indexType: numeric, type: any});
 
     // we need an instantiated any[]
 
@@ -726,7 +751,7 @@ export const SyntheticType = (function() {
         anyFunction: anyFunction, // already created via call to cfFunctionSignature
         cfcLookupType: TypeConstructor([], any), // param and body are meaningless here, we just want a single type constructor that says "hey, lookup the name of this as a cfc as a type"
         EmptyInterface: Interface("", new Map()),
-        ArrayInterface: ArrayInterface,
+        //ArrayInterface: ArrayInterface,
     } as const;
 
     return results;
@@ -773,16 +798,14 @@ function stringifyDottedPath(dottedPath: DottedPath) {
 
 }
 
-function typeFromJavaLikeTypename(dottedPath: DottedPath | null) : _Type {
-    if (dottedPath == null) return SyntheticType.any;
-    if (dottedPath.rest.length > 0) {
-        return SyntheticType.any;
-    }
+export function typeFromJavaLikeTypename(dottedPath: string | DottedPath | null) : _Type {
+    if (dottedPath === null) return SyntheticType.any;
+    else if (typeof dottedPath === "string") return typeFromStringifiedJavaLikeTypename(dottedPath);
     return typeFromStringifiedJavaLikeTypename(stringifyDottedPath(dottedPath));
 }
 
 function typeFromStringifiedJavaLikeTypename(typename: string | null) : _Type {
-    if (typename === null) return SyntheticType.any;
+    if (typename === null) return SyntheticType.any; // function foo(bar) {} -- bar is any; var foo = (bar) => 42; -- bar is any
     switch (typename.toLowerCase()) {
         case "array": return UninstantiatedArray(SyntheticType.any);
         case "boolean": return SyntheticType.boolean;
@@ -792,7 +815,8 @@ function typeFromStringifiedJavaLikeTypename(typename: string | null) : _Type {
         case "string": return SyntheticType.string;
         case "struct": return SyntheticType.EmptyInterface;
         case "void": return SyntheticType.void_;
-        default: return SyntheticType.any; // @fixme: should be CFC<typename>, which will be resolved to a CFC during checking phase (could also be a java class...)
+        case "any": return SyntheticType.any;
+        default: return CfcLookup(typename); // @fixme: do we need to store "origin" so we can issue diagnostics on failing lookups?
     }
 }
 

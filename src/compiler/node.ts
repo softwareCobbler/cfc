@@ -1490,6 +1490,7 @@ interface FunctionParameterBase extends NodeBase {
     uiName: string,
     attrs: TagAttribute[],
     type: _Type | null
+    javaLikeTypename: string | DottedPath | null // fixme: can this be just `string | null`
 }
 
 export type FunctionParameter = Script.FunctionParameter | Tag.FunctionParameter;
@@ -1535,6 +1536,10 @@ export namespace Script {
     }
 }
 
+function defineNodeGetter<TNode extends Node, TKey extends keyof TNode>(node: TNode, k: TKey, get: (this: TNode) => TNode[TKey]) {
+    Object.defineProperty(node, k, { get });
+}
+
 export namespace Tag {
     export interface FunctionParameter extends FunctionParameterBase {
         kind: NodeKind.functionParameter,
@@ -1554,6 +1559,11 @@ export namespace Tag {
         v.defaultValue = getAttributeValue(tag.attrs, "default") ?? null;
         v.required = !v.defaultValue && (getTriviallyComputableBoolean(getAttributeValue(tag.attrs, "required")) ?? false);
         v.type = null;
+
+        defineNodeGetter(v, "javaLikeTypename", function() {
+            return getTriviallyComputableString(getAttributeValue(this.attrs, "type")) ?? null;
+        });
+
         return v;
     }
 }

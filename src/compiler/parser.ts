@@ -2524,7 +2524,7 @@ export function Parser(config: {language: LanguageVersion}) {
             case TokenType.NUMBER:
             case TokenType.QUOTE_DOUBLE:
             case TokenType.QUOTE_SINGLE:
-            //case TokenType.LEFT_ANGLE: part of a type, but does not START a type
+            case TokenType.LEFT_ANGLE:
             case TokenType.LEXEME:
                 return true;
             default:
@@ -2958,6 +2958,10 @@ export function Parser(config: {language: LanguageVersion}) {
             parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
             const type = parseType();
             args.push({name, optional, type});
+            
+            if (lookahead() !== TokenType.RIGHT_PAREN) {
+                parseExpectedTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+            }
         }
         return args.map((arg) => cfFunctionSignatureParam(!arg.optional, arg.type, arg.name.token.text));
     }
@@ -4232,6 +4236,19 @@ export function Parser(config: {language: LanguageVersion}) {
             return type;
         }
 
+        function parseTypeParamListElement() : TypeConstructorParam {
+            const terminal = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/true, /*allowNumeric*/false);
+            const defaultType = lookahead() === TokenType.EQUAL
+                ? parseType()
+                : undefined;
+
+            if (lookahead() !== TokenType.RIGHT_ANGLE) {
+                parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);
+            }
+
+            return TypeConstructorParam(terminal.token.text, defaultType);
+        }
+
         const enum StructMemberParseResult_t { keyTypePair, spread, indexSignature };
         type StructMemberParseResult =
             | {resultKind: StructMemberParseResult_t.keyTypePair, name: Terminal, type: _Type}
@@ -4317,7 +4334,6 @@ export function Parser(config: {language: LanguageVersion}) {
             return SyntheticType.any;
         }
 
-
         function localParseType() : _Type {
             let result : _Type = SyntheticType.any;
 
@@ -4337,7 +4353,7 @@ export function Parser(config: {language: LanguageVersion}) {
                         let typeParams : TypeConstructorParam[] | undefined;
                         if (lookahead() === TokenType.LEFT_ANGLE) {
                             parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
-                            typeParams = parseList(ParseContext.typeParamList, parseTypeListElement);
+                            typeParams = parseList(ParseContext.typeParamList, parseTypeParamListElement);
                             parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);
                         }
 
@@ -4442,11 +4458,7 @@ export function Parser(config: {language: LanguageVersion}) {
                         break;
                     }
                     else {
-                        const params = parseFunctionTypeParametersArrowLike();
-                        parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
-                        parseExpectedTerminal(TokenType.EQUAL_RIGHT_ANGLE, ParseOptions.withTrivia);
-                        const returnType = parseType();
-                        result = cfFunctionSignature("", params, returnType, []);
+                        result = fixme__parseArrowFunctionTypeAssumingFirstParenIsAlreadyParsed();
                         break;
                     }
                 }
@@ -4519,30 +4531,40 @@ export function Parser(config: {language: LanguageVersion}) {
 
                     break;
                 }
-                /*
-                had a go with `type v = <T,U> => <V> => ...something using T,U,V...`, with currying etc., but no
                 case TokenType.LEFT_ANGLE: {
                     parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
-                    const typeParams = parseList(ParseContext.typeParamList, parseTypeParam);
+                    const typeParams = parseList(ParseContext.typeParamList, parseTypeParamListElement);
                     parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);
-                    parseExpectedTerminal(TokenType.EQUAL_RIGHT_ANGLE, ParseOptions.withTrivia);
-                    const body = parseType();
-                    result = cfTypeConstructor(typeParams, body);
-                    return result; // don't do intersections or unions with type functions
-                }*/
+                    parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
+                    const functionType = fixme__parseArrowFunctionTypeAssumingFirstParenIsAlreadyParsed();
+                    return TypeConstructor(typeParams, functionType); // don't do intersections or unions with type functions
+                }
                 case TokenType.QUOTE_SINGLE:
                 case TokenType.QUOTE_DOUBLE: {
                     const s = parseStringLiteral(/*allowInterpolations*/false);
                     if (s.kind === NodeKind.simpleStringLiteral) {
-                        result = SyntheticType.string;//cfString(s);
+                        result = createLiteralType(s.textSpan.text);
                     }
                     else {
                         result = SyntheticType.string; // should never happen, parseStringLiteral(false) should always return a simpleStringLiteral
                     }
                 }
+                case TokenType.NUMBER: {
+                    const n = parseNumericLiteral();
+                    const value = parseFloat(n.literal.token.text);
+                    result = createLiteralType(value);
+                }
             }
 
             return result;
+        }
+
+        function fixme__parseArrowFunctionTypeAssumingFirstParenIsAlreadyParsed() {
+            const params = parseFunctionTypeParametersArrowLike();
+            parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
+            parseExpectedTerminal(TokenType.EQUAL_RIGHT_ANGLE, ParseOptions.withTrivia);
+            const returnType = parseType();
+            return cfFunctionSignature("", params, returnType, []);
         }
 
         let result = localParseType();
