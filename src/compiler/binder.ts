@@ -1,4 +1,4 @@
-import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, ReachableFlow, FlowType, ConditionalSubtype, SymbolTable, TypeShim, Property, ParamStatement, ParamStatementSubType, typedefs } from "./node";
+import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, ConditionalSubtype, SymbolTable, TypeShim, Property, ParamStatement, ParamStatementSubType, typedefs, Flow, FlowType, freshFlow } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { SyntheticType, _Type, extractCfFunctionSignature, isFunctionSignature, Interface, isInterface } from "./types";
@@ -11,8 +11,7 @@ export function Binder() {
     let diagnostics: Diagnostic[];
     let langVersion : LanguageVersion = LanguageVersion.acf2018;
     
-    let currentFlow : Flow;
-    let detachedClosureFlows : Flow[] = [];
+    let currentFlow! : Flow;
     
     let nodeMap = new Map<NodeId, Node>();
     let withPropertyAccessors = false;
@@ -62,7 +61,6 @@ export function Binder() {
         }
 
         currentFlow = freshFlow([], FlowType.default);
-        bindFlowToNode(currentFlow, RootNode);
 
         if (sourceFile_.cfFileType === CfFileType.cfc) {
             RootNode.containedScope.this = new Map<string, SymTabEntry>();
@@ -71,71 +69,10 @@ export function Binder() {
         currentContainer = RootNode;
         bindTypedefs(sourceFile_);
         bindList(sourceFile_.content, sourceFile_);
-        connectDetachedClosureFlowsToCurrentFlow();
     }
 
     function setLang(lv: LanguageVersion) {
         langVersion = lv;
-    }
-
-    function newFlowGraphRootedAt(node: Node) : Flow {
-        const flow = freshFlow([], FlowType.default);
-        bindFlowToNode(flow, node);
-        return flow;
-    }
-
-    function bindFlowToNode(flow: Flow, node: Node) : void {
-        flow.node = node;
-        node.flow = flow;
-    }
-
-    function isBoundFlow(flow: Flow) : flow is ReachableFlow {
-        return !!flow.node;
-    }
-
-    function extendCurrentFlowToNode(node: Node, flowType: FlowType = FlowType.default) : void {
-        // if the current flow is already bound to a node, make a new flow and connect them
-        if (isBoundFlow(currentFlow)) {
-            const flow = freshFlow(currentFlow, flowType);
-            bindFlowToNode(flow, node);
-            currentFlow.successor = flow;
-            currentFlow = flow;
-        }
-        else {
-            // otherwise, the current flow is "dangling", just bind the dangling flow to the current node
-            bindFlowToNode(currentFlow, node);
-        }
-    }
-
-    /**
-     *    <0>       <- current flow
-     *  /     \
-     * a<1> = b<2>; <- assignment, with new flows <1> and <2>; program continues with <1> as predecessor
-     * |
-     * <program continues>
-     */
-    function bindAssignmentFlow(assignmentTarget: Node, expr: Node) {
-        bindFlowToNode(freshFlow(currentFlow, FlowType.default), expr);
-        extendCurrentFlowToNode(assignmentTarget, FlowType.assignment);
-    }
-
-    /*function dangleFreshFlowFromCurrentFlow(flowType: FlowType = FlowType.default) {
-        if (!isBoundFlow(currentFlow)) {
-            throw "dangling flow must dangle from a bound flow";
-        }
-        const flow = freshFlow(currentFlow, flowType);
-        currentFlow.successor = flow;
-        currentFlow = flow;
-    }*/
-
-    // closures have their predecessor flows connected to the final flow node of their containing scope
-    // there is no flow node with a successor of a closure flow, it is not possible to "flow into" a closure
-    // we can only use the flow to walk out of a closure and into the surrounding environment
-    function connectDetachedClosureFlowsToCurrentFlow() {
-        for (const flow of detachedClosureFlows) {
-            flow.predecessor.push(currentFlow);
-        }
-        detachedClosureFlows = [];
     }
 
     function bindNode(node: Node | null | undefined, parent: Node) {
@@ -403,20 +340,11 @@ export function Binder() {
             return;
         }
 
-        const savedFlow = currentFlow;
-        extendCurrentFlowToNode(node.left);
         bindNode(node.left, node);
-
-        currentFlow = savedFlow;
-        extendCurrentFlowToNode(node.right);
         bindNode(node.right, node);
-
-        currentFlow = savedFlow;
     }
 
     function bindConditional(node: Conditional) {
-        const baseFlow = currentFlow;
-
         if (node.subType === ConditionalSubtype.if || node.subType === ConditionalSubtype.elseif) {
             let expr : Node;
             if (node.fromTag) {
@@ -426,24 +354,15 @@ export function Binder() {
                 expr = node.expr!;
             }
 
-            extendCurrentFlowToNode(expr);
             bindNode(expr, node);
         }
             
-        extendCurrentFlowToNode(node.consequent);
         bindNode(node.consequent, node);
-        const trueFlow = currentFlow;
 
         if (node.alternative) {
-            currentFlow = baseFlow;
-            extendCurrentFlowToNode(node.alternative);
             bindNode(node.alternative, node);
-            const falseFlow = currentFlow;
-            currentFlow = freshFlow([trueFlow, falseFlow], FlowType.default);
         }
         else if (node.subType !== ConditionalSubtype.else) {
-            const falseFlow = freshFlow(baseFlow, FlowType.default);
-            currentFlow = freshFlow([trueFlow, falseFlow], FlowType.default);
         }
     }
 
@@ -520,22 +439,15 @@ export function Binder() {
     }
 
     function bindVariableDeclaration(node: VariableDeclaration) {
-        if (!node.flow) extendCurrentFlowToNode(node); // for-in declarations will already have flows
-        
         if (node.parent?.kind === NodeKind.for && node.parent.subType === ForSubType.forIn && node.parent.init === node) {
-            extendCurrentFlowToNode(node.expr);
             bindForInInit(node);
             return;
         }
 
         if (node.expr.kind === NodeKind.binaryOperator) {
-            bindAssignmentFlow(node.expr.left, node.expr.right);
             bindNode(node.expr.left, node);
 
-            const savedFlow = currentFlow;
-            currentFlow = node.expr.right.flow!;
             bindNode(node.expr.right, node);
-            currentFlow = savedFlow;
         }
 
         let identifierBaseName : ReturnType<typeof stringifyLValue> | undefined = undefined;
@@ -588,7 +500,6 @@ export function Binder() {
                 // e.g, cftransaction(action="rollback");
                 // bind parens specially; callStatement is not a Node so it wasn't considered
                 // can probably make callStatement a Parenthetical<CallArgument> or something
-                extendCurrentFlowToNode(node);
                 bindNode(node.callStatement!.leftParen, node);
                 bindList(node.callStatement!.args, node);
                 bindNode(node.callStatement!.rightParen, node);
@@ -596,23 +507,19 @@ export function Binder() {
             case StatementType.expressionWrapper:
                 // if it is a tagOrigin node, it is a <cfset> tag
                 if (node.tagOrigin.startTag) {
-                    extendCurrentFlowToNode(node.tagOrigin.startTag);
                     bindNode(node.tagOrigin.startTag, node);
                     return;
                 }
                 
-                if (node.expr) extendCurrentFlowToNode(node.expr); // it could be a "null statement"
                 bindNode(node.expr, node);
 
                 return;
             case StatementType.fromTag:
                 maybeBindTagResult(node.tagOrigin.startTag);
-                if (node.tagOrigin.startTag) extendCurrentFlowToNode(node.tagOrigin.startTag);
                 bindNode(node.tagOrigin.startTag, node);
                 break;
             case StatementType.scriptSugaredTagCallStatement:
                 // check attrs against cf tag meta here
-                if (node.expr) extendCurrentFlowToNode(node.expr);
                 bindNode(node.expr, node);
                 bindList(node.scriptSugaredTagStatement!.attrs, node);
                 return;
@@ -622,21 +529,15 @@ export function Binder() {
     function bindReturnStatement(node: ReturnStatement) {
         if (node.tagOrigin.startTag) {
             const expr = (node.tagOrigin.startTag as CfTag.ScriptLike).expr;
-            extendCurrentFlowToNode(node);
             if (expr) {
-                extendCurrentFlowToNode(expr);
                 bindNode(expr, node);
             }
         }
         else {
-            extendCurrentFlowToNode(node);
             if (node.expr) {
-                extendCurrentFlowToNode(node.expr);
                 bindNode(node.expr, node);
             }
         }
-
-        currentFlow = freshFlow(/*predecessor*/ [], FlowType.postReturn);
     }
 
     function bindBreakStatement(node: BreakStatement) {
@@ -892,13 +793,9 @@ export function Binder() {
     // n.b. this is different than a declaring assignment, like `var x = y`;
     // this is for non-declaring assignments like `x = y`
     function bindAssignment(node: BinaryOperator) {
-        bindAssignmentFlow(node.left, node.right);
         bindNode(node.left, node);
 
-        const savedFlow = currentFlow;
-        currentFlow = node.right.flow!;
         bindNode(node.right, node);
-        currentFlow = savedFlow;
 
         const target = node.left;
 
@@ -1110,16 +1007,9 @@ export function Binder() {
             bindNode(node.nameToken, node);
         }
 
-        const detachedFlow = newFlowGraphRootedAt(node);
-        detachedClosureFlows.push(detachedFlow);
-
-        const savedFlow = currentFlow;
         const savedContainer = currentContainer;
-        const savedDetachedClosureFlows = detachedClosureFlows;
         
-        currentFlow = detachedFlow;
         currentContainer = node as NodeWithScope;
-        detachedClosureFlows = [];
 
         bindList(node.params, node);
 
@@ -1130,11 +1020,7 @@ export function Binder() {
             bindNode(node.body, node);
         }
 
-        connectDetachedClosureFlowsToCurrentFlow();
-
-        currentFlow = savedFlow;
         currentContainer = savedContainer;
-        detachedClosureFlows = savedDetachedClosureFlows;
 
         popAndMergePendingSymbolResolutionFrame();
     }
@@ -1179,10 +1065,6 @@ export function Binder() {
 
     function bindFor(node: For) {
         if (node.subType === ForSubType.forIn) {
-            extendCurrentFlowToNode(node.expr);
-            extendCurrentFlowToNode(node.init);
-            extendCurrentFlowToNode(node.body);
-
             bindNode(node.init, node);
             bindNode(node.inToken, node);
 
@@ -1194,15 +1076,12 @@ export function Binder() {
         bindNode(node.initExpr, node);
         bindNode(node.semi1, node);
 
-        if (node.conditionExpr) extendCurrentFlowToNode(node.conditionExpr);
         bindNode(node.conditionExpr, node);
 
         bindNode(node.semi2, node);
 
-        if (node.incrementExpr) extendCurrentFlowToNode(node.incrementExpr);
         bindNode(node.incrementExpr, node);
 
-        extendCurrentFlowToNode(node.body);
         bindNode(node.body, node);
     }
 

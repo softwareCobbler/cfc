@@ -1168,7 +1168,7 @@ export function Checker() {
                             typeErrorAtNode(node, "_Type annotations can only be bound to an identifier's first assignment.");
                         }
                         if (isAssignable(/*assignThis*/rhsType, /*to*/lhsType)) {
-                            setCachedEvaluatedFlowType(node.left.flow!, lValIdent.canonical, rhsType);
+                            // setCachedEvaluatedFlowType(node.left.flow!, lValIdent.canonical, rhsType);
                         }
                         else {
                             const l = stringifyType(lhsType);

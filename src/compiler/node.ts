@@ -225,8 +225,6 @@ export interface Flow {
     node: Node | null // this effectively be null while a FlowNode is waiting on a node to attach to; but by the time we get to the checker it will have been populated or the entire flownode discarded
 }
 
-export type ReachableFlow = Flow & {node: Node};
-
 export interface NodeBase {
     kind: NodeKind,
     nodeId: NodeId,
