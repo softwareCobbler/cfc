@@ -655,7 +655,7 @@ export interface NodeSourceMap {
     range: SourceRange
 }
 
-export function exhaustiveCaseGuard(_:never) { throw "Non-exhaustive case or unintentional fallthrough."; }
+export function exhaustiveCaseGuard(_:never) : never { throw "Non-exhaustive case or unintentional fallthrough."; }
 
 export function flattenTree(tree: Node | Node[]) : NodeSourceMap[] {
     const result : NodeSourceMap[] = [];

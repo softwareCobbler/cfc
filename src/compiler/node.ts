@@ -1,5 +1,5 @@
 import { Scanner, SourceRange, TokenType, Token, NilToken, TokenTypeUiString, CfFileType } from "./scanner";
-import { getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, Mutable } from "./utils";
+import { exhaustiveCaseGuard, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, Mutable } from "./utils";
 import type { Decorator, Interface, _Type } from "./types";
 
 let debug = false;
@@ -214,14 +214,14 @@ export type NodeWithScope<N extends Node = Node, T extends (StaticallyKnownScope
 export const enum FlowType {
     default,
     assignment,
-    postReturn
+    label,
+    unreachable
 }
 
 export interface Flow {
     flowId: FlowId,
     flowType: FlowType,
     predecessor: Flow[],
-    successor: Flow | null,
     node: Node | null // this effectively be null while a FlowNode is waiting on a node to attach to; but by the time we get to the checker it will have been populated or the entire flownode discarded
 }
 
@@ -406,13 +406,31 @@ export function NilTerminal(pos: number, text: string = "") { return Terminal(Ni
 
 export const freshFlow = (function() {
     let flowId = 0;
-    return (predecessor: Flow | Flow[], flowType: FlowType, node: Node | null = null) : Flow => ({
-        flowId: flowId++,
-        flowType: flowType,
-        predecessor: Array.isArray(predecessor) ? predecessor : [predecessor],
-        successor: null,
-        node});
+    return (predecessor: Flow | Flow[], flowType: FlowType, node: Node | null = null) : Flow => {
+        const result = {
+            flowId: flowId++,
+            flowType: flowType,
+            predecessor: Array.isArray(predecessor) ? predecessor : [predecessor],
+            node
+        }
+        if (debug) {
+            Object.defineProperty(result, "__debugFlowInfo", {
+                get() : string {
+                    switch (flowType) {
+                        case FlowType.assignment: return "assignment";
+                        case FlowType.default: return "default";
+                        case FlowType.label: return "label";
+                        case FlowType.unreachable: return "unreachable";
+                        default: exhaustiveCaseGuard(flowType);
+                    }
+                }
+            })
+        }
+        return result;
+    }
 })();
+
+export const UnreachableFlow = freshFlow([], FlowType.unreachable);
 
 export const enum CommentType { tag, scriptSingleLine, scriptMultiLine };
 export interface Comment extends NodeBase {
@@ -1896,6 +1914,7 @@ export function Ternary(
     ifFalse: Node,
 ) {
     const v = NodeBase<Ternary>(NodeKind.ternary, mergeRanges(expr, ifFalse));
+    v.expr = expr;
     v.questionMark = questionMark;
     v.ifTrue = ifTrue;
     v.colon = colon;

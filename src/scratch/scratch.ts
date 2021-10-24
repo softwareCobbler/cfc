@@ -29,28 +29,33 @@ function projectFiddle() {
                         //toList: (sep?: string) => string,
                         //append: (val: T) => T[],
                         //map: <U>(m: (e: T, i?: number, a?: T[]) => U) => T[]
+                        //each: (callback: (e?: T, i?: number, a?: T[])) => void
+                        // free function:
+                        // @declare function arrayEach<T>(
+                        // a: T[],
+                        // f: (e?: T[], i?: numeric, a?: T[]) => void # no-suggest-param-names
+                        ) no-suggest-param-names
                         id: <U>(mapper: (e: T) => U) => U
                     }
+
                 `,
                 "someFile.cfc": `
                     /**
                      */
-                    <cfcomponent>
-                        <cffunction name="my_callback">
-                            <cfargument name="some_arg" type="a.b.c">
-                        </cffunction>
+                    component {
+                        function foo(x) {
+                            var z = {};
 
-                        <cffunction name="doit">
-                            <cfscript>
-                                function foo() {
-                                    // @type string[]
-                                    var x = [];
-        
-                                    var xxx = x.id((e) => [e]);
-                                }
-                            </cfscript>
-                        </cffunction>
-                    </cfcomponent>
+                            if (x) {
+                                return 42;
+                            }
+                            else {
+                                return 1;
+                            }
+
+                            return z;
+                        }
+                    }
                     `,
                 "a": {
                     "b": {

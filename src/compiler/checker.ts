@@ -1,4 +1,4 @@
-import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, Property, hasDeclaredType } from "./node";
+import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, Property, hasDeclaredType, UnreachableFlow } from "./node";
 import { CfcResolver, EngineSymbolResolver, LanguageVersion, LibTypeResolver } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, cfIntersection, Struct, cfUnion, SyntheticType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStructLike, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, getCanonicalType, stringifyType, cfFunctionSignatureParam, unsafe__cfFunctionSignatureWithFreshReturnType, isFunctionOverloadSet, cfFunctionOverloadSet, isLiteralType, cfTypeId, SymbolTableTypeWrapper, CfcTypeWrapper, Interface, StructKind, isCfcLookupType, isInstantiatedArray, isInterface, createType, createLiteralType, isUninstantiatedArray, isGenericFunctionSignature, TypeConstructor, typeFromJavaLikeTypename, } from "./types";
@@ -14,6 +14,7 @@ export function Checker() {
     let diagnostics!: Diagnostic[];
     let noUndefinedVars = false;
     let languageVersion!: LanguageVersion;
+    let returnTypes: _Type[] = [];
 
     function check(sourceFile_: SourceFile) {
         // we're using the Checker as a singleton, and checking one source file might trigger checking another
@@ -1254,7 +1255,7 @@ export function Checker() {
         }
 
         const sig = getCachedEvaluatedNodeType(func);
-        if (!sig || !isFunctionSignature(sig) || sig.returns.flags & TypeFlags.any) {
+        if (!sig || !isFunctionSignature(sig)) {
             return;
         }
 
@@ -1264,6 +1265,11 @@ export function Checker() {
             // if we got an exprType, we got an expr or a just return token; if this is from tag, we definitely got a tag
             const errNode = node.fromTag ? node.tagOrigin.startTag! : (node.expr || node.returnToken!);
             typeErrorAtNode(errNode, `Type '${stringifyType(exprType)}' is not compatible with expected return type '${stringifyType(sig.returns)}'`);
+        }
+        else {
+            if (node.flow !== UnreachableFlow) {
+                returnTypes.push(exprType);
+            }
         }
     }
 
@@ -1514,6 +1520,7 @@ export function Checker() {
                 setCachedEvaluatedNodeType(node, evaluatedType);
                 setResolvedSymbol(node, resolvedSymbol);
             }
+
             // let flowType : _Type | undefined = undefined; determineFlowType(node, name);
 
             // // we know the symbol, but it has no flow type yet
@@ -1683,6 +1690,9 @@ export function Checker() {
         // for cfc member functions, some work was already done in the binder to extract the signature, but we didn't have visibility into CFC resolution there;
         // so here we can try to resolve CFC return types / param types
 
+        const savedReturnTypes = returnTypes;
+        returnTypes = [];
+
         const isMemberFunction = isCfcMemberFunctionDefinition(node);
         let memberFunctionSignature : cfFunctionSignature | undefined;
         
@@ -1772,6 +1782,8 @@ export function Checker() {
         else {
             checkNode(node.body);
         }
+
+        returnTypes = savedReturnTypes;
     }
 
     function checkSwitch(node: Switch) {
@@ -1818,6 +1830,10 @@ export function Checker() {
         checkNode(node.expr);
         checkNode(node.ifTrue);
         checkNode(node.ifFalse);
+        setCachedEvaluatedNodeType(node, unionify([
+            getCachedEvaluatedNodeType(node.ifTrue),
+            getCachedEvaluatedNodeType(node.ifFalse)
+        ]));
     }
 
     //

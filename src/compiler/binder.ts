@@ -1,4 +1,4 @@
-import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, ConditionalSubtype, SymbolTable, TypeShim, Property, ParamStatement, ParamStatementSubType, typedefs, Flow, FlowType, freshFlow } from "./node";
+import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, ConditionalSubtype, SymbolTable, TypeShim, Property, ParamStatement, ParamStatementSubType, typedefs, Flow, FlowType, freshFlow, UnreachableFlow } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { SyntheticType, _Type, extractCfFunctionSignature, isFunctionSignature, Interface, isInterface } from "./types";
@@ -75,9 +75,27 @@ export function Binder() {
         langVersion = lv;
     }
 
+    function mergeFlowsToLabel(...flows: (Flow|undefined)[]) {
+        const filteredFlows = flows.filter((flow) : flow is Flow => !!flow);
+        let someFlowsAreReachable = false;
+        for (const flow of filteredFlows) {
+            if (flow !== UnreachableFlow) {
+                someFlowsAreReachable = true;
+                break;
+            }
+        }
+
+        if (!someFlowsAreReachable) {
+            return UnreachableFlow;
+        }
+
+        return freshFlow(filteredFlows, FlowType.label);
+    }
+
     function bindNode(node: Node | null | undefined, parent: Node) {
         if (!node) return;
 
+        node.flow = currentFlow;
         nodeMap.set(node.nodeId, node);
         bindDirectTerminals(node);
         node.parent = parent;
@@ -356,14 +374,26 @@ export function Binder() {
 
             bindNode(expr, node);
         }
-            
+        
+        const savedStartFlow = currentFlow;
+        const trueFlow = freshFlow(currentFlow, FlowType.default);
+        let trueEndFlow : Flow;
+        let falseEndFlow : Flow | undefined = undefined;
+
+        currentFlow = trueFlow;
         bindNode(node.consequent, node);
+        trueEndFlow = currentFlow;
 
         if (node.alternative) {
+            currentFlow = savedStartFlow;
             bindNode(node.alternative, node);
+            falseEndFlow = currentFlow;
         }
-        else if (node.subType !== ConditionalSubtype.else) {
-        }
+
+        currentFlow = mergeFlowsToLabel(
+            trueEndFlow,
+            falseEndFlow,
+        );
     }
 
     // the symbol and its declarations already fully exist, we just want to include it in another symbol table
@@ -445,9 +475,10 @@ export function Binder() {
         }
 
         if (node.expr.kind === NodeKind.binaryOperator) {
-            bindNode(node.expr.left, node);
-
             bindNode(node.expr.right, node);
+
+            currentFlow = freshFlow(currentFlow, FlowType.assignment, node.expr.left);
+            bindNode(node.expr.left, node);
         }
 
         let identifierBaseName : ReturnType<typeof stringifyLValue> | undefined = undefined;
@@ -527,6 +558,12 @@ export function Binder() {
     }
 
     function bindReturnStatement(node: ReturnStatement) {
+        let resultingFlow = UnreachableFlow;
+        if (!getContainingFunction(node)) {
+            // error, should issue a diagnostic, and we won't update the flow on complete
+            resultingFlow = currentFlow;
+        }
+
         if (node.tagOrigin.startTag) {
             const expr = (node.tagOrigin.startTag as CfTag.ScriptLike).expr;
             if (expr) {
@@ -538,6 +575,8 @@ export function Binder() {
                 bindNode(node.expr, node);
             }
         }
+
+        currentFlow = resultingFlow;
     }
 
     function bindBreakStatement(node: BreakStatement) {
@@ -978,6 +1017,9 @@ export function Binder() {
             }
         }
 
+        const savedFlow = currentFlow;
+        currentFlow = freshFlow(currentFlow, FlowType.default, node);
+
         node.containedScope = {
             parentContainer: currentContainer,
             typedefs: typedefs(),
@@ -1023,6 +1065,7 @@ export function Binder() {
         currentContainer = savedContainer;
 
         popAndMergePendingSymbolResolutionFrame();
+        currentFlow = savedFlow;
     }
 
     function bindSwitch(node: Switch) {
@@ -1059,8 +1102,18 @@ export function Binder() {
 
     function bindTernary(node: Ternary) {
         bindNode(node.expr, node);
+        const trueFlow = freshFlow(currentFlow, FlowType.default, node.ifTrue);
+        const falseFlow = freshFlow(currentFlow, FlowType.default, node.ifFalse);
+        
+        currentFlow = trueFlow;
         bindNode(node.ifTrue, node);
+        const endTrueFlow = currentFlow;
+        
+        currentFlow = falseFlow;
         bindNode(node.ifFalse, node);
+        const endFalseFlow = currentFlow;
+        
+        currentFlow = mergeFlowsToLabel(endTrueFlow, endFalseFlow);
     }
 
     function bindFor(node: For) {
