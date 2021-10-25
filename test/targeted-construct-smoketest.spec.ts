@@ -5,9 +5,10 @@ import { IndexedAccess, NodeKind } from "../src/compiler/node";
 import { findNodeInFlatSourceMap, getTriviallyComputableString } from "../src/compiler/utils";
 import * as TestLoader from "./TestLoader";
 import { CompletionItem, getCompletions } from "../src/services/completions";
-import { ProjectOptions, LanguageVersion, FileSystemNode, pushFsNode } from "../src/compiler/project";
+import { ProjectOptions, FileSystemNode, pushFsNode } from "../src/compiler/project";
+import { EngineVersions, EngineVersion } from "../src/compiler/engines";
 
-const parser = Parser({language: LanguageVersion.acf2018}).setDebug(true);
+const parser = Parser({engineVersion: EngineVersions["acf.2018"]}).setDebug(true);
 const binder = Binder().setDebug(true);
 
 function assertDiagnosticsCount(text: string, cfFileType: CfFileType, count: number) {
@@ -18,14 +19,14 @@ function assertDiagnosticsCount(text: string, cfFileType: CfFileType, count: num
     assert.strictEqual(sourceFile.diagnostics.length, count, `${count} diagnostics emitted`);
 }
 
-function assertDiagnosticsCountWithProject(fs: FileSystem, diagnosticsTargetFile: string, count: number, language = LanguageVersion.acf2018) {
-    const project = Project("/", fs, {debug: true, parseTypes: true, language, wireboxConfigFileCanonicalAbsPath: null, withWireboxResolution: false});
+function assertDiagnosticsCountWithProject(fs: FileSystem, diagnosticsTargetFile: string, count: number, language : EngineVersion = EngineVersions["acf.2018"]) {
+    const project = Project("/", fs, {debug: true, parseTypes: true, engineVersion: language, wireboxConfigFileCanonicalAbsPath: null, withWireboxResolution: false});
     project.addFile(diagnosticsTargetFile);
     assert.strictEqual(project.getDiagnostics(diagnosticsTargetFile).length, count, `Expected ${count} errors.`);
 }
 
 describe("general smoke test for particular constructs", () => {
-    const commonProjectOptions : ProjectOptions = {debug: true, parseTypes: true, language: LanguageVersion.acf2018, wireboxConfigFileCanonicalAbsPath: null, withWireboxResolution: false};
+    const commonProjectOptions : ProjectOptions = {debug: true, parseTypes: true, engineVersion: EngineVersions["acf.2018"], wireboxConfigFileCanonicalAbsPath: null, withWireboxResolution: false};
 
     it("Should accept `new` expression in an expression context", () => {
         assertDiagnosticsCount(`<cfset x = {v: new foo.bar().someMethod()}>`, CfFileType.cfm, 0);
@@ -408,8 +409,8 @@ describe("general smoke test for particular constructs", () => {
                 someCall("quotedArg");
             }`);
         const dfs = DebugFileSystem(fsRoot);
-        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 1, LanguageVersion.acf2018);
-        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0, LanguageVersion.lucee5);
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 1, EngineVersions["acf.2018"]);
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0, EngineVersions["lucee.5"]);
     });
     it("Should not require a required && defaulted parameter", () => {
         const fsRoot : FileSystemNode = {"/": {}};
@@ -506,8 +507,8 @@ describe("general smoke test for particular constructs", () => {
     it("Unparenthesized arrow functions illegal in Lucce", () => {
         const fsRoot : FileSystemNode = {"/": {}};
         pushFsNode(fsRoot, "/a.cfc", `component { x = v => 42; }`);
-        const luceeProject = Project("/", DebugFileSystem(fsRoot), {...commonProjectOptions, language: LanguageVersion.lucee5});
-        const acfProject = Project("/", DebugFileSystem(fsRoot), {...commonProjectOptions, language: LanguageVersion.acf2018});
+        const luceeProject = Project("/", DebugFileSystem(fsRoot), {...commonProjectOptions, engineVersion: EngineVersions["lucee.5"]});
+        const acfProject = Project("/", DebugFileSystem(fsRoot), {...commonProjectOptions, engineVersion: EngineVersions["acf.2018"]});
 
         luceeProject.addFile("/a.cfc");
         acfProject.addFile("/a.cfc");

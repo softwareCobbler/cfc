@@ -1,5 +1,6 @@
 {
   "files": [
+    "engines.ts",
     "scanner.ts",
     "node.ts",
     "types.ts",

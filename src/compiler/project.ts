@@ -3,6 +3,7 @@ import * as path from "path";
 
 import { Binder } from "./binder";
 import { Checker } from "./checker";
+import { EngineVersion } from "./engines";
 import { BlockType, CallExpression, mergeRanges, Node, NodeId, NodeKind, SourceFile, StatementType, SymTabEntry } from "./node";
 import { Parser } from "./parser";
 import { CfFileType, SourceRange } from "./scanner";
@@ -177,12 +178,10 @@ export function DebugFileSystem(files?: Readonly<FileSystemNode>, pathSepOfDebug
     }
 }
 
-export const enum LanguageVersion { acf2018 = 1, lucee5 };
-
 export interface ProjectOptions {
     debug: boolean,
     parseTypes: boolean,
-    language: LanguageVersion,
+    engineVersion: EngineVersion,
     withWireboxResolution: boolean,
     wireboxConfigFileCanonicalAbsPath: string | null,
 }
@@ -206,8 +205,8 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         // checker.setDebug(true);
     }
 
-    binder.setLang(options.language);
-    checker.setLang(options.language);
+    binder.setLang(options.engineVersion);
+    checker.setLang(options.engineVersion);
     checker.install({CfcResolver, EngineSymbolResolver});
 
     type FileCache = Map<AbsPath, CachedFile>;
