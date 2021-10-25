@@ -47,7 +47,7 @@ import { _Type } from '../../../compiler/types';
 import { FileSystem, LanguageVersion, Project } from "../../../compiler/project";
 import * as cfls from "../../../services/completions";
 import { getAttribute, getAttributeValue, getSourceFile, getTriviallyComputableString } from '../../../compiler/utils';
-import { FunctionDefinition, NodeFlags, Property } from '../../../compiler/node';
+import { BlockType, FunctionDefinition, NodeFlags, Property } from '../../../compiler/node';
 import { SourceRange, Token } from '../../../compiler/scanner';
 
 type TextDocumentUri = string;
@@ -164,6 +164,25 @@ connection.onDefinition((params) : Location[] | undefined  => {
 	const targetNode = project.getInterestingNodeToLeftOfCursor(fsPath, targetIndex);
 	if (!targetNode) return undefined;
 
+	if (targetNode.kind === NodeKind.simpleStringLiteral) {
+		if (targetNode.parent?.kind === NodeKind.tagAttribute && targetNode.parent.canonicalName === "extends") {
+			if (targetNode.parent?.parent?.kind === NodeKind.block
+					&& targetNode.parent.parent.subType === BlockType.scriptSugaredTagCallBlock
+					&& targetNode.parent.parent.name?.token.text.toLowerCase() === "component") {
+					if (sourceFile.cfc?.extends) {
+						return [{
+							uri: URI.file(sourceFile.cfc.extends.absPath).toString(),
+							range: {
+								start: {line: 0, character: 0},
+								end: {line: 0, character: 0},
+							}
+						}]
+					}
+
+			}
+		}
+		return undefined;
+	}
 	const checker = project.__unsafe_dev_getChecker();
 	const symbol = checker.getSymbol(targetNode, sourceFile);
 	if (!symbol || !symbol.symTabEntry.declarations) return undefined;

@@ -2373,7 +2373,6 @@ export namespace Tag {
             startTag: CfTag.Common,
             endTag: null
         }
-        attrs: TagAttribute[]
     }
 
     export function Property(tag: CfTag.Common) : Property {

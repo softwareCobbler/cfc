@@ -6,7 +6,7 @@ import { Checker } from "./checker";
 import { BlockType, CallExpression, mergeRanges, Node, NodeId, NodeKind, SourceFile, StatementType, SymTabEntry } from "./node";
 import { Parser } from "./parser";
 import { CfFileType, SourceRange } from "./scanner";
-import { CfcTypeWrapper, cfFunctionOverloadSet, cfFunctionSignatureParam, Interface, createLiteralType, _Type } from "./types";
+import { CfcTypeWrapper, cfFunctionOverloadSet, cfFunctionSignatureParam, Interface, createLiteralType, _Type, Struct } from "./types";
 
 import { cfmOrCfc, findNodeInFlatSourceMap, flattenTree, getAttributeValue, getComponentAttrs, getComponentBlock, getTriviallyComputableString, NodeSourceMap, visit } from "./utils";
 
@@ -254,7 +254,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             const wireboxInterface = constructWireboxInterface(sourceFile);
             if (wireboxInterface) {
                 if (!wireboxLib) wireboxLib = SourceFile("<<magic/wirebox>>", CfFileType.dCfm, "");
-                wireboxLib.containedScope.typedefs.interfaces.set("Wirebox", [wireboxInterface]);
+                wireboxLib.containedScope.typedefs.mergedInterfaces.set("Wirebox", wireboxInterface);
             }
             else {
                 wireboxLib = null;
@@ -304,6 +304,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         }
 
         const overloads : {params: cfFunctionSignatureParam[], returns: _Type}[] = [];
+        const mappingsBuilder = new Map<string, SymTabEntry>();
         for (const mapping of mappings) {
             if (mapping.kind === "dir") {
                 const dirTarget = fileSystem.join(projectRoot, ...mapping.target.split("."));
@@ -327,7 +328,15 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
                         const instantiableNameAsLiteralType = createLiteralType(instantiableName);
 
                         const param = cfFunctionSignatureParam(/*required*/true, instantiableNameAsLiteralType, "name")
-                        overloads.push({params: [param], returns: CfcTypeWrapper(file.parsedSourceFile)});
+                        var cfcTypeWrapper = CfcTypeWrapper(file.parsedSourceFile);
+                        overloads.push({params: [param], returns: cfcTypeWrapper});
+                        const canonicalName = instantiableName.toLowerCase();
+                        mappingsBuilder.set(canonicalName, {
+                            canonicalName,
+                            uiName: instantiableName,
+                            type: cfcTypeWrapper,
+                            declarations: null
+                        });
                     }
                 }
             }
@@ -340,7 +349,16 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             type: cfFunctionOverloadSet("getInstance", overloads, [])
         };
 
-        const wireboxMembers = new Map<string, SymTabEntry>([["getinstance", wireboxGetInstanceSymbol]]);
+        const wireboxMembers = new Map<string, SymTabEntry>([
+            ["getinstance", wireboxGetInstanceSymbol],
+            ["mappings", {
+                canonicalName: "mappings",
+                uiName: "mappings",
+                declarations: null,
+                type: Struct(mappingsBuilder)
+            }]
+        ]);
+        
         return Interface("Wirebox", wireboxMembers);
     }
 
@@ -524,12 +542,11 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             const components = parsedPath.dir.split(fileSystem.pathSep);
             const result : string[] = [];
 
-            while (components.length > 0) {
-                components.pop();
-                const workingPath = fileSystem.normalize(fileSystem.join(...components));
-
+            while (components.length > 0 && components[components.length-1] !== "" /* a removed, leading path separator turned to "" on split */) {
+                const workingPath = fileSystem.join(parsedPath.root, ...components);
+                
                 if (!workingPath.startsWith(projectRoot)) break; // should never happen ? i.e. we've climbed out of project root?
-
+                
                 const maybeModulesPath = fileSystem.join(workingPath, "modules");
                 if (fileSystem.existsSync(maybeModulesPath)) {
                     result.push(maybeModulesPath);
@@ -537,6 +554,8 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
                 if (components[components.length-1] === "modules_app") { // we'll treat some/path/modules_app/ as a root
                     result.push(workingPath);
                 }
+
+                components.pop();
             }
 
             return result;

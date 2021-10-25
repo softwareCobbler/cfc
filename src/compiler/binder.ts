@@ -914,7 +914,7 @@ export function Binder() {
                 const firstAccessElement = target.accessElements[0];
                 let firstAccessAsString : string | undefined = undefined;
                 if (firstAccessElement.accessType === IndexedAccessType.dot) {
-                    firstAccessAsString = firstAccessElement.property.token.text.toLowerCase();
+                    firstAccessAsString = firstAccessElement.property.token.text;
                 }
                 else if (firstAccessElement.accessType === IndexedAccessType.bracket) {
                     firstAccessAsString = getTriviallyComputableString(firstAccessElement.expr)

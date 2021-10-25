@@ -296,8 +296,26 @@ export function Checker() {
                 return;
             case NodeKind.typeShim:
                 return;
-            case NodeKind.property:
+            case NodeKind.property: {
+                // if we're in Wirebox mode, and the property has an inject attribute that we can resolve, add the type to the property value
+                if (sourceFile.libRefs.has("<<magic/wirebox>>")) {
+                    const nameAttrVal = getAttributeValue(node.attrs, "name");
+                    const nameStringVal = getTriviallyComputableString(nameAttrVal)?.toLowerCase();
+                    const injectAttrVal = getAttributeValue(node.attrs, "inject");
+                    const injectStringVal = getTriviallyComputableString(injectAttrVal)?.toLowerCase();
+                    if (!injectStringVal || !nameStringVal) return;
+
+                    const mappings = sourceFile.libRefs.get("<<magic/wirebox>>")!.containedScope.typedefs.mergedInterfaces.get("Wirebox")?.members.get("mappings");
+                    const targetSymbol = sourceFile.containedScope.variables!.get(nameStringVal);
+                    if (!mappings || !targetSymbol || !isStructLike(mappings.type)) return;
+
+                    const cfc = mappings.type.members.get(injectStringVal);
+                    if (!cfc) return;
+
+                    targetSymbol.declaredType = cfc.type;
+                }
                 return;
+            }
             case NodeKind.paramStatement:
                 return;
             default:
@@ -1626,8 +1644,8 @@ export function Checker() {
                 }
                 if (node.kind === NodeKind.sourceFile) {
                     for (const lib of node.libRefs.values()) {
-                        if (lib.containedScope.typedefs.interfaces.has(type.name)) {
-                            return lib.containedScope.typedefs.interfaces.get(type.name)![0]; // no interface merging in libraries (or at least autogen'd libraries) yet
+                        if (lib.containedScope.typedefs.mergedInterfaces.has(type.name)) {
+                            return lib.containedScope.typedefs.mergedInterfaces.get(type.name)!;
                         }
                     }
                     break;
