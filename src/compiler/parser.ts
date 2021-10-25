@@ -2706,10 +2706,6 @@ export function Parser(config: {engineVersion: EngineVersion}) {
     }
 
     function parseStructLiteralInitializerMember() : StructLiteralInitializerMember {
-        // move comma checks into checker, then we can put error range where TS does:
-        // {abc: foo def: bar},
-        //           ^^^ expected ','
-        //
         if (lookahead() === TokenType.DOT_DOT_DOT) {
             const dotdotdot = parseExpectedTerminal(TokenType.DOT_DOT_DOT, ParseOptions.withTrivia);
             const expr = parseExpression();
