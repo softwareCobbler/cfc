@@ -41,20 +41,22 @@
 					"default": false,
 					"description": "experimental types / flow analysis; toggling it on enables better autocomplete and errors, but it is still in development and WILL crash. default is OFF (unchecked / false)."
 				},
-				"cflsp.languageVersion": {
+				"cflsp.engineVersion": {
 					"scope": "resource",
 					"type": "string",
 					"description": "Which ColdFusion language version to use",
 					"enum": [
-						"Adobe",
-						"Lucee"
+						"acf.2018",
+						"acf.2021",
+						"lucee.5"
 					],
-					"default": "Lucee",
+					"default": "lucee.5",
 					"enumDescriptions": [
-						"Adobe",
-						"Lucee"
+						"Adobe 2018",
+						"Adobe 2021",
+						"Lucee 5"
 					],
-					"items": ["acf2018+", "lucee5+"]
+					"items": ["Adobe/2018", "Adobe/2021", "Lucee/5"]
 				},
 				"cflsp.wireboxResolution": {
 					"scope": "resource",

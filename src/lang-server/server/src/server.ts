@@ -44,7 +44,8 @@ import * as path from "path";
 import { NodeId, SourceFile, Parser, Binder, Node, Diagnostic as cfcDiagnostic, cfmOrCfc, NodeSourceMap, Checker, NodeKind } from "compiler";
 
 import { _Type } from '../../../compiler/types';
-import { FileSystem, LanguageVersion, Project } from "../../../compiler/project";
+import { FileSystem, Project } from "../../../compiler/project";
+import { EngineVersions, EngineVersion } from "../../../compiler/engines";
 import * as cfls from "../../../services/completions";
 import { getAttribute, getAttributeValue, getSourceFile, getTriviallyComputableString } from '../../../compiler/utils';
 import { FunctionDefinition, NodeFlags, Property } from '../../../compiler/node';
@@ -55,7 +56,7 @@ type TextDocumentUri = string;
 interface CflsConfig {
 	engineLibAbsPath: string | null
 	x_types: boolean,
-	languageVersion: LanguageVersion,
+	engineVersion: EngineVersion,
 	wireboxConfigFile: string | null,
 	wireboxResolution: boolean
 }
@@ -253,7 +254,7 @@ function resetCfls(why: string) {
 		{
 			parseTypes: cflsConfig.x_types,
 			debug: true,
-			language: cflsConfig.languageVersion,
+			engineVersion: cflsConfig.engineVersion,
 			withWireboxResolution: cflsConfig.wireboxResolution,
 			wireboxConfigFileCanonicalAbsPath: wireboxConfigFileAbsPath,
 		});
@@ -291,7 +292,7 @@ function updateConfig(config: Record<string, any> | null) {
 		engineLibAbsPath: cflsConfig?.engineLibAbsPath ?? null,
 		// the rest of these are supplied via config
 		x_types: config?.x_types,
-		languageVersion: config?.languageVersion ? languageConfigToEnum(config.languageVersion): LanguageVersion.lucee5,
+		engineVersion: engineVersionConfigToEngineVersion(config?.engineVersion),
 		wireboxConfigFile: config?.wireboxConfigFile ?? null,
 		wireboxResolution: config?.wireboxResolution ?? false
 	};
@@ -344,12 +345,9 @@ let globalSettings: ExampleSettings = defaultSettings;
 // Cache the settings of all open documents
 let documentSettings: Map<string, Thenable<ExampleSettings>> = new Map();
 
-function languageConfigToEnum(s: string) {
-	switch (s) {
-		case "Adobe": return LanguageVersion.acf2018;
-		case "Lucee": return LanguageVersion.lucee5;
-		default: return LanguageVersion.lucee5; // shouldn't hit this
-	}
+function engineVersionConfigToEngineVersion(key: any) {
+	if (typeof key === "string" && EngineVersions.hasOwnProperty(key)) return EngineVersions[key as keyof typeof EngineVersions];
+	else return EngineVersions["lucee.5"];
 }
 
 connection.onDidChangeConfiguration(async change => {

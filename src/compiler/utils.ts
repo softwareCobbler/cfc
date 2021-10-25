@@ -562,10 +562,16 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                 || visitor(node.rightDelimiter);
         case NodeKind.structLiteralInitializerMember:
             if (node.subType === StructLiteralInitializerMemberSubtype.keyed) {
-                return visitor(node.key)
-                    || visitor(node.colon)
-                    || visitor(node.expr)
-                    || visitor(node.comma);
+                if (node.shorthand) {
+                    return visitor(node.key)
+                        || visitor(node.comma);
+                }
+                else {
+                    return visitor(node.key)
+                        || visitor(node.colon)
+                        || visitor(node.expr)
+                        || visitor(node.comma);
+                }
             }
             else {
                 return visitor(node.dotDotDot)
@@ -655,7 +661,7 @@ export interface NodeSourceMap {
     range: SourceRange
 }
 
-export function exhaustiveCaseGuard(_:never) { throw "Non-exhaustive case or unintentional fallthrough."; }
+export function exhaustiveCaseGuard(_:never) : never { throw "Non-exhaustive case or unintentional fallthrough."; }
 
 export function flattenTree(tree: Node | Node[]) : NodeSourceMap[] {
     const result : NodeSourceMap[] = [];
