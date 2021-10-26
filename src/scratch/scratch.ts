@@ -35,7 +35,7 @@ function projectFiddle() {
                         // @declare function arrayEach<T>(
                         // a: T[],
                         // f: (e?: T[], i?: numeric, a?: T[]) => void # no-suggest-param-names
-                        ) no-suggest-param-names
+                        //) no-suggest-param-names
                         id: <U>(mapper: (e: T) => U) => U
                     }
 
@@ -44,24 +44,14 @@ function projectFiddle() {
                     /**
                      */
                     component {
-                        function foo(x) {
-                            var z = {};
-
-                            if (x) {
-                                return 42;
-                            }
-                            else {
-                                return 1;
-                            }
-
-                            return z;
+                        someFile function index( event, rc, prc ) {
+                            return new someFile();
                         }
                     }
                     `,
                 "a": {
                     "b": {
                         "x.cfc": `
-                        /** @interface this { ... cfc<y> } */
                         component { function foobar() { this.mlem(); } }
                         `,
                         "y.cfc": "component { function mlem() {} }",

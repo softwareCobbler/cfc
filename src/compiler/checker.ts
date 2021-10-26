@@ -2,7 +2,7 @@ import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, State
 import { CfcResolver, EngineSymbolResolver, LibTypeResolver } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, cfIntersection, Struct, cfUnion, SyntheticType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStructLike, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, getCanonicalType, stringifyType, cfFunctionSignatureParam, unsafe__cfFunctionSignatureWithFreshReturnType, isFunctionOverloadSet, cfFunctionOverloadSet, isLiteralType, cfTypeId, SymbolTableTypeWrapper, CfcTypeWrapper, Interface, StructKind, isCfcLookupType, isInstantiatedArray, isInterface, createType, createLiteralType, isUninstantiatedArray, isGenericFunctionSignature, TypeConstructor, typeFromJavaLikeTypename, } from "./types";
-import { exhaustiveCaseGuard, findAncestor, getAttributeValue, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionReturnsLiteral, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
+import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, getAttributeValue, getContainingFunction, getFunctionDefinitionAccessLiteral, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol } from "./utils";
 import { Engine, EngineVersion, supports } from "./engines";
 
@@ -565,8 +565,8 @@ export function Checker() {
      * @param assignThis 
      * @param to 
      */
-    function isAssignable(assignThis: _Type, to: _Type, sourceIsLiteralExpr = false) : boolean {
-        return isLeftSubtypeOfRight(assignThis, to, sourceIsLiteralExpr);
+    function isAssignable(assignThis: _Type, to: _Type, sourceIsLiteralExpr = false, forReturnType = false) : boolean {
+        return isLeftSubtypeOfRight(assignThis, to, sourceIsLiteralExpr, forReturnType);
     }
 
     //
@@ -597,7 +597,7 @@ export function Checker() {
     // subtype has the common meaning; however it is maybe helpful to note that "sub" also means "substitutable" in addition to "a descendant in a heirarchy"
     // i.e. `l <: r` means l is substitutable for r (you can safely use an l in r's place)
     //
-    function isLeftSubtypeOfRight(l: _Type, r: _Type, sourceIsLiteralExpr = false) : boolean {
+    function isLeftSubtypeOfRight(l: _Type, r: _Type, sourceIsLiteralExpr = false, forReturnType = false) : boolean {
         let depth = 0;
         let tooDeep = false;
         tooDeep ? 0 : 1; // yes compiler this is used
@@ -625,7 +625,10 @@ export function Checker() {
                 // any is a subtype of every type; every type is a subtype of any
                 if (l.flags & TypeFlags.any || r.flags & TypeFlags.any) return true;
 
-                // void is not a subtype of anything except itself and any
+                // `void function foo() {}` is valid, in effect foo() returns null
+                if (forReturnType && l.flags & TypeFlags.null && r.flags & TypeFlags.void) return true;
+
+                // except for the above return type case, void is not a subtype of anything except itself and any
                 if (l.flags & TypeFlags.void || r.flags & TypeFlags.void) return false;
 
                 // it would be nice to error on this, but plenty of legacy code relies on
@@ -640,6 +643,8 @@ export function Checker() {
                 if (l === SyntheticType.numeric && r === SyntheticType.string) {
                     return true;
                 }
+
+                
 
                 //
                 // {x: number, y: number} <: {x: number}, because L has AT LEAST all the properties of R
@@ -1278,12 +1283,12 @@ export function Checker() {
             return;
         }
 
-        const exprType = node.expr ? getCachedEvaluatedNodeType(node.expr) : SyntheticType.void_;
+        const exprType = node.expr ? getCachedEvaluatedNodeType(node.expr) : SyntheticType.void;
 
         if (!isAssignable(exprType, sig.returns)) {
             // if we got an exprType, we got an expr or a just return token; if this is from tag, we definitely got a tag
             const errNode = node.fromTag ? node.tagOrigin.startTag! : (node.expr || node.returnToken!);
-            typeErrorAtNode(errNode, `Type '${stringifyType(exprType)}' is not compatible with expected return type '${stringifyType(sig.returns)}'`);
+            typeErrorAtNode(errNode, `Type '${stringifyType(exprType)}' is not assignable to declared return type '${stringifyType(sig.returns)}'`);
         }
         else {
             if (node.flow !== UnreachableFlow) {
@@ -1720,20 +1725,15 @@ export function Checker() {
                 const symbol = walkupScopesToResolveSymbol(sourceFile, (node as any).canonicalName);
                 if (symbol?.symTabEntry.type && isFunctionSignature(symbol.symTabEntry.type)) {
                     memberFunctionSignature = symbol.symTabEntry.type;
-                    if (memberFunctionSignature.returns === SyntheticType.any) { // we got any as a returntype; user may have explicitly said "any", or we may have gotten something we didn't understand in the binder
-                        const returnTypeLiteral = getFunctionDefinitionReturnsLiteral(node);
-                        if (returnTypeLiteral && returnTypeLiteral.canonical !== "any") { // fixme: if (returnTypeLiteral && !isBuiltinType) so we don't try to lookup "string" as a cfc or etc.
-                            const cfc = cfcResolver({resolveFrom: sourceFile.absPath, cfcName: returnTypeLiteral.ui});
-                            if (cfc) {
-                                memberFunctionSignature = unsafe__cfFunctionSignatureWithFreshReturnType(memberFunctionSignature, CfcTypeWrapper(cfc.sourceFile));
-                                const variablesSymbol = sourceFile.containedScope.variables?.get(node.canonicalName);
-                                // keep both `variables` and `this` in sync with member functions
-                                if (variablesSymbol) {
-                                    variablesSymbol.type = memberFunctionSignature;
-                                    sourceFile.containedScope.variables?.set(node.canonicalName, variablesSymbol);
-                                    sourceFile.containedScope.this?.set(node.canonicalName, variablesSymbol);
-                                }
-                            }
+                    if (isCfcLookupType(memberFunctionSignature.returns)) {
+                        const resolvedCfc = evaluateType(sourceFile, memberFunctionSignature.returns) as CfcTypeWrapper;
+                        memberFunctionSignature = unsafe__cfFunctionSignatureWithFreshReturnType(memberFunctionSignature, resolvedCfc);
+                        const variablesSymbol = sourceFile.containedScope.variables?.get(node.canonicalName);
+                        // keep both `variables` and `this` in sync with member functions
+                        if (variablesSymbol) {
+                            variablesSymbol.type = memberFunctionSignature;
+                            sourceFile.containedScope.variables?.set(node.canonicalName, variablesSymbol);
+                            sourceFile.containedScope.this?.set(node.canonicalName, variablesSymbol);
                         }
                     }
                 }
@@ -1800,6 +1800,39 @@ export function Checker() {
         }
         else {
             checkNode(node.body);
+        }
+
+        let flowFallsThrough = false;
+        if (node.finalFlow !== UnreachableFlow) {
+            flowFallsThrough = true;
+            returnTypes.push(SyntheticType.null);
+        }
+
+        const actualReturnType = unionify(returnTypes);
+        if (!isAssignable(actualReturnType, finalType.returns, /*sourceIsLiteralExpr*/ false, /*forReturnType*/ true)) {
+            if (node.kind === NodeKind.functionDefinition) {
+                let literalReturnType : CanonicalizedName | undefined = undefined;
+                if (node.fromTag) {
+                    const literal = getTriviallyComputableString(getAttributeValue(node.attrs, "returntype"));
+                    if (literal) {
+                        literalReturnType = {ui: literal, canonical: literal.toLowerCase()};
+                    }
+                }
+                else {
+                    if (node.returnType) {
+                        literalReturnType = stringifyDottedPath(node.returnType)
+                    }
+                }
+                
+                if (flowFallsThrough && literalReturnType && (literalReturnType.canonical !== "void" && literalReturnType.canonical !== "any")) {
+                    const range = node.fromTag ? getAttributeValue(node.attrs, "returntype")!.range : node.returnType!.range;
+                    typeErrorAtRange(range, `Function does not have a final return statement, and may return 'null' which is not assignable to declared return type '${literalReturnType.ui}'.`);
+                }
+                else {
+                    const range = node.fromTag ? node.tagOrigin.startTag!.range : mergeRanges(node.accessModifier, node.returnType, node.functionToken, node.nameToken);
+                    typeErrorAtRange(range, `Function declares return type '${stringifyType(finalType.returns)}' but actual return type is '${stringifyType(actualReturnType)}'.}`);
+                }
+            }
         }
 
         returnTypes = savedReturnTypes;

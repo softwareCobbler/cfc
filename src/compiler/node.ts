@@ -1590,6 +1590,7 @@ interface FunctionDefinitionBase extends NodeBase {
     canonicalName  : string | null,
     uiName         : string | null,
     attrs          : TagAttribute[],
+    finalFlow      : Flow,
 }
 
 export type FunctionDefinition = Script.FunctionDefinition | Tag.FunctionDefinition;
@@ -1606,7 +1607,7 @@ export namespace Script {
         params         : FunctionParameter[],
         rightParen     : Terminal,
         body           : Block,
-        returnTypeAnnotation : _Type | null,
+        returnTypeAnnotation : _Type | null, // fixme: this will be either in the full node type annotation, or as an attribute
     }
 
     export function FunctionDefinition(
@@ -1668,6 +1669,7 @@ export interface ArrowFunctionDefinition extends NodeBase {
     params: Script.FunctionParameter[]; // not possible to have a tag based arrow function def
     fatArrow: Terminal,
     body: Node;
+    finalFlow: Flow;
 }
 
 export function ArrowFunctionDefinition(leftParen: Terminal | null, params: Script.FunctionParameter[], rightParen: Terminal | null, fatArrow: Terminal, body: Node) : ArrowFunctionDefinition {

@@ -12,7 +12,7 @@ export const enum TypeFlags {
     string                          = 0x00000004,
     numeric                         = 0x00000008,
     boolean                         = 0x00000010,
-    //interface                       = 0x00000020,
+    null                            = 0x00000020,
     never                           = 0x00000040,
     array                           = 0x00000080,
     tuple                           = 0x00000100,
@@ -56,6 +56,7 @@ const TypeKindUiString : Record<TypeFlags, string> = {
     [TypeFlags.none]:                            "none",
     [TypeFlags.any]:                             "any",
     [TypeFlags.void]:                            "void",
+    [TypeFlags.null]:                            "null",
     [TypeFlags.string]:                          "string",
     [TypeFlags.numeric]:                          "number",
     [TypeFlags.boolean]:                         "boolean",
@@ -129,6 +130,7 @@ export interface _Type {
 
 export function getCanonicalType(type: _Type) {
     while (true) {
+        if (type === undefined) debugger;
         if (type.underlyingType && type === type.underlyingType) return type;
         if (!type.underlyingType) return type;
         type = type.underlyingType;
@@ -318,7 +320,7 @@ export function SymbolTableTypeWrapper(symbolTable: Readonly<SymbolTable>, inter
 }
 
 export function isStructLike(t: _Type) : t is Struct {
-    t = getCanonicalType(t);
+    // @rmme 10/25/21 t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.struct);
 }
 
@@ -381,12 +383,12 @@ export function unsafe__cfFunctionSignatureWithFreshReturnType(other: cfFunction
 }
 
 export function isFunctionSignature(t: _Type) : t is cfFunctionSignature {
-    t = getCanonicalType(t);
+    // t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.functionSignature);
 }
 
 export function isFunctionOverloadSet(t: _Type) : t is cfFunctionOverloadSet {
-    t = getCanonicalType(t);
+    // t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.functionSignature) && !!(t as cfFunctionOverloadSet).overloads;
 }
 
@@ -446,7 +448,7 @@ export function TypeConstructorInvocation(left: _Type, args: _Type[]) : TypeCons
 }
 
 export function isTypeConstructorInvocation(t: _Type) : t is TypeConstructorInvocation {
-    t = getCanonicalType(t);
+    // rmme 10/25/2021 t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.typeConstructorInvocation);
 }
 
@@ -694,6 +696,11 @@ export const SyntheticType = (function() {
     } as _Type;
     (void_ as Mutable<_Type>).underlyingType = void_;
 
+    const null_ : _Type = {
+        flags: TypeFlags.synthetic | TypeFlags.null,
+    } as _Type;
+    (null_ as Mutable<_Type>).underlyingType = null_;
+
     const string : _Type = {
         flags: TypeFlags.synthetic | TypeFlags.string,
     } as _Type;
@@ -742,7 +749,8 @@ export const SyntheticType = (function() {
 
     const results = {
         any: createType(any),
-        void_: createType(void_),
+        void: createType(void_),
+        null: createType(null_),
         string: createType(string),
         numeric: createType(numeric),
         boolean: createType(boolean),
@@ -814,7 +822,7 @@ function typeFromStringifiedJavaLikeTypename(typename: string | null) : _Type {
         case "query": return SyntheticType.EmptyInterface; // @fixme: have real query type
         case "string": return SyntheticType.string;
         case "struct": return SyntheticType.EmptyInterface;
-        case "void": return SyntheticType.void_;
+        case "void": return SyntheticType.void;
         case "any": return SyntheticType.any;
         default: return CfcLookup(typename); // @fixme: do we need to store "origin" so we can issue diagnostics on failing lookups?
     }
@@ -905,42 +913,42 @@ export function isLiteralType(_type: _Type) : _type is _Type & {literalValue: nu
     return _type.hasOwnProperty(__literalTypeKey);
 }
 
-export function stringifyType(_type: _Type, _depth = 0) : string {
-    return "x";
-    /*
+export function stringifyType(type: _Type, depth = 0) : string {
     if (depth > 2) return "<<TYPE-TOO-DEEP>>";
     if (type.flags & TypeFlags.any) return "any";
     if (type.flags & TypeFlags.void) return "void";
     if (type.flags & TypeFlags.numeric) return "numeric";
     if (type.flags & TypeFlags.string) return "string";
     if (type.flags & TypeFlags.boolean) return "boolean";
-    if (isStruct(type)) {
-        const builder = [];
-        for (const [propName, {type: memberType}] of type.members) {
-            builder.push(propName + ": " + stringifyType(memberType, depth+1));
+    if (isStructLike(type)) {
+        if (isInstantiatedArray(type)) {
+            return "<<[array-but-we-can't-serialize-that-yet]>>";
         }
-        const result = builder.join(", ");
-        return "{" + result + "}";
+        return "<<{struct-like-but-can't-serialize-that-yet}>>";
+        // const builder = [];
+        // for (const [propName, {type: memberType}] of type.members) {
+        //     builder.push(propName + ": " + stringifyType(memberType, depth+1));
+        // }
+        // const result = builder.join(", ");
+        // return "{" + result + "}";
     }
-    if (isArray(type)) {
-        return stringifyType(type.memberType, depth+1) + "[]";
-    }
-    if (isUnion(type) || isIntersection(type)) {
-        const joiner = isUnion(type) ? " | " : " & ";
-        const result = type.types.map(memberType => stringifyType(memberType, depth+1)).join(joiner);
-        return result;
-    }
+    // if (isUnion(type) || isIntersection(type)) {
+    //     const joiner = isUnion(type) ? " | " : " & ";
+    //     const result = type.types.map(memberType => stringifyType(memberType, depth+1)).join(joiner);
+    //     return result;
+    // }
     if (isFunctionSignature(type)) {
-        const params = [];
-        for (const param of type.params) {
-            params.push(stringifyType(param, depth+1));
-        }
-        return "(" + params.join(", ") + ")" + " => " + stringifyType(type.returns, depth+1);
+        return "<<function-we-can't-serialize-yet>>";
+        // const params = [];
+        // for (const param of type.params) {
+        //     params.push(stringifyType(param, depth+1));
+        // }
+        // return "(" + params.join(", ") + ")" + " => " + stringifyType(type.returns, depth+1);
     }
-    if (isFunctionSignatureParam(type)) {
-        return (!(type.flags & TypeFlags.optional) ? "required " : "") + type.uiName + ": " + (type.flags & TypeFlags.spread ? "..." : "") + stringifyType(type.type, depth+1);
-    }
+    // if (isFunctionSignatureParam(type)) {
+    //     return (!(type.flags & TypeFlags.optional) ? "required " : "") + type.uiName + ": " + (type.flags & TypeFlags.spread ? "..." : "") + stringifyType(type.type, depth+1);
+    // }
 
-    return "<<type>>";
-    */
+    // return "<<type>>";
+    return "<<complex-type-we-can't-serialize-yet>>";
 }

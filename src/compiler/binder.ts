@@ -76,20 +76,10 @@ export function Binder() {
     }
 
     function mergeFlowsToLabel(...flows: (Flow|undefined)[]) {
-        const filteredFlows = flows.filter((flow) : flow is Flow => !!flow);
-        let someFlowsAreReachable = false;
-        for (const flow of filteredFlows) {
-            if (flow !== UnreachableFlow) {
-                someFlowsAreReachable = true;
-                break;
-            }
-        }
-
-        if (!someFlowsAreReachable) {
-            return UnreachableFlow;
-        }
-
-        return freshFlow(filteredFlows, FlowType.label);
+        const filteredFlows = flows.filter((flow) : flow is Flow => !!flow && flow !== UnreachableFlow);
+        return filteredFlows.length === 0
+            ? UnreachableFlow
+            : freshFlow(filteredFlows, FlowType.label);
     }
 
     function bindNode(node: Node | null | undefined, parent: Node) {
@@ -390,10 +380,12 @@ export function Binder() {
             falseEndFlow = currentFlow;
         }
 
-        currentFlow = mergeFlowsToLabel(
-            trueEndFlow,
-            falseEndFlow,
-        );
+        if (node.subType === ConditionalSubtype.else) {
+            currentFlow = trueEndFlow;
+        }
+        else {
+            currentFlow = mergeFlowsToLabel(trueEndFlow, falseEndFlow || savedStartFlow);
+        }
     }
 
     // the symbol and its declarations already fully exist, we just want to include it in another symbol table
@@ -1065,6 +1057,8 @@ export function Binder() {
         currentContainer = savedContainer;
 
         popAndMergePendingSymbolResolutionFrame();
+
+        node.finalFlow = currentFlow;
         currentFlow = savedFlow;
     }
 
