@@ -2044,22 +2044,36 @@ export function EmptyOrderedStructLiteral(
     return v;
 }
 
-export type StructLiteralInitializerMember = KeyedStructLiteralInitializerMember | SpreadStructLiteralInitializerMember;
+export type StructLiteralInitializerMember = 
+    | KeyedStructLiteralInitializerMember
+    | ShorthandStructLiteralInitializerMember
+    | SpreadStructLiteralInitializerMember;
 
 export const enum StructLiteralInitializerMemberSubtype { keyed, spread };
 
 interface StructLiteralInitializerMemberBase extends NodeBase {
-    kind: NodeKind.structLiteralInitializerMember;
-    subType: StructLiteralInitializerMemberSubtype,
+    readonly kind: NodeKind.structLiteralInitializerMember;
+    readonly subType: StructLiteralInitializerMemberSubtype,
+    readonly comma: Terminal | null
 }
 
-export interface KeyedStructLiteralInitializerMember extends StructLiteralInitializerMemberBase {
-    kind: NodeKind.structLiteralInitializerMember;
-    subType: StructLiteralInitializerMemberSubtype.keyed,
-    key: Node,
-    colon: Terminal,
-    expr: Node,
-    comma: Terminal | null
+interface KeyedStructLiteralInitializerMemberBase extends StructLiteralInitializerMemberBase {
+    readonly kind: NodeKind.structLiteralInitializerMember;
+    readonly subType: StructLiteralInitializerMemberSubtype.keyed,
+    readonly shorthand: boolean,
+    readonly key: Node,
+}
+
+export interface KeyedStructLiteralInitializerMember extends KeyedStructLiteralInitializerMemberBase {
+    readonly kind: NodeKind.structLiteralInitializerMember;
+    readonly subType: StructLiteralInitializerMemberSubtype.keyed,
+    readonly shorthand: false,
+    readonly colon: Terminal,
+    readonly expr: Node,
+}
+
+export interface ShorthandStructLiteralInitializerMember extends KeyedStructLiteralInitializerMemberBase {
+    readonly shorthand: true,
 }
 
 export function KeyedStructLiteralInitializerMember(
@@ -2067,11 +2081,23 @@ export function KeyedStructLiteralInitializerMember(
     colon: Terminal,
     expr: Node,
     comma: Terminal | null) : KeyedStructLiteralInitializerMember {
-    const v = NodeBase<KeyedStructLiteralInitializerMember>(NodeKind.structLiteralInitializerMember, mergeRanges(key, expr, comma));
+    const v = NodeBase<Mutable<KeyedStructLiteralInitializerMember>>(NodeKind.structLiteralInitializerMember, mergeRanges(key, expr, comma));
     v.subType = StructLiteralInitializerMemberSubtype.keyed;
+    v.shorthand = false;
     v.key = key;
+    v.comma = comma;
     v.colon = colon;
     v.expr = expr;
+    return v;
+}
+
+export function ShorthandStructLiteralInitializerMember(
+    key: Node,
+    comma: Terminal | null) : ShorthandStructLiteralInitializerMember {
+    const v = NodeBase<Mutable<ShorthandStructLiteralInitializerMember>>(NodeKind.structLiteralInitializerMember, mergeRanges(key, comma));
+    v.subType = StructLiteralInitializerMemberSubtype.keyed;
+    v.shorthand = true;
+    v.key = key;
     v.comma = comma;
     return v;
 }
@@ -2081,14 +2107,13 @@ export interface SpreadStructLiteralInitializerMember extends StructLiteralIniti
     subType: StructLiteralInitializerMemberSubtype.spread,
     dotDotDot: Terminal,
     expr: Node,
-    comma: Terminal| null,
 }
 
 export function SpreadStructLiteralInitializerMember(
     dotDotDot: Terminal,
     expr: Node,
     comma: Terminal | null) : SpreadStructLiteralInitializerMember {
-    const v = NodeBase<SpreadStructLiteralInitializerMember>(NodeKind.structLiteralInitializerMember, mergeRanges(dotDotDot, expr, comma));
+    const v = NodeBase<Mutable<SpreadStructLiteralInitializerMember>>(NodeKind.structLiteralInitializerMember, mergeRanges(dotDotDot, expr, comma));
     v.subType = StructLiteralInitializerMemberSubtype.spread;
     v.dotDotDot = dotDotDot;
     v.expr = expr;
@@ -2411,7 +2436,6 @@ export namespace Tag {
             startTag: CfTag.Common,
             endTag: null
         }
-        attrs: TagAttribute[]
     }
 
     export function Property(tag: CfTag.Common) : Property {

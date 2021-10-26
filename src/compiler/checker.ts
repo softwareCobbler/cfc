@@ -1,9 +1,10 @@
 import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, Property, hasDeclaredType, UnreachableFlow } from "./node";
-import { CfcResolver, EngineSymbolResolver, LanguageVersion, LibTypeResolver } from "./project";
+import { CfcResolver, EngineSymbolResolver, LibTypeResolver } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, cfIntersection, Struct, cfUnion, SyntheticType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStructLike, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, getCanonicalType, stringifyType, cfFunctionSignatureParam, unsafe__cfFunctionSignatureWithFreshReturnType, isFunctionOverloadSet, cfFunctionOverloadSet, isLiteralType, cfTypeId, SymbolTableTypeWrapper, CfcTypeWrapper, Interface, StructKind, isCfcLookupType, isInstantiatedArray, isInterface, createType, createLiteralType, isUninstantiatedArray, isGenericFunctionSignature, TypeConstructor, typeFromJavaLikeTypename, } from "./types";
 import { exhaustiveCaseGuard, findAncestor, getAttributeValue, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionReturnsLiteral, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol } from "./utils";
+import { Engine, EngineVersion, supports } from "./engines";
 
 const structViewCache = WeakPairMap<SymbolTable, Interface, Struct>(); // map a SymbolTable -> Interface -> Struct, used to check prior existence of a wrapping of a symbol table into a struct with a possible interface extension
 const reinstantiationContext = SourceFile("", CfFileType.cfc, ""); // an empty type reinstantiation context, no symbols are visible; reinstantiation relies entirely on capture contexts attached the "reinstantiable"
@@ -13,8 +14,8 @@ export function Checker() {
     let scanner!: Scanner;
     let diagnostics!: Diagnostic[];
     let noUndefinedVars = false;
-    let languageVersion!: LanguageVersion;
     let returnTypes: _Type[] = [];
+    let engineVersion!: EngineVersion;
 
     function check(sourceFile_: SourceFile) {
         // we're using the Checker as a singleton, and checking one source file might trigger checking another
@@ -305,8 +306,26 @@ export function Checker() {
                 return;
             case NodeKind.typeShim:
                 return;
-            case NodeKind.property:
+            case NodeKind.property: {
+                // if we're in Wirebox mode, and the property has an inject attribute that we can resolve, add the type to the property value
+                if (sourceFile.libRefs.has("<<magic/wirebox>>")) {
+                    const nameAttrVal = getAttributeValue(node.attrs, "name");
+                    const nameStringVal = getTriviallyComputableString(nameAttrVal)?.toLowerCase();
+                    const injectAttrVal = getAttributeValue(node.attrs, "inject");
+                    const injectStringVal = getTriviallyComputableString(injectAttrVal)?.toLowerCase();
+                    if (!injectStringVal || !nameStringVal) return;
+
+                    const mappings = sourceFile.libRefs.get("<<magic/wirebox>>")!.containedScope.typedefs.mergedInterfaces.get("Wirebox")?.members.get("mappings");
+                    const targetSymbol = sourceFile.containedScope.variables!.get(nameStringVal);
+                    if (!mappings || !targetSymbol || !isStructLike(mappings.type)) return;
+
+                    const cfc = mappings.type.members.get(injectStringVal);
+                    if (!cfc) return;
+
+                    targetSymbol.declaredType = cfc.type;
+                }
                 return;
+            }
             case NodeKind.paramStatement:
                 return;
             default:
@@ -1302,7 +1321,7 @@ export function Checker() {
             typeErrorAtRange(mergeRanges(node.finalModifier, node.expr), `final-qualified declaration in a for initializer will fail at runtime.`);
         }
 
-        if (languageVersion === LanguageVersion.acf2018 && canonicalPath.length === 1) {
+        if (engineVersion.engine === Engine.Adobe && canonicalPath.length === 1) {
             const enclosingFunction = getContainingFunction(node);
             if (enclosingFunction) {
                 for (const param of enclosingFunction.params) {
@@ -1908,29 +1927,65 @@ export function Checker() {
         checkList(node.members);
         const memberTypes = new Map<string, SymTabEntry>();
         for (const member of node.members) {
-            if (member.subType === StructLiteralInitializerMemberSubtype.keyed) {
-                const key = getTriviallyComputableString(member.key);
-                if (!key) continue;
-                const canonicalName = key.toLowerCase();
-                memberTypes.set(canonicalName, {
-                    uiName: key,
-                    canonicalName,
-                    declarations: [member],
-                    type: getCachedEvaluatedNodeType(member),
-                });
+            switch (member.subType) {
+                case StructLiteralInitializerMemberSubtype.keyed: {
+                    const memberType = getCachedEvaluatedNodeType(member);
+                    if (memberType === SyntheticType.never) continue; // spreads or shorthand in unsupported engines may produce this
+                    const key = getTriviallyComputableString(member.key);
+                    if (!key) continue;
+                    const canonicalName = key.toLowerCase();
+                    memberTypes.set(canonicalName, {
+                        uiName: key,
+                        canonicalName,
+                        declarations: [member],
+                        type: memberType
+                    });
+                    break;
+                }
+                case StructLiteralInitializerMemberSubtype.spread: {
+                    break;
+                }
+                default: exhaustiveCaseGuard(member);
             }
         }
         setCachedEvaluatedNodeType(node, SyntheticType.struct(memberTypes));
     }
 
     function checkStructLiteralInitializerMember(node: StructLiteralInitializerMember) {
-        if (node.subType === StructLiteralInitializerMemberSubtype.keyed) {
-            checkNode(node.key);
-            checkNode(node.expr);
-            setCachedEvaluatedNodeType(node, getCachedEvaluatedNodeType(node.expr));
-        }
-        else /* spread */ {
-            checkNode(node.expr);
+        switch (node.subType) {
+            case StructLiteralInitializerMemberSubtype.keyed: {
+                if (node.shorthand) {
+                    if (!supports.structLiteralShorthand(engineVersion)) {
+                        typeErrorAtNode(node, `CF engine ${engineVersion.uiString} does not support struct literal shorthand notation.`);
+                        setCachedEvaluatedNodeType(node, SyntheticType.never);
+                        break;
+                    }
+                    if (node.key.kind !== NodeKind.identifier || !node.key.canonicalName) { // fixme: when is this undefined or empty?
+                        typeErrorAtNode(node, "Shorthand struct literal initializers must be identifiers.");
+                        setCachedEvaluatedNodeType(node, SyntheticType.never);
+                        break;
+                    }
+
+                    checkNode(node.key);
+                    const symbol = walkupScopesToResolveSymbol(node, node.key.canonicalName);
+                    if (symbol) setCachedEvaluatedNodeType(node, symbol.symTabEntry.type);
+                }
+                else {
+                    checkNode(node.key);
+                    checkNode(node.expr);
+                    setCachedEvaluatedNodeType(node, getCachedEvaluatedNodeType(node.expr));
+                }
+                break;
+            }
+            case StructLiteralInitializerMemberSubtype.spread: {
+                if (!supports.structLiteralSpread(engineVersion)) {
+                    typeErrorAtNode(node, `CF engine ${engineVersion} does not support struct literal spread syntax.`)
+                    setCachedEvaluatedNodeType(node, SyntheticType.never);
+                }
+                checkNode(node.expr);
+                break;
+            }
+            default: exhaustiveCaseGuard(node);
         }
     }
 
@@ -2497,7 +2552,7 @@ export function Checker() {
         getSymbol: getSymbolImpl,
         setNoUndefinedVars,
         install,
-        setLang: (lv: LanguageVersion) => languageVersion = lv,
+        setLang: (lv: EngineVersion) => engineVersion = lv,
     }
 }
 

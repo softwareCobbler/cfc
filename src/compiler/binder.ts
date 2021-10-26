@@ -2,14 +2,14 @@ import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { SyntheticType, _Type, extractCfFunctionSignature, isFunctionSignature, Interface, isInterface } from "./types";
-import { LanguageVersion } from "./project";
+import { Engine, EngineVersion, EngineVersions, supports } from "./engines";
 
 export function Binder() {
     let RootNode : NodeWithScope<SourceFile>;
     let currentContainer : NodeWithScope;
     let scanner : Scanner;
     let diagnostics: Diagnostic[];
-    let langVersion : LanguageVersion = LanguageVersion.acf2018;
+    let engineVersion : EngineVersion = EngineVersions["acf.2018"]; // fixme: use definitely assigned syntax and force-assign in init with config args
     
     let currentFlow! : Flow;
     
@@ -71,8 +71,8 @@ export function Binder() {
         bindList(sourceFile_.content, sourceFile_);
     }
 
-    function setLang(lv: LanguageVersion) {
-        langVersion = lv;
+    function setLang(ev: EngineVersion) {
+        engineVersion = ev;
     }
 
     function mergeFlowsToLabel(...flows: (Flow|undefined)[]) {
@@ -853,7 +853,7 @@ export function Binder() {
                 const firstAccessElement = target.accessElements[0];
                 let firstAccessAsString : string | undefined = undefined;
                 if (firstAccessElement.accessType === IndexedAccessType.dot) {
-                    firstAccessAsString = firstAccessElement.property.token.text.toLowerCase();
+                    firstAccessAsString = firstAccessElement.property.token.text;
                 }
                 else if (firstAccessElement.accessType === IndexedAccessType.bracket) {
                     firstAccessAsString = getTriviallyComputableString(firstAccessElement.expr)
@@ -971,10 +971,10 @@ export function Binder() {
 
     // fixme: make more explicit that we grab signatures here for cfc member functions
     function bindFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {
-        if (node.kind === NodeKind.arrowFunctionDefinition && langVersion === LanguageVersion.lucee5) {
-            if (node.params.length === 1 && !node.parens) {
-                errorAtRange(node.params[0].range, "Arrow function parameter lists must always be parenthesized.")
-            }
+        if (node.kind === NodeKind.arrowFunctionDefinition
+            && node.params.length === 1 && !node.parens
+            && !supports.noParenSingleArgArrowFunction(engineVersion)) {
+            errorAtRange(node.params[0].range, `CF engine '${engineVersion.uiString}' requires arrow function parameter lists to be parenthesized.`)
         }
 
         const signature = extractCfFunctionSignature(node);
@@ -1140,15 +1140,38 @@ export function Binder() {
 
     function bindStructLiteral(node: StructLiteral) {
         bindList(node.members, node);
+
+        for (let i = 0; i < node.members.length; i++) {
+            const isLast = i === node.members.length - 1;
+            const member = node.members[i];
+            if (isLast && member.comma && !supports.trailingStructLiteralComma(engineVersion)) {
+                errorAtRange(new SourceRange(member.range.toExclusive, member.range.toExclusive), "Illegal trailing comma.");
+            }
+            if (!isLast && !member.comma) {
+                const nextNode = node.members[i+1];
+                const targetRange = nextNode.subType === StructLiteralInitializerMemberSubtype.keyed ? nextNode.key.range : nextNode.expr.range;
+                errorAtRange(targetRange, "Expected ','");
+            }
+        }
     }
 
     function bindStructLiteralInitializerMember(node: StructLiteralInitializerMember) {
-        if (node.subType === StructLiteralInitializerMemberSubtype.keyed) {
-            bindNode(node.key, node);
-            bindNode(node.expr, node);
-        }
-        else {
-            bindNode(node.expr, node);
+        switch (node.subType) {
+            case StructLiteralInitializerMemberSubtype.keyed: {
+                if (node.shorthand) {
+                    bindNode(node.key, node);
+                }
+                else {
+                    bindNode(node.key, node);
+                    bindNode(node.expr, node);
+                }
+                break;
+            }
+            case StructLiteralInitializerMemberSubtype.spread: {
+                bindNode(node.expr, node);
+                break;
+            }
+            default: exhaustiveCaseGuard(node);
         }
     }
 
@@ -1327,7 +1350,7 @@ export function Binder() {
                             // ok as a named arg name and object property name
                             break;
                         }
-                        else if (langVersion === LanguageVersion.acf2018) {
+                        else if (engineVersion.engine === Engine.Adobe) {
                             // invalid as an identifier, both tag and script
                             errorAtRange(node.range, defaultMsg(node));
                         }
@@ -1340,7 +1363,7 @@ export function Binder() {
                             break;
                         }
 
-                        if (langVersion === LanguageVersion.acf2018) {
+                        if (engineVersion.engine === Engine.Adobe) {
                             errorAtRange(node.range, defaultMsg(node));
                             break;
                         }
@@ -1370,7 +1393,7 @@ export function Binder() {
                             errorAtRange(node.range, defaultMsg(node));
                             break;
                         }
-                        else if (langVersion === LanguageVersion.acf2018 && !isNamedFunctionArgumentName(node) && !isObjectLiteralPropertyName(node) && isInScriptBlock(node)) {
+                        else if (engineVersion.engine === Engine.Adobe && !isNamedFunctionArgumentName(node) && !isObjectLiteralPropertyName(node) && isInScriptBlock(node)) {
                             errorAtRange(node.range, defaultMsg(node));
                             break;
                         }

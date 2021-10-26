@@ -44,10 +44,11 @@ import * as path from "path";
 import { NodeId, SourceFile, Parser, Binder, Node, Diagnostic as cfcDiagnostic, cfmOrCfc, NodeSourceMap, Checker, NodeKind } from "compiler";
 
 import { _Type } from '../../../compiler/types';
-import { FileSystem, LanguageVersion, Project } from "../../../compiler/project";
+import { FileSystem, Project } from "../../../compiler/project";
+import { EngineVersions, EngineVersion } from "../../../compiler/engines";
 import * as cfls from "../../../services/completions";
 import { getAttribute, getAttributeValue, getSourceFile, getTriviallyComputableString } from '../../../compiler/utils';
-import { FunctionDefinition, NodeFlags, Property } from '../../../compiler/node';
+import { BlockType, FunctionDefinition, NodeFlags, Property } from '../../../compiler/node';
 import { SourceRange, Token } from '../../../compiler/scanner';
 
 type TextDocumentUri = string;
@@ -55,7 +56,7 @@ type TextDocumentUri = string;
 interface CflsConfig {
 	engineLibAbsPath: string | null
 	x_types: boolean,
-	languageVersion: LanguageVersion,
+	engineVersion: EngineVersion,
 	wireboxConfigFile: string | null,
 	wireboxResolution: boolean
 }
@@ -164,6 +165,25 @@ connection.onDefinition((params) : Location[] | undefined  => {
 	const targetNode = project.getInterestingNodeToLeftOfCursor(fsPath, targetIndex);
 	if (!targetNode) return undefined;
 
+	if (targetNode.kind === NodeKind.simpleStringLiteral) {
+		if (targetNode.parent?.kind === NodeKind.tagAttribute && targetNode.parent.canonicalName === "extends") {
+			if (targetNode.parent?.parent?.kind === NodeKind.block
+					&& targetNode.parent.parent.subType === BlockType.scriptSugaredTagCallBlock
+					&& targetNode.parent.parent.name?.token.text.toLowerCase() === "component") {
+					if (sourceFile.cfc?.extends) {
+						return [{
+							uri: URI.file(sourceFile.cfc.extends.absPath).toString(),
+							range: {
+								start: {line: 0, character: 0},
+								end: {line: 0, character: 0},
+							}
+						}]
+					}
+
+			}
+		}
+		return undefined;
+	}
 	const checker = project.__unsafe_dev_getChecker();
 	const symbol = checker.getSymbol(targetNode, sourceFile);
 	if (!symbol || !symbol.symTabEntry.declarations) return undefined;
@@ -253,7 +273,7 @@ function resetCfls(why: string) {
 		{
 			parseTypes: cflsConfig.x_types,
 			debug: true,
-			language: cflsConfig.languageVersion,
+			engineVersion: cflsConfig.engineVersion,
 			withWireboxResolution: cflsConfig.wireboxResolution,
 			wireboxConfigFileCanonicalAbsPath: wireboxConfigFileAbsPath,
 		});
@@ -291,7 +311,7 @@ function updateConfig(config: Record<string, any> | null) {
 		engineLibAbsPath: cflsConfig?.engineLibAbsPath ?? null,
 		// the rest of these are supplied via config
 		x_types: config?.x_types,
-		languageVersion: config?.languageVersion ? languageConfigToEnum(config.languageVersion): LanguageVersion.lucee5,
+		engineVersion: engineVersionConfigToEngineVersion(config?.engineVersion),
 		wireboxConfigFile: config?.wireboxConfigFile ?? null,
 		wireboxResolution: config?.wireboxResolution ?? false
 	};
@@ -344,12 +364,9 @@ let globalSettings: ExampleSettings = defaultSettings;
 // Cache the settings of all open documents
 let documentSettings: Map<string, Thenable<ExampleSettings>> = new Map();
 
-function languageConfigToEnum(s: string) {
-	switch (s) {
-		case "Adobe": return LanguageVersion.acf2018;
-		case "Lucee": return LanguageVersion.lucee5;
-		default: return LanguageVersion.lucee5; // shouldn't hit this
-	}
+function engineVersionConfigToEngineVersion(key: any) {
+	if (typeof key === "string" && EngineVersions.hasOwnProperty(key)) return EngineVersions[key as keyof typeof EngineVersions];
+	else return EngineVersions["lucee.5"];
 }
 
 connection.onDidChangeConfiguration(async change => {

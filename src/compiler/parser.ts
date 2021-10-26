@@ -25,12 +25,12 @@ import {
     New,
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
-    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, TypeShim, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement } from "./node";
+    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, TypeShim, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath } from "./utils";
 import { cfIndexedType, Interface, cfIntersection, extractCfFunctionSignature, isIntersection, isStructLike, isTypeId, isUnion, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, Decorator, TypeConstructor, IndexSignature } from "./types";
 import { _Type, UninstantiatedArray, Struct, StructKind, cfTuple, cfFunctionSignature, cfTypeId, cfUnion, SyntheticType, cfFunctionSignatureParam } from "./types";
-import { LanguageVersion } from "./project";
+import { EngineVersion, Engine } from "./engines";
 
 let debugParseModule = false;
 let parseTypes = false; // generally not yet possible
@@ -113,7 +113,7 @@ interface ScannerState {
     artificialEndLimit: number | undefined;
 }
 
-export function Parser(config: {language: LanguageVersion}) {
+export function Parser(config: {engineVersion: EngineVersion}) {
     function setSourceFile(sourceFile_: SourceFile) {
         sourceFile = sourceFile_;
         scanner = sourceFile.scanner;
@@ -152,7 +152,7 @@ export function Parser(config: {language: LanguageVersion}) {
     let token_ : Token;
     let lastNonTriviaToken : Token;
     let diagnostics : Diagnostic[] = [];
-    const langVersion = config.language;
+    const engineVersion = config.engineVersion;
     const stripStructuralOnlyDocBlockTextPattern = /(^|\r?\n)\s*\*/g; // pattern to strip leading whitespace followed by a single "*" in docblocks
 
     let lastDocBlock : {type: _Type | null, typedefs: TypeShim[], docBlockAttrs: TagAttribute[] } | null = null;
@@ -1870,7 +1870,7 @@ export function Parser(config: {language: LanguageVersion}) {
             //      ^^^^^^^^^
             // so we hope to see an `in` following this; otherwise, it *also* needs an initializer
             // but we can flag that in the antecedent `for` parser
-            if (!isInSomeContext(ParseContext.for) && varModifier && langVersion === LanguageVersion.acf2018) {
+            if (!isInSomeContext(ParseContext.for) && varModifier && engineVersion.engine === Engine.Adobe) {
                 parseErrorAtRange(root.range, "Variable declarations require initializers.");
             }
 
@@ -2176,7 +2176,7 @@ export function Parser(config: {language: LanguageVersion}) {
             case TokenType.LEFT_PAREN: {
 
                 const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
-                const expr = langVersion === LanguageVersion.acf2018
+                const expr = engineVersion.engine === Engine.Adobe
                     ? parseAnonymousFunctionDefinitionOrExpression()
                     : parseAssignmentOrLower()
                 const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
@@ -2187,7 +2187,7 @@ export function Parser(config: {language: LanguageVersion}) {
                 // `() => ({x:1})` is illegal, but the message could be "Consider an explicit return"
                 // anyway, at least its flagged
                 //
-                if (langVersion === LanguageVersion.acf2018) {
+                if (engineVersion.engine === Engine.Adobe) {
                     switch (stripOuterParens(root).kind) {
                         case NodeKind.arrayLiteral:
                             parseErrorAtRange(root.range, "Parenthesized array literals are illegal. Consider removing the parentheses.");
@@ -2209,7 +2209,7 @@ export function Parser(config: {language: LanguageVersion}) {
                 //
                 // all of the above are valid in lucee
                 //
-                if (langVersion == LanguageVersion.acf2018 && (
+                if (engineVersion.engine === Engine.Adobe && (
                     (root.kind === NodeKind.indexedAccess)
                     || (root.kind === NodeKind.unaryOperator && root.expr.kind === NodeKind.indexedAccess)
                     || (root.kind === NodeKind.callExpression && root.left.kind === NodeKind.indexedAccess))) {
@@ -2567,7 +2567,7 @@ export function Parser(config: {language: LanguageVersion}) {
                 let dotDotDot : Terminal | null = null;
                 let expr : Node;
 
-                if (langVersion === LanguageVersion.acf2018 && isSimpleOrInterpolatedStringLiteral(name)) {
+                if (engineVersion.engine === Engine.Adobe && isSimpleOrInterpolatedStringLiteral(name)) {
                     parseErrorAtRange(name.range, "String literals cannot be used as argument names.");
                 }
 
@@ -2683,7 +2683,7 @@ export function Parser(config: {language: LanguageVersion}) {
     // @todo - the rules around what is and isn't a valid struct key need to be made more clear
     //
     function parseStructLiteralInitializerKey() : Node {
-        if (langVersion === LanguageVersion.lucee5) {
+        if (engineVersion.engine === Engine.Lucee) {
             return parseExpression();
         }
 
@@ -2708,45 +2708,30 @@ export function Parser(config: {language: LanguageVersion}) {
         }
     }
 
-    function parseStructLiteralInitializerMember(terminator: TokenType.RIGHT_BRACE | TokenType.RIGHT_BRACKET) : StructLiteralInitializerMember {
-        // move comma checks into checker, then we can put error range where TS does:
-        // {abc: foo def: bar},
-        //           ^^^ expected ','
-        //
+    function parseStructLiteralInitializerMember() : StructLiteralInitializerMember {
         if (lookahead() === TokenType.DOT_DOT_DOT) {
             const dotdotdot = parseExpectedTerminal(TokenType.DOT_DOT_DOT, ParseOptions.withTrivia);
             const expr = parseExpression();
             const maybeComma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
-
-            if (!maybeComma && lookahead() !== terminator) {
-                parseErrorAtRange(expr.range.toExclusive - 1, expr.range.toExclusive + 1, "Expected ','");
-            }
-            if (maybeComma && lookahead() === terminator) {
-                parseErrorAtRange(maybeComma.range, "Illegal trailing comma.");
-            }
             return SpreadStructLiteralInitializerMember(dotdotdot, expr, maybeComma);
         }
         else {
             const key = parseStructLiteralInitializerKey();
+            if (lookahead() === TokenType.COMMA || lookahead() === TokenType.RIGHT_BRACE) {
+                return ShorthandStructLiteralInitializerMember(key, parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia));
+            }
             const colonOrEqual = lookahead() === TokenType.EQUAL
                 ? parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia)
                 : parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
             const value = parseAnonymousFunctionDefinitionOrExpression();
             const maybeComma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
-    
-            if (!maybeComma && lookahead() !== terminator) {
-                parseErrorAtRange(value.range.toExclusive - 1, value.range.toExclusive + 1, "Expected ','");
-            }
-            if (maybeComma && lookahead() === terminator && langVersion === LanguageVersion.acf2018) {
-                parseErrorAtRange(maybeComma.range, "Illegal trailing comma.");
-            }
             return KeyedStructLiteralInitializerMember(key, colonOrEqual, value, maybeComma);
         }
     }
 
     function parseStructLiteral() : Node {
         const leftBrace = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
-        const kvPairs = parseList(ParseContext.structLiteralBody, parseStructLiteralInitializerMember, TokenType.RIGHT_BRACE);
+        const kvPairs = parseList(ParseContext.structLiteralBody, parseStructLiteralInitializerMember);
         const rightBrace = parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
         return parseCallExpressionOrLowerRest(
             StructLiteral(leftBrace, kvPairs, rightBrace));
@@ -2775,7 +2760,7 @@ export function Parser(config: {language: LanguageVersion}) {
 
         if (SpeculationHelper.lookahead(isExpressionThenColonOrEquals)) {
             const useArrayBodyListTerminator = ParseContext.arrayLiteralBody;
-            const structMembers = parseList(useArrayBodyListTerminator, parseStructLiteralInitializerMember, TokenType.RIGHT_BRACKET);
+            const structMembers = parseList(useArrayBodyListTerminator, parseStructLiteralInitializerMember);
             const rightBracket = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
             return OrderedStructLiteral(leftBracket, structMembers, rightBracket);
         }
@@ -2790,7 +2775,7 @@ export function Parser(config: {language: LanguageVersion}) {
                     if (!maybeComma && lookahead() !== TokenType.RIGHT_BRACKET) {
                         parseErrorAtRange(expr.range.toExclusive-1, expr.range.toExclusive, "Expected ','");
                     }
-                    if (maybeComma && langVersion === LanguageVersion.acf2018 && lookahead() === TokenType.RIGHT_BRACKET) {
+                    if (maybeComma && engineVersion.engine === Engine.Adobe && lookahead() === TokenType.RIGHT_BRACKET) {
                         parseErrorAtRange(maybeComma.range, "Illegal trailing comma.");
                     }
                     elements.push(SpreadArrayLiteralInitializerMember(dotDotDot, expr, maybeComma));
@@ -2802,7 +2787,7 @@ export function Parser(config: {language: LanguageVersion}) {
                     if (!maybeComma && lookahead() !== TokenType.RIGHT_BRACKET) {
                         parseErrorAtRange(expr.range.toExclusive-1, expr.range.toExclusive, "Expected ','");
                     }
-                    if (maybeComma && langVersion === LanguageVersion.acf2018 && lookahead() === TokenType.RIGHT_BRACKET) {
+                    if (maybeComma && engineVersion.engine === Engine.Adobe && lookahead() === TokenType.RIGHT_BRACKET) {
                         parseErrorAtRange(maybeComma.range, "Illegal trailing comma.");
                     }
 
@@ -3069,7 +3054,7 @@ export function Parser(config: {language: LanguageVersion}) {
             result.push(Script.FunctionParameter(requiredTerminal, javaLikeTypename, dotDotDot, name, equal, defaultValue, attrs, comma, type));
         }
 
-        if (langVersion === LanguageVersion.acf2018 && result.length > 0 && result[result.length-1].comma) {
+        if (engineVersion.engine === Engine.Adobe && result.length > 0 && result[result.length-1].comma) {
             parseErrorAtRange(result[result.length-1].comma!.range, "Illegal trailing comma.");
         }
 
@@ -3149,7 +3134,7 @@ export function Parser(config: {language: LanguageVersion}) {
                         params,
                         rightParen,
                         fatArrow,
-                        doOutsideOfContext(ParseContext.cfcPsuedoConstructor, () => langVersion === LanguageVersion.acf2018
+                        doOutsideOfContext(ParseContext.cfcPsuedoConstructor, () => engineVersion.engine === Engine.Adobe
                             ? parseAnonymousFunctionDefinitionOrExpression()
                             : parseAssignmentOrLower()));
                 }
@@ -3656,7 +3641,7 @@ export function Parser(config: {language: LanguageVersion}) {
                     //
                     // in adobe, param is just a typical sugared tag name: `param <attr>+`
                     //
-                    if (peekedCanonicalText === "param" && langVersion === LanguageVersion.lucee5) {
+                    if (peekedCanonicalText === "param" && engineVersion.engine === Engine.Lucee) {
                         // param is also a valid variable name;
                         // we don't want to create a ParamStatement for something like `param = 42`, which is an assignment to a symbol named 'param', and has nothing to do with a ParamStatement
                         const paramToken = SpeculationHelper.speculate(() => {

@@ -1,22 +1,18 @@
 # cfc
 A compiler for Coldfusion, designed primarily for editor tooling support
 
+The VsCode plugin based on this tool is "cflsp", downloadable from within VsCode or on the [extensions marketplace](https://marketplace.visualstudio.com/items?itemName=DavidRogers.cflsp)
+
 ## current goals
-* Parse large subset of ColdFusion 2018+ / Lucee5+
+* Support ColdFusion 2018+ and Lucee5+
 * Recognize syntactic and semantic errors and emit reasonable diagnostics for them.
 * Offer autocomplete and navigate-to-symbol
-* Always produce a valid AST - don't crash on invalid source text, circular extends clauses, and etc.
 * Extract type information from source text in a gradual, unobtrusive way that permits flagging code that will fail at runtime and that supports an improved in-editor development experience.
 
 ### Experiments
-* Resolve Coldbox module via Wirebox's `getInstance`, treating it as the de-facto package manager, ala `npm` in the nodejs world
+* Resolve Coldbox modules via Wirebox's `getInstance` and in-cfc property declarations, treating it as the de-facto package manager, ala `npm` in the nodejs world
 * Type annotations for functions and variable declarations to support type checking of expressions
-* "interface extended engine scopes" - `@interface variables { x: string }` is the equivalent of declaring `x: string` in the global scope (since `variables` always participates in name lookup); the same can be done for `cgi`, `application`, `this`, etc.
-
-### How you can help
-* Feature suggestions welcome, we can't promise we'll implement them but we're interested in listening
-* Bug reports
-* How do you use `new`? How do you map paths? Is it extremely dynamic, using a lot of `expandPath` and friends? Would you be willing to be a little less dynamic, if it meant a better editor experience? Do you use Forgebox/Coldbox/Wirebox?
+* "interface extended engine scopes" &mdash;&nbsp; `@interface variables { x: string }` in a CFC preamble is the equivalent of declaring `x: string` in the global scope (since `variables` always participates in name lookup); the same can be done for `cgi`, `application`, `this`, etc.
 
 ## building
 

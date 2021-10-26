@@ -3,10 +3,11 @@ import * as path from "path";
 
 import { Binder } from "./binder";
 import { Checker } from "./checker";
+import { EngineVersion } from "./engines";
 import { BlockType, CallExpression, mergeRanges, Node, NodeId, NodeKind, SourceFile, StatementType, SymTabEntry } from "./node";
 import { Parser } from "./parser";
 import { CfFileType, SourceRange } from "./scanner";
-import { CfcTypeWrapper, cfFunctionOverloadSet, cfFunctionSignatureParam, Interface, createLiteralType, _Type } from "./types";
+import { CfcTypeWrapper, cfFunctionOverloadSet, cfFunctionSignatureParam, Interface, createLiteralType, _Type, Struct } from "./types";
 
 import { cfmOrCfc, findNodeInFlatSourceMap, flattenTree, getAttributeValue, getComponentAttrs, getComponentBlock, getTriviallyComputableString, NodeSourceMap, visit } from "./utils";
 
@@ -177,12 +178,10 @@ export function DebugFileSystem(files?: Readonly<FileSystemNode>, pathSepOfDebug
     }
 }
 
-export const enum LanguageVersion { acf2018 = 1, lucee5 };
-
 export interface ProjectOptions {
     debug: boolean,
     parseTypes: boolean,
-    language: LanguageVersion,
+    engineVersion: EngineVersion,
     withWireboxResolution: boolean,
     wireboxConfigFileCanonicalAbsPath: string | null,
 }
@@ -206,8 +205,8 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         // checker.setDebug(true);
     }
 
-    binder.setLang(options.language);
-    checker.setLang(options.language);
+    binder.setLang(options.engineVersion);
+    checker.setLang(options.engineVersion);
     checker.install({CfcResolver, EngineSymbolResolver, LibTypeResolver});
 
     type FileCache = Map<AbsPath, CachedFile>;
@@ -252,7 +251,6 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             const wireboxInterface = constructWireboxInterface(sourceFile);
             if (wireboxInterface) {
                 if (!wireboxLib) wireboxLib = SourceFile("<<magic/wirebox>>", CfFileType.dCfm, "");
-                // put on merged interfaces because we're done with, we merged it as part of building it here (well really there is no mergin to do)
                 wireboxLib.containedScope.typedefs.mergedInterfaces.set("Wirebox", wireboxInterface);
             }
             else {
@@ -301,6 +299,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         }
 
         const overloads : {params: cfFunctionSignatureParam[], returns: _Type}[] = [];
+        const mappingsBuilder = new Map<string, SymTabEntry>();
         for (const mapping of mappings) {
             if (mapping.kind === "dir") {
                 const dirTarget = fileSystem.join(projectRoot, ...mapping.target.split("."));
@@ -324,7 +323,15 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
                         const instantiableNameAsLiteralType = createLiteralType(instantiableName);
 
                         const param = cfFunctionSignatureParam(/*required*/true, instantiableNameAsLiteralType, "name")
-                        overloads.push({params: [param], returns: CfcTypeWrapper(file.parsedSourceFile)});
+                        var cfcTypeWrapper = CfcTypeWrapper(file.parsedSourceFile);
+                        overloads.push({params: [param], returns: cfcTypeWrapper});
+                        const canonicalName = instantiableName.toLowerCase();
+                        mappingsBuilder.set(canonicalName, {
+                            canonicalName,
+                            uiName: instantiableName,
+                            type: cfcTypeWrapper,
+                            declarations: null
+                        });
                     }
                 }
             }
@@ -337,7 +344,16 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             type: cfFunctionOverloadSet("getInstance", overloads, [])
         };
 
-        const wireboxMembers = new Map<string, SymTabEntry>([["getinstance", wireboxGetInstanceSymbol]]);
+        const wireboxMembers = new Map<string, SymTabEntry>([
+            ["getinstance", wireboxGetInstanceSymbol],
+            ["mappings", {
+                canonicalName: "mappings",
+                uiName: "mappings",
+                declarations: null,
+                type: Struct(mappingsBuilder)
+            }]
+        ]);
+        
         return Interface("Wirebox", wireboxMembers);
     }
 
@@ -512,10 +528,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     function getCfcSpecifier(resolveFrom: string, possiblyUnqualifiedCfc: string) : ComponentSpecifier[] | undefined {
         resolveFrom = canonicalizePath(resolveFrom);
         if (projectRoot.startsWith(resolveFrom)) return;
-        const isUnqualified = !/\./.test(possiblyUnqualifiedCfc);
         const base = path.parse(projectRoot).base; // Z in X/Y/Z, assuming Z is some root we're interested in
-        const rel = path.relative(projectRoot, resolveFrom);
-        const {dir} = path.parse(rel); // A/B/C in X/Y/Z/A/B/C, where X/Y/Z is the root
         // if it is unqualifed, we prepend the full path from root and lookup from that
         // with root of "X/", a file of "X/Y/Z/foo.cfm" calling "new Bar()" looks up "X.Y.Z.Bar"
 
@@ -524,13 +537,20 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             const components = parsedPath.dir.split(fileSystem.pathSep);
             const result : string[] = [];
 
-            while (components.length > 0) {
-                components.pop();
-                const maybeModulesPath = fileSystem.normalize(fileSystem.join(...components, "modules"));
-                if (!maybeModulesPath.startsWith(projectRoot)) break; // should never happen ? i.e. we've climbed out of project root?
+            while (components.length > 0 && components[components.length-1] !== "" /* a removed, leading path separator turned to "" on split */) {
+                const workingPath = fileSystem.join(parsedPath.root, ...components);
+                
+                if (!workingPath.startsWith(projectRoot)) break; // should never happen ? i.e. we've climbed out of project root?
+                
+                const maybeModulesPath = fileSystem.join(workingPath, "modules");
                 if (fileSystem.existsSync(maybeModulesPath)) {
                     result.push(maybeModulesPath);
                 }
+                if (components[components.length-1] === "modules_app") { // we'll treat some/path/modules_app/ as a root
+                    result.push(workingPath);
+                }
+
+                components.pop();
             }
 
             return result;
@@ -539,78 +559,56 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         const parentModulesFolders = findParentModulesFolders(resolveFrom);
         parentModulesFolders;
 
-        if (isUnqualified) {
-            if (resolveFrom.startsWith(projectRoot)) {
-                const cfcName = [base, ...dir.split(fileSystem.pathSep), possiblyUnqualifiedCfc].filter(e => e !== "").join("."); // filter out possibly empty base and dirs; e.g. root is '/' so path.parse(root).base is ''
-                const xname = [base, possiblyUnqualifiedCfc].filter(e => e !== "").join(".");
-                return [
-                    {
-                        canonicalName: cfcName.toLowerCase(),
-                        uiName: cfcName,
-                        path: fileSystem.join(projectRoot, dir, possiblyUnqualifiedCfc + ".cfc")
-                    },
-                    {
-                        canonicalName: xname.toLowerCase(),
-                        uiName: xname,
-                        path: fileSystem.join(projectRoot, possiblyUnqualifiedCfc + ".cfc")
-                    },
-                ];
-            }
+        const canonicalCfcName = possiblyUnqualifiedCfc.toLowerCase();
+
+        // project root - '/root/', project base is 'root'; does cfc name start with path component 'root'?
+        // if so, we want to try to resolve '/root/foo/bar.cfc' as well as '/root/root/foo/bar.cfc'
+        const canonicalBase = base.toLowerCase();
+        const nameStartsWithProjectBase = canonicalCfcName.startsWith(canonicalBase);
+
+        const cfcComponents = possiblyUnqualifiedCfc.split(".");
+        
+        if (cfcComponents.length === 0) return undefined; // just to not crash; why would this happen?
+        
+        cfcComponents[cfcComponents.length - 1] = cfcComponents[cfcComponents.length - 1] + ".cfc";
+
+        const common = {
+            canonicalName: canonicalCfcName,
+            uiName: possiblyUnqualifiedCfc,
+        } as const;
+
+        const result = [{
+            ...common,    
+            path: fileSystem.join(projectRoot, ...nameStartsWithProjectBase ? cfcComponents.slice(1) : cfcComponents) // /root/foo/bar.cfc
+        },{
+            ...common,    
+            path: fileSystem.join(path.parse(resolveFrom).dir, ...cfcComponents)
+        }];
+
+        // magic coldbox/wirebox resolution, might want something to toggle this
+        for (const coldboxModulePath of parentModulesFolders) {
+            result.push({
+                ...common,
+                path: path.join(coldboxModulePath, ...cfcComponents)
+            });    
         }
-        else {
-            const canonicalCfcName = possiblyUnqualifiedCfc.toLowerCase();
+        // result.push({
+        //     ...common,
+        //     path: fileSystem.join(projectRoot, "modules", ...cfcComponents) // /root/modules/foo/bar.cfc
+        // });
+        // result.push({
+        //     ...common,
+        //     path: fileSystem.join(path.parse(resolveFrom).dir, "modules", ...cfcComponents) // /root/modules/foo/bar.cfc
+        // })
 
-            // project root - '/root/', project base is 'root'; does cfc name start with path component 'root'?
-            // if so, we want to try to resolve '/root/foo/bar.cfc' as well as '/root/root/foo/bar.cfc'
-            const canonicalBase = base.toLowerCase();
-            const nameStartsWithProjectBase = canonicalCfcName.startsWith(canonicalBase);
-
-            const cfcComponents = possiblyUnqualifiedCfc.split(".");
-            
-            if (cfcComponents.length === 0) return undefined; // just to not crash; why would this happen?
-            
-            cfcComponents[cfcComponents.length - 1] = cfcComponents[cfcComponents.length - 1] + ".cfc";
-
-            const common = {
-                canonicalName: canonicalCfcName,
-                uiName: possiblyUnqualifiedCfc,
-            } as const;
-
-            const result = [{
-                ...common,    
-                path: fileSystem.join(projectRoot, ...nameStartsWithProjectBase ? cfcComponents.slice(1) : cfcComponents) // /root/foo/bar.cfc
-            },{
-                ...common,    
-                path: fileSystem.join(path.parse(resolveFrom).dir, ...cfcComponents)
-            }];
-
-            // magic coldbox/wirebox resolution, might want something to toggle this
-            for (const coldboxModulePath of parentModulesFolders) {
-                result.push({
-                    ...common,
-                    path: path.join(coldboxModulePath, ...cfcComponents)
-                });    
-            }
-            // result.push({
-            //     ...common,
-            //     path: fileSystem.join(projectRoot, "modules", ...cfcComponents) // /root/modules/foo/bar.cfc
-            // });
-            // result.push({
-            //     ...common,
-            //     path: fileSystem.join(path.parse(resolveFrom).dir, "modules", ...cfcComponents) // /root/modules/foo/bar.cfc
-            // })
-
-            if (nameStartsWithProjectBase) {
-                result.push({
-                    ...common,
-                    path: fileSystem.join(projectRoot, ...cfcComponents) // /root/root/foo/bar.cfc
-                });
-            }
-
-            return result;
+        if (nameStartsWithProjectBase) {
+            result.push({
+                ...common,
+                path: fileSystem.join(projectRoot, ...cfcComponents) // /root/root/foo/bar.cfc
+            });
         }
 
-        return undefined;
+        return result;
     }
 
     function EngineSymbolResolver(canonicalName: string) : SymTabEntry | undefined {

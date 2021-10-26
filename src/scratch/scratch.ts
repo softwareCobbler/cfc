@@ -6,7 +6,8 @@ import { Scanner, Parser, Binder, NilDCfm, NilCfc, NilCfm, SourceFile } from "..
 import { CfFileType } from "../compiler/scanner";
 import { binarySearch, cfmOrCfc, findNodeInFlatSourceMap, flattenTree, isExpressionContext, recursiveGetFiles } from "../compiler/utils";
 import { Checker } from "../compiler/checker";
-import { DebugFileSystem, FileSystem, LanguageVersion, Project } from "../compiler/project";
+import { DebugFileSystem, FileSystem, Project } from "../compiler/project";
+import { EngineVersions } from "../compiler/engines";
 import { getCompletions } from "../services/completions";
 
 import * as fs from "fs";
@@ -75,7 +76,7 @@ function projectFiddle() {
 
     //let x = debugfs.readFileSync("/Child.cfc").toString().slice(102,105)
     
-    const project = Project("/", /*filesystem*/debugfs, {debug: true, parseTypes: true, language: LanguageVersion.lucee5, withWireboxResolution: true, wireboxConfigFileCanonicalAbsPath: "/Wirebox.cfc"});
+    const project = Project("/", /*filesystem*/debugfs, {debug: true, parseTypes: true, engineVersion: EngineVersions["acf.2018"], withWireboxResolution: true, wireboxConfigFileCanonicalAbsPath: "/Wirebox.cfc"});
     //const project = Project([path.resolve(".")], FileSystem(), {debug: true, parseTypes: true, language: LanguageVersion.lucee5});
     //const target = path.join(path.resolve("./test/"), "mxunit/framework/javaloader/JavaProxy.cfc");
     //project.addFile(target);
