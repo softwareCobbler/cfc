@@ -141,7 +141,7 @@ export function getCanonicalType(type: _Type) {
 
 export interface UninstantiatedArray extends TypeConstructorInvocation {
     left: cfTypeId,
-    args: [_Type]
+    args: [_Type],
 }
 
 const arrayTypeID = cfTypeId("Array");
@@ -572,7 +572,7 @@ export function cfTypeId(name: string, indexChain?: string[]) : cfTypeId {
 }
 
 export function isTypeId(t: _Type) : t is cfTypeId {
-    t = getCanonicalType(t);
+    //t = getCanonicalType(t);
     return !!(t.flags & TypeFlags.typeId);
 }
 

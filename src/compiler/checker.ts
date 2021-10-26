@@ -1,13 +1,13 @@
 import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, Property, hasDeclaredType, UnreachableFlow } from "./node";
 import { CfcResolver, EngineSymbolResolver, LibTypeResolver } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
-import { cfFunctionSignature, cfIntersection, Struct, cfUnion, SyntheticType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStructLike, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, getCanonicalType, stringifyType, cfFunctionSignatureParam, unsafe__cfFunctionSignatureWithFreshReturnType, isFunctionOverloadSet, cfFunctionOverloadSet, isLiteralType, cfTypeId, SymbolTableTypeWrapper, CfcTypeWrapper, Interface, StructKind, isCfcLookupType, isInstantiatedArray, isInterface, createType, createLiteralType, isUninstantiatedArray, isGenericFunctionSignature, TypeConstructor, typeFromJavaLikeTypename, } from "./types";
+import { cfFunctionSignature, cfIntersection, Struct, cfUnion, SyntheticType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStructLike, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, stringifyType, cfFunctionSignatureParam, unsafe__cfFunctionSignatureWithFreshReturnType, isFunctionOverloadSet, cfFunctionOverloadSet, isLiteralType, cfTypeId, SymbolTableTypeWrapper, CfcTypeWrapper, Interface, StructKind, isCfcLookupType, isInstantiatedArray, isInterface, createType, createLiteralType, isUninstantiatedArray, isGenericFunctionSignature, TypeConstructor, typeFromJavaLikeTypename, } from "./types";
 import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, getAttributeValue, getContainingFunction, getFunctionDefinitionAccessLiteral, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol } from "./utils";
 import { Engine, EngineVersion, supports } from "./engines";
 
 const structViewCache = WeakPairMap<SymbolTable, Interface, Struct>(); // map a SymbolTable -> Interface -> Struct, used to check prior existence of a wrapping of a symbol table into a struct with a possible interface extension
-const reinstantiationContext = SourceFile("", CfFileType.cfc, ""); // an empty type reinstantiation context, no symbols are visible; reinstantiation relies entirely on capture contexts attached the "reinstantiable"
+const EmptyInstantiationContext = SourceFile("", CfFileType.cfc, ""); // an empty type type instantiation context, no symbols are visible; there we rely entirely on captured or provided contexts attached the instantiable target
 
 export function Checker() {
     let sourceFile!: SourceFile;
@@ -774,11 +774,11 @@ export function Checker() {
                 let didReinstantiate = false;
                 if (isTypeConstructorInvocation(l)) {
                     didReinstantiate = true;
-                    l = evaluateType(reinstantiationContext, l);
+                    l = evaluateType(EmptyInstantiationContext, l);
                 }
                 if (isTypeConstructorInvocation(r)) {
                     didReinstantiate = true;
-                    r = evaluateType(reinstantiationContext, r);
+                    r = evaluateType(EmptyInstantiationContext, r);
                 }
 
                 if (didReinstantiate) {
@@ -886,7 +886,6 @@ export function Checker() {
 
                 if (isFunctionSignature(sigParamType)) {
                     const isGenericInReturnPosition = isTypeId(sigParamType.returns) && typeParamMap.has(sigParamType.returns.name);
-                    let argType : _Type | undefined;
 
                     if (isGenericInReturnPosition && (callSiteArg.expr.kind === NodeKind.functionDefinition || callSiteArg.expr.kind === NodeKind.arrowFunctionDefinition)) {
                         for (let j = 0; j < callSiteArg.expr.params.length; j++) {
@@ -912,19 +911,14 @@ export function Checker() {
                             // not possible, can't have a tag expr in an inline function expression, like `needsACallback(<cffunction>....)`
                         }
                         else {
-                            checkNode(callSiteArg.expr.body);
-                            if (callSiteArg.expr.kind === NodeKind.arrowFunctionDefinition && callSiteArg.expr.body.kind !== NodeKind.block) {
-                                const returnType = getCachedEvaluatedNodeType(callSiteArg.expr.body);
-                                pushResolution((sigParamType.returns as cfTypeId).name, returnType);
-                            }
+                            const returnType = checkFunctionBody(callSiteArg.expr);
+                            pushResolution((sigParamType.returns as cfTypeId).name, returnType);
                         }
                     }
                     else {
                         checkNode(callSiteArg.expr);
-                        argType = getCachedEvaluatedNodeType(callSiteArg.expr);
+                        getCachedEvaluatedNodeType(callSiteArg.expr);
                     }
-
-                    console.log(argType);
                 }
                 else {
                     checkNode(callSiteArg);
@@ -936,6 +930,11 @@ export function Checker() {
                         }
                     }
                 }
+            }
+
+            if (definitelyResolvedTypeParamMap.size === typeParamMap.size) {
+                const returnType = evaluateType(EmptyInstantiationContext, sig.body.returns, definitelyResolvedTypeParamMap);
+                setCachedEvaluatedNodeType(node, returnType);
             }
 
             function widenToCommonType(t: _Type, u: _Type) : _Type | undefined {
@@ -1280,10 +1279,20 @@ export function Checker() {
 
         const sig = getCachedEvaluatedNodeType(func);
         if (!sig || !isFunctionSignature(sig)) {
+            //
+            // kludge -- we need an ast based way to see if we're inside a function expression (an arrow function expr is necessarily an expression)
+            //
+            const container = getContainingFunction(node);
+            if (container?.kind === NodeKind.arrowFunctionDefinition || container?.kind === NodeKind.functionDefinition && !container.fromTag && !container.canonicalName) {
+                const exprType = node.expr ? getCachedEvaluatedNodeType(node.expr) : SyntheticType.null;
+                returnTypes.push(exprType);
+                return;        
+            }
+
             return;
         }
 
-        const exprType = node.expr ? getCachedEvaluatedNodeType(node.expr) : SyntheticType.void;
+        const exprType = node.expr ? getCachedEvaluatedNodeType(node.expr) : SyntheticType.null;
 
         if (!isAssignable(exprType, sig.returns)) {
             // if we got an exprType, we got an expr or a just return token; if this is from tag, we definitely got a tag
@@ -1445,13 +1454,6 @@ export function Checker() {
         sourceFile.nodeToSymbol.set(node.nodeId, resolvedSymbol);
     }
 
-    function isStructOrArray(type: _Type) : boolean {
-        return isStructLike(type)
-            || isArray(type)
-            || (isIntersection(type) && type.types.some(type => isStructOrArray(type)))
-            || (isUnion(type) && type.types.every(type => isStructOrArray(type)))
-    }
-
     // take a SymbolTable and wrap it in a Struct, so we can bridge the gap between those worlds, mostly for the 
     // sake of completions; a "scope" in CF is essentially a struct, but not quite; and vice versa; so the abstraction is not perfect but it's close
     // we cache and reuse already-wrapped sybmol tables so that we can compare types by identity
@@ -1604,10 +1606,14 @@ export function Checker() {
         // we set cached types on 'root' elements,
         // that is, the indexed-access root node itself, and the subsequent elements
         // not on the component identifiers, dots, brackets, etc.
-        if (isStructOrArray(type)) {
+        if (isStructLike(type)) {
             for (let i = 0; i < node.accessElements.length; i++) {
                 const element = node.accessElements[i];
-                if ((element.accessType === IndexedAccessType.dot || element.accessType === IndexedAccessType.bracket) && isStructLike(type)) {
+                if (element.accessType === IndexedAccessType.bracket && isInstantiatedArray(type)) {
+                    symbol = undefined;
+                    type = type.memberType;
+                }
+                else if ((element.accessType === IndexedAccessType.dot || element.accessType === IndexedAccessType.bracket) && isStructLike(type)) {
                     const propertyName = element.accessType === IndexedAccessType.dot
                         ? element.property.token.text.toLowerCase()
                         : getTriviallyComputableString(element.expr);
@@ -1653,12 +1659,7 @@ export function Checker() {
                         }
                     }
                 }
-                else if (element.accessType === IndexedAccessType.bracket && type && isArray(type)) {
-                    type = getArrayMemberType(type);
-                    if (!type) type = SyntheticType.any;
-                }
                 else {
-                    // todo - support arrays being also dot-indexable, since they have member functions
                     type = SyntheticType.any;
                 }
 
@@ -1713,9 +1714,6 @@ export function Checker() {
     function checkFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {
         // for cfc member functions, some work was already done in the binder to extract the signature, but we didn't have visibility into CFC resolution there;
         // so here we can try to resolve CFC return types / param types
-
-        const savedReturnTypes = returnTypes;
-        returnTypes = [];
 
         const isMemberFunction = isCfcMemberFunctionDefinition(node);
         let memberFunctionSignature : cfFunctionSignature | undefined;
@@ -1791,24 +1789,8 @@ export function Checker() {
 
         setCachedEvaluatedNodeType(node, finalType);
         
-        // for (const param of node.params) {
-        //     setCachedEvaluatedFlowType(node.flow!, param.canonicalName, param.type || SyntheticType.any);
-        // }
+        const actualReturnType = checkFunctionBody(node);
 
-        if (node.kind === NodeKind.functionDefinition && node.fromTag) {
-            checkListFunctionsLast(node.body);
-        }
-        else {
-            checkNode(node.body);
-        }
-
-        let flowFallsThrough = false;
-        if (node.finalFlow !== UnreachableFlow) {
-            flowFallsThrough = true;
-            returnTypes.push(SyntheticType.null);
-        }
-
-        const actualReturnType = unionify(returnTypes);
         if (!isAssignable(actualReturnType, finalType.returns, /*sourceIsLiteralExpr*/ false, /*forReturnType*/ true)) {
             if (node.kind === NodeKind.functionDefinition) {
                 let literalReturnType : CanonicalizedName | undefined = undefined;
@@ -1824,7 +1806,7 @@ export function Checker() {
                     }
                 }
                 
-                if (flowFallsThrough && literalReturnType && (literalReturnType.canonical !== "void" && literalReturnType.canonical !== "any")) {
+                if (node.finalFlow !== UnreachableFlow && literalReturnType && (literalReturnType.canonical !== "void" && literalReturnType.canonical !== "any")) {
                     const range = node.fromTag ? getAttributeValue(node.attrs, "returntype")!.range : node.returnType!.range;
                     typeErrorAtRange(range, `Function does not have a final return statement, and may return 'null' which is not assignable to declared return type '${literalReturnType.ui}'.`);
                 }
@@ -1834,8 +1816,33 @@ export function Checker() {
                 }
             }
         }
+    }
+
+    function checkFunctionBody(node: FunctionDefinition | ArrowFunctionDefinition) : _Type {
+        const savedReturnTypes = returnTypes;
+        returnTypes = [];
+
+        if (node.kind === NodeKind.functionDefinition && node.fromTag) {
+            checkListFunctionsLast(node.body);
+        }
+        else {
+            checkNode(node.body);
+        }
+
+        if (node.finalFlow !== UnreachableFlow) {
+            returnTypes.push(SyntheticType.null);
+        }
+
+        let actualReturnType : _Type;
+        if (node.kind === NodeKind.arrowFunctionDefinition && node.body.kind !== NodeKind.block) {
+            actualReturnType = getCachedEvaluatedNodeType(node.body);
+        }
+        else {
+            actualReturnType = unionify(returnTypes);
+        }
 
         returnTypes = savedReturnTypes;
+        return actualReturnType;
     }
 
     function checkSwitch(node: Switch) {
@@ -2065,14 +2072,6 @@ export function Checker() {
             setCachedEvaluatedNodeType(node.callExpr.left, initSig.type);
             checkCallLikeArguments(initSig.type, node.callExpr)
         }
-    }
-
-    function getArrayMemberType(type: _Type) : _Type | undefined {
-        type = getCanonicalType(type);
-        if (isArray(type)) {
-            return type.memberType;
-        }
-        return undefined;
     }
 
     function getStructMember(element: Node, type: _Type, canonicalName: string) : SymbolResolution | undefined {
@@ -2433,6 +2432,11 @@ export function Checker() {
                         if (isTypeId(type.left)) {
                             const constructor = typeParamMap?.get(type.left.name) || walkUpContainersToResolveType(context, type.left) || null;
                             if (constructor && isInterface(constructor)) {
+                                for (const arg of type.args) {
+                                    if (isTypeId(arg) && lookupDeferrals?.has(arg.name)) {
+                                        return type;
+                                    }
+                                }
                                 const result = instantiateInterface(constructor, type.args);
                                 if (result.status === TypeCache_Status.resolving) {
                                     if (typeParamMap) { // a new type (by identity), which holds onto the capture context, running it through the instantiator again should find a resolved cached version 

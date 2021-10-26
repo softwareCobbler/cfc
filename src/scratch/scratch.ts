@@ -36,7 +36,7 @@ function projectFiddle() {
                         // a: T[],
                         // f: (e?: T[], i?: numeric, a?: T[]) => void # no-suggest-param-names
                         //) no-suggest-param-names
-                        id: <U>(mapper: (e: T) => U) => U
+                        maplike: <U>(mapper: (e: T) => U) => U[]
                     }
 
                 `,
@@ -44,9 +44,16 @@ function projectFiddle() {
                     /**
                      */
                     component {
-                        someFile function index( event, rc, prc ) {
-                            return new someFile();
+                        function index( event, rc, prc ) {
+                            // @type string[]
+                            var foo = [];
+
+                            foo.maplike((e) => {
+                                return new someFile();
+                            }).maplike((v) => v.    // 381
                         }
+
+                        function bar() {}
                     }
                     `,
                 "a": {
@@ -76,7 +83,7 @@ function projectFiddle() {
     const diagnostics = project.getDiagnostics("/Base.cfc");
 
     //const x = project.getInterestingNodeToLeftOfCursor("/someFile.cfc", 378);
-    const completions = getCompletions(project, "/someFile.cfc", 378, null);
+    const completions = getCompletions(project, "/someFile.cfc", 381, null);
     console.log(completions);
     for (const diagnostic of diagnostics) {
         console.log(diagnostic);
