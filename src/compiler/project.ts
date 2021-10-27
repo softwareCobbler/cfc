@@ -190,6 +190,10 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     type AbsPath = string;
     
     const projectRoot = canonicalizePath(__const__projectRoot);
+    const projectRootDirName = (() => {
+        const t = path.parse(projectRoot).base.split(fileSystem.pathSep);
+        return t.length > 0 ? t[t.length - 1] : "";
+    })();
     const parser = Parser(options);
     const binder = Binder();
     const checker = Checker();
@@ -396,6 +400,12 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         }
     }
 
+    /**
+     * Convert some path or path component into its canonical form, which is identity
+     * on case-sensitive systems, and all lower case on case-sensitive
+     * @param path
+     * @returns 
+     */
     function canonicalizePath<T extends string | null | undefined>(path: T) : T extends string ? string : undefined {
         if (!path) return undefined as any;
         return fileSystem.caseSensitive ? path : path.toLowerCase() as any;
@@ -450,7 +460,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         if (!heritageLiteral) return undefined;
         return {
             extendsAttr: heritage,
-            extendsSpecifier: getCfcSpecifier(sourceFile.absPath, heritageLiteral)
+            extendsSpecifier: buildPossibleCfcResolutionPaths(sourceFile.absPath, heritageLiteral)
         }
     }
 
@@ -475,7 +485,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     }
 
     function CfcResolver(args: {resolveFrom: string, cfcName: string}) {
-        const specifiers = getCfcSpecifier(args.resolveFrom, args.cfcName);
+        const specifiers = buildPossibleCfcResolutionPaths(args.resolveFrom, args.cfcName);
         if (!specifiers) return undefined;
         for (const specifier of specifiers) {
             const file = getCachedFile(specifier.path)?.parsedSourceFile;
@@ -529,64 +539,60 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         return getCachedFile(absPath)?.parsedSourceFile || undefined;
     }
 
-    function getCfcSpecifier(resolveFrom: string, possiblyUnqualifiedCfc: string) : ComponentSpecifier[] | undefined {
-        resolveFrom = canonicalizePath(resolveFrom);
-        if (projectRoot.startsWith(resolveFrom)) return;
-        const base = path.parse(projectRoot).base; // Z in X/Y/Z, assuming Z is some root we're interested in
-        // if it is unqualifed, we prepend the full path from root and lookup from that
-        // with root of "X/", a file of "X/Y/Z/foo.cfm" calling "new Bar()" looks up "X.Y.Z.Bar"
+    function findColdboxParentModulesFolders(canonicalBase: string) : string[] {
+        const parsedPath = path.parse(canonicalBase);
+        const components = parsedPath.dir.split(fileSystem.pathSep);
+        const result : string[] = [];
 
-        function findParentModulesFolders(canonicalBase: string) : string[] {
-            const parsedPath = path.parse(canonicalBase);
-            const components = parsedPath.dir.split(fileSystem.pathSep);
-            const result : string[] = [];
-
-            while (components.length > 0 && components[components.length-1] !== "" /* a removed, leading path separator turned to "" on split */) {
-                const workingPath = fileSystem.join(parsedPath.root, ...components);
-                
-                if (!workingPath.startsWith(projectRoot)) break; // should never happen ? i.e. we've climbed out of project root?
-                
-                const maybeModulesPath = fileSystem.join(workingPath, "modules");
-                if (fileSystem.existsSync(maybeModulesPath)) {
-                    result.push(maybeModulesPath);
-                }
-                if (components[components.length-1] === "modules_app") { // we'll treat some/path/modules_app/ as a root
-                    result.push(workingPath);
-                }
-
-                components.pop();
+        while (components.length > 0 && components[components.length-1] !== "" /* a removed, leading path separator turned to "" on split */) {
+            const workingPath = fileSystem.join(parsedPath.root, ...components);
+            
+            if (!workingPath.startsWith(projectRoot)) break; // should never happen ? i.e. we've climbed out of project root?
+            
+            const maybeModulesPath = fileSystem.join(workingPath, "modules");
+            if (fileSystem.existsSync(maybeModulesPath)) {
+                result.push(maybeModulesPath);
+            }
+            if (components[components.length-1] === "modules_app") { // we'll treat some/path/modules_app/ as a root
+                result.push(workingPath);
             }
 
-            return result;
+            components.pop();
         }
 
-        const parentModulesFolders = findParentModulesFolders(resolveFrom);
-        parentModulesFolders;
+        return result;
+    }
 
-        const canonicalCfcName = possiblyUnqualifiedCfc.toLowerCase();
-
-        // project root - '/root/', project base is 'root'; does cfc name start with path component 'root'?
-        // if so, we want to try to resolve '/root/foo/bar.cfc' as well as '/root/root/foo/bar.cfc'
-        const canonicalBase = base.toLowerCase();
-        const nameStartsWithProjectBase = canonicalCfcName.startsWith(canonicalBase);
-
-        const cfcComponents = possiblyUnqualifiedCfc.split(".");
-        
+    function buildPossibleCfcResolutionPaths(resolveFrom: string, inCodeCfcName: string) : ComponentSpecifier[] | undefined {
+        const cfcComponents = inCodeCfcName.split(".");
         if (cfcComponents.length === 0) return undefined; // just to not crash; why would this happen?
-        
         cfcComponents[cfcComponents.length - 1] = cfcComponents[cfcComponents.length - 1] + ".cfc";
+
+        const parsedResolveFrom = path.parse(canonicalizePath(resolveFrom));
+        resolveFrom = parsedResolveFrom.dir;
+
+        const parentModulesFolders = findColdboxParentModulesFolders(resolveFrom);
+        const canonicalCfcName = canonicalizePath(inCodeCfcName);
+
+        // given:
+        //   - project root = '/root/proj/'
+        //   - project root dirname = "proj"
+        //   - while checking file = "/root/proj/someFolder/child/file.cfc"
+        //   - resolveFrom = '/root/proj/someFolder/child'
+        //   - inCodeCfcName = "proj.foo.bar"
+        // we want to try to search at least the following paths:
+        //   - /root/proj/foo/bar.cfc
+        //   - /root/proj/proj/foo/bar.cfc
+        const cfcNameStartsWithProjectRootDirName = canonicalCfcName.startsWith(projectRootDirName);
 
         const common = {
             canonicalName: canonicalCfcName,
-            uiName: possiblyUnqualifiedCfc,
+            uiName: inCodeCfcName,
         } as const;
 
         const result = [{
             ...common,    
-            path: fileSystem.join(projectRoot, ...nameStartsWithProjectBase ? cfcComponents.slice(1) : cfcComponents) // /root/foo/bar.cfc
-        },{
-            ...common,    
-            path: fileSystem.join(path.parse(resolveFrom).dir, ...cfcComponents)
+            path: fileSystem.join(resolveFrom, ...cfcComponents)
         }];
 
         // magic coldbox/wirebox resolution, might want something to toggle this
@@ -596,21 +602,18 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
                 path: path.join(coldboxModulePath, ...cfcComponents)
             });    
         }
-        // result.push({
-        //     ...common,
-        //     path: fileSystem.join(projectRoot, "modules", ...cfcComponents) // /root/modules/foo/bar.cfc
-        // });
-        // result.push({
-        //     ...common,
-        //     path: fileSystem.join(path.parse(resolveFrom).dir, "modules", ...cfcComponents) // /root/modules/foo/bar.cfc
-        // })
 
-        if (nameStartsWithProjectBase) {
+        if (cfcNameStartsWithProjectRootDirName) {
             result.push({
                 ...common,
-                path: fileSystem.join(projectRoot, ...cfcComponents) // /root/root/foo/bar.cfc
+                path: fileSystem.join(projectRoot, ...(cfcComponents.slice(1)))
             });
         }
+
+        result.push({
+            ...common,
+            path: fileSystem.join(projectRoot, ...cfcComponents)
+        });
 
         return result;
     }
