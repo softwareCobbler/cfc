@@ -25,35 +25,49 @@ function projectFiddle() {
                     }`,
                 "lib.d.cfm": `
                     @interface Array<T> {
-                        //[index: numeric]: T,
-                        //len: () => numeric,
-                        //toList: (sep?: string) => string,
-                        //append: (val: T) => T[],
-                        //map: <U>(m: (e: T, i?: number, a?: T[]) => U) => T[]
-                        //each: (callback: (e?: T, i?: number, a?: T[])) => void
-                        // free function:
-                        // @declare function arrayEach<T>(
-                        // a: T[],
-                        // f: (e?: T[], i?: numeric, a?: T[]) => void # no-suggest-param-names
-                        //) no-suggest-param-names
-                        maplike: <U>(mapper: (e: T) => U) => U[]
+                        map: <U>(callback: (e: T, i?: numeric, a?: T[]) => U, parallel?: boolean, maxThreads?: boolean) => U[]
                     }
-
                 `,
+                "realLib.d.cfm": fs.readFileSync("C:\\Users\\anon\\dev\\cfc\\src\\lang-server\\server\\src\\runtimelib\\lib.cf2018.d.cfm").toString(),
                 "someFile.cfc": `
                     /**
                      */
-                    component {
-                        function index( event, rc, prc ) {
-                            // @type string[]
-                            var foo = [];
 
-                            foo.maplike((e) => {
-                                return new someFile();
-                            }).maplike((v) => v.    // 381
+                     component {
+
+  
+                        struct function xxx( event, rc, prc ) {
+                            // @type cfc<someFile>[]  
+                            var v = [];
+                            
+                            // uncommeting the following when it resolves to a generic will OOM kill it
+                            v.map((v) => v.xxx
+                            
+                            
+                            x.map((vvv) => {
+                                switch (v) {
+                                    case 42: {
+                                        return {ok: true, something: "ok!"};
+                                    }
+                                    default: {
+                                        throw();
+                                    }
+                                }
+                            })[1]
+                             
+                            
+                            switch (v) {
+                                default: {
+                                    //return {};
+                                    throw "";
+                                    throw()
+                                }
+                                case 42: { 
+                                    throw()
+                                }
+                            }
+                    
                         }
-
-                        function bar() {}
                     }
                     `,
                 "a": {
@@ -73,12 +87,12 @@ function projectFiddle() {
 
     //let x = debugfs.readFileSync("/Child.cfc").toString().slice(102,105)
     
-    const project = Project("/", /*filesystem*/debugfs, {debug: true, parseTypes: true, engineVersion: EngineVersions["acf.2018"], withWireboxResolution: true, wireboxConfigFileCanonicalAbsPath: "/Wirebox.cfc"});
+    const project = Project("/", /*filesystem*/debugfs, {debug: true, parseTypes: true, engineVersion: EngineVersions["lucee.5"], withWireboxResolution: true, wireboxConfigFileCanonicalAbsPath: "/Wirebox.cfc"});
     //const project = Project([path.resolve(".")], FileSystem(), {debug: true, parseTypes: true, language: LanguageVersion.lucee5});
     //const target = path.join(path.resolve("./test/"), "mxunit/framework/javaloader/JavaProxy.cfc");
     //project.addFile(target);
 
-    project.addEngineLib("/lib.d.cfm");
+    project.addEngineLib("/realLib.d.cfm");
     project.addFile("/someFile.cfc");
     const diagnostics = project.getDiagnostics("/Base.cfc");
 

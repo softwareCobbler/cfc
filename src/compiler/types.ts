@@ -603,15 +603,13 @@ export interface cfUnion extends _Type {
 }
 
 export function cfUnion(types: _Type[], flags: TypeFlags = TypeFlags.none) {
-    const identityDedup = [...new Set(types)];
-
-    if (identityDedup.length === 1) {
-        return freshType(identityDedup[0], flags);
+    if  (types.length === 1) {
+        return types[0];
     }
     else {
         return createType({
             flags: TypeFlags.union | flags,
-            types: [...identityDedup],
+            types: [...types],
         });
     }
 }
@@ -770,15 +768,6 @@ export function createType(type: _Type) {
     return type;
 }
 
-// this is really "fresh type with new flags" ... ?
-function freshType(type: _Type, flags: TypeFlags) : _Type {
-    if (flags === TypeFlags.none || type.flags === flags) return type;
-    else {
-        flags |= TypeFlags.derived;
-        return createType({flags, underlyingType: type});
-    }
-}
-
 // mostly just for exposition
 const staticallyKnownCfTypes : readonly string[] = [
     "any",
@@ -909,7 +898,13 @@ export function createLiteralType(value: string | number) : _Type {
 
 // fixme: ran out of flags, need a better way to discriminate a literal type
 const __literalTypeKey : keyof _Type = "literalValue";
-export function isLiteralType(_type: _Type) : _type is _Type & {literalValue: number | string} {
+export interface _LiteralType extends _Type {
+    literalValue: string | number,
+    underlyingType: _Type
+}
+export type LiteralType = _LiteralType;
+
+export function isLiteralType(_type: _Type) : _type is LiteralType {
     return _type.hasOwnProperty(__literalTypeKey);
 }
 

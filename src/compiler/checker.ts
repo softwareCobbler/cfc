@@ -1,7 +1,7 @@
 import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, Property, hasDeclaredType, UnreachableFlow } from "./node";
 import { CfcResolver, EngineSymbolResolver, LibTypeResolver } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
-import { cfFunctionSignature, cfIntersection, Struct, cfUnion, SyntheticType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStructLike, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, stringifyType, cfFunctionSignatureParam, unsafe__cfFunctionSignatureWithFreshReturnType, isFunctionOverloadSet, cfFunctionOverloadSet, isLiteralType, cfTypeId, SymbolTableTypeWrapper, CfcTypeWrapper, Interface, StructKind, isCfcLookupType, isInstantiatedArray, isInterface, createType, createLiteralType, isUninstantiatedArray, isGenericFunctionSignature, TypeConstructor, typeFromJavaLikeTypename, } from "./types";
+import { cfFunctionSignature, Struct, cfUnion, SyntheticType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStructLike, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, stringifyType, cfFunctionSignatureParam, unsafe__cfFunctionSignatureWithFreshReturnType, isFunctionOverloadSet, cfFunctionOverloadSet, isLiteralType, cfTypeId, SymbolTableTypeWrapper, CfcTypeWrapper, Interface, StructKind, isCfcLookupType, isInstantiatedArray, isInterface, createType, createLiteralType, isUninstantiatedArray, isGenericFunctionSignature, TypeConstructor, typeFromJavaLikeTypename } from "./types";
 import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, getAttributeValue, getContainingFunction, getFunctionDefinitionAccessLiteral, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol } from "./utils";
 import { Engine, EngineVersion, supports } from "./engines";
@@ -533,12 +533,54 @@ export function Checker() {
     //     // }
     // }
 
+    function mergeTypes(l: _Type, r: _Type) : _Type {
+        if (l === r) return l;
+
+        if (isLiteralType(l) && isLiteralType(r)) {
+            if (l.flags & TypeFlags.numeric && r.flags & TypeFlags.numeric) return SyntheticType.numeric;
+            if (l.flags & TypeFlags.string && r.flags & TypeFlags.string) return SyntheticType.string;
+            if (l.flags & TypeFlags.numeric && r.flags & TypeFlags.string) return SyntheticType.string;
+            if (l.flags & TypeFlags.string && r.flags & TypeFlags.numeric) return SyntheticType.string;
+        }
+
+        if (isStructLike(l) && isStructLike(r)) {
+            // merge arrays ... ?
+            // merge cfc types ? ... probably not desireable?
+            if (l.structKind === StructKind.struct && r.structKind === StructKind.struct) {
+                const keys = [...l.members.keys(), ...r.members.keys()];
+                const mergedMembers = new Map<string, SymTabEntry>();
+                for (const key of keys) {
+                    if (l.members.has(key) && r.members.has(key)) {
+                        const mergedType = mergeTypes(l.members.get(key)!.type, r.members.get(key)!.type);
+                        mergedMembers.set(key, {
+                            canonicalName: key,
+                            uiName: l.members.get(key)!.uiName,
+                            declarations: [],
+                            type: mergedType
+                        })
+                    }
+                    else {
+                        // would be good to mark it as optional
+                        const oneDefinitelyExists = (l.members.get(key) || r.members.get(key))!
+                        mergedMembers.set(key, oneDefinitelyExists)
+                    }
+                }
+                return Struct(mergedMembers);
+            }
+
+        }
+
+        return l; // ?!
+    }
+
     // needs to merge 2+ unions, dedup, etc.
     // union type needs to be a Set<_Type>
     // "instantiated type": {flags: TypeFlag, type: _Type} so we can share "any" and "void" and etc.
+    // the "undefined" typeflag needs, at a minimum, to be renamed "containsNull", and should be a BulitinType.null
+    // unions could maybe have flags that indicate whether they contain primitives
     function unionify(types: _Type[], definitelyContainsUndefined = false) : _Type {
         let flags : TypeFlags = definitelyContainsUndefined ? TypeFlags.containsUndefined : TypeFlags.none;
-        const membersBuilder : _Type[] = [];
+        const membersBuilder = new Set<_Type>();
         for (const type of types) {
             if (type.flags & TypeFlags.containsUndefined) {
                 flags |= TypeFlags.containsUndefined;
@@ -547,13 +589,34 @@ export function Checker() {
                 return type;
             }
             else {
-                membersBuilder.push(type);
+                // merge types that are subtypes of each others
+                // the check is bivariant
+                // l: {x: 1, y:1, z:1}, r: {x: 1, y:1} -> merge ok
+                // l: {x: 1, y:1}, r: {x: 1, y:1, z: 1} -> merge ok
+                // l: {x:1}, r: {z:1} -> no merge
+                const deletables : _Type[] = [];
+                let addedViaMerge = false;
+                for (const existingUnionMember of membersBuilder) {
+                    if (isLeftSubtypeOfRight(existingUnionMember, type, false, false, true) || isLeftSubtypeOfRight(type, existingUnionMember, false, false, true)) {
+                        deletables.push(existingUnionMember);
+                        const merged = mergeTypes(existingUnionMember, type);
+                        membersBuilder.add(merged);
+                        addedViaMerge = true;
+                        break;
+                    }
+                }
+                if (!addedViaMerge) {
+                    membersBuilder.add(type);
+                }
+                for (const deleteable of deletables) {
+                    membersBuilder.delete(deleteable);
+                }
             }
         }
 
-        if (membersBuilder.length === 0) return SyntheticType.any;
+        if (membersBuilder.size === 0) return SyntheticType.any;
 
-        return cfUnion(membersBuilder, flags);
+        return cfUnion([...membersBuilder], flags);
     }
 
 
@@ -594,7 +657,7 @@ export function Checker() {
     // subtype has the common meaning; however it is maybe helpful to note that "sub" also means "substitutable" in addition to "a descendant in a heirarchy"
     // i.e. `l <: r` means l is substitutable for r (you can safely use an l in r's place)
     //
-    function isLeftSubtypeOfRight(l: _Type, r: _Type, sourceIsLiteralExpr = false, forReturnType = false) : boolean {
+    function isLeftSubtypeOfRight(l: _Type, r: _Type, sourceIsLiteralExpr = false, forReturnType = false, widenLiterals = false) : boolean {
         let depth = 0;
         let tooDeep = false;
         tooDeep ? 0 : 1; // yes compiler this is used
@@ -632,14 +695,30 @@ export function Checker() {
                 // number being assignable to boolean
                 if (l.flags & TypeFlags.numeric && r.flags & TypeFlags.boolean) return true;
 
-                if (isLiteralType(l) && isLiteralType(r)) return l.literalValue === r.literalValue;
-                if (!isLiteralType(l) && isLiteralType(r)) return false; // number is not a subtype of `0`
+                if (widenLiterals) {
+                    const widenedLeft = isLiteralType(l) ? l.underlyingType : undefined;
+                    const widenedRight = isLiteralType(r) ? r.underlyingType : undefined;
+                    if (widenedLeft && widenedRight && widenedLeft === widenedRight) {
+                        return true;
+                    }
 
-                // numeric is a subtype of string
-                // however, string is not a subtype of numeric
-                if (l === SyntheticType.numeric && r === SyntheticType.string) {
-                    return true;
+                    // numeric is a subtype of string
+                    // however, string is not a subtype of numeric
+                    if (widenedLeft === SyntheticType.numeric && widenedRight === SyntheticType.string) {
+                        return true;
+                    }
                 }
+                else {
+                    if (isLiteralType(l) && isLiteralType(r)) return l.literalValue === r.literalValue;
+                    if (!isLiteralType(l) && isLiteralType(r)) return false; // number is not a subtype of `0`
+
+                    // numeric is a subtype of string
+                    // however, string is not a subtype of numeric
+                    if (l === SyntheticType.numeric && r === SyntheticType.string) {
+                        return true;
+                    }
+                }
+
 
                 
 
@@ -882,9 +961,10 @@ export function Checker() {
             }
 
             for (const p of sig.params) typeParamMap.set(p.name, undefined);
-            for (let i = 0; i < sig.body.params.length; i++) {
+            for (let i = 0; i < sig.body.params.length && i < node.args.length; i++) {
                 const sigParamType = sig.body.params[i].type;
                 const callSiteArg = node.args[i];
+
 
                 if (isFunctionSignature(sigParamType)) {
                     const isGenericInReturnPosition = isTypeId(sigParamType.returns) && typeParamMap.has(sigParamType.returns.name);
@@ -923,6 +1003,7 @@ export function Checker() {
                     }
                 }
                 else {
+                    // if param is optional and callSiteArg is undefined we don't need to do this
                     checkNode(callSiteArg);
                     const argType = getCachedEvaluatedNodeType(node.args[i])
                     const resolutions = resolveGenericFunctionTypeParams(typeParamMap, sigParamType, argType);
@@ -1032,7 +1113,19 @@ export function Checker() {
             return;
         }
         else {
-            typeErrorAtNode(node.left, `Type '${stringifyType(sig)}' is not callable.`);
+            function getCallExprCallableName(node: CallExpression) : Node {
+                if (node.left.kind === NodeKind.indexedAccess) {
+                    const accessElement = node.left.accessElements[node.left.accessElements.length - 1];
+                    if (accessElement.accessType === IndexedAccessType.dot || accessElement.accessType === IndexedAccessType.optionalDot) {
+                        return accessElement.property;
+                    }
+                    else if (accessElement.accessType === IndexedAccessType.bracket || accessElement.accessType === IndexedAccessType.optionalBracket) {
+                        return accessElement.expr;
+                    }
+                }
+                return node.left;
+            }
+            typeErrorAtNode(getCallExprCallableName(node), `Type '${stringifyType(sig)}' is not callable.`);
         }
     }
 
@@ -2063,7 +2156,11 @@ export function Checker() {
 
     function checkArrayLiteral(node: ArrayLiteral) {
         checkList(node.members);
-        setCachedEvaluatedNodeType(node, evaluateType(node, UninstantiatedArray(unionify(node.members.map(member => getCachedEvaluatedNodeType(member))))));
+        const arrayMemberTypes = node.members.map((member) => getCachedEvaluatedNodeType(member));
+        const membersAsUnion = unionify(arrayMemberTypes);
+        const uninstantiatedArray = UninstantiatedArray(membersAsUnion);
+        const instantiatedArrayType = evaluateType(node, uninstantiatedArray);
+        setCachedEvaluatedNodeType(node, instantiatedArrayType);
     }
 
     function checkArrayLiteralInitializerMember(node: ArrayLiteralInitializerMember) {
@@ -2319,56 +2416,56 @@ export function Checker() {
             //     }
             // }
             
-            function evaluateIntersection(types: _Type[]) : _Type {
-                if (types.includes(SyntheticType.never)) {
-                    return SyntheticType.never;
-                }
+            // function evaluateIntersection(types: _Type[]) : _Type {
+            //     if (types.includes(SyntheticType.never)) {
+            //         return SyntheticType.never;
+            //     }
 
-                try {
-                    depth++;
+            //     try {
+            //         depth++;
 
-                    /*
-                    if (left.typeKind === TypeKind.struct && right.typeKind === TypeKind.struct) {
-                        let longest = left.membersMap.size > right.membersMap.size ? left.membersMap : right.membersMap;
-                        let shortest = longest === left.membersMap ? right.membersMap : left.membersMap;
+            //         /*
+            //         if (left.typeKind === TypeKind.struct && right.typeKind === TypeKind.struct) {
+            //             let longest = left.membersMap.size > right.membersMap.size ? left.membersMap : right.membersMap;
+            //             let shortest = longest === left.membersMap ? right.membersMap : left.membersMap;
                 
-                        const remainingLongestKeys = new Set([...longest.keys()]);
-                        const result = new Map<string, SymTabEntry>();
-                        for (const key of shortest.keys()) {
-                            remainingLongestKeys.delete(key);
-                            const evaluatedShortest = typeWorker(shortest.get(key)!.type);
-                            const evaluatedLongest = longest.has(key) ? typeWorker(longest.get(key)!.type) : null;
-                            if (!evaluatedLongest) {
-                                result.set(key, {uiName: shortest.get(key)!.uiName, canonicalName: key, declarations: null, userType: null, inferredType: null, type: evaluatedShortest});
-                                continue;
-                            }
-                            const intersect = evaluateIntersection(evaluatedShortest, evaluatedLongest);
-                            if (intersect.typeKind === TypeKind.never) {
-                                return cfNever();
-                            }
-                            else {
-                                result.set(key, {uiName: longest.get(key)!.uiName, canonicalName: key, declarations: null, userType: null, inferredType: null, type: evaluatedLongest});
-                            }
-                        }
+            //             const remainingLongestKeys = new Set([...longest.keys()]);
+            //             const result = new Map<string, SymTabEntry>();
+            //             for (const key of shortest.keys()) {
+            //                 remainingLongestKeys.delete(key);
+            //                 const evaluatedShortest = typeWorker(shortest.get(key)!.type);
+            //                 const evaluatedLongest = longest.has(key) ? typeWorker(longest.get(key)!.type) : null;
+            //                 if (!evaluatedLongest) {
+            //                     result.set(key, {uiName: shortest.get(key)!.uiName, canonicalName: key, declarations: null, userType: null, inferredType: null, type: evaluatedShortest});
+            //                     continue;
+            //                 }
+            //                 const intersect = evaluateIntersection(evaluatedShortest, evaluatedLongest);
+            //                 if (intersect.typeKind === TypeKind.never) {
+            //                     return cfNever();
+            //                 }
+            //                 else {
+            //                     result.set(key, {uiName: longest.get(key)!.uiName, canonicalName: key, declarations: null, userType: null, inferredType: null, type: evaluatedLongest});
+            //                 }
+            //             }
                 
-                        for (const key of remainingLongestKeys) {
-                            result.set(key, longest.get(key)!);
-                        }
+            //             for (const key of remainingLongestKeys) {
+            //                 result.set(key, longest.get(key)!);
+            //             }
                 
-                        return SyntheticType.struct(result);
+            //             return SyntheticType.struct(result);
 
-                    }
-                    else {
-                        // only valid type operands to the "&" type operator are {}
-                        // which is not the "empty interface" but just a shorthand for "struct"
-                        return SyntheticType.never;
-                    }*/
-                    return cfIntersection(...types);
-                }
-                finally {
-                    depth--;
-                }
-            }
+            //         }
+            //         else {
+            //             // only valid type operands to the "&" type operator are {}
+            //             // which is not the "empty interface" but just a shorthand for "struct"
+            //             return SyntheticType.never;
+            //         }*/
+            //         return cfIntersection(...types);
+            //     }
+            //     finally {
+            //         depth--;
+            //     }
+            // }
 
             function typeWorker(type: Readonly<_Type> | null,
                                 typeParamMap: ReadonlyMap<string, _Type> | undefined = type?.capturedContext,
@@ -2386,10 +2483,12 @@ export function Checker() {
                         return type;
                     }
                     if (isIntersection(type)) {
-                        return evaluateIntersection(type.types);
+                        return type;
+                        //return evaluateIntersection(type.types);
                     }
                     if (isUnion(type)) {
-                        return cfUnion(type.types.map(type => typeWorker(type))); // need to dedupe and etc.
+                        return type;
+                        //return cfUnion(type.types.map(type => typeWorker(type))); // need to dedupe and etc.
                     }
                     if (isStructLike(type)) {
                         return type;
@@ -2424,23 +2523,36 @@ export function Checker() {
                             : lookupDeferrals;
 
                         const params : cfFunctionSignatureParam[] = [];
+                        let originalTypeWasConcrete = true;
+
                         for (let i = 0; i < sig.params.length; i++) {
+                            const freshType = typeWorker(sig.params[i].type,
+                                typeParamMap, partiallyApplyGenericFunctionSigs, updatedLookupDeferrals);
+                            originalTypeWasConcrete = originalTypeWasConcrete && (freshType === sig.params[i].type);
                             params.push(
                                 cfFunctionSignatureParam(
                                     !(sig.params[i].flags & TypeFlags.optional),
-                                    typeWorker(sig.params[i].type,
-                                        typeParamMap, partiallyApplyGenericFunctionSigs, updatedLookupDeferrals),
+                                    freshType,
                                     sig.params[i].uiName));
                         }
+
                         const returns = typeWorker(sig.returns, typeParamMap, partiallyApplyGenericFunctionSigs, updatedLookupDeferrals);
-                        const freshSignature = cfFunctionSignature(sig.uiName, params, returns, sig.attrs);
-                        return isGenericFunctionSignature(type) ? TypeConstructor(type.params, freshSignature) : freshSignature;
+
+                        originalTypeWasConcrete = originalTypeWasConcrete && (returns === sig.returns);
+                        
+                        if (isGenericFunctionSignature(type) || !originalTypeWasConcrete) {
+                            const freshSignature = cfFunctionSignature(sig.uiName, params, returns, sig.attrs);
+                            return isGenericFunctionSignature(type) ? TypeConstructor(type.params, freshSignature) : freshSignature;
+                        }
+                        else {
+                            return type;
+                        }
                     }
                     if (isTypeConstructorInvocation(type)) {
                         
 
-                        if (isInterface(type.left)) {
-                            const result = instantiateInterface(type.left, type.args);
+                        if (isInterface(type.left)) { // not generic since it is not a constructor invocation...
+                            const result = instantiateInterfaceWithPreinstantiatedArgs(type.left, new Map());
                             if (result.status === TypeCache_Status.resolving) {
                                 if (typeParamMap) {
                                     return createType({...type, capturedContext: typeParamMap});
@@ -2472,17 +2584,30 @@ export function Checker() {
                                         return type;
                                     }
                                 }
-                                const result = instantiateInterface(constructor, type.args);
-                                if (result.status === TypeCache_Status.resolving) {
-                                    if (typeParamMap) { // a new type (by identity), which holds onto the capture context, running it through the instantiator again should find a resolved cached version 
-                                        return createType({...type, capturedContext: typeParamMap});
+
+                                let instantiableParamMap : ReadonlyMap<string, _Type>;
+                                if (type.capturedContext) {
+                                    instantiableParamMap = type.capturedContext;
+                                }
+                                else {
+                                    const mapBuilder = new Map<string, _Type>();
+                                    if (constructor.typeParams) {
+                                        for (let i = 0; i < constructor.typeParams?.length ?? 0; i++) {
+                                            const name = constructor.typeParams[i].name;
+                                            const argType = evaluateType(context, type.args[i], typeParamMap);
+                                            mapBuilder.set(name, argType);
+                                        }
                                     }
-                                    return type;
+                                    instantiableParamMap = mapBuilder;
+                                }
+
+                                const result = instantiateInterfaceWithPreinstantiatedArgs(constructor, instantiableParamMap);
+
+                                if (result.status === TypeCache_Status.resolving) {
+                                    return createType({...type, capturedContext: instantiableParamMap});
                                 }
                                 else return result.value;
                             }
-
-                            return SyntheticType.any;
                         }
 
                         return SyntheticType.any;
@@ -2564,26 +2689,18 @@ export function Checker() {
                     | {status: TypeCache_Status.resolved, value: _Type}
                     | {status: TypeCache_Status.resolving} // for something like interface X<T> { v: X<T> }, X<T> is already resolving when we instantiate v
 
-                function instantiateInterface(iface: Interface, args?: _Type[]) : InterfaceInstantiationResult {
-                    let argMap : Map<string, _Type>;
-
+                function instantiateInterfaceWithPreinstantiatedArgs(iface: Interface, preInstantiatedArgMap: ReadonlyMap<string, _Type>) : InterfaceInstantiationResult {
+                    const argsArray : _Type[] = [];
                     if (iface.typeParams) {
-                        if (!args || args.length !== iface.typeParams.length) {
-                            return {status: TypeCache_Status.resolved, value: SyntheticType.never};
+                        for (const typeParam of iface.typeParams) {
+                            if (!preInstantiatedArgMap.has(typeParam.name)) { // bad invocation
+                                return {status: TypeCache_Status.resolved, value: SyntheticType.any};
+                            }
+                            argsArray.push(preInstantiatedArgMap.get(typeParam.name)!);
                         }
-                        argMap = new Map<string, _Type>();
-                        for (let i = 0; i < iface.typeParams.length; i++) {
-                            const name = iface.typeParams[i].name;
-                            const type = typeWorker(args[i], typeParamMap); // fixme: is this always just typeID->type lookup?
-                            argMap.set(name, type);
-                        }
-                    }
-                    else {
-                        return {status: TypeCache_Status.resolved, value: iface}; // shouldn't have gotten here though, why instantiate a non-generic, it always already is
                     }
 
-                    const instantiatedArgsArray = [...argMap.values()];
-                    const cached = getCachedTypeConstructorInvocation(iface, instantiatedArgsArray);
+                    const cached = getCachedTypeConstructorInvocation(iface, argsArray);
                     if (cached.status === TypeCache_Status.resolved) {
                         return cached;
                     }
@@ -2593,11 +2710,11 @@ export function Checker() {
                 
                     // say our current evaluation is for `T<U>`
                     // set `T<U>` to "PENDING" so that we have something to check for to not recurse infinitely on something like `T<U> = {foo: T<U>}`
-                    setCachedTypeConstructorInvocation(iface, instantiatedArgsArray, "PENDING");
+                    setCachedTypeConstructorInvocation(iface, argsArray, "PENDING");
 
                     const instantiatedMembers = new Map<string, SymTabEntry>();
                     for (const [name, symTabEntry] of iface.members) {
-                        const freshType = typeWorker(symTabEntry.type, argMap, true);
+                        const freshType = typeWorker(symTabEntry.type, preInstantiatedArgMap, true);
                         instantiatedMembers.set(name, {...symTabEntry, type: freshType});
                     }
 
@@ -2605,10 +2722,10 @@ export function Checker() {
                     (result as Mutable<_Type>).underlyingType = iface;
                     if (iface.name === "Array") {
                         // should always have a "T", although we need to enforce user defined interfaces to have always be Array<T>
-                        (result as Mutable<_Type>).memberType = argMap.get("T") ?? SyntheticType.any;
+                        (result as Mutable<_Type>).memberType = preInstantiatedArgMap.get("T") ?? SyntheticType.any;
                     }
 
-                    setCachedTypeConstructorInvocation(iface, instantiatedArgsArray, result);
+                    setCachedTypeConstructorInvocation(iface, argsArray, result);
 
                     return {status: TypeCache_Status.resolved, value: result};
                 }

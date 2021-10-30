@@ -760,5 +760,54 @@
 }
 
 @interface Array<T> {
-    append: (val: T) => T[]
+    append: (value: T, merge?: boolean) => T[],
+    avg: () => numeric,
+    clear: () => T[],
+    contains: (value: T) => boolean,
+    containsNoCase: (value: T) => boolean,
+    delete: (value: T) => T[],
+    deleteAt: (index: numeric) => T[],
+    deleteNoCase: (value: T) => T[],
+    each: (callback: (e: T, i?: numeric, a?: T[]) => any, parallel?: boolean, maxThreads?: numeric) => void,
+    every: (callback: (e: T, i?: numeric, a?: T[]) => any, parallel?: boolean, maxThreads?: numeric) => boolean,
+    filter:	(callback: (e: T, i?: numeric, a?: T[]) => boolean, parallel?: boolean, maxThreads?: numeric) => T[],
+
+<!---
+    find: (cb: (e: T, i?: numeric, a?: T[]) => boolean) => numeric,
+    find: (value: T) => numeric,
+    find: (v: T | ((e: T, i?: numeric, a?: T[]) => boolean)) => numeric,
+--->
+    
+<!---
+    ArrayFind	someVar.find()
+    ArrayFindAll	someVar.findAll()
+    ArrayFindAllNoCase	someVar.findAllNoCase()
+    ArrayFindNoCase	someVar.findNoCase()
+--->
+    first: () => T | null,
+<!---
+    ArrayGetMetaData	someVar.getMetaData()
+    ArrayInsertAt	someVar.insertAt()
+    ArrayIsDefined	someVar.isDefined()
+--->
+    isEmpty: () => boolean,
+    last: () => T | null,
+    len: () => numeric,
+    map: <U>(callback: (e: T, i?: numeric, a?: T[]) => U, parallel?: boolean, maxThreads?: boolean) => U[]
+<!---
+    ArrayMax	someVar.max()
+    ArrayMin	someVar.min()
+    ArrayPrepend	someVar.prepend()
+    ArrayReduceRight	someVar.reduceRight()
+    ArrayResize	someVar.resize()
+    ArraySet	someVar.set()
+    ArraySlice	someVar.slice()
+    ArraySort	someVar.sort()
+    ArraySplice	someVar.splice()
+    ArraySome	someVar.some()
+    ArraySum	someVar.sum()
+    ArraySwap	someVar.swap()
+    ArrayToList	someVar.toList()
+    ArrayReduce	someVar.reduce()
+--->
 }

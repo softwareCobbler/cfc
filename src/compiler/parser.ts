@@ -490,6 +490,10 @@ export function Parser(config: {engineVersion: EngineVersion}) {
             const errorPos = pos();
             const emptyRange = new SourceRange(errorPos, errorPos);
             const phonyToken : Token = Token(type, "", emptyRange);
+            next();
+            if (parseOptions & ParseOptions.withTrivia) {
+                parseTrivia();
+            }
             return createMissingNode(Terminal(phonyToken));
         }
     }
@@ -568,7 +572,7 @@ export function Parser(config: {engineVersion: EngineVersion}) {
             result = CfTag.Comment(commentStart, nestedComments, commentEnd);
         }
 
-        if (parseTypes) {
+        if (parseTypes && !isInSomeContext(ParseContext.typeAnnotation)) {
             parseTypeAnnotationsFromPreParsedTrivia(result);
         }
 
@@ -650,7 +654,9 @@ export function Parser(config: {engineVersion: EngineVersion}) {
                     case TokenType.DBL_FORWARD_SLASH: {
                         const comment = parseScriptSingleLineComment();
                         result.push(comment);
-                        parseTypeAnnotationsFromPreParsedTrivia(comment);
+                        if (parseTypes && !isInSomeContext(ParseContext.typeAnnotation)) {
+                            parseTypeAnnotationsFromPreParsedTrivia(comment);
+                        }
                         continue;
                     }
                     case TokenType.FORWARD_SLASH_STAR: {
@@ -672,7 +678,7 @@ export function Parser(config: {engineVersion: EngineVersion}) {
                 break;
             }
 
-            if (lastDocBlock) {
+            if (lastDocBlock && !isInSomeContext(ParseContext.typeAnnotation)) {
                 parseDocBlockFromPreParsedComment(lastDocBlock);
             }
         }
@@ -1006,7 +1012,7 @@ export function Parser(config: {engineVersion: EngineVersion}) {
                 break;
             }
             case CfFileType.dCfm: {
-                sourceFile.content = parseTypeAnnotations(/*asDeclarationFile*/ true);
+                sourceFile.content = parseTypeAnnotations();
                 break;
             }
         }
@@ -2527,8 +2533,16 @@ export function Parser(config: {engineVersion: EngineVersion}) {
             case TokenType.LEFT_ANGLE:
             case TokenType.LEXEME:
                 return true;
-            default:
-                return false;
+            default: {
+                const tokenType = lookahead();
+                // things like NOT and FUNCTION can be type names
+                return (TokenType._FIRST_KW < tokenType && tokenType < TokenType._LAST_KW)
+                    || (TokenType._FIRST_LIT < tokenType
+                        && tokenType < TokenType._LAST_LIT
+                        // "multi-token" tokens can't be used -- `type T = {does not contain: 42}` is not a valid type
+                        && tokenType !== TokenType.LIT_DOES_NOT_CONTAIN
+                        && tokenType !== TokenType.LIT_IS_NOT)
+            }
         }
     }
 
@@ -3861,13 +3875,13 @@ export function Parser(config: {engineVersion: EngineVersion}) {
         const typedefs : TypeShim[] = [];
 
         while (true) {
-            if (workingAttributeUiName.token.text === "interface") {
+            if (parseTypes && workingAttributeUiName.token.text === "interface") {
                 // backup to start of `interface` "token"
                 restoreScannerState({...getScannerState(), index: getIndex() - workingAttributeUiName.token.text.length})
                 const typedef = parseType();
                 typedefs.push(TypeShim("typedef", typedef));
             }
-            else if (workingAttributeUiName.token.text === "decorate") {
+            else if (parseTypes && workingAttributeUiName.token.text === "decorate") {
                 parseTrivia();
                 const decoratorName = stringifyDottedPath(parseDottedPath());
                 typedefs.push(TypeShim("decorator", Decorator(decoratorName.ui)));
@@ -3919,7 +3933,7 @@ export function Parser(config: {engineVersion: EngineVersion}) {
                     mode: ScannerMode.allow_both, // make this optional? it is set in parseTypeAnnotations, too; so we only set it because it is required here
                 })
 
-                const types = parseTypeAnnotations(/*asDeclarationFile*/ false);
+                const types = parseTypeAnnotations();
                 
                 const typedefs = types.filter(typeShim => typeShim.what === "typedef")
                 if (typedefs.length > 0) {
@@ -3949,14 +3963,16 @@ export function Parser(config: {engineVersion: EngineVersion}) {
     /**
      * parse type annotations, 
      */
-     function parseTypeAnnotations(asDeclarationFile: boolean) : TypeShim[] {
-        setScannerMode(ScannerMode.script);
-        const savedContext = updateParseContext(ParseContext.typeAnnotation);
+     function parseTypeAnnotations() : TypeShim[] {
+        const savedContext = parseContext;
+        const savedScannerMode = getScannerState().mode;
+        
+        setScannerMode(ScannerMode.allow_both);
+        parseContext = 1 << ParseContext.typeAnnotation;
+        
         const result : TypeShim[] = [];
         while (lookahead() !== TokenType.EOF) {
-            if (asDeclarationFile) {
-                parseTrivia();
-            }
+            parseTrivia();
             if (next().text === "@") {
                 const contextualKeyword = peek();
                 if (contextualKeyword.text === "declare") {
@@ -3982,125 +3998,123 @@ export function Parser(config: {engineVersion: EngineVersion}) {
                 }
                 else if (contextualKeyword.text === "type") {
                     next(), parseTrivia();
+                    result.push(TypeShim("annotation", parseType()));
+                }
+                else if (contextualKeyword.text === "typedef") {
+                    // next(), parseTrivia();
                     
-                    // we can have an annotation, or a declaration here
-                    // an annotation is like `@type {foo:bar}`, annotating the subsequent construct with type `{foo: bar}`
-                    // a declaration is like `@type foo = bar` or `@type foo<T, etc> = bar<T, etc>`
-                    // requires some lookahead:
-                    // @type T                      -- annotation
-                    // @type T = ...                -- alias
-                    // @type T<U>                   -- annotation (type constructor invocation)
-                    // @type T<U [= default]> = ... -- alias (type constructor definition)
+                    // // @type T = ...                -- alias
+                    // // @type T<U [= default]> = ... -- alias (type constructor definition)
 
-                    function parseTypeAliasDefOrAnnotation() {
-                        if (lookahead() === TokenType.LEXEME) {
-                            const enum SpeculationResult_t { definiteNonGenericAliasDef, indefiniteGeneric };
-                            type SpeculationResult =
-                                | {resultKind: SpeculationResult_t.indefiniteGeneric, name: string}
-                                | {resultKind: SpeculationResult_t.definiteNonGenericAliasDef, nonGenericAliasDef: TypeShim}
-                                | null;
+                    // function parseTypeAliasDefOrAnnotation() {
+                    //     if (lookahead() === TokenType.LEXEME) {
+                    //         const enum SpeculationResult_t { definiteNonGenericAliasDef, indefiniteGeneric };
+                    //         type SpeculationResult =
+                    //             | {resultKind: SpeculationResult_t.indefiniteGeneric, name: string}
+                    //             | {resultKind: SpeculationResult_t.definiteNonGenericAliasDef, nonGenericAliasDef: TypeShim}
+                    //             | null;
 
-                            const possibleAliasDef = SpeculationHelper.speculate(() : SpeculationResult => {
-                                const name = parseOptionalTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
-                                if (name) {
-                                    if (lookahead() === TokenType.LEFT_ANGLE) {
-                                        parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
-                                        return {resultKind: SpeculationResult_t.indefiniteGeneric, name: name.token.text};
-                                    }
-                                    else if (lookahead() === TokenType.EQUAL) {
-                                        parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
-                                        return {resultKind: SpeculationResult_t.definiteNonGenericAliasDef, nonGenericAliasDef: TypeShim("typedef", parseType(), name.token.text)};
-                                    }
-                                }
-                                return null;
-                            });
+                    //         const possibleAliasDef = SpeculationHelper.speculate(() : SpeculationResult => {
+                    //             const name = parseOptionalTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
+                    //             if (name) {
+                    //                 if (lookahead() === TokenType.LEFT_ANGLE) {
+                    //                     parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
+                    //                     return {resultKind: SpeculationResult_t.indefiniteGeneric, name: name.token.text};
+                    //                 }
+                    //                 else if (lookahead() === TokenType.EQUAL) {
+                    //                     parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
+                    //                     return {resultKind: SpeculationResult_t.definiteNonGenericAliasDef, nonGenericAliasDef: TypeShim("typedef", parseType(), name.token.text)};
+                    //                 }
+                    //             }
+                    //             return null;
+                    //         });
 
-                            if (!possibleAliasDef) {
-                                return TypeShim("annotation", parseType());
-                            }
-                            else if (possibleAliasDef.resultKind === SpeculationResult_t.definiteNonGenericAliasDef) {
-                                return possibleAliasDef.nonGenericAliasDef;
-                            }
-                            else {
-                                // after parsing the param/arg list and an optional equals token, both will be false, or exactly one will be true
-                                // if both are false, it implies a constructorInvocation
-                                let isDefiniteConstructorDefinition = false;
-                                let isDefiniteConstructorInvocation = false;
+                    //         if (!possibleAliasDef) {
+                    //             return TypeShim("annotation", parseType());
+                    //         }
+                    //         else if (possibleAliasDef.resultKind === SpeculationResult_t.definiteNonGenericAliasDef) {
+                    //             return possibleAliasDef.nonGenericAliasDef;
+                    //         }
+                    //         else {
+                    //             // after parsing the param/arg list and an optional equals token, both will be false, or exactly one will be true
+                    //             // if both are false, it implies a constructorInvocation
+                    //             let isDefiniteConstructorDefinition = false;
+                    //             let isDefiniteConstructorInvocation = false;
 
-                                const paramsOrArgs : {element: _Type, default?: _Type}[] = [];
+                    //             const paramsOrArgs : {element: _Type, default?: _Type}[] = [];
 
-                                while (lookahead() !== TokenType.RIGHT_ANGLE && lookahead() !== TokenType.EOF) {
-                                    if (isDefiniteConstructorDefinition) {
-                                        // fixme: types don't have ranges
-                                        const start = pos();
-                                        let element = parseType();
-                                        const end = pos();
-                                        if (!isTypeId(element)) {
-                                            parseErrorAtRange(new SourceRange(start, end), "A generic type alias parameter's names must be identifiers.");
-                                            element = cfTypeId("<<ERROR-TYPE>>");
-                                        }
-                                        if (lookahead() === TokenType.EQUAL) {
-                                            parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
-                                            paramsOrArgs.push({element, default: parseType()});
-                                        }
-                                        else {
-                                            paramsOrArgs.push({element});
-                                        }
-                                    }
-                                    else if (isDefiniteConstructorInvocation) {
-                                        paramsOrArgs.push({element: parseType()});
-                                    }
-                                    else {
-                                        const element = parseType();
-                                        if (isTypeId(element)) {
-                                            if (lookahead() === TokenType.EQUAL) {
-                                                // something like X<T=U> is a definite constructor definition
-                                                isDefiniteConstructorDefinition = true;
-                                                parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
-                                                paramsOrArgs.push({element, default: parseType()});
-                                            }
-                                            else {
-                                                paramsOrArgs.push({element});
-                                            }
-                                        }
-                                        else {
-                                            // something like X<{P:T}> is a definite invocation
-                                            isDefiniteConstructorInvocation = true;
-                                            paramsOrArgs.push({element});
-                                        }
-                                    }
-                                }
+                    //             while (lookahead() !== TokenType.RIGHT_ANGLE && lookahead() !== TokenType.EOF) {
+                    //                 if (isDefiniteConstructorDefinition) {
+                    //                     // fixme: types don't have ranges
+                    //                     const start = pos();
+                    //                     let element = parseType();
+                    //                     const end = pos();
+                    //                     if (!isTypeId(element)) {
+                    //                         parseErrorAtRange(new SourceRange(start, end), "A generic type alias parameter's names must be identifiers.");
+                    //                         element = cfTypeId("<<ERROR-TYPE>>");
+                    //                     }
+                    //                     if (lookahead() === TokenType.EQUAL) {
+                    //                         parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
+                    //                         paramsOrArgs.push({element, default: parseType()});
+                    //                     }
+                    //                     else {
+                    //                         paramsOrArgs.push({element});
+                    //                     }
+                    //                 }
+                    //                 else if (isDefiniteConstructorInvocation) {
+                    //                     paramsOrArgs.push({element: parseType()});
+                    //                 }
+                    //                 else {
+                    //                     const element = parseType();
+                    //                     if (isTypeId(element)) {
+                    //                         if (lookahead() === TokenType.EQUAL) {
+                    //                             // something like X<T=U> is a definite constructor definition
+                    //                             isDefiniteConstructorDefinition = true;
+                    //                             parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
+                    //                             paramsOrArgs.push({element, default: parseType()});
+                    //                         }
+                    //                         else {
+                    //                             paramsOrArgs.push({element});
+                    //                         }
+                    //                     }
+                    //                     else {
+                    //                         // something like X<{P:T}> is a definite invocation
+                    //                         isDefiniteConstructorInvocation = true;
+                    //                         paramsOrArgs.push({element});
+                    //                     }
+                    //                 }
+                    //             }
 
-                                parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);
+                    //             parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);
 
-                                if (isDefiniteConstructorDefinition) {
-                                    parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
-                                }
-                                else {
-                                    isDefiniteConstructorDefinition = !isDefiniteConstructorInvocation && !!parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
-                                }
+                    //             if (isDefiniteConstructorDefinition) {
+                    //                 parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
+                    //             }
+                    //             else {
+                    //                 isDefiniteConstructorDefinition = !isDefiniteConstructorInvocation && !!parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
+                    //             }
 
-                                if (isDefiniteConstructorInvocation || !isDefiniteConstructorDefinition) {
-                                    return TypeShim("annotation", TypeConstructorInvocation(cfTypeId(possibleAliasDef.name), paramsOrArgs.map(arg => arg.element)));
-                                }
-                                else /* isDefiniteConstructorDefinition */ {
-                                    return TypeShim(
-                                        "typedef",
-                                        TypeConstructor(
-                                            paramsOrArgs.map(param => TypeConstructorParam((param.element as cfTypeId).name, param.default)),
-                                            parseType()),
-                                        possibleAliasDef.name
-                                    );
-                                }
-                            }
-                        }
-                        else {
-                            return TypeShim("annotation", parseType());
-                        }
+                    //             if (isDefiniteConstructorInvocation || !isDefiniteConstructorDefinition) {
+                    //                 return TypeShim("annotation", TypeConstructorInvocation(cfTypeId(possibleAliasDef.name), paramsOrArgs.map(arg => arg.element)));
+                    //             }
+                    //             else /* isDefiniteConstructorDefinition */ {
+                    //                 return TypeShim(
+                    //                     "typedef",
+                    //                     TypeConstructor(
+                    //                         paramsOrArgs.map(param => TypeConstructorParam((param.element as cfTypeId).name, param.default)),
+                    //                         parseType()),
+                    //                     possibleAliasDef.name
+                    //                 );
+                    //             }
+                    //         }
+                    //     }
+                    //     else {
+                    //         return TypeShim("annotation", parseType());
+                    //     }
                             
-                    }
+                    // }
 
-                    result.push(parseTypeAliasDefOrAnnotation());
+                    // result.push(parseTypeAliasDefOrAnnotation());
 
 
                     // const nameIfIsTypeConstructorOrAlias = SpeculationHelper.speculate(() => {
@@ -4138,7 +4152,10 @@ export function Parser(config: {engineVersion: EngineVersion}) {
                 }
             }
         }
+        
         parseContext = savedContext;
+        setScannerMode(savedScannerMode);
+        
         return result;
     }
 
