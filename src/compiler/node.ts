@@ -15,6 +15,7 @@ export const enum NodeFlags {
     missing      = 1 << 1,
     checkerError = 1 << 2,
     docBlock     = 1 << 3,
+    unreachable  = 1 << 4,
 }
 
 export const enum NodeKind {
@@ -214,15 +215,17 @@ export type NodeWithScope<N extends Node = Node, T extends (StaticallyKnownScope
 export const enum FlowType {
     default,
     assignment,
-    label,
+    jumpTarget,
+    switchCase,
     unreachable
 }
 
 export interface Flow {
     flowId: FlowId,
     flowType: FlowType,
-    predecessor: Flow[],
-    node: Node | null // this effectively be null while a FlowNode is waiting on a node to attach to; but by the time we get to the checker it will have been populated or the entire flownode discarded
+    predecessors: Flow[],
+    becameUnreachable: boolean,
+    node: Node | null
 }
 
 export interface NodeBase {
@@ -318,7 +321,6 @@ export interface Diagnostic {
 export interface SymTabResolution {
     scopeName: StaticallyKnownScopeName,
     symTabEntry: SymTabEntry,
-    alwaysVisibleEngineSymbol?: SymTabEntry,
 }
 
 export interface SymbolResolution extends SymTabResolution {
@@ -339,6 +341,7 @@ export interface SourceFile extends NodeBase {
     cachedNodeTypes: Map<NodeId, _Type>, // type of a particular node, exactly zero or one per node
     cachedFlowTypes: Map<FlowId, Map<string, _Type>>, // types for symbols as determined at particular flow nodes, zero or more per flow node
     nodeToSymbol: Map<NodeId, SymbolResolution>,
+    endOfNodeFlowMap: Map<NodeId, Flow>,
     cfc: {
         extends: SourceFile | null,
         implements: SourceFile[]
@@ -355,6 +358,7 @@ function resetSourceFileInPlace(target: SourceFile, newSource: string | Buffer) 
     target.cachedNodeTypes = new Map();
     target.cachedFlowTypes = new Map();
     target.nodeToSymbol = new Map<NodeId, SymbolResolution>();
+    target.endOfNodeFlowMap = new Map<NodeId, Flow>();
     target.cfc = undefined;
 }
 
@@ -373,6 +377,7 @@ export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: 
     sourceFile.cachedNodeTypes = new Map<NodeId, _Type>();
     sourceFile.cachedFlowTypes = new Map<FlowId, Map<string, _Type>>();
     sourceFile.nodeToSymbol = new Map<NodeId, SymbolResolution>();
+    sourceFile.endOfNodeFlowMap = new Map<NodeId, Flow>();
     sourceFile.resetInPlaceWithNewSource = (newSource: string | Buffer) => resetSourceFileInPlace(sourceFile, newSource);
     return sourceFile;
 }
@@ -410,7 +415,8 @@ export const freshFlow = (function() {
         const result = {
             flowId: flowId++,
             flowType: flowType,
-            predecessor: Array.isArray(predecessor) ? predecessor : [predecessor],
+            predecessors: Array.isArray(predecessor) ? predecessor : [predecessor],
+            becameUnreachable: false,
             node
         }
         if (debug) {
@@ -419,8 +425,9 @@ export const freshFlow = (function() {
                     switch (flowType) {
                         case FlowType.assignment: return "assignment";
                         case FlowType.default: return "default";
-                        case FlowType.label: return "label";
+                        case FlowType.jumpTarget: return "jumpTarget";
                         case FlowType.unreachable: return "unreachable";
+                        case FlowType.switchCase: return "switchCase";
                         default: exhaustiveCaseGuard(flowType);
                     }
                 }

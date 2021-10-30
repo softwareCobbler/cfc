@@ -225,6 +225,11 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         const parseStart = new Date().getTime();
         parser.parse();
         const parseElapsed = new Date().getTime() - parseStart;
+
+        if (engineLib) {
+            sourceFile.libRefs.set("<<engine>>", engineLib.parsedSourceFile);
+        }
+
         const bindStart = new Date().getTime();
         binder.bind(sourceFile);
         const bindElapsed = new Date().getTime() - bindStart;

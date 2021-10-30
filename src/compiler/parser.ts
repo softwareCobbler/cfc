@@ -4161,6 +4161,8 @@ export function Parser(config: {engineVersion: EngineVersion}) {
                     return SyntheticType.boolean;
                 case "void":
                     return SyntheticType.void;
+                case "never":
+                    return SyntheticType.never;
                 default:
                     return cfTypeId(lexeme.text);
             }

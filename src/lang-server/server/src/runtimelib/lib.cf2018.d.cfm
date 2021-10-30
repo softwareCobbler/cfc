@@ -1,3 +1,4 @@
+<!---
 @declare function abs(required numeric number) xtype="any";
 @declare function acos(required numeric number) xtype="any";
 @declare function addSOAPRequestHeader(required string webservice, required string namespace, required string name, required string value, boolean mustUnderstand) xtype="any";
@@ -706,7 +707,7 @@
 @declare function tan(required numeric number) xtype="any";
 @declare function threadJoin(string threadName, numeric timeout) xtype="any";
 @declare function threadTerminate(required string threadname) xtype="any";
-@declare function throw(string message, string type, string detail, string errorcode, string extendedinfo, any object) xtype="any";
+@declare function throw(string message, string type, string detail, string errorcode, string extendedinfo, any object) xtype="never";
 @declare function timeFormat(required date time, string mask) xtype="any";
 @declare function toBase64(required any string_or_object, string encoding) xtype="any";
 @declare function toBinary(required any base64_or_object) xtype="any";
@@ -752,6 +753,11 @@
 @declare function xmlValidate(required any xmlDoc, string validator) xtype="any";
 @declare function year(required date date) xtype="any";
 @declare function yesNoFormat(required any value) xtype="any";
+--->
+
+@interface __cfEngine {
+    throw: () => never
+}
 
 @interface Array<T> {
     append: (val: T) => T[]

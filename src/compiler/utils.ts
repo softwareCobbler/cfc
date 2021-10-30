@@ -1184,7 +1184,8 @@ const defaultScopeLookupOrder : readonly StaticallyKnownScopeName[] = [
     "url",
     "form",
     "cookie",
-    "client"
+    "client",
+    "__cfEngine"
 ];
 
 export function getScopeDisplayMember(scope: ScopeDisplay,
@@ -1234,7 +1235,7 @@ function tryResolveFromLibs(sourceFile: SourceFile, canonicalName: string) : Sym
 
 export function walkupScopesToResolveSymbol(base: Node,
                                             canonicalName: string,
-                                            engineSymbolResolver?: EngineSymbolResolver,
+                                            engineSymbolResolver?: EngineSymbolResolver, // can remove this, engine resolution happens via well-known interface "__cfEngine"
                                             orderedScopes: readonly StaticallyKnownScopeName[] = defaultScopeLookupOrder) : SymbolResolution | undefined {
     const engineSymbol = engineSymbolResolver?.(canonicalName);
     let node : Node | null = base;
@@ -1244,11 +1245,10 @@ export function walkupScopesToResolveSymbol(base: Node,
             const varEntry = getScopeDisplayMember(node.containedScope, canonicalName, orderedScopes);
             if (varEntry) {
                 (varEntry as SymbolResolution).container = node;
-                if (engineSymbol) varEntry.alwaysVisibleEngineSymbol = engineSymbol;
                 return varEntry as SymbolResolution;
             }
             else {
-                // lookup symbols from visible interface definitions; does not yet perform interface-merging, so first hit wins, if any
+                // lookup symbols from visible interface definitions
                 const scopeLookup : readonly StaticallyKnownScopeName[] = node.kind === NodeKind.sourceFile ? orderedScopes : ["variables"];
                 for (const scopeName of scopeLookup) {
                     if (node.containedScope.typedefs.mergedInterfaces.has(scopeName)) {
@@ -1266,7 +1266,6 @@ export function walkupScopesToResolveSymbol(base: Node,
             if (node.kind === NodeKind.sourceFile) {
                 const libResolution = tryResolveFromLibs(node, canonicalName);
                 if (libResolution) {
-                    if (engineSymbol) libResolution.alwaysVisibleEngineSymbol = engineSymbol;
                     return libResolution;
                 }
 

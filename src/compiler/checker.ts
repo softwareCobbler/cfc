@@ -16,6 +16,7 @@ export function Checker() {
     let noUndefinedVars = false;
     let returnTypes: _Type[] = [];
     let engineVersion!: EngineVersion;
+    let flowBecameUnreachable = false;
 
     function check(sourceFile_: SourceFile) {
         // we're using the Checker as a singleton, and checking one source file might trigger checking another
@@ -31,7 +32,7 @@ export function Checker() {
         }
 
         instantiateInterfaces(sourceFile);
-        checkListFunctionsLast(sourceFile.content);
+        checkList(sourceFile.content);
 
         for (const decorator of sourceFile.containedScope.typedefs.decorators) {
             if (decorator.name === "QuickInstance") {
@@ -132,19 +133,15 @@ export function Checker() {
         }
     }
 
-    function forEach(nodes: Node[], cb: (node: Node) => void) {
-        for (let i = 0; i < nodes.length; i++) {
-            cb(nodes[i]);
-        }
-    }
-
-    function checkListFunctionsLast(nodes: Node[]) {
-        forEach(nodes.filter(node => node.kind !== NodeKind.functionDefinition), checkNode);
-        forEach(nodes.filter(node => node.kind === NodeKind.functionDefinition), checkNode);
-    }
-
     function checkNode(node: Node | null) {
         if (!node) return;
+
+        if (flowBecameUnreachable) {
+            node.flags |= NodeFlags.unreachable;
+            if (sourceFile.endOfNodeFlowMap.has(node.nodeId)) {
+                sourceFile.endOfNodeFlowMap.get(node.nodeId)!.becameUnreachable = true;
+            }
+        }
 
         switch (node.kind) {
             case NodeKind.sourceFile:
@@ -198,10 +195,10 @@ export function Checker() {
                 switch (node.subType) {
                     case BlockType.fromTag:
                         // check attrs and etc...
-                        checkListFunctionsLast(node.stmtList);
+                        checkList(node.stmtList);
                         return;
                     case BlockType.cLike:
-                        checkListFunctionsLast(node.stmtList);
+                        checkList(node.stmtList);
                         return;
                     case BlockType.scriptSugaredTagCallBlock:
                         checkList(node.stmtList);
@@ -844,32 +841,37 @@ export function Checker() {
         // invoking the builtin function 'encodeForHTML' on the string argument 'encodeForHTML'
         // if the above is true, checking has cached the non-engine type, and we need to override that decision
         const symbol = getResolvedSymbol(node.left);
-        if (symbol?.alwaysVisibleEngineSymbol || symbol?.scopeName === "__cfEngine") { // are we shadowing an alwaysVisible symbol, or this symbol is directly a built-in type?
-            const sig = symbol.alwaysVisibleEngineSymbol?.type ?? symbol.symTabEntry.type;
+        if (symbol?.scopeName === "__cfEngine") { // are we shadowing an alwaysVisible symbol, or this symbol is directly a built-in type?
+            const sig = symbol.symTabEntry.type;
             if (isFunctionSignature(sig)) { // what else could it be here?
                 setCachedEvaluatedNodeType(node.left, sig);
                 setCachedEvaluatedNodeType(node, sig.returns);
+
+                if (sig.returns === SyntheticType.never) {
+                    flowBecameUnreachable = true;
+                }
             }
             // for now we won't check that the args to built-ins are correct (have the right names / types etc.), because we don't have great definitions for them
             return;
         }
 
         const sig = getCachedEvaluatedNodeType(node.left);
+        let returnType : _Type;
 
         if (isFunctionOverloadSet(sig)) {
             checkList(node.args);
             const overloads = chooseOverload(sig, node.args);
             if (overloads.length !== 1) {
-                setCachedEvaluatedNodeType(node, SyntheticType.any);
+                setCachedEvaluatedNodeType(node, returnType = SyntheticType.any);
             }
             else {
-                setCachedEvaluatedNodeType(node, overloads[0].returns);
+                setCachedEvaluatedNodeType(node, returnType = overloads[0].returns);
             }
         }
         else if (isFunctionSignature(sig)) {
             checkList(node.args);
             checkCallLikeArguments(sig, node);
-            setCachedEvaluatedNodeType(node, sig.returns);
+            setCachedEvaluatedNodeType(node, returnType = sig.returns);
         }
         else if (isGenericFunctionSignature(sig)) {
             const typeParamMap = new Map<string, _Type | undefined>();
@@ -933,8 +935,11 @@ export function Checker() {
             }
 
             if (definitelyResolvedTypeParamMap.size === typeParamMap.size) {
-                const returnType = evaluateType(EmptyInstantiationContext, sig.body.returns, definitelyResolvedTypeParamMap);
+                returnType = evaluateType(EmptyInstantiationContext, sig.body.returns, definitelyResolvedTypeParamMap);
                 setCachedEvaluatedNodeType(node, returnType);
+            }
+            else {
+                returnType = SyntheticType.any;
             }
 
             function widenToCommonType(t: _Type, u: _Type) : _Type | undefined {
@@ -1017,6 +1022,10 @@ export function Checker() {
                 else {
                     return undefined;
                 }
+            }
+
+            if (returnType === SyntheticType.never) {
+                flowBecameUnreachable = true;
             }
         }
         else if (sig.flags & TypeFlags.any) {
@@ -1296,8 +1305,10 @@ export function Checker() {
 
         if (!isAssignable(exprType, sig.returns)) {
             // if we got an exprType, we got an expr or a just return token; if this is from tag, we definitely got a tag
-            const errNode = node.fromTag ? node.tagOrigin.startTag! : (node.expr || node.returnToken!);
-            typeErrorAtNode(errNode, `Type '${stringifyType(exprType)}' is not assignable to declared return type '${stringifyType(sig.returns)}'`);
+            const errNode = node.fromTag ? node.tagOrigin.startTag : (node.expr || node.returnToken);
+            if (errNode) {
+                typeErrorAtNode(errNode, `Type '${stringifyType(exprType)}' is not assignable to declared return type '${stringifyType(sig.returns)}'`);
+            }
         }
         else {
             if (node.flow !== UnreachableFlow) {
@@ -1819,17 +1830,18 @@ export function Checker() {
     }
 
     function checkFunctionBody(node: FunctionDefinition | ArrowFunctionDefinition) : _Type {
+        const savedFlowBecameUnreachable = flowBecameUnreachable;
         const savedReturnTypes = returnTypes;
         returnTypes = [];
 
         if (node.kind === NodeKind.functionDefinition && node.fromTag) {
-            checkListFunctionsLast(node.body);
+            checkList(node.body);
         }
         else {
             checkNode(node.body);
         }
 
-        if (node.finalFlow !== UnreachableFlow) {
+        if (isReachableFlow(sourceFile.endOfNodeFlowMap.get(node.nodeId)!)) {
             returnTypes.push(SyntheticType.null);
         }
 
@@ -1842,6 +1854,8 @@ export function Checker() {
         }
 
         returnTypes = savedReturnTypes;
+        flowBecameUnreachable = savedFlowBecameUnreachable;
+
         return actualReturnType;
     }
 
@@ -1855,9 +1869,21 @@ export function Checker() {
         for (const case_ of node.cases) {
             checkNode(case_);
         }
+
+        const postFlow = sourceFile.endOfNodeFlowMap.get(node.nodeId)!;
+        if (postFlow !== UnreachableFlow) {
+            postFlow.predecessors = postFlow.predecessors.filter((flow) => !flow.becameUnreachable);
+            if (postFlow.predecessors.length === 0) {
+                postFlow.becameUnreachable = true;
+            }
+        }
+
     }
 
     function checkSwitchCase(node: SwitchCase) {
+        const savedFlowBecameUnreachable = flowBecameUnreachable;
+        flowBecameUnreachable = false;
+
         if (node.fromTag) {
             if (node.tagOrigin.startTag?.canonicalName === "cfcase") {
                 const attr = getAttributeValue((node.tagOrigin.startTag as CfTag.Common).attrs, "value") ?? null;
@@ -1865,6 +1891,8 @@ export function Checker() {
                 checkNode(attr);
             }
             checkList(node.body);
+            node.flow!.becameUnreachable = flowBecameUnreachable;
+            flowBecameUnreachable = savedFlowBecameUnreachable;
             return;
         }
 
@@ -1872,7 +1900,11 @@ export function Checker() {
             // pre cf-2021 it has to be a string or numeric literal
             checkNode(node.expr);
         }
+        
         checkList(node.body);
+        node.flow!.becameUnreachable = flowBecameUnreachable;
+
+        flowBecameUnreachable = savedFlowBecameUnreachable;
     }
 
     function checkDo(node: Do) {
@@ -2135,6 +2167,9 @@ export function Checker() {
         }
     }
 
+    function isReachableFlow(flow: Flow) {
+        return flow !== UnreachableFlow && !flow.becameUnreachable;
+    }
     //
     // type evaluation
     //

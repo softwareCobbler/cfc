@@ -1,17 +1,18 @@
-import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, ConditionalSubtype, SymbolTable, TypeShim, Property, ParamStatement, ParamStatementSubType, typedefs, Flow, FlowType, freshFlow, UnreachableFlow } from "./node";
-import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol } from "./utils";
+import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, ConditionalSubtype, SymbolTable, TypeShim, Property, ParamStatement, ParamStatementSubType, typedefs, Flow, FlowType, freshFlow, UnreachableFlow, SwitchCaseType, StaticallyKnownScopeName } from "./node";
+import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol, findAncestor } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { SyntheticType, _Type, extractCfFunctionSignature, isFunctionSignature, Interface, isInterface } from "./types";
 import { Engine, EngineVersion, EngineVersions, supports } from "./engines";
 
 export function Binder() {
-    let RootNode : NodeWithScope<SourceFile>;
+    let sourceFile : NodeWithScope<SourceFile>;
     let currentContainer : NodeWithScope;
     let scanner : Scanner;
     let diagnostics: Diagnostic[];
     let engineVersion : EngineVersion = EngineVersions["acf.2018"]; // fixme: use definitely assigned syntax and force-assign in init with config args
     
     let currentFlow! : Flow;
+    let currentJumpTargetPredecessors : Flow[] = [];
     
     let nodeMap = new Map<NodeId, Node>();
     let withPropertyAccessors = false;
@@ -30,11 +31,11 @@ export function Binder() {
         withPropertyAccessors = false;
         pendingSymbolResolutionStack = [new Map()];
 
-        RootNode = sourceFile_ as NodeWithScope<SourceFile>;
+        sourceFile = sourceFile_ as NodeWithScope<SourceFile>;
 
-        RootNode.containedScope = {
+        sourceFile.containedScope = {
             parentContainer: null,
-            typedefs: RootNode.containedScope.typedefs, // parse phase will have provided typedefs
+            typedefs: sourceFile.containedScope.typedefs, // parse phase will have provided typedefs
             variables: new Map<string, SymTabEntry>(),
             application: new Map<string, SymTabEntry>(),
             url: new Map<string, SymTabEntry>(),
@@ -43,9 +44,9 @@ export function Binder() {
         };
 
         if (sourceFile_.cfFileType === CfFileType.cfc) {
-            RootNode.containedScope.this = new Map<string, SymTabEntry>();
-            RootNode.containedScope.super = new Map<string, SymTabEntry>();
-            const componentAttrs = getComponentAttrs(RootNode);
+            sourceFile.containedScope.this = new Map<string, SymTabEntry>();
+            sourceFile.containedScope.super = new Map<string, SymTabEntry>();
+            const componentAttrs = getComponentAttrs(sourceFile);
             if (componentAttrs) {
                 const accessors = getAttributeValue(componentAttrs, "accessors");
                 if (accessors === null) { // property not present
@@ -63,10 +64,10 @@ export function Binder() {
         currentFlow = freshFlow([], FlowType.default);
 
         if (sourceFile_.cfFileType === CfFileType.cfc) {
-            RootNode.containedScope.this = new Map<string, SymTabEntry>();
+            sourceFile.containedScope.this = new Map<string, SymTabEntry>();
         }
 
-        currentContainer = RootNode;
+        currentContainer = sourceFile;
         bindTypedefs(sourceFile_);
         bindList(sourceFile_.content, sourceFile_);
     }
@@ -75,11 +76,17 @@ export function Binder() {
         engineVersion = ev;
     }
 
-    function mergeFlowsToLabel(...flows: (Flow|undefined)[]) {
-        const filteredFlows = flows.filter((flow) : flow is Flow => !!flow && flow !== UnreachableFlow);
-        return filteredFlows.length === 0
+    function mergeFlowsToJumpTarget(...flows: (Flow|undefined)[]) {
+        const filteredFlows = (() : Set<Flow> => {
+            const flowFilter = new Set(flows);
+            flowFilter.delete(undefined);
+            flowFilter.delete(UnreachableFlow);
+            return flowFilter as Set<Flow>;
+        })();
+
+        return filteredFlows.size === 0
             ? UnreachableFlow
-            : freshFlow(filteredFlows, FlowType.label);
+            : freshFlow([...filteredFlows], FlowType.jumpTarget);
     }
 
     function bindNode(node: Node | null | undefined, parent: Node) {
@@ -254,7 +261,30 @@ export function Binder() {
         }
     }
 
-    function mergeInterfaces(name: string, interfaces: readonly Interface[]) : Interface {
+    const scopeInterfaceNames : StaticallyKnownScopeName[] = ["variables", "__cfEngine"];
+    function bindTypedefs(node: Node) {
+        if (!node.containedScope) return;
+        for (const [name, defs] of node.containedScope.typedefs.interfaces) {
+            const localMergedDef = defs.length === 1 ? defs[0] : mergeInterfaces(name, defs);
+            const parentMergedDef = mergeInterfaceWithParent(node, name, localMergedDef);
+            node.containedScope.typedefs.mergedInterfaces.set(name, parentMergedDef);
+        }
+        if (node === sourceFile) {
+            for (const name of scopeInterfaceNames) {
+                node.containedScope.typedefs.mergedInterfaces.set(
+                    name, mergeInterfaceWithParent(node, name, node.containedScope.typedefs.mergedInterfaces.get(name)) )
+            }
+        }
+    }
+    
+    function bindTypeShim(_node: TypeShim) {
+        // types always have names here? -- yes, typedefs do, but we need to explicitly indicate that inside the typesystem
+        // we get them from `@type x = ` so presumably always...
+        // also `@declare function foo` and possibly `@declare global <identifier-name> : type`
+        //currentContainer.containedScope.typedefs.set(node.type.name!, node.type);
+    }
+
+    function mergeInterfaces(name: string, interfaces: readonly Readonly<Interface>[]) : Interface {
         const mergedMembers = new Map<string, SymTabEntry>();
         for (const iface of interfaces) {
             for (const [name, symTabEntry] of iface.members) {
@@ -264,12 +294,26 @@ export function Binder() {
         return Interface(name, mergedMembers);
     }
 
-    function mergeInterfaceWithParent(base: Node, name: string, iface: Readonly<Interface>) : Interface {
+    function mergeInterfaceWithParent(base: Node, name: string, iface: Readonly<Interface> | undefined) : Interface {
+        if (base === sourceFile) {
+            const mergeable : Readonly<Interface>[] = [];
+            for (const lib of sourceFile.libRefs.values()) {
+                if (lib.containedScope.typedefs.mergedInterfaces.has(name)) {
+                    mergeable.push(lib.containedScope.typedefs.mergedInterfaces.get(name)!);
+                }
+            }
+            if (iface) mergeable.push(iface);
+            return mergeInterfaces(name, mergeable);
+        }
+
         let working : Node | null = base;
+
         while (working) {
             if (working.containedScope) {
                 if (working.containedScope.typedefs.mergedInterfaces.has(name)) {
-                    return mergeInterfaces(name, [working.containedScope.typedefs.mergedInterfaces.get(name)!, iface]);
+                    const mergeable = [working.containedScope.typedefs.mergedInterfaces.get(name)!];
+                    if (iface) mergeable.push(iface);
+                    return mergeInterfaces(name, mergeable);
                 }
                 else {
                     working = working.containedScope.parentContainer;
@@ -280,21 +324,6 @@ export function Binder() {
             }
         }
         return iface as Interface;
-    }
-
-    function bindTypedefs(node: Node) {
-        if (!node.containedScope) return;
-        for (const [name, defs] of node.containedScope.typedefs.interfaces) {
-            const localMergedDef = defs.length === 1 ? defs[0] : mergeInterfaces(name, defs);
-            const parentMergedDef = mergeInterfaceWithParent(node, name, localMergedDef);
-            node.containedScope.typedefs.mergedInterfaces.set(name, parentMergedDef);
-        }
-    }
-    function bindTypeShim(_node: TypeShim) {
-        // types always have names here? -- yes, typedefs do, but we need to explicitly indicate that inside the typesystem
-        // we get them from `@type x = ` so presumably always...
-        // also `@declare function foo` and possibly `@declare global <identifier-name> : type`
-        //currentContainer.containedScope.typedefs.set(node.type.name!, node.type);
     }
 
     function bindTag(node: CfTag) {
@@ -384,7 +413,7 @@ export function Binder() {
             currentFlow = trueEndFlow;
         }
         else {
-            currentFlow = mergeFlowsToLabel(trueEndFlow, falseEndFlow || savedStartFlow);
+            currentFlow = mergeFlowsToJumpTarget(trueEndFlow, falseEndFlow || savedStartFlow);
         }
     }
 
@@ -438,7 +467,7 @@ export function Binder() {
     }
 
     function bindForInInit(node: VariableDeclaration) : void {
-        let targetScope = RootNode.containedScope.variables!;
+        let targetScope = sourceFile.containedScope.variables!;
         if (node.varModifier) {
             const containingFunction = getContainingFunction(node);
             if (!containingFunction) {
@@ -493,7 +522,7 @@ export function Binder() {
                 targetScope = currentContainer.containedScope.local;
             }
             else {
-                targetScope = RootNode.containedScope[canonicalPath[0]];
+                targetScope = sourceFile.containedScope[canonicalPath[0]];
             }
 
             if (targetScope) {
@@ -549,11 +578,27 @@ export function Binder() {
         }
     }
 
+    function isDefaultCaseDescendant(node: Node) {
+        return !!findAncestor(node, (node) => {
+            return node.kind === NodeKind.switchCase
+                && node.caseType === SwitchCaseType.default
+                ? true
+                : node.kind === NodeKind.switchCase
+                && node.caseType === SwitchCaseType.case
+                ? "bail"
+                : false;
+        });
+    }
+
     function bindReturnStatement(node: ReturnStatement) {
         let resultingFlow = UnreachableFlow;
         if (!getContainingFunction(node)) {
             // error, should issue a diagnostic, and we won't update the flow on complete
             resultingFlow = currentFlow;
+        }
+
+        if (isDefaultCaseDescendant(node)) {
+            currentJumpTargetPredecessors.push(UnreachableFlow);
         }
 
         if (node.tagOrigin.startTag) {
@@ -572,6 +617,9 @@ export function Binder() {
     }
 
     function bindBreakStatement(node: BreakStatement) {
+        currentJumpTargetPredecessors.push(currentFlow);
+        currentFlow = UnreachableFlow;
+
         if (node.tagOrigin.startTag) {
             bindNode(node.tagOrigin.startTag, node);
             return;
@@ -707,7 +755,7 @@ export function Binder() {
         // unqualified result names (i.e. no dots in the name) get written to the transient scope if we are in a container with a transient scope (i.e. a function)
         // otherwise, it goes straight into the root variables scope
         // we do not push a symbol resolution for the __transient in this case; this is an assignment to a var that will be in play for the remainder of the function
-        let targetScope : SymbolTable = currentContainer.containedScope.__transient ?? RootNode.containedScope.variables!;
+        let targetScope : SymbolTable = currentContainer.containedScope.__transient ?? sourceFile.containedScope.variables!;
         let targetName = name.length === 1 ? name[0] : name[1];
 
         if (name.length === 2) {
@@ -861,12 +909,12 @@ export function Binder() {
                     }
                     else {
                         // assigning to `local.x` in a non-local scope just binds the name `local` to the root variables scope
-                        addFreshSymbolToTable(RootNode.containedScope.variables!, "local", node);
+                        addFreshSymbolToTable(sourceFile.containedScope.variables!, "local", node);
                     }
                 }
                 else {
-                    if (targetBaseName in RootNode.containedScope) {
-                        addFreshSymbolToTable(RootNode.containedScope[targetBaseName]!, firstAccessAsString, node);
+                    if (targetBaseName in sourceFile.containedScope) {
+                        addFreshSymbolToTable(sourceFile.containedScope[targetBaseName]!, firstAccessAsString, node);
                     }
                 }
             }
@@ -887,7 +935,7 @@ export function Binder() {
                     return;
                 }
 
-                const targetScope = currentContainer === RootNode
+                const targetScope = currentContainer === sourceFile
                     ? currentContainer.containedScope.variables!
                     : currentContainer.containedScope.__transient!;
 
@@ -980,7 +1028,7 @@ export function Binder() {
             // function bar() {} -- error, functions may only be defined once
             // bar(); -- error, bar is not visible
 
-            const existingFunction = RootNode.containedScope.variables!.get(node.canonicalName) || currentContainer.containedScope.this?.get(node.canonicalName);
+            const existingFunction = sourceFile.containedScope.variables!.get(node.canonicalName) || currentContainer.containedScope.this?.get(node.canonicalName);
             if (existingFunction && isFunctionSignature((existingFunction as SymTabEntry).type)) {
                 // if acf { ...
                 //      errorAtRange(getFunctionNameRange(node.range), "Redefinition of hoistable function.");
@@ -992,11 +1040,11 @@ export function Binder() {
             if (currentContainer.containedScope.local) { // it's only callable from local, but in ACF the name is taken globally
                 scopeTargets = [currentContainer.containedScope.local];
             }
-            else if (RootNode.cfFileType === CfFileType.cfc && isInCfcPsuedoConstructor(node)) {
-                scopeTargets = [RootNode.containedScope.this!, RootNode.containedScope.variables!];
+            else if (sourceFile.cfFileType === CfFileType.cfc && isInCfcPsuedoConstructor(node)) {
+                scopeTargets = [sourceFile.containedScope.this!, sourceFile.containedScope.variables!];
             }
             else {
-                scopeTargets = [RootNode.containedScope.variables!];
+                scopeTargets = [sourceFile.containedScope.variables!];
             }
             
             for (const scopeTarget of scopeTargets) {
@@ -1058,7 +1106,7 @@ export function Binder() {
 
         popAndMergePendingSymbolResolutionFrame();
 
-        node.finalFlow = currentFlow;
+        sourceFile.endOfNodeFlowMap.set(node.nodeId, currentFlow);
         currentFlow = savedFlow;
     }
 
@@ -1070,7 +1118,27 @@ export function Binder() {
             return;
         }
         bindNode(node.expr, node);
-        bindList(node.cases, node);
+
+        const startFlow = currentFlow;
+        const savedJumpTargetPredecessors = currentJumpTargetPredecessors;
+        currentJumpTargetPredecessors = [];
+
+        for (const caseNode of node.cases) {
+            currentFlow = currentFlow == startFlow
+                ? freshFlow(startFlow, FlowType.switchCase, caseNode) // previous case broke or returned, can only arrive via case match
+                : freshFlow([startFlow, currentFlow], FlowType.switchCase, caseNode); // previous case did not break or return; we could get here from fallthrough or case match
+
+            bindNode(caseNode, node);
+            if (currentFlow === UnreachableFlow && caseNode.caseType !== SwitchCaseType.default) {
+                currentFlow = startFlow;
+            }
+        }
+
+        currentJumpTargetPredecessors.push(currentFlow);
+        currentFlow = mergeFlowsToJumpTarget(...currentJumpTargetPredecessors);
+        sourceFile.endOfNodeFlowMap.set(node.nodeId, currentFlow);
+
+        currentJumpTargetPredecessors = savedJumpTargetPredecessors;
     }
 
     function bindSwitchCase(node: SwitchCase) {
@@ -1107,7 +1175,7 @@ export function Binder() {
         bindNode(node.ifFalse, node);
         const endFalseFlow = currentFlow;
         
-        currentFlow = mergeFlowsToLabel(endTrueFlow, endFalseFlow);
+        currentFlow = mergeFlowsToJumpTarget(endTrueFlow, endFalseFlow);
     }
 
     function bindFor(node: For) {
@@ -1251,18 +1319,18 @@ export function Binder() {
             }
 
             // property gets add to variables scope with just its name;
-            addFreshSymbolToTable(RootNode.containedScope.variables!, uiName, node, SyntheticType.any);
+            addFreshSymbolToTable(sourceFile.containedScope.variables!, uiName, node, SyntheticType.any);
 
             // if generating accessors, both variables and this get the getter/setter version of it
             if (withPropertyAccessors) {
                 // uppercase the first letter of the propertyname, so that
                 // "somePropertyName" becomes "setSomePropertyName" and "getSomePropertyName"
                 const camelCasedUiName = uiName[0].toUpperCase() + uiName.slice(1);
-                const getter = addFreshSymbolToTable(RootNode.containedScope.variables!, "get" + camelCasedUiName, node, SyntheticType.anyFunction);
-                const setter = addFreshSymbolToTable(RootNode.containedScope.variables!, "set" + camelCasedUiName, node, SyntheticType.anyFunction);
+                const getter = addFreshSymbolToTable(sourceFile.containedScope.variables!, "get" + camelCasedUiName, node, SyntheticType.anyFunction);
+                const setter = addFreshSymbolToTable(sourceFile.containedScope.variables!, "set" + camelCasedUiName, node, SyntheticType.anyFunction);
 
-                addExistingSymbolToTable(RootNode.containedScope.this!, getter);
-                addExistingSymbolToTable(RootNode.containedScope.this!, setter);
+                addExistingSymbolToTable(sourceFile.containedScope.this!, getter);
+                addExistingSymbolToTable(sourceFile.containedScope.this!, setter);
             }
         }
     }
