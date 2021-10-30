@@ -1245,6 +1245,7 @@ export function walkupScopesToResolveSymbol(base: Node,
             const varEntry = getScopeDisplayMember(node.containedScope, canonicalName, orderedScopes);
             if (varEntry) {
                 (varEntry as SymbolResolution).container = node;
+                if (engineSymbol) varEntry.alwaysVisibleEngineSymbol = engineSymbol;
                 return varEntry as SymbolResolution;
             }
             else {
@@ -1256,7 +1257,9 @@ export function walkupScopesToResolveSymbol(base: Node,
                         if (interfaceDef.members.has(canonicalName)) {
                             const symTabEntry = interfaceDef.members.get(canonicalName)!;
                             if (symTabEntry) {
-                                return {scopeName, container: node, symTabEntry};
+                                const result : SymbolResolution = {scopeName, container: node, symTabEntry};
+                                if (engineSymbol) result.alwaysVisibleEngineSymbol = engineSymbol;
+                                return result;
                             }
                         }
                     }
@@ -1266,6 +1269,7 @@ export function walkupScopesToResolveSymbol(base: Node,
             if (node.kind === NodeKind.sourceFile) {
                 const libResolution = tryResolveFromLibs(node, canonicalName);
                 if (libResolution) {
+                    if (engineSymbol) libResolution.alwaysVisibleEngineSymbol = engineSymbol;
                     return libResolution;
                 }
 

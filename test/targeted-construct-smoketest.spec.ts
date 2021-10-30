@@ -432,7 +432,7 @@ describe("general smoke test for particular constructs", () => {
                     dateFormat(42); // built-in should be "more visible" in a call-expression position than the argument named dateFormat
                 }
             </cfscript>`);
-        pushFsNode(fsRoot, "/lib.d.cfm", `@declare function dateFormat(required date date, string mask) xtype="any";`);
+        pushFsNode(fsRoot, "/lib.d.cfm", `@interface __cfEngine { dateFormat: (date: string, mask?: string) => any }`);
 
         const dfs = DebugFileSystem(fsRoot);
 

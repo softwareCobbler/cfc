@@ -310,7 +310,7 @@ function updateConfig(config: Record<string, any> | null) {
 		// engineLibAbsPath doesn't come from config, so we just carry it forward if it exists
 		engineLibAbsPath: cflsConfig?.engineLibAbsPath ?? null,
 		// the rest of these are supplied via config
-		x_types: config?.x_types,
+		x_types: !!config?.x_types,
 		engineVersion: engineVersionConfigToEngineVersion(config?.engineVersion),
 		wireboxConfigFile: config?.wireboxConfigFile ?? null,
 		wireboxResolution: config?.wireboxResolution ?? false

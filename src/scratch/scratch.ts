@@ -30,45 +30,10 @@ function projectFiddle() {
                 `,
                 "realLib.d.cfm": fs.readFileSync("C:\\Users\\anon\\dev\\cfc\\src\\lang-server\\server\\src\\runtimelib\\lib.cf2018.d.cfm").toString(),
                 "someFile.cfc": `
-                    /**
-                     */
-
-                     component {
-
-  
-                        struct function xxx( event, rc, prc ) {
-                            // @type cfc<someFile>[]  
-                            var v = [];
-                            
-                            // uncommeting the following when it resolves to a generic will OOM kill it
-                            v.map((v) => v.xxx
-                            
-                            
-                            x.map((vvv) => {
-                                switch (v) {
-                                    case 42: {
-                                        return {ok: true, something: "ok!"};
-                                    }
-                                    default: {
-                                        throw();
-                                    }
-                                }
-                            })[1]
-                             
-                            
-                            switch (v) {
-                                default: {
-                                    //return {};
-                                    throw "";
-                                    throw()
-                                }
-                                case 42: { 
-                                    throw()
-                                }
-                            }
-                    
-                        }
-                    }
+                    <cfcomponent extends="mxunit.framework.TestCase">
+                        <cffunction name="testXXX" returntype="void" access="public">
+                        </cffunction
+                    </cfcomponent>
                     `,
                 "a": {
                     "b": {
@@ -94,11 +59,11 @@ function projectFiddle() {
 
     project.addEngineLib("/realLib.d.cfm");
     project.addFile("/someFile.cfc");
-    const diagnostics = project.getDiagnostics("/Base.cfc");
+    const diagnostics = project.getDiagnostics("/someFile.cfc");
 
     //const x = project.getInterestingNodeToLeftOfCursor("/someFile.cfc", 378);
-    const completions = getCompletions(project, "/someFile.cfc", 381, null);
-    console.log(completions);
+    //const completions = getCompletions(project, "/someFile.cfc", 381, null);
+    //console.log(completions);
     for (const diagnostic of diagnostics) {
         console.log(diagnostic);
     }

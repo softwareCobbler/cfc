@@ -3,7 +3,7 @@
 import { Project } from "../compiler/project"
 import { Node, NodeKind, CallExpression, CfTag, StaticallyKnownScopeName, SymbolTable, SymTabEntry, SimpleStringLiteral, SourceFile } from "../compiler/node"
 import { CfFileType, SourceRange, TokenType } from "../compiler/scanner";
-import { isFunctionOverloadSet, isFunctionSignature, isLiteralType, isStructLike, StructKind, SymbolTableTypeWrapper, TypeFlags, _Type } from "../compiler/types";
+import { isFunctionOverloadSet, isFunctionSignature, isGenericFunctionSignature, isLiteralType, isStructLike, StructKind, SymbolTableTypeWrapper, TypeFlags, _Type } from "../compiler/types";
 import { isExpressionContext, isCfScriptTagBlock, stringifyCallExprArgName, getSourceFile, cfcIsDescendantOf, isPublicMethod } from "../compiler/utils";
 import { tagNames } from "./tagnames";
 import { Checker } from "../compiler/checker";
@@ -213,9 +213,9 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
         while (typeinfo) {
             let underlyingMembers : ReadonlyMap<string, SymTabEntry>;
             let interfaceExtension : ReadonlyMap<string, SymTabEntry> | undefined = undefined;
-            let typeinfoSourceFileIsCfc = false;
+            let currentStructLikeIsCfc = false;
             if (typeinfo instanceof Map) {
-                typeinfoSourceFileIsCfc = true; // we got a symboltable, which we only get in cases of climbing into a parent CFC
+                currentStructLikeIsCfc = true; // we got a symboltable, which we only get in cases of climbing into a parent CFC
                 underlyingMembers = typeinfo;
                 if (workingSourceFile.cfFileType === CfFileType.cfc && workingSourceFile.containedScope.typedefs.mergedInterfaces.has("this")) {
                     interfaceExtension = workingSourceFile.containedScope.typedefs.mergedInterfaces.get("this")!.members;
@@ -223,7 +223,7 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
             }
             else if (isStructLike(typeinfo)) {
                 underlyingMembers = typeinfo.members;
-                typeinfoSourceFileIsCfc = typeinfo.structKind === StructKind.cfcTypeWrapper;
+                currentStructLikeIsCfc = typeinfo.structKind === StructKind.cfcTypeWrapper;
                 if (typeinfo.structKind === StructKind.symbolTableTypeWrapper) interfaceExtension = (typeinfo as SymbolTableTypeWrapper).interfaceExtension?.members;
             }
             else {
@@ -231,13 +231,13 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
             }
 
             const runOne = (symTabEntry: SymTabEntry) => {
-                if (symTabEntry.canonicalName === "init" && typeinfoSourceFileIsCfc) return; // don't need to show init, we can still check its signature though?
-                if ( typeinfoSourceFileIsCfc && isFunctionSignature(symTabEntry.type) && !isPublicMethod(symTabEntry.type)) {
+                if (symTabEntry.canonicalName === "init" && currentStructLikeIsCfc) return; // don't need to show init, we can still check its signature though?
+                if ( currentStructLikeIsCfc && isFunctionSignature(symTabEntry.type) && !isPublicMethod(symTabEntry.type)) {
                     if (!parsedSourceFileIsDescendantOfTypeinfoCfc) return; // don't offer completions for non-public members for non-descendants
                 }
                 result.push({
                     label: symTabEntry.uiName,
-                    kind: isFunctionSignature(symTabEntry.type)
+                    kind: isFunctionSignature(symTabEntry.type) || isGenericFunctionSignature(symTabEntry.type)
                         ? CompletionItemKind.function
                         : CompletionItemKind.structMember,
                     detail: ""
@@ -248,7 +248,7 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
             interfaceExtension?.forEach(runOne);
 
             // climb the hierarchy and offer public members of parent components, too
-            if (workingSourceFile.cfc?.extends) {
+            if (currentStructLikeIsCfc && workingSourceFile.cfc?.extends) {
                 workingSourceFile = workingSourceFile.cfc.extends;
                 typeinfo = workingSourceFile.containedScope.this; // the first typeinfo was guaranteed to be a Struct; from here and for every subsequent iteration, we get a SymbolTable instaed
             }

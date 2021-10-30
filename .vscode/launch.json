@@ -24,7 +24,7 @@
 			"type": "node",
 			"request": "attach",
 			"name": "Attach to cfls (server process)",
-			"port": 6009,
+			"port": 6011,
 			"restart": true,
 			"outFiles": ["${workspaceRoot}/cflsp-vscode/out/**/*.js"],
 			"trace": true,

@@ -1,6 +1,5 @@
 import {
     Diagnostic,
-    setDebug as setNodeFactoryDebug,
     CfTag, Node, NodeKind, TagAttribute, NodeFlags, Terminal, Comment, TextSpan, NilTerminal,
     Conditional, FromTag, CommentType,
     HashWrappedExpr, BinaryOperator, Parenthetical, UnaryOperator, BooleanLiteral,
@@ -26,14 +25,12 @@ import {
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, TypeShim, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember } from "./node";
-import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType, setScannerDebug } from "./scanner";
+import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath } from "./utils";
 import { cfIndexedType, Interface, cfIntersection, extractCfFunctionSignature, isIntersection, isStructLike, isTypeId, isUnion, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, Decorator, TypeConstructor, IndexSignature } from "./types";
 import { _Type, UninstantiatedArray, Struct, StructKind, cfTuple, cfFunctionSignature, cfTypeId, cfUnion, SyntheticType, cfFunctionSignatureParam } from "./types";
-import { EngineVersion, Engine } from "./engines";
-
-let debugParseModule = false;
-let parseTypes = false; // generally not yet possible
+import { Engine } from "./engines";
+import { ProjectOptions } from "./project";
 
 const enum ParseOptions {
     none     = 0,
@@ -113,7 +110,7 @@ interface ScannerState {
     artificialEndLimit: number | undefined;
 }
 
-export function Parser(config: {engineVersion: EngineVersion}) {
+export function Parser(config: ProjectOptions) {
     function setSourceFile(sourceFile_: SourceFile) {
         sourceFile = sourceFile_;
         scanner = sourceFile.scanner;
@@ -132,18 +129,6 @@ export function Parser(config: {engineVersion: EngineVersion}) {
         return self_;
     }
 
-    function setDebug(isDebug: boolean) {
-        setNodeFactoryDebug(isDebug);
-        setScannerDebug(isDebug);
-        debugParseModule = isDebug;
-        return self_;
-    }
-
-    function setParseTypes(b: boolean) {
-        parseTypes = b;
-        return self_;
-    }
-
     let scanner : Scanner;
     let sourceFile: SourceFile;
     let mode: ScannerMode;
@@ -152,7 +137,11 @@ export function Parser(config: {engineVersion: EngineVersion}) {
     let token_ : Token;
     let lastNonTriviaToken : Token;
     let diagnostics : Diagnostic[] = [];
+
+    const parseTypes = config.parseTypes;
+    const debug = config.debug;
     const engineVersion = config.engineVersion;
+
     const stripStructuralOnlyDocBlockTextPattern = /(^|\r?\n)\s*\*/g; // pattern to strip leading whitespace followed by a single "*" in docblocks
 
     let lastDocBlock : {type: _Type | null, typedefs: TypeShim[], docBlockAttrs: TagAttribute[] } | null = null;
@@ -213,10 +202,6 @@ export function Parser(config: {engineVersion: EngineVersion}) {
     const self_ = {
         setScannerMode,
         setSourceFile,
-
-        setDebug,
-        setParseTypes,
-
         parseTags,
         parseScript,
         parse,
@@ -416,7 +401,7 @@ export function Parser(config: {engineVersion: EngineVersion}) {
             msg: msg ?? (toExclusiveOrMsg as string)
         };
 
-        if (debugParseModule) {
+        if (debug) {
             const debugFrom = scanner.getAnnotatedChar(freshDiagnostic.fromInclusive);
             const debugTo = scanner.getAnnotatedChar(freshDiagnostic.toExclusive);
             // bump 0-offsetted info to editor-centric 1-offset
@@ -490,10 +475,6 @@ export function Parser(config: {engineVersion: EngineVersion}) {
             const errorPos = pos();
             const emptyRange = new SourceRange(errorPos, errorPos);
             const phonyToken : Token = Token(type, "", emptyRange);
-            next();
-            if (parseOptions & ParseOptions.withTrivia) {
-                parseTrivia();
-            }
             return createMissingNode(Terminal(phonyToken));
         }
     }
@@ -636,7 +617,7 @@ export function Parser(config: {engineVersion: EngineVersion}) {
                         return Comment(v);
                     }
                     else {
-                        if (debugParseModule) {
+                        if (debug) {
                             return TextSpan(v.range, scanner.getTextSlice(v.range));
                         }
                         else {
@@ -666,7 +647,7 @@ export function Parser(config: {engineVersion: EngineVersion}) {
                         continue;
                     }
                     case TokenType.WHITESPACE:
-                        if (debugParseModule) {
+                        if (debug) {
                             const nextToken = next();
                             result.push(TextSpan(nextToken.range, scanner.getTextSlice(nextToken.range)));
                         }
@@ -1319,7 +1300,7 @@ export function Parser(config: {engineVersion: EngineVersion}) {
                             || catchBlocks[catchBlocks.length-1].tagOrigin.startTag?.tagEnd.trivia)!; // if a <catch /> statement, it is just a start tag
                     }
                     else {
-                        if (debugParseModule) throw "no trivia owner?";
+                        if (debug) throw "no trivia owner?";
                         else return [];
                     }
                 }
@@ -2952,7 +2933,7 @@ export function Parser(config: {engineVersion: EngineVersion}) {
     function parseFunctionTypeParametersArrowLike() : cfFunctionSignatureParam[] {
         const args : {name: Terminal, optional: boolean, type: _Type}[] = [];
         while (lookahead() !== TokenType.RIGHT_PAREN && lookahead() !== TokenType.EOF) {
-            const name = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
+            const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/true, /*allowNumeric*/false);
             const optional = !!parseOptionalTerminal(TokenType.QUESTION_MARK, ParseOptions.withTrivia);
             parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
             const type = parseType();
@@ -4303,6 +4284,7 @@ export function Parser(config: {engineVersion: EngineVersion}) {
             }
             else {
                 name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ true);
+                if (diagnostics.length > 0) debugger;
                 // `name` is always truthy, though
                 // if (!name) {
                 //     parseErrorAtCurrentToken("Expected a struct key.");

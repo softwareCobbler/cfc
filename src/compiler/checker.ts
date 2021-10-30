@@ -9,6 +9,8 @@ import { Engine, EngineVersion, supports } from "./engines";
 const structViewCache = WeakPairMap<SymbolTable, Interface, Struct>(); // map a SymbolTable -> Interface -> Struct, used to check prior existence of a wrapping of a symbol table into a struct with a possible interface extension
 const EmptyInstantiationContext = SourceFile("", CfFileType.cfc, ""); // an empty type type instantiation context, no symbols are visible; there we rely entirely on captured or provided contexts attached the instantiable target
 
+const GENERIC_FUNCTION_INFERENCE = false;
+
 export function Checker() {
     let sourceFile!: SourceFile;
     let scanner!: Scanner;
@@ -920,9 +922,12 @@ export function Checker() {
         // invoking the builtin function 'encodeForHTML' on the string argument 'encodeForHTML'
         // if the above is true, checking has cached the non-engine type, and we need to override that decision
         const symbol = getResolvedSymbol(node.left);
-        if (symbol?.scopeName === "__cfEngine") { // are we shadowing an alwaysVisible symbol, or this symbol is directly a built-in type?
+
+        const shadowsBuiltinSymbol = !!symbol?.alwaysVisibleEngineSymbol;
+        const isBuiltinSymbol = symbol?.scopeName === "__cfEngine";
+        if (shadowsBuiltinSymbol || isBuiltinSymbol) {
             const sig = symbol.symTabEntry.type;
-            if (isFunctionSignature(sig)) { // what else could it be here?
+            if (isFunctionSignature(sig)) {
                 setCachedEvaluatedNodeType(node.left, sig);
                 setCachedEvaluatedNodeType(node, sig.returns);
 
@@ -953,6 +958,10 @@ export function Checker() {
             setCachedEvaluatedNodeType(node, returnType = sig.returns);
         }
         else if (isGenericFunctionSignature(sig)) {
+            if (!GENERIC_FUNCTION_INFERENCE) {
+                return;
+            }
+
             const typeParamMap = new Map<string, _Type | undefined>();
             const definitelyResolvedTypeParamMap = new Map<string, _Type>();
             const pushResolution = (name: string, type: _Type) => {
@@ -1934,7 +1943,8 @@ export function Checker() {
             checkNode(node.body);
         }
 
-        if (isReachableFlow(sourceFile.endOfNodeFlowMap.get(node.nodeId)!)) {
+        const postFlow = sourceFile.endOfNodeFlowMap.get(node.nodeId);
+        if (postFlow && isReachableFlow(postFlow)) {
             returnTypes.push(SyntheticType.null);
         }
 
@@ -1963,14 +1973,13 @@ export function Checker() {
             checkNode(case_);
         }
 
-        const postFlow = sourceFile.endOfNodeFlowMap.get(node.nodeId)!;
-        if (postFlow !== UnreachableFlow) {
+        const postFlow = sourceFile.endOfNodeFlowMap.get(node.nodeId);
+        if (postFlow && postFlow !== UnreachableFlow) {
             postFlow.predecessors = postFlow.predecessors.filter((flow) => !flow.becameUnreachable);
             if (postFlow.predecessors.length === 0) {
                 postFlow.becameUnreachable = true;
             }
         }
-
     }
 
     function checkSwitchCase(node: SwitchCase) {

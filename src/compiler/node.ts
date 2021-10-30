@@ -321,6 +321,7 @@ export interface Diagnostic {
 export interface SymTabResolution {
     scopeName: StaticallyKnownScopeName,
     symTabEntry: SymTabEntry,
+    alwaysVisibleEngineSymbol?: SymTabEntry,
 }
 
 export interface SymbolResolution extends SymTabResolution {

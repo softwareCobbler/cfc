@@ -195,12 +195,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     const checker = Checker();
     const heritageCircularityDetector = new Set<string>();
 
-    if (options.parseTypes) {
-        parser.setParseTypes(true);
-    }
-
     if (options.debug) {
-        parser.setDebug(true);
         binder.setDebug(true);
         // checker.setDebug(true);
     }
@@ -618,8 +613,8 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
 
     function EngineSymbolResolver(canonicalName: string) : SymTabEntry | undefined {
         if (!engineLib) return undefined;
-        if (!engineLib.parsedSourceFile.containedScope.__declaration) return undefined;
-        return engineLib.parsedSourceFile.containedScope.__declaration.get(canonicalName);
+        if (!engineLib.parsedSourceFile.containedScope.typedefs.mergedInterfaces.has("__cfEngine")) return undefined;
+        return engineLib.parsedSourceFile.containedScope.typedefs.mergedInterfaces.get("__cfEngine")!.members.get(canonicalName);
     }
 
     // resolve types (right now, just interfaces) from *the* lib file
