@@ -507,8 +507,9 @@ export function Scanner(source_: string | Buffer) {
             );
         }
 
-        const tag = mode === ScannerMode.tag || mode === ScannerMode.allow_both;
-        const script = mode === ScannerMode.script || mode === ScannerMode.allow_both;
+        const tag = !!(mode & ScannerMode.tag);
+        const script = !!(mode & ScannerMode.script);
+        const docBlock = !!(mode & ScannerMode.docBlock);
         const from = getIndex();
 
         const c = peekChar()!.codepoint;
@@ -559,7 +560,13 @@ export function Scanner(source_: string | Buffer) {
             case AsciiMap.TAB:             // \t [[fallthrough]];
             case AsciiMap.CARRIAGE_RETURN: // \r [[fallthrough]];
             case AsciiMap.NEWLINE:         // \n [[fallthrough]];
-                // more of a "definite" eat here
+                // `maybeEat` is more of a "definite" eat here
+                if (docBlock) {
+                    // eat whitespace, and if we get a newline, nextline's whitespace, up to the first "*" if it exists, and then subsequent whitespace
+                    // if we get another newline, repeat the process
+                    maybeEat(/[ \t]*(\r?\n[ \t]*(\*[ \t])?)*/iy);
+                    return makeToken(TokenType.WHITESPACE, from, getIndex());
+                }
                 maybeEat(/\s+/iy);
                 return makeToken(TokenType.WHITESPACE, from, getIndex());
             case AsciiMap.EXCLAMATION:
@@ -863,15 +870,100 @@ export function Scanner(source_: string | Buffer) {
             || codePoint > 128;
     }
 
-    function scanIdentifier() : Token | null {
+    function scanIdentifierWorker() : string | null {
         if (!isIdentifierStart(annotatedChars[index].codepoint)) return null;
         const from = index;
         index += 1;
         while (isIdentifierRest(annotatedChars[index].codepoint)) {
             index += 1;
         }
-        lastScannedText = sourceText.slice(from, index);
-        return makeToken(TokenType.LEXEME, from, getIndex());
+        return sourceText.slice(from, index);
+    }
+
+    function scanIdentifier() : Token | null {
+        const from = index;
+        const identifierText = scanIdentifierWorker();
+        if (!identifierText) {
+            return null;
+        }
+        else {
+            lastScannedText = identifierText;
+            return makeToken(TokenType.LEXEME, from, getIndex());
+        }
+    }
+
+    function scanDocBlockAttrName() : string | null {
+        if (annotatedChars[index].codepoint === AsciiMap.AT) {
+            const startPos = index;
+            index++;
+            const identifierText = scanIdentifierWorker();
+            if (!identifierText) {
+                index = startPos;
+                return null;
+            }
+            else {
+                return identifierText;
+            }
+        }
+        return null;
+    }
+
+    // caller should have set the end limit to the appropriate position
+    // so that `hasNext()` returns false on the character that would otherwise be the "*/" comment terminator
+    function scanDocBlockAttrText() : string {
+        let start = index;
+        let justWhitespaceThisLine = true;
+        let inPrefix = false;
+        const result : string[] = [];
+        while (hasNext()) {
+            if (annotatedChars[index].codepoint === AsciiMap.SPACE || annotatedChars[index].codepoint === AsciiMap.TAB) {
+                index += 1;
+                continue;
+            }
+            else if (annotatedChars[index].codepoint === AsciiMap.NEWLINE) {
+                justWhitespaceThisLine = true;
+                inPrefix = true;
+                index += 1;
+                result.push(sourceText.slice(start, index));
+                start = index;
+                continue;
+            }
+            else if (annotatedChars[index].codepoint === AsciiMap.CARRIAGE_RETURN && annotatedChars[index+1].codepoint === AsciiMap.NEWLINE) {
+                justWhitespaceThisLine = true;
+                inPrefix = true;
+                index += 2;
+                result.push(sourceText.slice(start, index));
+                start = index;
+                continue;
+            }
+            else if (annotatedChars[index].codepoint === AsciiMap.STAR) {
+                index += 1;
+                if (inPrefix) {
+                    start = index;
+                    inPrefix = false;
+                }
+                else {
+                    justWhitespaceThisLine = false;
+                }
+            }
+            else if (annotatedChars[index].codepoint === AsciiMap.AT) {
+                if (!justWhitespaceThisLine) {
+                    index += 1;
+                }
+                else {
+                    break;
+                }
+            }
+            else {
+                index += 1;
+                justWhitespaceThisLine = false;
+                continue;
+            }
+        }
+        if (!justWhitespaceThisLine) result.push(sourceText.slice(start, index));
+        const text = result.join("");
+        lastScannedText = text;
+        return text;
     }
 
     function isIdentifier() {
@@ -996,6 +1088,8 @@ export function Scanner(source_: string | Buffer) {
         scanLexemeLikeStructKey,
         scanIdentifier,
         isIdentifier,
+        scanDocBlockAttrName,
+        scanDocBlockAttrText,
         getSourceText: () => sourceText
     }
 }
@@ -1033,4 +1127,4 @@ export function Token(type: TokenType, text: string, fromOrRange: number | Sourc
 
 export const NilToken = (pos: number, text: string = "") => Token(TokenType.NIL, text, new SourceRange(pos, pos));
 
-export const enum ScannerMode { tag, script, allow_both }
+export const enum ScannerMode { tag = 1 << 1, script = 1 << 2, docBlock = 1 << 3 }

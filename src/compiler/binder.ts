@@ -277,11 +277,11 @@ export function Binder() {
         }
     }
     
-    function bindTypeShim(_node: TypeShim) {
-        // types always have names here? -- yes, typedefs do, but we need to explicitly indicate that inside the typesystem
-        // we get them from `@type x = ` so presumably always...
-        // also `@declare function foo` and possibly `@declare global <identifier-name> : type`
-        //currentContainer.containedScope.typedefs.set(node.type.name!, node.type);
+    // why is this different than bindTypedefs
+    function bindTypeShim(node: TypeShim) {
+        if (node.what === "typedef" && node.type.name) { // ah naming, a typedef can currently be a type annotation and not a typedef ?...
+            currentContainer.containedScope.typedefs.aliases.set(node.type.name, node.type);
+        }
     }
 
     function mergeInterfaces(name: string, interfaces: readonly Readonly<Interface>[]) : Interface {

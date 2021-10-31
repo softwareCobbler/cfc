@@ -940,7 +940,7 @@ export function getContainingFunction(node: Node) : FunctionDefinition | ArrowFu
     return findAncestor(node, (node) => node.kind === NodeKind.functionDefinition || node.kind === NodeKind.arrowFunctionDefinition) as FunctionDefinition | ArrowFunctionDefinition;
 }
 
-export function isCfcMemberFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) : boolean {
+export function isCfcMemberFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) : node is FunctionDefinition {
     if (node.kind === NodeKind.arrowFunctionDefinition) return false;
     return !getContainingFunction(node) // there is no outer function
         && getSourceFile(node)?.cfFileType === CfFileType.cfc; // and the file type is a cfc

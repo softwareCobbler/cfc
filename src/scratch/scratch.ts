@@ -30,15 +30,46 @@ function projectFiddle() {
                 `,
                 "realLib.d.cfm": fs.readFileSync("C:\\Users\\anon\\dev\\cfc\\src\\lang-server\\server\\src\\runtimelib\\lib.cf2018.d.cfm").toString(),
                 "someFile.cfc": `
-                    <cfcomponent extends="mxunit.framework.TestCase">
-                        <cffunction name="testXXX" returntype="void" access="public">
-                        </cffunction
-                    </cfcomponent>
+                <!---
+                    @typedef SomeShapeFromOuterContext = {lel: string, lol: string}
+                --->
+                <cfcomponent extends="mxunit.framework.TestCase">               
+                    <cffunction name="setUp" returntype="void" access="public" hint="put things here that you want to run before each test">
+                        
+                    </cffunction>
+                
+                    <cffunction name="tearDown" returntype="void" access="public" hint="put things here that you want to run after each test">	
+                        <cfscript>
+                            // @type SomeShapeFromOuterContext[]
+                            var x = []; 
+                            x[1]
+                            
+                        </cfscript>
+                    </cffunction>
+                    
+                    <cffunction name="testXXX" returntype="void" access="public">
+                        <cfscript>
+                            /**
+                             * @typedef X = {a:string, b: string}
+                             */
+                            // @type X[]
+                            var x = []; 
+                            x[1].
+                            
+                        </cfscript>
+                    </cffunction
+                
+                
+                </cfcomponent>
                     `,
                 "a": {
                     "b": {
                         "x.cfc": `
-                        component { function foobar() { this.mlem(); } }
+                        component extends="someFile" {
+                            function foobar() {
+                                foo();
+                            }
+                        }
                         `,
                         "y.cfc": "component { function mlem() {} }",
                     },
@@ -59,6 +90,7 @@ function projectFiddle() {
 
     project.addEngineLib("/realLib.d.cfm");
     project.addFile("/someFile.cfc");
+    project.addFile("/a/b/x.cfc");
     const diagnostics = project.getDiagnostics("/someFile.cfc");
 
     //const x = project.getInterestingNodeToLeftOfCursor("/someFile.cfc", 378);

@@ -26,7 +26,7 @@ import {
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, TypeShim, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType } from "./scanner";
-import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath } from "./utils";
+import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard } from "./utils";
 import { cfIndexedType, Interface, cfIntersection, extractCfFunctionSignature, isIntersection, isStructLike, isTypeId, isUnion, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, Decorator, TypeConstructor, IndexSignature } from "./types";
 import { _Type, UninstantiatedArray, Struct, StructKind, cfTuple, cfFunctionSignature, cfTypeId, cfUnion, SyntheticType, cfFunctionSignatureParam } from "./types";
 import { Engine } from "./engines";
@@ -141,8 +141,6 @@ export function Parser(config: ProjectOptions) {
     const parseTypes = config.parseTypes;
     const debug = config.debug;
     const engineVersion = config.engineVersion;
-
-    const stripStructuralOnlyDocBlockTextPattern = /(^|\r?\n)\s*\*/g; // pattern to strip leading whitespace followed by a single "*" in docblocks
 
     let lastDocBlock : {type: _Type | null, typedefs: TypeShim[], docBlockAttrs: TagAttribute[] } | null = null;
     
@@ -304,6 +302,18 @@ export function Parser(config: ProjectOptions) {
         return result;
     }
 
+    function scanDocBlockAttrName() : string | null {
+        const result = scanner.scanDocBlockAttrName();
+        primeLookahead();
+        return result;
+    }
+
+    function scanDocBlockAttrText() : string {
+        const result = scanner.scanDocBlockAttrText();
+        primeLookahead();
+        return result;
+    }
+
     function getIndex() {
         return scanner.getIndex();
     }
@@ -333,10 +343,10 @@ export function Parser(config: ProjectOptions) {
     }
 
     function tagMode() : boolean {
-        return mode === ScannerMode.tag || mode === ScannerMode.allow_both;
+        return !!(mode & ScannerMode.tag);
     }
     function scriptMode() : boolean {
-        return mode === ScannerMode.script || mode === ScannerMode.allow_both;
+        return !!(mode & ScannerMode.script);
     }
     function isInSomeContext(context: ParseContext) : boolean {
         return !!(parseContext & (1 << context));
@@ -563,7 +573,13 @@ export function Parser(config: ProjectOptions) {
     function parseScriptSingleLineComment() : Comment {
         const start = parseExpectedTerminal(TokenType.DBL_FORWARD_SLASH, ParseOptions.noTrivia);
         scanToNextChar("\n", /*endOnOrAfter*/"after");
-        return Comment(CommentType.scriptSingleLine, /*isDocBlock*/ false, new SourceRange(start.range.fromInclusive, scanner.getIndex()));
+
+        const comment = Comment(CommentType.scriptSingleLine, /*isDocBlock*/ false, new SourceRange(start.range.fromInclusive, scanner.getIndex()));
+        if (parseTypes && !isInSomeContext(ParseContext.typeAnnotation)) {
+            parseTypeAnnotationsFromPreParsedTrivia(comment);
+        }
+
+        return comment;
     }
 
     function parseScriptMultiLineComment() : Comment {
@@ -571,7 +587,16 @@ export function Parser(config: ProjectOptions) {
         const isDocBlock = peekChar() === "*";
         scanToNextToken([TokenType.STAR_FORWARD_SLASH]);
         const endToken = parseExpectedTerminal(TokenType.STAR_FORWARD_SLASH, ParseOptions.noTrivia, "Unterminated multiline script comment.");
-        return Comment(CommentType.scriptMultiLine, isDocBlock, new SourceRange(startToken.range.fromInclusive, endToken.range.toExclusive));
+        const comment = Comment(CommentType.scriptMultiLine, isDocBlock, new SourceRange(startToken.range.fromInclusive, endToken.range.toExclusive));
+
+        if (isDocBlock) {
+            parseDocBlockFromPreParsedComment(comment);
+        }
+        else if (parseTypes && !isInSomeContext(ParseContext.typeAnnotation)) {
+            parseTypeAnnotationsFromPreParsedTrivia(comment);
+        }
+
+        return comment;
     }
 
     /**
@@ -629,20 +654,15 @@ export function Parser(config: ProjectOptions) {
         }
         else {
             result = [];
-            let lastDocBlock : Comment | null = null;
             while (true) {
                 switch (lookahead()) {
                     case TokenType.DBL_FORWARD_SLASH: {
                         const comment = parseScriptSingleLineComment();
                         result.push(comment);
-                        if (parseTypes && !isInSomeContext(ParseContext.typeAnnotation)) {
-                            parseTypeAnnotationsFromPreParsedTrivia(comment);
-                        }
                         continue;
                     }
                     case TokenType.FORWARD_SLASH_STAR: {
                         const comment = parseScriptMultiLineComment();
-                        if (comment.flags & NodeFlags.docBlock) lastDocBlock = comment;
                         result.push(comment);
                         continue;
                     }
@@ -657,10 +677,6 @@ export function Parser(config: ProjectOptions) {
                         continue;
                 }
                 break;
-            }
-
-            if (lastDocBlock && !isInSomeContext(ParseContext.typeAnnotation)) {
-                parseDocBlockFromPreParsedComment(lastDocBlock);
             }
         }
 
@@ -796,12 +812,11 @@ export function Parser(config: ProjectOptions) {
     interface ComponentPreamble {
         primarySyntax: ComponentSyntaxType,
         type: ComponentOrInterface,
-        typedefs: TypeShim[],
         preamble: Node[],
     }
 
     function parseComponentPreamble() : ComponentPreamble | null {
-        setScannerMode(ScannerMode.allow_both);
+        setScannerMode(ScannerMode.tag | ScannerMode.script);
         const preamble : Node[] = []; // not certain, but probably just {Comment | ImportStatement}
 
         //
@@ -844,7 +859,7 @@ export function Parser(config: ProjectOptions) {
         let gotScriptComment = false;
         let syntaxType : ComponentSyntaxType | null = null;
         let componentOrInterface : ComponentOrInterface | null = null;
-        const typedefs : TypeShim[] = [];
+
         outer:
         while (lookahead() !== TokenType.EOF) {
             switch (lookahead()) {
@@ -863,10 +878,6 @@ export function Parser(config: ProjectOptions) {
                     preamble.push(comment);
                     if (comment.flags & NodeFlags.docBlock) {
                         parseDocBlockFromPreParsedComment(comment);
-                        if (lastDocBlock) {
-                            typedefs.push(...lastDocBlock.typedefs);
-                            lastDocBlock = null;
-                        }
                     }
                     gotScriptComment = true;
                     continue;
@@ -922,7 +933,6 @@ export function Parser(config: ProjectOptions) {
             return {
                 primarySyntax: syntaxType,
                 type: componentOrInterface,
-                typedefs,
                 preamble,
             };
         }
@@ -967,27 +977,36 @@ export function Parser(config: ProjectOptions) {
                 }
 
                 sourceFile.content.push(...componentInfo.preamble);
+
+                // extract parsed types into working node's typedefs
+                // should probably break this out so we can use it on any current working node
+                // also this more of the binder's responsibility, it would do a better job of checking for duplicate declarations and etc.
+                if (lastDocBlock) {
+                    for (const typeshim of lastDocBlock.typedefs) {
+                        if (typeshim.what === "typedef") {
+                            if (isStructLike(typeshim.type) && typeshim.type.structKind === StructKind.interface) {
+                                if (sourceFile.containedScope.typedefs.interfaces.has((typeshim.type as Interface).name)) {
+                                    sourceFile.containedScope.typedefs.interfaces.get((typeshim.type as Interface).name)!.push(typeshim.type as Interface);
+                                }
+                                else {
+                                    sourceFile.containedScope.typedefs.interfaces.set((typeshim.type as Interface).name, [typeshim.type as Interface]);
+                                }
+                            }
+                            else if (typeshim.type.name) {
+                                sourceFile.containedScope.typedefs.aliases.set(typeshim.type.name, typeshim.type);
+                            }
+                        }
+                        else if (typeshim.what === "decorator") {
+                            sourceFile.containedScope.typedefs.decorators.push(typeshim.type as Decorator);
+                        }
+                    }
+                }
+
                 if (componentInfo.primarySyntax === ComponentSyntaxType.tag) {
                     sourceFile.content.push(...parseTags());
                 }
                 else {
                     sourceFile.content.push(...parseScript());
-                }
-
-                // extract parsed types into working node's typedefs
-                // should probably break this out so we can use it on any current working node
-                for (const typeshim of componentInfo.typedefs) {
-                    if (isStructLike(typeshim.type) && typeshim.type.structKind === StructKind.interface) {
-                        if (sourceFile.containedScope.typedefs.interfaces.has((typeshim.type as Interface).name)) {
-                            sourceFile.containedScope.typedefs.interfaces.get((typeshim.type as Interface).name)!.push(typeshim.type as Interface);
-                        }
-                        else {
-                            sourceFile.containedScope.typedefs.interfaces.set((typeshim.type as Interface).name, [typeshim.type as Interface]);
-                        }
-                    }
-                    else if (typeshim.what === "decorator") {
-                        sourceFile.containedScope.typedefs.decorators.push(typeshim.type as Decorator);
-                    }
                 }
 
                 break;
@@ -3296,12 +3315,6 @@ export function Parser(config: ProjectOptions) {
         }
 
         let returnTypeAnnotation : _Type | null = null;
-        const returnTypeAttrName = "xtype";
-        for (const attr of attrs) {
-            if (attr.canonicalName === returnTypeAttrName && attr.expr?.kind === NodeKind.simpleStringLiteral) {
-                returnTypeAnnotation = parseType(attr.expr.range.fromInclusive + 1, attr.expr.range.toExclusive - 1);                
-            }
-        }
         const result = Script.FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body, returnTypeAnnotation);
 
         result.typeAnnotation = savedLastDocBlock?.type ?? null;
@@ -3778,112 +3791,112 @@ export function Parser(config: ProjectOptions) {
         return nilStatement;
     }
 
+    //
+    // types / docblocks
+    //
+    // type annotations can appear
+    //   - in a comment
+    //     - in a docblock            (parseDocBlock)
+    //     - in a single line comment (parseTypeAnnotationsFromPreParsedTrivia)
+    //     - in a multiline comment   (parseTypeAnnotationsFromPreParsedTrivia)
+    //     - in a tag comment         (parseTypeAnnotationsFromPreParsedTrivia)
+    //   - in a .d.cfm file           (parseTypeAnnotations)
+    //
+    // - We recognize a docblock during primary parsing of comments, when we hit a multiline comment where the first character is "*" (so the source text looks like "/**")
+    //   when we recognize a docblock, we scan out the entire comment to the end "*/", update the scanner's range so that it can only "see" the contents of the docblock,
+    //   and enter "parseDocBlockFromPreParseComment"
+    // - In the doc block parser, we parse "@foo .*" as a tag attribute where the name is "foo" and the associated node is a textspan containing the subsequent text.
+    //   The scanner takes care of removing "elidable prefixes", which is the portion of a new line that is just whitespace followed by "*"
+    // - If the "parseTypes" flag is set, and an attribute name is a recognized type start symbol ("typedef", "decorator", "type", "interface"),
+    //   we update the scanner as appropriate and descend into a type parser
+    // - Parsed types get turned into TypeShims
+    // - All the tag attributes / typeshims parsed out of a docblock get put onto the parser-global "lastDocBlock" object, which all parsers have access to and may
+    //   inspect and peel off tag attributes and type annotations as appropriate; this allows annotations to appear in the "comment before" any given node
+    // - The binder is then responsible for putting node-attached typedefs onto appropriate containers, the parser should attach a literal type annotation to a node's typeAnnotation property
+    //
+    // - parseType is a typical parser function, and as long as the scanner's view is updated appropriately, calling `parseType()` isn't any different than calling `parse*`
+    //   i.e. it tries to parse it's goal and issues diagnostics just like any other term-level parser
+    //
+    // - "parseTypeAnnotations" and "parseTypeAnnotationsFromPreParsedTrivia" should probably be unified in some way, one serves as the "statement" parser for a .d.cfm file,
+    //   the other to parse type annotations out of single line comments, multiline comments, but not docblock comments; they all do just about the same thing, but assume
+    //   three separate "parsing contexts" (single line / multiline / tag comment, docblock comment, .d.cfm file), each of which has subtle differences that we can probably abstract over
+    //
+    // - docblock tag attributes need to go into the global docblock obj, so the subsequently parsed node can grab them
+    // - a type annotation neds to into the global docblock obj for the same reason
+    // - typedefs need to be attached to their containing trivia, so that the binder can hoist them into the appropriate container
+    //   - a typedef is visible only from ancestors of the container in which it was declared
+    //   - we expect most to be "global", at the library or source level, but it is possible to declare them within functions and have their visibility limited to the function
+
     // sets the parser-global `lastDocBlock`
     function parseDocBlockFromPreParsedComment(node: Comment) : void {
         const from = node.range.fromInclusive + 3; // start immediately after the start sequence "/**" which kicked off the docblock
         const to = node.range.toExclusive - 2; // start immediately after the start sequence "/**" which kicked off the docblock
         const savedScannerState = getScannerState();
+
         restoreScannerState({
             index: from,
             artificialEndLimit: to,
-            mode: ScannerMode.allow_both
+            mode: ScannerMode.docBlock,
         });        
 
-        function finishDocBlockAttribute(attrValueSourceRange: SourceRange, attrUiName: Terminal) {
-            const text = scanner.getTextSlice(attrValueSourceRange).replace(stripStructuralOnlyDocBlockTextPattern, "$1").trim();
-            const syntheticEquals = NilTerminal(attrUiName.range.toExclusive, "=");
-
-            let docBlockAttr : TagAttribute;
-            if (text) {
-                const textSpanNode = TextSpan(attrValueSourceRange, text);
-                docBlockAttr = TagAttribute(attrUiName, attrUiName.token.text, syntheticEquals, textSpanNode);
-            }
-            else {
-                docBlockAttr = TagAttribute(attrUiName, attrUiName.token.text);
-            }
-
-            docBlockAttr.flags |= NodeFlags.docBlock;
-            return docBlockAttr;
-        }
-
-        function isDocBlockAttrName() : boolean {
-            return SpeculationHelper.lookahead(() => {
-                if (peek().text !== "@") return false;
-                next();
-                return !!scanTagAttributeName();
-            })
-        }
-
-        function scanDocBlockAttrName() : Terminal {
-            parseExpectedTerminal(TokenType.CHAR, ParseOptions.noTrivia); // consume "@"
-            const token = scanTagAttributeName(/*allowDot*/ true);
-            if (!token) return NilTerminal(pos(), "<<error/doc-block-attr-name>>");
-            else return Terminal(token, []);
-        }
-
-        /**
-         * a next attribute start is:
-         *      first: "@"<attr-name>
-         *      rest:  "\n" \s* \* \s* "@"<attr-name>
-         */
-        function scanToNextAttributeName(matchImmediate = false) : void {
-            let allowFreshAttr = matchImmediate;
-            while (lookahead() !== TokenType.EOF) {
-                if (allowFreshAttr && isDocBlockAttrName()) return;
-                const token = next();
-                if (token.type === TokenType.WHITESPACE) {
-                    if (lookahead() === TokenType.STAR && /\n/.test(token.text)) {
-                        next(); // consume the "*"
-                        allowFreshAttr = true;
-                    }
-                }
-                else {
-                    allowFreshAttr = false;
-                }
-            }
-        }
-
-        function scanDocBlockAttrValue(matchImmediate = false) {
-            const start = getIndex();
-            scanToNextAttributeName(matchImmediate);
-            return new SourceRange(start, getIndex());
-        }
-        
-        // the first part of a cf-docblock is implicitly a "hint" attribute if it is text without an attribute name
-        let first = true;
         let workingAttributeUiName : Terminal = NilTerminal(pos(), "hint");
         const docBlockAttrs : TagAttribute[] = [];
         const typedefs : TypeShim[] = [];
+        let typeAnnotation : _Type | null = null;
 
-        while (true) {
-            if (parseTypes && workingAttributeUiName.token.text === "interface") {
-                // backup to start of `interface` "token"
-                restoreScannerState({...getScannerState(), index: getIndex() - workingAttributeUiName.token.text.length})
-                const typedef = parseType();
-                typedefs.push(TypeShim("typedef", typedef));
+        function eatWhitespace() {
+            while (lookahead() === TokenType.WHITESPACE) { // fixme: we are in trivia context, right?
+                next();
+                continue;
             }
-            else if (parseTypes && workingAttributeUiName.token.text === "decorate") {
-                parseTrivia();
-                const decoratorName = stringifyDottedPath(parseDottedPath());
-                typedefs.push(TypeShim("decorator", Decorator(decoratorName.ui)));
-            }
-            else {
-                const valueSourceRange = scanDocBlockAttrValue(/*matchImmediate*/ first);
-                const docBlockAttr = finishDocBlockAttribute(valueSourceRange, workingAttributeUiName);
-                if (!first || (first && docBlockAttr.expr)) {
-                    docBlockAttrs.push(docBlockAttr);
+        }
+
+        eatWhitespace();
+
+        while (lookahead() !== TokenType.EOF) {
+            const start = pos();
+            const name = scanDocBlockAttrName();
+
+            if (name) {
+                if (parseTypes && name === "interface") {
+                    scanner.restoreIndex(getIndex() - name.length); // backup to start of `interface` "token"
+                    const interfaceDef = parseType();
+                    typedefs.push(TypeShim("typedef", interfaceDef));
+                }
+                else if (parseTypes && name === "typedef") {
+                    eatWhitespace();
+                    typedefs.push(parseTypeDef());
+                    continue;
+                }
+                else if (parseTypes && name == "type") {
+                    eatWhitespace();
+                    typeAnnotation = parseType();
+                    continue;
+                }
+                else if (parseTypes && name === "decorate") {
+                    eatWhitespace();
+                    const decoratorName = stringifyDottedPath(parseDottedPath());
+                    typedefs.push(TypeShim("decorator", Decorator(decoratorName.ui)));
+                    continue;
+                }
+                else {
+                    workingAttributeUiName = NilTerminal(start, name);
                 }
             }
 
-            if (lookahead() === TokenType.EOF) {
-                break;
-            }
-
-            workingAttributeUiName = scanDocBlockAttrName() || {uiName: "__error__", fromInclusive: pos(), toExclusive: pos()};
-            first = false;
+            const text = scanDocBlockAttrText();
+            const syntheticEquals = NilTerminal(workingAttributeUiName.range.toExclusive, "=");
+            const textSpan = TextSpan(new SourceRange(start, scanner.getIndex()), text);
+            const docBlockAttr = TagAttribute(workingAttributeUiName, workingAttributeUiName.token.text, syntheticEquals, textSpan);
+            docBlockAttr.flags |= NodeFlags.docBlock;
+            docBlockAttrs.push(docBlockAttr);
         }
 
-        lastDocBlock = {type: null, typedefs: typedefs, docBlockAttrs: docBlockAttrs};
+        lastDocBlock = {type: typeAnnotation, typedefs: typedefs, docBlockAttrs: docBlockAttrs};
+
+        if (typedefs) {
+            node.typedefs = typedefs;
+        }
 
         restoreScannerState(savedScannerState);
     }
@@ -3893,49 +3906,64 @@ export function Parser(config: ProjectOptions) {
      * every call to this method clears the last known trivia-bound type annotation,
      * and sets it to the final type annotation of the current trivia collection, if it exists
      */
-     function parseTypeAnnotationsFromPreParsedTrivia(trivia: Node | Node[]) : void {
+    function parseTypeAnnotationsFromPreParsedTrivia(node: Comment | CfTag.Comment) : void {
         lastDocBlock = null;
-
-        if (!Array.isArray(trivia)) trivia = [trivia];
-
-        if (trivia.length === 0) {
-            return;
-        }
 
         const savedScannerState = getScannerState();
         const savedParseContext = parseContext;
         parseContext = 1 << ParseContext.typeAnnotation;
 
-        for (const node of trivia) {
-            if (node.kind === NodeKind.comment || (node.kind === NodeKind.tag && node.tagType === CfTag.TagType.comment)) {
-                restoreScannerState({
-                    index: node.range.fromInclusive,
-                    artificialEndLimit: node.range.toExclusive,
-                    mode: ScannerMode.allow_both, // make this optional? it is set in parseTypeAnnotations, too; so we only set it because it is required here
-                })
-
-                const types = parseTypeAnnotations();
-                
-                const typedefs = types.filter(typeShim => typeShim.what === "typedef")
-                if (typedefs.length > 0) {
-                    node.typedefs = typedefs; // store the parsed type functions on the trivia node
-                }
-
-                const typeAnnotations = types.filter(typeShim => typeShim.what === "annotation")
-                if (typeAnnotations.length > 1) {
-                    // we need to get the type's ranges and terminals and etc.
-                    parseErrorAtRange(node.range, "Only one @type annotation is permitted per comment.");
-                }
-
-                // <whitespace><comment><whitespace><comment>
-                // only the last final comment's type annotation will be considered for the next non-trivial production
-                lastDocBlock = {
-                    type: typeAnnotations.length === 1 ? typeAnnotations[0].type : null,
-                    typedefs: [],
-                    docBlockAttrs: []
-                };
+        let leadingOffset : number;
+        let trailingOffset : number;
+        switch (node.kind) {
+            case NodeKind.comment: {
+                leadingOffset = node.commentType === CommentType.scriptSingleLine
+                    || node.commentType === CommentType.scriptMultiLine
+                    ? 2  // script "//" or "/*"
+                    : 5; // tag "<!---"
+                trailingOffset = node.commentType === CommentType.scriptSingleLine
+                    ? 0 // script single line no "end terminal" to skip
+                    : node.commentType === CommentType.scriptMultiLine
+                    ? 2 // script "*/"
+                    : 4 // tag "--->"
+                break;
+            }
+            case NodeKind.tag: {
+                leadingOffset = 5; // tag "<!---"
+                trailingOffset = 4; // tag "--->"
+                break;
+            }
+            default: {
+                exhaustiveCaseGuard(node);
             }
         }
+
+        restoreScannerState({
+            index: node.range.fromInclusive + leadingOffset, // jump ahead the "//" or "/*" chars
+            artificialEndLimit: node.range.toExclusive - trailingOffset,
+            mode: ScannerMode.tag | ScannerMode.script, // set docblock mode if we're in a docblock...
+        })
+
+        const types = parseTypeAnnotations();
+        
+        const typedefs = types.filter(typeShim => typeShim.what === "typedef")
+        if (typedefs.length > 0) {
+            node.typedefs = typedefs; // store the parsed type functions on the trivia node
+        }
+
+        const typeAnnotations = types.filter(typeShim => typeShim.what === "annotation")
+        if (typeAnnotations.length > 1) {
+            // we need to get the type's ranges and terminals and etc.
+            parseErrorAtRange(node.range, "Only one @type annotation is permitted per comment.");
+        }
+
+        // <whitespace><comment><whitespace><comment>
+        // only the last final comment's type annotation will be considered for the next non-trivial production
+        lastDocBlock = {
+            type: typeAnnotations.length === 1 ? typeAnnotations[0].type : null,
+            typedefs: typedefs,
+            docBlockAttrs: [] // this is not a docblock, if it were, we'd be using "parseDocBlockFromPreParsedTrivia"
+        };
 
         restoreScannerState(savedScannerState);
         parseContext = savedParseContext;
@@ -3948,7 +3976,7 @@ export function Parser(config: ProjectOptions) {
         const savedContext = parseContext;
         const savedScannerMode = getScannerState().mode;
         
-        setScannerMode(ScannerMode.allow_both);
+        setScannerMode(getScannerState().mode | ScannerMode.script | ScannerMode.tag); // maintain "docblock" mode if we're in it
         parseContext = 1 << ParseContext.typeAnnotation;
         
         const result : TypeShim[] = [];
@@ -3982,150 +4010,9 @@ export function Parser(config: ProjectOptions) {
                     result.push(TypeShim("annotation", parseType()));
                 }
                 else if (contextualKeyword.text === "typedef") {
-                    // next(), parseTrivia();
-                    
-                    // // @type T = ...                -- alias
-                    // // @type T<U [= default]> = ... -- alias (type constructor definition)
-
-                    // function parseTypeAliasDefOrAnnotation() {
-                    //     if (lookahead() === TokenType.LEXEME) {
-                    //         const enum SpeculationResult_t { definiteNonGenericAliasDef, indefiniteGeneric };
-                    //         type SpeculationResult =
-                    //             | {resultKind: SpeculationResult_t.indefiniteGeneric, name: string}
-                    //             | {resultKind: SpeculationResult_t.definiteNonGenericAliasDef, nonGenericAliasDef: TypeShim}
-                    //             | null;
-
-                    //         const possibleAliasDef = SpeculationHelper.speculate(() : SpeculationResult => {
-                    //             const name = parseOptionalTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
-                    //             if (name) {
-                    //                 if (lookahead() === TokenType.LEFT_ANGLE) {
-                    //                     parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
-                    //                     return {resultKind: SpeculationResult_t.indefiniteGeneric, name: name.token.text};
-                    //                 }
-                    //                 else if (lookahead() === TokenType.EQUAL) {
-                    //                     parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
-                    //                     return {resultKind: SpeculationResult_t.definiteNonGenericAliasDef, nonGenericAliasDef: TypeShim("typedef", parseType(), name.token.text)};
-                    //                 }
-                    //             }
-                    //             return null;
-                    //         });
-
-                    //         if (!possibleAliasDef) {
-                    //             return TypeShim("annotation", parseType());
-                    //         }
-                    //         else if (possibleAliasDef.resultKind === SpeculationResult_t.definiteNonGenericAliasDef) {
-                    //             return possibleAliasDef.nonGenericAliasDef;
-                    //         }
-                    //         else {
-                    //             // after parsing the param/arg list and an optional equals token, both will be false, or exactly one will be true
-                    //             // if both are false, it implies a constructorInvocation
-                    //             let isDefiniteConstructorDefinition = false;
-                    //             let isDefiniteConstructorInvocation = false;
-
-                    //             const paramsOrArgs : {element: _Type, default?: _Type}[] = [];
-
-                    //             while (lookahead() !== TokenType.RIGHT_ANGLE && lookahead() !== TokenType.EOF) {
-                    //                 if (isDefiniteConstructorDefinition) {
-                    //                     // fixme: types don't have ranges
-                    //                     const start = pos();
-                    //                     let element = parseType();
-                    //                     const end = pos();
-                    //                     if (!isTypeId(element)) {
-                    //                         parseErrorAtRange(new SourceRange(start, end), "A generic type alias parameter's names must be identifiers.");
-                    //                         element = cfTypeId("<<ERROR-TYPE>>");
-                    //                     }
-                    //                     if (lookahead() === TokenType.EQUAL) {
-                    //                         parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
-                    //                         paramsOrArgs.push({element, default: parseType()});
-                    //                     }
-                    //                     else {
-                    //                         paramsOrArgs.push({element});
-                    //                     }
-                    //                 }
-                    //                 else if (isDefiniteConstructorInvocation) {
-                    //                     paramsOrArgs.push({element: parseType()});
-                    //                 }
-                    //                 else {
-                    //                     const element = parseType();
-                    //                     if (isTypeId(element)) {
-                    //                         if (lookahead() === TokenType.EQUAL) {
-                    //                             // something like X<T=U> is a definite constructor definition
-                    //                             isDefiniteConstructorDefinition = true;
-                    //                             parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
-                    //                             paramsOrArgs.push({element, default: parseType()});
-                    //                         }
-                    //                         else {
-                    //                             paramsOrArgs.push({element});
-                    //                         }
-                    //                     }
-                    //                     else {
-                    //                         // something like X<{P:T}> is a definite invocation
-                    //                         isDefiniteConstructorInvocation = true;
-                    //                         paramsOrArgs.push({element});
-                    //                     }
-                    //                 }
-                    //             }
-
-                    //             parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);
-
-                    //             if (isDefiniteConstructorDefinition) {
-                    //                 parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
-                    //             }
-                    //             else {
-                    //                 isDefiniteConstructorDefinition = !isDefiniteConstructorInvocation && !!parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
-                    //             }
-
-                    //             if (isDefiniteConstructorInvocation || !isDefiniteConstructorDefinition) {
-                    //                 return TypeShim("annotation", TypeConstructorInvocation(cfTypeId(possibleAliasDef.name), paramsOrArgs.map(arg => arg.element)));
-                    //             }
-                    //             else /* isDefiniteConstructorDefinition */ {
-                    //                 return TypeShim(
-                    //                     "typedef",
-                    //                     TypeConstructor(
-                    //                         paramsOrArgs.map(param => TypeConstructorParam((param.element as cfTypeId).name, param.default)),
-                    //                         parseType()),
-                    //                     possibleAliasDef.name
-                    //                 );
-                    //             }
-                    //         }
-                    //     }
-                    //     else {
-                    //         return TypeShim("annotation", parseType());
-                    //     }
-                            
-                    // }
-
-                    // result.push(parseTypeAliasDefOrAnnotation());
-
-
-                    // const nameIfIsTypeConstructorOrAlias = SpeculationHelper.speculate(() => {
-                    //     const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
-                    //     if (lookahead() === TokenType.EQUAL) {
-                    //         return name;
-                    //     }
-                    //     else return null;
-                    // });
-
-                    // //
-                    // // an assignment generates an alias for the type on the RHS
-                    // // `@type foo = bar` is an alias declaration
-                    // // `@type {foo:bar}` is an annotation to be attached to a subsequent node
-                    // //
-                    // if (nameIfIsTypeConstructorOrAlias) {
-                    //     parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
-                    //     let type = parseType();
-                    //     (type as Mutable<_Type>).name = nameIfIsTypeConstructorOrAlias.token.text;
-                    //     result.push(TypeShim("typedef", type));
-                    // }
-                    // // a non-definition is a type-to-term assignment, it will be bound to the next non-trivia/non-type production
-                    // // like 
-                    // // <!--- @type Query<Schema> --->
-                    // // <cfquery name="q"> <!--- q has type `Query<Schema>` --->
-                    // //
-                    // else {
-                    //     const type = parseType();
-                    //     result.push(TypeShim("annotation", type));
-                    // }
+                    next(), parseTrivia();
+                    const typeDef = parseTypeDef();
+                    result.push(typeDef);
                 }
                 else {
                     next(), parseTrivia();
@@ -4138,6 +4025,46 @@ export function Parser(config: ProjectOptions) {
         setScannerMode(savedScannerMode);
         
         return result;
+    }
+
+    function parseTypeDef() : TypeShim {
+        const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/true, /*allowNumeric*/ false);
+        if (lookahead() === TokenType.LEFT_ANGLE) {
+            function parseTypeId() : cfTypeId {
+                const start = pos();
+                let element = parseType();
+                const end = pos();
+                if (!isTypeId(element)) {
+                    parseErrorAtRange(new SourceRange(start, end), "A generic type alias parameter's names must be identifiers.");
+                    return cfTypeId("<<ERROR-TYPE>>");
+                }
+                return element;
+            }
+
+            const params : TypeConstructorParam[] = [];
+
+            while (lookahead() !== TokenType.RIGHT_ANGLE && lookahead() !== TokenType.EOF) {
+                // fixme: types don't have ranges
+                const typeId = parseTypeId();
+                if (lookahead() === TokenType.EQUAL) {
+                    parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
+                    params.push(TypeConstructorParam(typeId.name, parseType()));
+                }
+                else {
+                    params.push(TypeConstructorParam(typeId.name));
+                }
+            }
+
+            parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia); // discarded
+            const body = parseType();
+            const type = TypeConstructor(params, body);
+            return TypeShim("typedef", type, name.token.text);
+        }
+        else {
+            parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia); // discarded
+            const type = parseType();
+            return TypeShim("typedef", type, name.token.text);
+        }
     }
 
     function parseType() : _Type;
@@ -4284,7 +4211,6 @@ export function Parser(config: ProjectOptions) {
             }
             else {
                 name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ true);
-                if (diagnostics.length > 0) debugger;
                 // `name` is always truthy, though
                 // if (!name) {
                 //     parseErrorAtCurrentToken("Expected a struct key.");

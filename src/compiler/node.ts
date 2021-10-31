@@ -2416,6 +2416,10 @@ export interface TypeShim extends NodeBase {
     kind: NodeKind.typeShim,
     what: "typedef" | "annotation" | "decorator"
     type: _Type
+    // type has name if typedef is an alias
+    // otherwise if typedef is for interface, the name is in the interface type node
+    // annotations have no name
+    // decorators just wrap typeIds
 }
 
 export function TypeShim(what: "typedef", type: _Type, name?: string) : TypeShim;

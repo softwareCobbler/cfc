@@ -4,7 +4,7 @@ import * as path from "path";
 import { Binder } from "./binder";
 import { Checker } from "./checker";
 import { EngineVersion } from "./engines";
-import { BlockType, CallExpression, mergeRanges, Node, NodeId, NodeKind, SourceFile, StatementType, SymTabEntry } from "./node";
+import { BlockType, CallExpression, mergeRanges, Node, NodeId, NodeKind, SourceFile, StatementType, SymTabEntry, setDebug as setNodeFactoryDebug } from "./node";
 import { Parser } from "./parser";
 import { CfFileType, SourceRange } from "./scanner";
 import { CfcTypeWrapper, cfFunctionOverloadSet, cfFunctionSignatureParam, Interface, createLiteralType, _Type, Struct } from "./types";
@@ -196,6 +196,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     const heritageCircularityDetector = new Set<string>();
 
     if (options.debug) {
+        setNodeFactoryDebug(true);
         binder.setDebug(true);
         // checker.setDebug(true);
     }

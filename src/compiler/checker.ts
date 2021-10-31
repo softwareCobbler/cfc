@@ -9,7 +9,7 @@ import { Engine, EngineVersion, supports } from "./engines";
 const structViewCache = WeakPairMap<SymbolTable, Interface, Struct>(); // map a SymbolTable -> Interface -> Struct, used to check prior existence of a wrapping of a symbol table into a struct with a possible interface extension
 const EmptyInstantiationContext = SourceFile("", CfFileType.cfc, ""); // an empty type type instantiation context, no symbols are visible; there we rely entirely on captured or provided contexts attached the instantiable target
 
-const GENERIC_FUNCTION_INFERENCE = false;
+const GENERIC_FUNCTION_INFERENCE = true; // feature flag for dev
 
 export function Checker() {
     let sourceFile!: SourceFile;
@@ -1873,6 +1873,9 @@ export function Checker() {
                 }
                 else {
                     // copy cf-sig param names into annotated-type param names
+                    // intent is we don't have to duplicate names from code signature to annotation signature, although we still need to give some name,
+                    // like `(x: any, x: string, x: cfc<a.b.c>) => any`
+                    // and then each param name has its name "filled in" by the actual cf code signature
                     for (let i = 0; i < cfSyntaxDirectedTypeSig.params.length; i++) {
                         evaluatedType.params[i].canonicalName = cfSyntaxDirectedTypeSig.params[i].canonicalName;
                         evaluatedType.params[i].uiName = cfSyntaxDirectedTypeSig.params[i].uiName;
@@ -1880,6 +1883,9 @@ export function Checker() {
                 }
 
                 finalType = evaluatedType;
+                if (isMemberFunction && node.canonicalName && sourceFile.containedScope.variables!.has(node.canonicalName)) {
+                    sourceFile.containedScope.variables!.get(node.canonicalName)!.type = finalType; // updates the 'this' copy of the symbol too, the refs are the same
+                }
             }
             else if (!(evaluatedType.flags & TypeFlags.any)) {
                 typeErrorAtNode(node, `Expected a function signature as an annotated type, but got type '${stringifyType(evaluatedType)}'.`)
