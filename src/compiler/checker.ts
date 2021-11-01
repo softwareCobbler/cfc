@@ -1,7 +1,7 @@
 import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, Property, hasDeclaredType, UnreachableFlow } from "./node";
 import { CfcResolver, EngineSymbolResolver, LibTypeResolver, ProjectOptions } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
-import { cfFunctionSignature, Struct, cfUnion, SyntheticType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStructLike, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, stringifyType, cfFunctionSignatureParam, unsafe__cfFunctionSignatureWithFreshReturnType, isFunctionOverloadSet, cfFunctionOverloadSet, isLiteralType, cfTypeId, SymbolTableTypeWrapper, CfcTypeWrapper, Interface, StructKind, isCfcLookupType, isInstantiatedArray, isInterface, createType, createLiteralType, isUninstantiatedArray, isGenericFunctionSignature, TypeConstructor, typeFromJavaLikeTypename } from "./types";
+import { cfFunctionSignature, Struct, cfUnion, SyntheticType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStructLike, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, stringifyType, cfFunctionSignatureParam, isFunctionOverloadSet, cfFunctionOverloadSet, isLiteralType, cfTypeId, SymbolTableTypeWrapper, CfcTypeWrapper, Interface, StructKind, isCfcLookupType, isInstantiatedArray, isInterface, createType, createLiteralType, isUninstantiatedArray, isGenericFunctionSignature, TypeConstructor, typeFromJavaLikeTypename } from "./types";
 import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, getAttributeValue, getContainingFunction, getFunctionDefinitionAccessLiteral, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol } from "./utils";
 import { Engine, supports } from "./engines";
@@ -796,7 +796,7 @@ export function Checker(options: ProjectOptions) {
                     return true;
                 }
                 if (isStructLike(l) && isStructLike(r)) {
-                    if (isInstantiatedArray(l) && isInstantiatedArray(r) && sourceIsLiteralExpr) {
+                    if (isInstantiatedArray(l) && isInstantiatedArray(r)) {
                         return worker(l.memberType, r.memberType);
                     }
                     return isLeftStructSubtypeOfRightStruct(l, r);
@@ -1864,14 +1864,13 @@ export function Checker(options: ProjectOptions) {
             if (node.kind === NodeKind.functionDefinition && node.canonicalName) {
                 const symbol = walkupScopesToResolveSymbol(sourceFile, (node as any).canonicalName);
                 if (symbol?.symTabEntry.type && isFunctionSignature(symbol.symTabEntry.type)) {
-                    memberFunctionSignature = symbol.symTabEntry.type;
-                    if (isCfcLookupType(memberFunctionSignature.returns)) {
-                        const resolvedCfc = evaluateType(sourceFile, memberFunctionSignature.returns) as CfcTypeWrapper;
-                        memberFunctionSignature = unsafe__cfFunctionSignatureWithFreshReturnType(memberFunctionSignature, resolvedCfc);
+                    const freshType = evaluateType(symbol.container, symbol.symTabEntry.type);
+                    if (isFunctionSignature(freshType) && !isFunctionOverloadSet(freshType)) { // fixme: why would this ever evaluate into an overload set
+                        memberFunctionSignature = freshType;
                         const variablesSymbol = sourceFile.containedScope.variables?.get(node.canonicalName);
                         // keep both `variables` and `this` in sync with member functions
                         if (variablesSymbol) {
-                            variablesSymbol.type = memberFunctionSignature;
+                            variablesSymbol.type = freshType;
                             sourceFile.containedScope.variables?.set(node.canonicalName, variablesSymbol);
                             sourceFile.containedScope.this?.set(node.canonicalName, variablesSymbol);
                         }
