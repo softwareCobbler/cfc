@@ -1,23 +1,26 @@
 import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, Property, hasDeclaredType, UnreachableFlow } from "./node";
-import { CfcResolver, EngineSymbolResolver, LibTypeResolver } from "./project";
+import { CfcResolver, EngineSymbolResolver, LibTypeResolver, ProjectOptions } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, Struct, cfUnion, SyntheticType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStructLike, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, stringifyType, cfFunctionSignatureParam, unsafe__cfFunctionSignatureWithFreshReturnType, isFunctionOverloadSet, cfFunctionOverloadSet, isLiteralType, cfTypeId, SymbolTableTypeWrapper, CfcTypeWrapper, Interface, StructKind, isCfcLookupType, isInstantiatedArray, isInterface, createType, createLiteralType, isUninstantiatedArray, isGenericFunctionSignature, TypeConstructor, typeFromJavaLikeTypename } from "./types";
 import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, getAttributeValue, getContainingFunction, getFunctionDefinitionAccessLiteral, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol } from "./utils";
-import { Engine, EngineVersion, supports } from "./engines";
+import { Engine, supports } from "./engines";
 
 const structViewCache = WeakPairMap<SymbolTable, Interface, Struct>(); // map a SymbolTable -> Interface -> Struct, used to check prior existence of a wrapping of a symbol table into a struct with a possible interface extension
 const EmptyInstantiationContext = SourceFile("", CfFileType.cfc, ""); // an empty type type instantiation context, no symbols are visible; there we rely entirely on captured or provided contexts attached the instantiable target
 
-const GENERIC_FUNCTION_INFERENCE = true; // feature flag for dev
+export function Checker(options: ProjectOptions) {
+    const engineVersion = options.engineVersion;
 
-export function Checker() {
+    // dev feature flags, generally enable-able via editor config options
+    const GENERIC_FUNCTION_INFERENCE = options.genericFunctionInference;
+    const CHECK_RETURN_TYPES = options.checkReturnTypes;
+
     let sourceFile!: SourceFile;
     let scanner!: Scanner;
     let diagnostics!: Diagnostic[];
     let noUndefinedVars = false;
     let returnTypes: _Type[] = [];
-    let engineVersion!: EngineVersion;
     let flowBecameUnreachable = false;
 
     function check(sourceFile_: SourceFile) {
@@ -631,6 +634,23 @@ export function Checker() {
         return isLeftSubtypeOfRight(assignThis, to, sourceIsLiteralExpr, forReturnType);
     }
 
+    // a zero-arity cf signature can be matched with the signature `(...arguments: any[]) => any`
+    // like:
+    //
+    // // @type (...arguments: any[]) => any
+    // <cfscript>
+    //     function foo() { /* any number of args in arguments */ }
+    // </cfscript>
+    // 
+    //
+    function functionSignatureIsLegacyCfIndefiniteArityMarker(sig: cfFunctionSignature) : boolean {
+        const exactlyOneParam = sig.params.length === 1;
+        const spread = exactlyOneParam && !!(sig.params[0].flags & TypeFlags.spread);
+        const nameIsArguments = exactlyOneParam && sig.params[0].canonicalName === "arguments";
+        const isArray = exactlyOneParam && isInstantiatedArray(sig.params[0].type);
+        const arrayMemberIsAny = isArray && sig.params[0].type.memberType === SyntheticType.any;
+        return exactlyOneParam && spread && nameIsArguments && isArray && arrayMemberIsAny;
+    }
     //
     // for an annotated function definition, the user will generally want to refine existing types
     // e.g for something like
@@ -643,6 +663,12 @@ export function Checker() {
     function isAnnotatedSigCompatibleWithCfFunctionSig(annotatedSig: cfFunctionSignature, cfSig: cfFunctionSignature) {
         // covariant in return type
         if (!isLeftSubtypeOfRight(annotatedSig.returns, cfSig.returns)) return false;
+
+        // if cf signature has zero args, but the annotated sig explicitly indicates zero-or-more
+        // note this is different than (atLeastOne: any, ...rest: any[])
+        if (cfSig.params.length === 0 && functionSignatureIsLegacyCfIndefiniteArityMarker(annotatedSig)) {
+            return true;
+        }
         
         if (cfSig.params.length != annotatedSig.params.length) return false;
 
@@ -914,7 +940,6 @@ export function Checker() {
 
     function checkCallExpression(node: CallExpression) {
         checkNode(node.left);
-        
 
         // the resolved symbol may shadow a built-in always-visible engine symbol
         // function call identifiers always call the built-in if it names a built-in
@@ -1143,22 +1168,22 @@ export function Checker() {
             return;
         }
         if (isFunctionSignature(sig)) {
+            const namedArgCount = node.args.filter(arg => !!arg.equals).length;
+            if (namedArgCount > 0 && namedArgCount !== node.args.length) {
+                typeErrorAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), "All arguments must be named, if any are named.");
+            }
+
             const isNewExpr = node.parent?.kind === NodeKind.new;
 
-            const minRequiredParams = sig.params.filter(param => !(param.flags & TypeFlags.optional)).length;
+            const minRequiredParams = sig.params.filter(param => !(param.flags & TypeFlags.optional) && !(param.flags & TypeFlags.spread)).length;
             // maxParams is undefined if there was a spread param, since it accepts any number of trailing args
             const maxParams = sig.params.length > 0 && sig.params[sig.params.length - 1].flags & TypeFlags.spread
                 ? undefined
                 : sig.params.length;
-
-            const namedArgCount = node.args.filter(arg => !!arg.equals).length;
+            
             let hasArgumentCollectionArg = false;
 
             if (namedArgCount > 0) {
-                if (namedArgCount !== node.args.length) {
-                    typeErrorAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), "All arguments must be named, if any are named.");
-                }
-
                 const paramNameMap = new Map<string, {uiName: string, param: cfFunctionSignatureParam}>();
                 for (const param of sig.params) {
                     paramNameMap.set(param.canonicalName, {uiName: param.uiName, param});
@@ -1236,19 +1261,23 @@ export function Checker() {
                 typeErrorAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), msg);
             }
 
-            for (let i = 0; i < node.args.length; i++) {
-                const paramType = sig.params[i]?.type ?? null;
-                if (!paramType) break;
-                const arg = node.args[i];
-                const argType = getCachedEvaluatedNodeType(arg);
-                if (!isAssignable(/*assignThis*/ argType, /*to*/ paramType)) {
-                    // error
-                }
-                if (isFunctionSignature(paramType) && (arg.expr.kind === NodeKind.functionDefinition || arg.expr.kind === NodeKind.arrowFunctionDefinition)) {
-                    //pushTypesIntoInlineFunctionDefinition(node, paramType, arg.expr);
-                    //checkNode(arg.expr.body as Node /*fixme: we know this is a script function definition but can't prove it here; anyway, all function defs should have Node as a body, not Node|Node[] ?*/);
-                }
-            }
+            // most of this is done above, with the exception of "push type into inline function definition"
+            // which we also do in the generic instantiator, and its necessary there to get the return type in something like `<T>(t:T) => t`
+            // so we should put this one spot
+            // for (let i = 0; i < node.args.length; i++) {
+            //     if (sig.params[i]?.flags & TypeFlags.spread) continue;
+            //     const paramType = sig.params[i]?.type ?? null;
+            //     if (!paramType) break;
+            //     const arg = node.args[i];
+            //     const argType = getCachedEvaluatedNodeType(arg);
+            //     if (!isAssignable(/*assignThis*/ argType, /*to*/ paramType)) {
+            //         // error
+            //     }
+            //     if (isFunctionSignature(paramType) && (arg.expr.kind === NodeKind.functionDefinition || arg.expr.kind === NodeKind.arrowFunctionDefinition)) {
+            //         //pushTypesIntoInlineFunctionDefinition(node, paramType, arg.expr);
+            //         //checkNode(arg.expr.body as Node /*fixme: we know this is a script function definition but can't prove it here; anyway, all function defs should have Node as a body, not Node|Node[] ?*/);
+            //     }
+            // }
         }
         else {
             // error
@@ -1866,10 +1895,10 @@ export function Checker() {
         // }
 
         if (node.typeAnnotation) {
-            const evaluatedType = evaluateType(node, node.typeAnnotation);
-            if (isFunctionSignature(evaluatedType)) {
-                if (!isAnnotatedSigCompatibleWithCfFunctionSig(evaluatedType, cfSyntaxDirectedTypeSig)) {
-                    typeErrorAtNode(node, `Type '${stringifyType(cfSyntaxDirectedTypeSig)}' is not assignable to the annotated type '${stringifyType(node.typeAnnotation)}'.`)
+            const evaluatedSignature = evaluateType(node, node.typeAnnotation);
+            if (isFunctionSignature(evaluatedSignature)) {
+                if (!isAnnotatedSigCompatibleWithCfFunctionSig(evaluatedSignature, cfSyntaxDirectedTypeSig)) {
+                    typeErrorAtNode(node, `Type '${stringifyType(cfSyntaxDirectedTypeSig)}' is not assignable to the annotated type '${stringifyType(evaluatedSignature)}'.`)
                 }
                 else {
                     // copy cf-sig param names into annotated-type param names
@@ -1877,18 +1906,18 @@ export function Checker() {
                     // like `(x: any, x: string, x: cfc<a.b.c>) => any`
                     // and then each param name has its name "filled in" by the actual cf code signature
                     for (let i = 0; i < cfSyntaxDirectedTypeSig.params.length; i++) {
-                        evaluatedType.params[i].canonicalName = cfSyntaxDirectedTypeSig.params[i].canonicalName;
-                        evaluatedType.params[i].uiName = cfSyntaxDirectedTypeSig.params[i].uiName;
+                        evaluatedSignature.params[i].canonicalName = cfSyntaxDirectedTypeSig.params[i].canonicalName;
+                        evaluatedSignature.params[i].uiName = cfSyntaxDirectedTypeSig.params[i].uiName;
                     }
                 }
 
-                finalType = evaluatedType;
+                finalType = evaluatedSignature;
                 if (isMemberFunction && node.canonicalName && sourceFile.containedScope.variables!.has(node.canonicalName)) {
                     sourceFile.containedScope.variables!.get(node.canonicalName)!.type = finalType; // updates the 'this' copy of the symbol too, the refs are the same
                 }
             }
-            else if (!(evaluatedType.flags & TypeFlags.any)) {
-                typeErrorAtNode(node, `Expected a function signature as an annotated type, but got type '${stringifyType(evaluatedType)}'.`)
+            else if (!(evaluatedSignature.flags & TypeFlags.any)) {
+                typeErrorAtNode(node, `Expected a function signature as an annotated type, but got type '${stringifyType(evaluatedSignature)}'.`)
             }
         }
 
@@ -1910,7 +1939,7 @@ export function Checker() {
         
         const actualReturnType = checkFunctionBody(node);
 
-        if (!isAssignable(actualReturnType, finalType.returns, /*sourceIsLiteralExpr*/ false, /*forReturnType*/ true)) {
+        if (CHECK_RETURN_TYPES && !isAssignable(actualReturnType, finalType.returns, /*sourceIsLiteralExpr*/ false, /*forReturnType*/ true)) {
             if (node.kind === NodeKind.functionDefinition) {
                 let literalReturnType : CanonicalizedName | undefined = undefined;
                 if (node.fromTag) {
@@ -2548,7 +2577,8 @@ export function Checker() {
                                 cfFunctionSignatureParam(
                                     !(sig.params[i].flags & TypeFlags.optional),
                                     freshType,
-                                    sig.params[i].uiName));
+                                    sig.params[i].uiName,
+                                    !!(sig.params[i].flags & TypeFlags.spread)));
                         }
 
                         const returns = typeWorker(sig.returns, typeParamMap, partiallyApplyGenericFunctionSigs, updatedLookupDeferrals);
@@ -2756,7 +2786,6 @@ export function Checker() {
         getSymbol: getSymbolImpl,
         setNoUndefinedVars,
         install,
-        setLang: (lv: EngineVersion) => engineVersion = lv,
     }
 }
 

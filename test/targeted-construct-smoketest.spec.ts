@@ -8,8 +8,18 @@ import { CompletionItem, getCompletions } from "../src/services/completions";
 import { ProjectOptions, FileSystemNode, pushFsNode } from "../src/compiler/project";
 import { EngineVersions, EngineVersion } from "../src/compiler/engines";
 
-const parser = Parser({engineVersion: EngineVersions["acf.2018"]}).setDebug(true);
-const binder = Binder().setDebug(true);
+const options : ProjectOptions = {
+    debug: true,
+    parseTypes: false,
+    withWireboxResolution: false,
+    wireboxConfigFileCanonicalAbsPath: null,
+    engineVersion: EngineVersions["acf.2018"],
+    genericFunctionInference: false,
+    checkReturnTypes: false
+}
+
+const parser = Parser(options);
+const binder = Binder(options);
 
 function assertDiagnosticsCount(text: string, cfFileType: CfFileType, count: number) {
     const sourceFile = SourceFile("", cfFileType, text);
@@ -19,14 +29,14 @@ function assertDiagnosticsCount(text: string, cfFileType: CfFileType, count: num
     assert.strictEqual(sourceFile.diagnostics.length, count, `${count} diagnostics emitted`);
 }
 
-function assertDiagnosticsCountWithProject(fs: FileSystem, diagnosticsTargetFile: string, count: number, language : EngineVersion = EngineVersions["acf.2018"]) {
-    const project = Project("/", fs, {debug: true, parseTypes: true, engineVersion: language, wireboxConfigFileCanonicalAbsPath: null, withWireboxResolution: false});
+function assertDiagnosticsCountWithProject(fs: FileSystem, diagnosticsTargetFile: string, count: number, engineVersion : EngineVersion = EngineVersions["acf.2018"]) {
+    const project = Project("/", fs, {...options, engineVersion});
     project.addFile(diagnosticsTargetFile);
     assert.strictEqual(project.getDiagnostics(diagnosticsTargetFile).length, count, `Expected ${count} errors.`);
 }
 
 describe("general smoke test for particular constructs", () => {
-    const commonProjectOptions : ProjectOptions = {debug: true, parseTypes: true, engineVersion: EngineVersions["acf.2018"], wireboxConfigFileCanonicalAbsPath: null, withWireboxResolution: false};
+    const commonProjectOptions : ProjectOptions = {...options};
 
     it("Should accept `new` expression in an expression context", () => {
         assertDiagnosticsCount(`<cfset x = {v: new foo.bar().someMethod()}>`, CfFileType.cfm, 0);
@@ -432,7 +442,7 @@ describe("general smoke test for particular constructs", () => {
                     dateFormat(42); // built-in should be "more visible" in a call-expression position than the argument named dateFormat
                 }
             </cfscript>`);
-        pushFsNode(fsRoot, "/lib.d.cfm", `@interface __cfEngine { dateFormat: (date: string, mask?: string) => any }`);
+        pushFsNode(fsRoot, "/lib.d.cfm", `@!interface __cfEngine { dateFormat: (date: string, mask?: string) => any }`);
 
         const dfs = DebugFileSystem(fsRoot);
 

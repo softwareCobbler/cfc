@@ -27,7 +27,7 @@ import {
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, TypeShim, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard } from "./utils";
-import { cfIndexedType, Interface, cfIntersection, extractCfFunctionSignature, isIntersection, isStructLike, isTypeId, isUnion, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, Decorator, TypeConstructor, IndexSignature } from "./types";
+import { cfIndexedType, Interface, cfIntersection, isIntersection, isStructLike, isTypeId, isUnion, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, Decorator, TypeConstructor, IndexSignature, isUninstantiatedArray } from "./types";
 import { _Type, UninstantiatedArray, Struct, StructKind, cfTuple, cfFunctionSignature, cfTypeId, cfUnion, SyntheticType, cfFunctionSignatureParam } from "./types";
 import { Engine } from "./engines";
 import { ProjectOptions } from "./project";
@@ -605,84 +605,67 @@ export function Parser(config: ProjectOptions) {
      * we need to consider the case where we are parsing types, do we parse both tag and script comments?
      */
     function parseTrivia() : Node[] {
-        let result : Node[];
+        const result : Node[] = [];
 
         const savedContext = updateParseContext(ParseContext.trivia);
 
-        if (tagMode()) {
-            result = [];
-            while (true) {
-                switch (lookahead()) {
-                    case TokenType.CF_TAG_COMMENT_START: {
-                        result.push(parseTagComment());
-                        continue;
-                    }
-                    case TokenType.WHITESPACE: {
-                        result.push(CfTag.Text(next().range));
-                        continue;
-                    }
+        while (true) {
+            switch (lookahead()) {
+                case TokenType.CF_TAG_COMMENT_START: {
+                    if (!tagMode()) break;
+                    result.push(parseTagComment());
+                    continue;
                 }
-                // if we didn't match tag comment start or whitespace, we're done
-                break;
-            }
-
-            //
-            // if we're in a tag or a hash-wrapped expr in tag mode, we want to parse tag trivia,
-            // but immediately convert it to script-like trivia
-            // this way, the tag treeifier doesn't need to concern itself with descending into hash-wrapped exprs to perform these transformations
-            // (where it is otherwise responsible for transforming all tags into some common script syntax tree)
-            // all other trivia during tag-treeification is loose
-            // @fixme: does this only handle "top-level" comments, i.e., we need to handle `#1 + <!--- foo ---> 2#`
-            // also the same logic applies to something like <cfset x = {x: "tag comment in struct" <!--- tag comment here --->}
-            // which is maybe just on script-like tags
-            //
-            if (isInSomeContext(ParseContext.hashWrappedExpr) || isInSomeContext(ParseContext.insideCfTagAngles)) {
-                result = (result as CfTag[]).map((v) => {
-                    if (v.tagType === CfTag.TagType.comment) {
-                        return Comment(v);
+                case TokenType.DBL_FORWARD_SLASH: {
+                    if (!scriptMode()) break;
+                    const comment = parseScriptSingleLineComment();
+                    result.push(comment);
+                    continue;
+                }
+                case TokenType.FORWARD_SLASH_STAR: {
+                    if (!scriptMode()) break;
+                    const comment = parseScriptMultiLineComment();
+                    result.push(comment);
+                    continue;
+                }
+                case TokenType.WHITESPACE: {
+                    if (debug) {
+                        const nextToken = next();
+                        result.push(TextSpan(nextToken.range, scanner.getTextSlice(nextToken.range)));
                     }
                     else {
-                        if (debug) {
-                            return TextSpan(v.range, scanner.getTextSlice(v.range));
-                        }
-                        else {
-                            return TextSpan(v.range, "");
-                        }
+                        result.push(TextSpan(next().range, ""));
                     }
-                })
+                    continue;
+                }
             }
+            // if we didn't match tag comment start or whitespace, we're done
+            break;
+        }
+
+        let finalizedResult : Node[];
+        if (isInSomeContext(ParseContext.hashWrappedExpr) || isInSomeContext(ParseContext.insideCfTagAngles)) {
+            finalizedResult = (result as CfTag[]).map((v) => {
+                if (v.tagType === CfTag.TagType.comment) {
+                    return Comment(v);
+                }
+                else {
+                    if (debug) {
+                        return TextSpan(v.range, scanner.getTextSlice(v.range));
+                    }
+                    else {
+                        return TextSpan(v.range, "");
+                    }
+                }
+            })
         }
         else {
-            result = [];
-            while (true) {
-                switch (lookahead()) {
-                    case TokenType.DBL_FORWARD_SLASH: {
-                        const comment = parseScriptSingleLineComment();
-                        result.push(comment);
-                        continue;
-                    }
-                    case TokenType.FORWARD_SLASH_STAR: {
-                        const comment = parseScriptMultiLineComment();
-                        result.push(comment);
-                        continue;
-                    }
-                    case TokenType.WHITESPACE:
-                        if (debug) {
-                            const nextToken = next();
-                            result.push(TextSpan(nextToken.range, scanner.getTextSlice(nextToken.range)));
-                        }
-                        else {
-                            result.push(TextSpan(next().range, ""));
-                        }
-                        continue;
-                }
-                break;
-            }
+            finalizedResult = result;
         }
 
         parseContext = savedContext; // clear trivia context; parsing types inside comments is not considered trivia
 
-        return result;
+        return finalizedResult;
     }
 
     function parseCfStartTag() {
@@ -2522,7 +2505,17 @@ export function Parser(config: ProjectOptions) {
         }
     }
 
-    function isStartOfType() {
+    function isValidTypeId(tokenType: TokenType) : boolean {
+        // things like NOT and FUNCTION can be type names
+        return tokenType === TokenType.LEXEME || (TokenType._FIRST_KW < tokenType && tokenType < TokenType._LAST_KW)
+            || (TokenType._FIRST_LIT < tokenType
+                && tokenType < TokenType._LAST_LIT
+                // "multi-token" tokens can't be used -- `type T = {does not contain: 42}` is not a valid type
+                && tokenType !== TokenType.LIT_DOES_NOT_CONTAIN
+                && tokenType !== TokenType.LIT_IS_NOT);
+    }
+
+    function isStartOfType() : boolean {
         switch (lookahead()) {
             case TokenType.LEFT_BRACKET:
             case TokenType.LEFT_PAREN:
@@ -2533,16 +2526,8 @@ export function Parser(config: ProjectOptions) {
             case TokenType.LEFT_ANGLE:
             case TokenType.LEXEME:
                 return true;
-            default: {
-                const tokenType = lookahead();
-                // things like NOT and FUNCTION can be type names
-                return (TokenType._FIRST_KW < tokenType && tokenType < TokenType._LAST_KW)
-                    || (TokenType._FIRST_LIT < tokenType
-                        && tokenType < TokenType._LAST_LIT
-                        // "multi-token" tokens can't be used -- `type T = {does not contain: 42}` is not a valid type
-                        && tokenType !== TokenType.LIT_DOES_NOT_CONTAIN
-                        && tokenType !== TokenType.LIT_IS_NOT)
-            }
+            default:
+                return isValidTypeId(lookahead());
         }
     }
 
@@ -2644,8 +2629,9 @@ export function Parser(config: ProjectOptions) {
                 if (lookahead() === TokenType.DOT_DOT_DOT) return true;
                 // else fallthrough
             case ParseContext.typeTupleOrArrayElement:
-            case ParseContext.typeParamList:
                 return isStartOfType();
+            case ParseContext.typeParamList:
+                return isValidTypeId(lookahead());
             default:
                 return false;
         }
@@ -2950,19 +2936,49 @@ export function Parser(config: ProjectOptions) {
     // }
 
     function parseFunctionTypeParametersArrowLike() : cfFunctionSignatureParam[] {
-        const args : {name: Terminal, optional: boolean, type: _Type}[] = [];
+        const params : {name: Terminal, optional: boolean, spread: boolean, type: _Type, range: SourceRange}[] = [];
         while (lookahead() !== TokenType.RIGHT_PAREN && lookahead() !== TokenType.EOF) {
+            let isSpread = false;
+            if (lookahead() === TokenType.DOT_DOT_DOT) {
+                parseExpectedTerminal(TokenType.DOT_DOT_DOT, ParseOptions.withTrivia);
+                isSpread = true;
+            }
+
             const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/true, /*allowNumeric*/false);
             const optional = !!parseOptionalTerminal(TokenType.QUESTION_MARK, ParseOptions.withTrivia);
             parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
-            const type = parseType();
-            args.push({name, optional, type});
-            
+
+            let typeStart = pos(); // fixme: add ranges to types
+            let type = parseType();
+            let typeEnd = pos();
+
             if (lookahead() !== TokenType.RIGHT_PAREN) {
                 parseExpectedTerminal(TokenType.COMMA, ParseOptions.withTrivia);
             }
+
+            params.push({spread: isSpread, name, optional, type, range: new SourceRange(typeStart, typeEnd)});
         }
-        return args.map((arg) => cfFunctionSignatureParam(!arg.optional, arg.type, arg.name.token.text));
+        for (let i = 0; i < params.length; i++) {
+            const isLast = i === params.length - 1;
+            const param = params[i];
+            if (param.spread) {
+                if (!isLast) {
+                    parseErrorAtRange(param.range, "Spread parameter must be in last parameter position.");
+                    param.type = SyntheticType.any;
+                }
+                if (!isUninstantiatedArray(param.type) && param.name.token.text.toLowerCase() !== "arguments") {
+                    parseErrorAtRange(param.range, "A spread parameter must be an array type (unless it is the only parameter, and its name is 'arguments').");
+                    param.type = SyntheticType.any;
+                }
+                if (param.name.token.text.toLowerCase() === "arguments") {
+                    if (params.length > 1 || !isUninstantiatedArray(param.type) || param.type.args[0] !== SyntheticType.any) {
+                        parseErrorAtRange(param.range, "The well-known spread parameter 'arguments' must be the only parameter in the signature, and it must have type 'any[]'.")
+                        param.type = SyntheticType.any;
+                    }
+                }
+            }
+        }
+        return params.map((param) => cfFunctionSignatureParam(!param.optional, param.type, param.name.token.text, param.spread));
     }
 
     // function parseFunctionTypeParameters() : cfFunctionSignatureParam[] {
@@ -3263,7 +3279,9 @@ export function Parser(config: ProjectOptions) {
     function tryParseNamedFunctionDefinition(speculative: false, asDeclaration: boolean) : Script.FunctionDefinition;
     function tryParseNamedFunctionDefinition(speculative: true) : Script.FunctionDefinition | null;
     function tryParseNamedFunctionDefinition(speculative: boolean, asDeclaration = false) : Script.FunctionDefinition | null {
-        let savedLastDocBlock = lastDocBlock;
+        const savedLastDocBlock = lastDocBlock;
+        lastDocBlock = null;
+
         let accessModifier: Terminal | null = null;
         let returnType    : DottedPath | null = null;
         let functionToken : Terminal | null;
@@ -3284,6 +3302,7 @@ export function Parser(config: ProjectOptions) {
         if (speculative) {
             functionToken = parseOptionalTerminal(TokenType.KW_FUNCTION, ParseOptions.withTrivia);
             if (!functionToken) {
+                lastDocBlock = savedLastDocBlock;
                 return null;
             }
         }
@@ -3857,30 +3876,49 @@ export function Parser(config: ProjectOptions) {
             const start = pos();
             const name = scanDocBlockAttrName();
 
+            // if we didn't get a valid name, advance and try again
+            if (!name) {
+                next();
+                scanDocBlockAttrText();
+                continue;
+            }
+
             if (name) {
-                if (parseTypes && name === "interface") {
-                    scanner.restoreIndex(getIndex() - name.length); // backup to start of `interface` "token"
-                    const interfaceDef = parseType();
-                    typedefs.push(TypeShim("typedef", interfaceDef));
-                }
-                else if (parseTypes && name === "typedef") {
-                    eatWhitespace();
-                    typedefs.push(parseTypeDef());
-                    continue;
-                }
-                else if (parseTypes && name == "type") {
-                    eatWhitespace();
-                    typeAnnotation = parseType();
-                    continue;
-                }
-                else if (parseTypes && name === "decorate") {
-                    eatWhitespace();
-                    const decoratorName = stringifyDottedPath(parseDottedPath());
-                    typedefs.push(TypeShim("decorator", Decorator(decoratorName.ui)));
-                    continue;
+                // we need a way to use "@type" in a docblock, but "@type" is already a legitimate docblock attribute name
+                // right now we use "@!type" and "@!typedef" and etc, which can be used in current docblocks, but can't represent actual tag attributes
+                // i.e. in `function foo() !type="{}" {}`, "!type" is not valid in that position, so /** @!type {} */ is currently valid but probably won't conflict with much real world code
+                if (name[0] === "!") {
+                    if (parseTypes && name === "!interface") {
+                        restoreScannerState({...getScannerState(), index: getIndex() - name.length + 1}); // backup to start of `interface` "token" (without the "!")
+                        const interfaceDef = parseType();
+                        typedefs.push(TypeShim("typedef", interfaceDef));
+                        continue;
+                    }
+                    else if (parseTypes && name === "!typedef") {
+                        eatWhitespace();
+                        typedefs.push(parseTypeDef());
+                        continue;
+                    }
+                    else if (parseTypes && name == "!type") {
+                        eatWhitespace();
+                        typeAnnotation = parseType();
+                        continue;
+                    }
+                    else if (parseTypes && name === "!decorate") {
+                        eatWhitespace();
+                        const decoratorName = stringifyDottedPath(parseDottedPath());
+                        typedefs.push(TypeShim("decorator", Decorator(decoratorName.ui)));
+                        continue;
+                    }
+                    else {
+                        parseErrorAtRange(start, pos(), "Invalid extended type syntax - only '@!interface', '@!typedef', '@!type' and '@!decorate' are supported.");
+                        scanDocBlockAttrText(); // discard text until next attribute
+                        continue;
+                    }
                 }
                 else {
                     workingAttributeUiName = NilTerminal(start, name);
+                    eatWhitespace();
                 }
             }
 
@@ -3976,32 +4014,37 @@ export function Parser(config: ProjectOptions) {
         const savedContext = parseContext;
         const savedScannerMode = getScannerState().mode;
         
-        setScannerMode(getScannerState().mode | ScannerMode.script | ScannerMode.tag); // maintain "docblock" mode if we're in it
+        // maintain "docblock" mode if we're in it? -- actually, this should not be called from docblock mode
+        // it reaches out directly
+        setScannerMode(ScannerMode.script | ScannerMode.tag);
         parseContext = 1 << ParseContext.typeAnnotation;
+        parseTrivia();
         
         const result : TypeShim[] = [];
+
         while (lookahead() !== TokenType.EOF) {
-            parseTrivia();
-            if (next().text === "@") {
+            if (peek().text === "@" && peek(1).text === "!") {
+                next(), next();
                 const contextualKeyword = peek();
-                if (contextualKeyword.text === "declare") {
-                    next(), parseTrivia();
-                    const declarationSpecifier = peek();
-                    if (declarationSpecifier.text === "function") {
-                        const decl = tryParseNamedFunctionDefinition(/*speculative*/ false, /*asDeclaration*/ true);
-                        const signature = extractCfFunctionSignature(decl, /*asDeclaration*/true);
-                        result.push(TypeShim("typedef", signature));
-                    }
-                    // else if (declarationSpecifier.text === "global") {
-                    //     parseErrorAtRange(contextualKeyword.range, "Global declarations are not yet supported. This would be for the cgi and etc. scopes.");
-                    //     next();
-                    // }
-                    else {
-                        parseErrorAtRange(contextualKeyword.range, "Invalid declaration specifier.");
-                        next();
-                    }
-                }
-                else if (contextualKeyword.text === "interface") {
+                // @rmme 10/31/21 -- no "global declarations" anymore, use "well known interface extensions"
+                // if (contextualKeyword.text === "declare") {
+                //     next(), parseTrivia();
+                //     const declarationSpecifier = peek();
+                //     if (declarationSpecifier.text === "function") {
+                //         const decl = tryParseNamedFunctionDefinition(/*speculative*/ false, /*asDeclaration*/ true);
+                //         const signature = extractCfFunctionSignature(decl, /*asDeclaration*/true);
+                //         result.push(TypeShim("typedef", signature));
+                //     }
+                //     // else if (declarationSpecifier.text === "global") {
+                //     //     parseErrorAtRange(contextualKeyword.range, "Global declarations are not yet supported. This would be for the cgi and etc. scopes.");
+                //     //     next();
+                //     // }
+                //     else {
+                //         parseErrorAtRange(contextualKeyword.range, "Invalid declaration specifier.");
+                //         next();
+                //     }
+                // }
+                if (contextualKeyword.text === "interface") {
                     const ifaceDef = parseType();
                     result.push(TypeShim("typedef", ifaceDef));
                 }
@@ -4018,6 +4061,9 @@ export function Parser(config: ProjectOptions) {
                     next(), parseTrivia();
                     // parse error ? if skipUnrecognized === false?
                 }
+            }
+            else {
+                next(), parseTrivia();
             }
         }
         
@@ -4243,6 +4289,7 @@ export function Parser(config: ProjectOptions) {
 
         if (!isStartOfType()) {
             parseErrorAtPos(pos(), "Expected a type expression.");
+            next(), parseTrivia();
             return SyntheticType.any;
         }
 
@@ -4346,17 +4393,21 @@ export function Parser(config: ProjectOptions) {
                     // we need some lookahead to know which
                     const enum TypeOrParam { type, param };
                     const typeOrParam = SpeculationHelper.lookahead(() => {
-                        const lexeme = next();
+                        const nextToken = next();
                         parseTrivia();
                         
-                        if (lookahead() === TokenType.COLON || lookahead() === TokenType.QUESTION_MARK && peek(1).type === TokenType.COLON) {
+                        if (nextToken.type === TokenType.DOT_DOT_DOT
+                            || (nextToken.type === TokenType.RIGHT_PAREN && peek().type === TokenType.EQUAL_RIGHT_ANGLE)
+                            || (isLexemeLikeToken(nextToken)
+                            && (lookahead() === TokenType.COLON || (lookahead() === TokenType.QUESTION_MARK && peek(1).type === TokenType.COLON))))
+                        {
                             // this is a non-type name, used to give a name to an inline function type signature parameter,
                             // i.e, (foo : any) => any
                             //       ^^^^^
-                            return TypeOrParam.param;
-                        }
-                        else if (lexeme.type === TokenType.RIGHT_PAREN && peek().type === TokenType.EQUAL_RIGHT_ANGLE) {
-                            // got `() => `
+                            // (...foo: bar) => any
+                            //  ^^^^^^
+                            // () => any
+                            // ^^^^^
                             return TypeOrParam.param;
                         }
 
@@ -4439,6 +4490,7 @@ export function Parser(config: ProjectOptions) {
                         result = Struct(members, indexSignature, instantiableSpreads);
                     // }
 
+                    // fixme: needs to happen at a higher level; we don't want to support `interface {}[]`
                     result = maybeParseArrayModifier(result);
 
                     break;
@@ -4460,6 +4512,7 @@ export function Parser(config: ProjectOptions) {
                     else {
                         result = SyntheticType.string; // should never happen, parseStringLiteral(false) should always return a simpleStringLiteral
                     }
+                    break;
                 }
                 case TokenType.NUMBER: {
                     const n = parseNumericLiteral();

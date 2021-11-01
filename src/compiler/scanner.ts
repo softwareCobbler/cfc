@@ -564,8 +564,10 @@ export function Scanner(source_: string | Buffer) {
                 if (docBlock) {
                     // eat whitespace, and if we get a newline, nextline's whitespace, up to the first "*" if it exists, and then subsequent whitespace
                     // if we get another newline, repeat the process
-                    maybeEat(/[ \t]*(\r?\n[ \t]*(\*[ \t])?)*/iy);
-                    return makeToken(TokenType.WHITESPACE, from, getIndex());
+                    if (maybeEat(/[ \t]*((\r|\n|\r\n)[ \t]*(\*[ \t])?)*/iy)) return makeToken(TokenType.WHITESPACE, from, getIndex());
+                    // shouldn't be necessary,
+                    // but have to prove the above always consumes at least one character (the pattern itself is like x*(y(z)?)* which is "possibly match none")?
+                    else return consumeCurrentCharAs(TokenType.WHITESPACE);
                 }
                 maybeEat(/\s+/iy);
                 return makeToken(TokenType.WHITESPACE, from, getIndex());
@@ -893,16 +895,23 @@ export function Scanner(source_: string | Buffer) {
     }
 
     function scanDocBlockAttrName() : string | null {
+        let withExclamation = false;
         if (annotatedChars[index].codepoint === AsciiMap.AT) {
             const startPos = index;
             index++;
+            if (annotatedChars[index].codepoint === AsciiMap.EXCLAMATION) { // support constructs like "@!type any", have to disambiguate with real CF attribute syntax
+                index++;
+                withExclamation = true;
+            }
             const identifierText = scanIdentifierWorker();
             if (!identifierText) {
                 index = startPos;
                 return null;
             }
             else {
-                return identifierText;
+                return withExclamation
+                    ? "!" + identifierText
+                    : identifierText;
             }
         }
         return null;
@@ -973,7 +982,7 @@ export function Scanner(source_: string | Buffer) {
     function maybeEat(pattern: RegExp) {
         pattern.lastIndex = index;
         const match = pattern.exec(sourceText);
-        if (match) {
+        if (match && match[0].length > 0) {
             index += match[0].length;
             lastScannedText = match[0]; // any perf boost to taking a slice of sourceText? is match[0] already a ref to sourceText's underlying storage?
             return true;

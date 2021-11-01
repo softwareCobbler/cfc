@@ -55,10 +55,12 @@ type TextDocumentUri = string;
 
 interface CflsConfig {
 	engineLibAbsPath: string | null
-	x_types: boolean,
+	x_parseTypes: boolean,
 	engineVersion: EngineVersion,
 	wireboxConfigFile: string | null,
-	wireboxResolution: boolean
+	wireboxResolution: boolean,
+	x_checkReturnTypes: boolean,
+	x_genericFunctionInference: boolean,
 }
 
 let project : Project; // init this before using it
@@ -271,11 +273,13 @@ function resetCfls(why: string) {
 		URI.parse(workspaceRoot.uri).fsPath,
 		fileSystem,
 		{
-			parseTypes: cflsConfig.x_types,
+			parseTypes: cflsConfig.x_parseTypes,
 			debug: true,
 			engineVersion: cflsConfig.engineVersion,
 			withWireboxResolution: cflsConfig.wireboxResolution,
 			wireboxConfigFileCanonicalAbsPath: wireboxConfigFileAbsPath,
+			checkReturnTypes: cflsConfig.x_checkReturnTypes,
+			genericFunctionInference: cflsConfig.x_genericFunctionInference,
 		});
 
 	if (cflsConfig.engineLibAbsPath) project.addEngineLib(cflsConfig.engineLibAbsPath);
@@ -310,10 +314,12 @@ function updateConfig(config: Record<string, any> | null) {
 		// engineLibAbsPath doesn't come from config, so we just carry it forward if it exists
 		engineLibAbsPath: cflsConfig?.engineLibAbsPath ?? null,
 		// the rest of these are supplied via config
-		x_types: !!config?.x_types,
+		x_parseTypes: !!config?.x_parseTypes,
+		x_genericFunctionInference: !!config?.x_genericFunctionInference,
+		x_checkReturnTypes: !!config?.x_checkReturnTypes,
 		engineVersion: engineVersionConfigToEngineVersion(config?.engineVersion),
 		wireboxConfigFile: config?.wireboxConfigFile ?? null,
-		wireboxResolution: config?.wireboxResolution ?? false
+		wireboxResolution: config?.wireboxResolution ?? false,
 	};
 }
 
@@ -609,7 +615,9 @@ connection.onNotification("cflsp/libpath", (libAbsPath: string) => {
 connection.onNotification("cflsp/cache-cfcs", (cfcAbsPaths: string[]) => {
 	const start = new Date().getTime();
 	let addFileTime = 0;
+	let i = 0;
 	for (const absPath of cfcAbsPaths) {
+		connection.console.log(`Staring ${absPath}...`);
 		const start = new Date().getTime();
 		project.addFile(absPath);
 		const elapsed = new Date().getTime() - start;

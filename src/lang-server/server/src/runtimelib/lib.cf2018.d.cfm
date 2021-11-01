@@ -1,4 +1,4 @@
-@interface __cfEngine {
+@!interface __cfEngine {
     abs: (number: numeric) => any,
     acos: (number: numeric) => any,
     addSOAPRequestHeader: (webservice: string, namespace: string, name: string, value: string, mustUnderstand?: boolean) => any,
@@ -755,7 +755,7 @@
     yesNoFormat: (value: any) => any,
 }
 
-@interface Array<T> {
+@!interface Array<T> {
     append: (value: T, merge?: boolean) => T[],
     avg: () => numeric,
     clear: () => T[],

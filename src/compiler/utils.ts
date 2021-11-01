@@ -112,7 +112,7 @@ export function isLexemeLikeToken(token: Token, allowNumeric = false) : boolean 
     return val === TokenType.LEXEME
         || (allowNumeric && val === TokenType.NUMBER)
         || (val > TokenType._FIRST_KW && val < TokenType._LAST_KW)
-        || (val > TokenType._FIRST_LIT && val < TokenType._LAST_LIT);
+        || (val > TokenType._FIRST_LIT && val < TokenType._LAST_LIT && val !== TokenType.LIT_DOES_NOT_CONTAIN && val !== TokenType.LIT_IS_NOT);
 }
 
 // a sugared tag is a tagname that kicks off special script-syntax:

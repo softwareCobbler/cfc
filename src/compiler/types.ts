@@ -1,6 +1,7 @@
 import type { ArrowFunctionDefinition, CfTag, DottedPath, FunctionDefinition, Script, SourceFile, SymbolTable, SymTabEntry, Tag, TagAttribute } from "./node";
 import { NodeKind } from "./node";
 import { exhaustiveCaseGuard, getAttributeValue, getTriviallyComputableString, Mutable } from "./utils";
+import * as path from "path"; // !! for stringifying CFC types...do we really want this dependency here?
 
 let debugTypeModule = true;
 debugTypeModule;
@@ -165,7 +166,7 @@ export function isInstantiatedArray(t: _Type) : t is InstantiatedArray {
 }
 
 export function isUninstantiatedArray(t: _Type) : t is UninstantiatedArray {
-    return !isInstantiatedArray(t);
+    return isTypeConstructorInvocation(t) && isTypeId(t.left) && t.left.name === "Array";
 }
 
 export interface cfTuple extends _Type {
@@ -407,10 +408,11 @@ export interface cfFunctionSignatureParam extends _Type {
     canonicalName: string,
 }
 
-export function cfFunctionSignatureParam(required: boolean, paramType: _Type, uiName: string) : cfFunctionSignatureParam {
+export function cfFunctionSignatureParam(required: boolean, paramType: _Type, uiName: string, spread = false) : cfFunctionSignatureParam {
     const optionalFlag = required ? TypeFlags.none : TypeFlags.optional;
+    const spreadFlag = spread ? TypeFlags.spread : TypeFlags.none;
     const type = {
-        flags: TypeFlags.functionSignatureParam | optionalFlag,
+        flags: TypeFlags.functionSignatureParam | optionalFlag | spreadFlag,
         type: paramType,
         uiName,
         canonicalName: uiName.toLowerCase(),
@@ -909,41 +911,61 @@ export function isLiteralType(_type: _Type) : _type is LiteralType {
 }
 
 export function stringifyType(type: _Type, depth = 0) : string {
-    if (depth > 2) return "<<TYPE-TOO-DEEP>>";
+    if (depth > 4) return "<<TYPE-TOO-DEEP>>";
     if (type.flags & TypeFlags.any) return "any";
     if (type.flags & TypeFlags.void) return "void";
     if (type.flags & TypeFlags.numeric) return "numeric";
     if (type.flags & TypeFlags.string) return "string";
     if (type.flags & TypeFlags.boolean) return "boolean";
+    if (type.flags & TypeFlags.never) return "never";
+    if (isTypeId(type)) {
+        return type.name;
+    }
     if (isStructLike(type)) {
         if (isInstantiatedArray(type)) {
-            return "<<[array-but-we-can't-serialize-that-yet]>>";
+            return stringifyType(type.memberType, depth + 1) + "[]";
         }
-        return "<<{struct-like-but-can't-serialize-that-yet}>>";
-        // const builder = [];
-        // for (const [propName, {type: memberType}] of type.members) {
-        //     builder.push(propName + ": " + stringifyType(memberType, depth+1));
-        // }
-        // const result = builder.join(", ");
-        // return "{" + result + "}";
+        else if (type.structKind === StructKind.cfcTypeWrapper) {
+            const baseNameNoExt = path.parse(type.cfc.absPath).base.replace(/\.cfc$/i, "");
+            return "cfc<" + baseNameNoExt + ">";
+        }
+        else {
+            const builder = [];
+            for (const [propName, {type: memberType}] of type.members) {
+                builder.push(propName + ": " + stringifyType(memberType, depth+1));
+            }
+            const result = builder.join(", ");
+            return "{" + result + "}";
+        }
     }
-    // if (isUnion(type) || isIntersection(type)) {
-    //     const joiner = isUnion(type) ? " | " : " & ";
-    //     const result = type.types.map(memberType => stringifyType(memberType, depth+1)).join(joiner);
-    //     return result;
-    // }
+    if (isUnion(type)) {
+        return "<<union>>";
+    }
+    if (isIntersection(type)) {
+        return "<<intersection>>";
+    }
     if (isFunctionSignature(type)) {
-        return "<<function-we-can't-serialize-yet>>";
-        // const params = [];
-        // for (const param of type.params) {
-        //     params.push(stringifyType(param, depth+1));
-        // }
-        // return "(" + params.join(", ") + ")" + " => " + stringifyType(type.returns, depth+1);
+        if (isFunctionOverloadSet(type)) {
+            return "<<function-overload-set>>";
+        }
+        else if (isGenericFunctionSignature(type)) {
+            return "<<generic-function-sig>>";
+        }
+        else {
+            const params = [];
+            for (const param of type.params) {
+                params.push(stringifyType(param, depth+1));
+            }
+            return "(" + params.join(", ") + ")" + " => " + stringifyType(type.returns, depth+1);
+        }
     }
-    // if (isFunctionSignatureParam(type)) {
-    //     return (!(type.flags & TypeFlags.optional) ? "required " : "") + type.uiName + ": " + (type.flags & TypeFlags.spread ? "..." : "") + stringifyType(type.type, depth+1);
-    // }
+    if (isFunctionSignatureParam(type)) {
+        const spread = (type.flags & TypeFlags.spread) ? "..." : "";
+        const name = (type.uiName || "<<unnamed>>");
+        const typing = (type.flags & TypeFlags.optional) ? "?: " : ": ";
+        const typeString = stringifyType(type.type);
+        return spread + name + typing + typeString;
+    }
 
-    // return "<<type>>";
     return "<<complex-type-we-can't-serialize-yet>>";
 }

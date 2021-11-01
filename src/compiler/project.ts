@@ -184,6 +184,8 @@ export interface ProjectOptions {
     engineVersion: EngineVersion,
     withWireboxResolution: boolean,
     wireboxConfigFileCanonicalAbsPath: string | null,
+    genericFunctionInference: boolean,
+    checkReturnTypes: boolean,
 }
 
 export function Project(__const__projectRoot: string, fileSystem: FileSystem, options: ProjectOptions) {
@@ -191,18 +193,15 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     
     const projectRoot = canonicalizePath(__const__projectRoot);
     const parser = Parser(options);
-    const binder = Binder();
-    const checker = Checker();
+    const binder = Binder(options);
+    const checker = Checker(options);
     const heritageCircularityDetector = new Set<string>();
 
     if (options.debug) {
         setNodeFactoryDebug(true);
-        binder.setDebug(true);
         // checker.setDebug(true);
     }
 
-    binder.setLang(options.engineVersion);
-    checker.setLang(options.engineVersion);
     checker.install({CfcResolver, EngineSymbolResolver, LibTypeResolver});
 
     type FileCache = Map<AbsPath, CachedFile>;
@@ -222,7 +221,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         parser.parse();
         const parseElapsed = new Date().getTime() - parseStart;
 
-        if (engineLib) {
+        if (engineLib && engineLib.parsedSourceFile !== sourceFile) {
             sourceFile.libRefs.set("<<engine>>", engineLib.parsedSourceFile);
         }
 

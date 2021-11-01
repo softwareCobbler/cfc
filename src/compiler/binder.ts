@@ -2,14 +2,17 @@ import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol, findAncestor } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { SyntheticType, _Type, extractCfFunctionSignature, isFunctionSignature, Interface, isInterface } from "./types";
-import { Engine, EngineVersion, EngineVersions, supports } from "./engines";
+import { Engine, supports } from "./engines";
+import { ProjectOptions } from "./project";
 
-export function Binder() {
+export function Binder(options: ProjectOptions) {
+    const engineVersion = options.engineVersion;
+    const debug = options.debug;
+    
     let sourceFile : NodeWithScope<SourceFile>;
     let currentContainer : NodeWithScope;
     let scanner : Scanner;
     let diagnostics: Diagnostic[];
-    let engineVersion : EngineVersion = EngineVersions["acf.2018"]; // fixme: use definitely assigned syntax and force-assign in init with config args
     
     let currentFlow! : Flow;
     let currentJumpTargetPredecessors : Flow[] = [];
@@ -70,10 +73,6 @@ export function Binder() {
         currentContainer = sourceFile;
         bindTypedefs(sourceFile_);
         bindList(sourceFile_.content, sourceFile_);
-    }
-
-    function setLang(ev: EngineVersion) {
-        engineVersion = ev;
     }
 
     function mergeFlowsToJumpTarget(...flows: (Flow|undefined)[]) {
@@ -1359,7 +1358,7 @@ export function Binder() {
     function errorAtSpan(fromInclusive: number, toExclusive: number, msg: string) {
         const freshDiagnostic : Diagnostic = {fromInclusive, toExclusive, msg };
 
-        if (debugBinder) {
+        if (debug) {
             const debugFrom = scanner.getAnnotatedChar(freshDiagnostic.fromInclusive);
             const debugTo = scanner.getAnnotatedChar(freshDiagnostic.toExclusive);
             // bump 0-offsetted info to editor-centric 1-offset
@@ -1470,21 +1469,12 @@ export function Binder() {
         errorAtSpan(range.fromInclusive, range.toExclusive, msg);
     }
 
-    function setDebug(isDebug: boolean) {
-        debugBinder = isDebug;
-        return self;
-    }
-
     const self = {
         bind,
-        setDebug,
-        setLang,
         getNodeMap: () => <ReadonlyMap<NodeId, Node>>nodeMap,
     }
 
     return self;
 }
-
-let debugBinder = false;
 
 export type Binder = ReturnType<typeof Binder>;

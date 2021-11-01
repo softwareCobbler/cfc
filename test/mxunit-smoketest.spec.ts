@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { Parser, Binder, cfmOrCfc, SourceFile, flattenTree, Checker, CfFileType } from "../src/compiler";
 import { EngineVersions } from "../src/compiler/engines";
+import { ProjectOptions } from "../src/compiler/project";
 
 const expectedDiagnosticCountByFile : Record<string, number> = {
     "./mxunit/mxunit-TestCase-Template.cfc": 0,
@@ -249,9 +250,18 @@ const expectedDiagnosticCountByFile : Record<string, number> = {
 };
 
 describe("MX-Unit smoke test", () => {
-    const parser = Parser({engineVersion: EngineVersions["lucee.5"]}).setDebug(true); // mxunit looks like it was intended to target lucee
-    const binder = Binder().setDebug(true);
-    const checker = Checker();
+    const options : ProjectOptions = {
+        debug: true,
+        parseTypes: false,
+        withWireboxResolution: false,
+        wireboxConfigFileCanonicalAbsPath: "",
+        engineVersion: EngineVersions["acf.2018"],
+        genericFunctionInference: false,
+        checkReturnTypes: false,
+    };
+    const parser = Parser(options);
+    const binder = Binder(options)
+    const checker = Checker(options);
 
     const libPath = path.resolve("./src/lang-server/server/src/runtimelib/lib.cf2018.d.cfm");
     const stdLib = SourceFile(libPath , CfFileType.dCfm, fs.readFileSync(libPath));

@@ -25,42 +25,46 @@ function projectFiddle() {
                     }`,
                 "lib.d.cfm": `
                     @interface Array<T> {
-                        map: <U>(callback: (e: T, i?: numeric, a?: T[]) => U, parallel?: boolean, maxThreads?: boolean) => U[]
+                        placeholder: any // map: <U>(callback: (e: T, i?: numeric, a?: T[]) => U, parallel?: boolean, maxThreads?: boolean) => U[]
                     }
                 `,
                 "realLib.d.cfm": fs.readFileSync("C:\\Users\\anon\\dev\\cfc\\src\\lang-server\\server\\src\\runtimelib\\lib.cf2018.d.cfm").toString(),
                 "someFile.cfc": `
-                <!---
-                    @typedef SomeShapeFromOuterContext = {lel: string, lol: string}
-                --->
-                <cfcomponent extends="mxunit.framework.TestCase">               
-                    <cffunction name="setUp" returntype="void" access="public" hint="put things here that you want to run before each test">
-                        
-                    </cffunction>
+                /**
+                 * Expression is a simple wrapper around text that should not
+                 * be parsed or evaluated or modified in any way.
+                 * Expressions are included as-is in a sql statement.
+                 */
+                component displayname="Expression" accessors="true" {
                 
-                    <cffunction name="tearDown" returntype="void" access="public" hint="put things here that you want to run after each test">	
-                        <cfscript>
-                            // @type SomeShapeFromOuterContext[]
-                            var x = []; 
-                            x[1]
-                            
-                        </cfscript>
-                    </cffunction>
-                    
-                    <cffunction name="testXXX" returntype="void" access="public">
-                        <cfscript>
-                            /**
-                             * @typedef X = {a:string, b: string}
-                             */
-                            // @type X[]
-                            var x = []; 
-                            x[1].
-                            
-                        </cfscript>
-                    </cffunction
+                    /**
+                     * The raw sql value
+                     */
+                    property name="sql" type="string" default="";
+                    property name="bindings" type="array";
                 
+                    this.isExpression = true;
                 
-                </cfcomponent>
+                    /**
+                     * Create a new Expression wrapping up some sql.
+                     *
+                     * @sql The sql string to wrap up.
+                     *
+                     * @return qb.models.Query.Expression
+                     */
+                    public Expression function init( required string sql, array bindings = [] ) {
+                        variables.sql = arguments.sql;
+                        variables.bindings = arguments.bindings;
+                        return this;
+                    }
+                
+                    // @!type <T>(g: string) => T
+                    string function foo(string g) {
+                        return + ddd;
+                    }
+                
+                }
+                
                     `,
                 "a": {
                     "b": {
@@ -83,14 +87,22 @@ function projectFiddle() {
 
     //let x = debugfs.readFileSync("/Child.cfc").toString().slice(102,105)
     
-    const project = Project("/", /*filesystem*/debugfs, {debug: true, parseTypes: true, engineVersion: EngineVersions["lucee.5"], withWireboxResolution: true, wireboxConfigFileCanonicalAbsPath: "/Wirebox.cfc"});
+    const project = Project("/", debugfs, {
+        debug: true,
+        parseTypes: true,
+        engineVersion: EngineVersions["lucee.5"],
+        withWireboxResolution: true,
+        wireboxConfigFileCanonicalAbsPath: "/Wirebox.cfc",
+        checkReturnTypes: true,
+        genericFunctionInference: true
+    });
     //const project = Project([path.resolve(".")], FileSystem(), {debug: true, parseTypes: true, language: LanguageVersion.lucee5});
     //const target = path.join(path.resolve("./test/"), "mxunit/framework/javaloader/JavaProxy.cfc");
-    //project.addFile(target);
-
-    project.addEngineLib("/realLib.d.cfm");
+    
+    // project.addEngineLib("/lib.d.cfm");
+    // project.addEngineLib("/realLib.d.cfm");
     project.addFile("/someFile.cfc");
-    project.addFile("/a/b/x.cfc");
+    //project.addFile("C:\\Users\\anon\\dev\\cb\\testbox\\tests\\resources\\coldbox\\system\\EventHandler.cfc");
     const diagnostics = project.getDiagnostics("/someFile.cfc");
 
     //const x = project.getInterestingNodeToLeftOfCursor("/someFile.cfc", 378);
