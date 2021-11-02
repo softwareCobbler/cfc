@@ -1,8 +1,8 @@
-import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, Property, hasDeclaredType, UnreachableFlow } from "./node";
+import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, Property, hasDeclaredType, UnreachableFlow, DiagnosticKind } from "./node";
 import { CfcResolver, EngineSymbolResolver, LibTypeResolver, ProjectOptions } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, Struct, cfUnion, SyntheticType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStructLike, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, stringifyType, cfFunctionSignatureParam, isFunctionOverloadSet, cfFunctionOverloadSet, isLiteralType, cfTypeId, SymbolTableTypeWrapper, CfcTypeWrapper, Interface, StructKind, isCfcLookupType, isInstantiatedArray, isInterface, createType, createLiteralType, isUninstantiatedArray, isGenericFunctionSignature, TypeConstructor, typeFromJavaLikeTypename } from "./types";
-import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, getAttributeValue, getContainingFunction, getFunctionDefinitionAccessLiteral, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
+import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, getAttributeValue, getComponentAttrs, getContainingFunction, getFunctionDefinitionAccessLiteral, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isLiteralExpr, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol } from "./utils";
 import { Engine, supports } from "./engines";
 
@@ -22,18 +22,25 @@ export function Checker(options: ProjectOptions) {
     let noUndefinedVars = false;
     let returnTypes: _Type[] = [];
     let flowBecameUnreachable = false;
+    let warnOnUndefined!: boolean;
 
     function check(sourceFile_: SourceFile) {
         // we're using the Checker as a singleton, and checking one source file might trigger checking another
         // so, we have to save state before descending into the next check
         const savedSourceFile = sourceFile;
+        const savedWarnOnUndefined = warnOnUndefined;
         
         sourceFile = sourceFile_;
         scanner = sourceFile.scanner;
         diagnostics = sourceFile.diagnostics;
+        warnOnUndefined = false;
 
-        if (sourceFile.cfFileType === CfFileType.cfc && sourceFile.cfc?.extends && sourceFile.cfc?.extends.containedScope.this) {
-            sourceFile.containedScope.super = sourceFile.cfc.extends.containedScope.this;
+        if (sourceFile.cfFileType === CfFileType.cfc) {
+            warnOnUndefined = getAttributeValue(getComponentAttrs(sourceFile) ?? [], "warn-undefined") !== null;
+
+            if (sourceFile.cfc?.extends && sourceFile.cfc?.extends.containedScope.this) {
+                sourceFile.containedScope.super = sourceFile.cfc.extends.containedScope.this;
+            }
         }
 
         instantiateInterfaces(sourceFile);
@@ -48,6 +55,7 @@ export function Checker(options: ProjectOptions) {
         sourceFile = savedSourceFile;
         scanner = savedSourceFile?.scanner;
         diagnostics = savedSourceFile?.diagnostics;
+        warnOnUndefined = savedWarnOnUndefined;
     }
 
     function instantiateInterfaces(node: Node) {
@@ -110,8 +118,9 @@ export function Checker(options: ProjectOptions) {
         noUndefinedVars = newVal;
     }
 
-    function typeErrorAtRange(range: SourceRange, msg: string) : void {
+    function issueDiagnosticAtRange(range: SourceRange, msg: string, kind = DiagnosticKind.error) : void {
         const freshDiagnostic : Diagnostic = {
+            kind,
             fromInclusive: range.fromInclusive,
             toExclusive: range.toExclusive,
             msg: msg,
@@ -128,8 +137,8 @@ export function Checker(options: ProjectOptions) {
         diagnostics.push(freshDiagnostic);
     }
 
-    function typeErrorAtNode(node: Node, msg: string) {
-        typeErrorAtRange(node.range, msg);
+    function issueDiagnosticAtNode(node: Node, msg: string, kind = DiagnosticKind.error) {
+        issueDiagnosticAtRange(node.range, msg, kind);
     }
 
     function checkList(nodes: Node[]) {
@@ -227,7 +236,7 @@ export function Checker(options: ProjectOptions) {
                 return;
             }
             case NodeKind.booleanLiteral:
-                setCachedEvaluatedNodeType(node, SyntheticType.boolean);
+                setCachedEvaluatedNodeType(node, node.booleanValue ? SyntheticType.true : SyntheticType.false);
                 return;
             case NodeKind.identifier:
                 // klude/fixme!: identifier.source can be an indexed access
@@ -682,7 +691,7 @@ export function Checker(options: ProjectOptions) {
     //
     // `l <: r` means "left is a subtype of right"
     // `l !<: r` means "left is NOT a subtype of right"
-    // subtype has the common meaning; however it is maybe helpful to note that "sub" also means "substitutable" in addition to "a descendant in a heirarchy"
+    // it is maybe helpful to note that "sub" means "substitutable" in addition to "a descendant in a heirarchy"
     // i.e. `l <: r` means l is substitutable for r (you can safely use an l in r's place)
     //
     function isLeftSubtypeOfRight(l: _Type, r: _Type, sourceIsLiteralExpr = false, forReturnType = false, widenLiterals = false) : boolean {
@@ -739,6 +748,7 @@ export function Checker(options: ProjectOptions) {
                 else {
                     if (isLiteralType(l) && isLiteralType(r)) return l.literalValue === r.literalValue;
                     if (!isLiteralType(l) && isLiteralType(r)) return false; // number is not a subtype of `0`
+                    if (isLiteralType(l) && !isLiteralType(r) && l.underlyingType === r) return true; // `0` is a subtype of number
 
                     // numeric is a subtype of string
                     // however, string is not a subtype of numeric
@@ -748,7 +758,24 @@ export function Checker(options: ProjectOptions) {
                 }
 
 
-                
+                function propertyCounts(structLike: Struct) {
+                    // doesn't make too much sense for an object literal
+                    let optional = 0;
+                    let required = 0;
+                    for (const symTabEntry of structLike.members.values()) {
+                        if (symTabEntry.optional) {
+                            optional += 1;
+                        }
+                        else {
+                            required += 1;
+                        }
+                    }
+                    return {
+                        optional,
+                        required,
+                        total: optional + required
+                    };
+                }
 
                 //
                 // {x: number, y: number} <: {x: number}, because L has AT LEAST all the properties of R
@@ -758,10 +785,6 @@ export function Checker(options: ProjectOptions) {
                     // the outer types may be different wrappers for the same underlying struct
                     // e.g. a SymbolTableWrapper around `this` from within a CFC, and a CFC wrapper wrapping the same `this` but for a reference from another file
                     if (l.members === r.members) return true;
-
-                    if (sourceIsLiteralExpr && l.members.size !== r.members.size) return false; // barring optional properties...
-                    if (l.members.size < r.members.size) return false;
-
 
                     // if both types are CFCs, we compare by nominal inheritance
                     // we probably need to fix that this is valid CF:
@@ -779,10 +802,33 @@ export function Checker(options: ProjectOptions) {
                         return !!findAncestor(l.cfc, (node) => node === r.cfc, /*followCfcInheritance*/ true);
                     }
 
+                    //if (sourceIsLiteralExpr && l.members.size !== r.members.size) return false; // barring optional properties...
+                    const countsR = propertyCounts(r);
+                    const countsL = propertyCounts(l);
+                    if (countsL.required < countsR.required) return false;
+                    if (sourceIsLiteralExpr && countsL.total > countsR.total) return false;
+
                     for (const [propName, rightVal] of r.members) {
                         const leftVal = l.members.get(propName);
-                        if (!leftVal || !worker(leftVal.type, rightVal.type)) return false;
+                        // check for optional property of R -- if left doesn't exist, OK; if left does exist, check for subtype-ness
+                        if (rightVal.optional) {
+                            if (!leftVal) continue;
+                            if (!worker(leftVal.type, rightVal.type)) return false;
+                        }
+                        // check for required properties of R -- left must exist, not be optional, and be a subtype
+                        else {
+                            if (!leftVal || (leftVal.optional) || !worker(leftVal.type, rightVal.type)) return false;
+                        }
                     }
+
+                    // we've checked everything in target against source;
+                    // if source is a literal expression, it may not have additional properties
+                    if (sourceIsLiteralExpr) {
+                        for (const propName of l.members.keys()) {
+                            if (!r.members.has(propName)) return false;
+                        }
+                    }
+
                     return true;
                 }
 
@@ -959,8 +1005,10 @@ export function Checker(options: ProjectOptions) {
                 if (sig.returns === SyntheticType.never) {
                     flowBecameUnreachable = true;
                 }
+                
+                // check the expressions themselves, but for now we won't check that they are correct for the signature
+                checkList(node.args);
             }
-            // for now we won't check that the args to built-ins are correct (have the right names / types etc.), because we don't have great definitions for them
             return;
         }
 
@@ -1144,6 +1192,7 @@ export function Checker(options: ProjectOptions) {
             }
         }
         else if (sig.flags & TypeFlags.any) {
+            checkList(node.args); // check the arg expressions, but we don't check that they make sense or have the right arity or etc.
             return;
         }
         else {
@@ -1159,7 +1208,7 @@ export function Checker(options: ProjectOptions) {
                 }
                 return node.left;
             }
-            typeErrorAtNode(getCallExprCallableName(node), `Type '${stringifyType(sig)}' is not callable.`);
+            issueDiagnosticAtNode(getCallExprCallableName(node), `Type '${stringifyType(sig)}' is not callable.`);
         }
     }
 
@@ -1170,7 +1219,7 @@ export function Checker(options: ProjectOptions) {
         if (isFunctionSignature(sig)) {
             const namedArgCount = node.args.filter(arg => !!arg.equals).length;
             if (namedArgCount > 0 && namedArgCount !== node.args.length) {
-                typeErrorAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), "All arguments must be named, if any are named.");
+                issueDiagnosticAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), "All arguments must be named, if any are named.");
             }
 
             const isNewExpr = node.parent?.kind === NodeKind.new;
@@ -1199,21 +1248,21 @@ export function Checker(options: ProjectOptions) {
                         hasArgumentCollectionArg = hasArgumentCollectionArg || (argName.canonical === "argumentcollection");
                         if (seenArgs.has(argName?.canonical)) {
                             const uiName = argName.ui || argName.canonical;
-                            typeErrorAtNode(arg.name, `Duplicate argument '${uiName}'`);
+                            issueDiagnosticAtNode(arg.name, `Duplicate argument '${uiName}'`);
                         }
 
                         const paramPair = paramNameMap.get(argName.canonical);
                         if (!paramPair) {
                             if (argName.canonical !== "argumentcollection") {
                                 const uiName = argName.ui || argName.canonical;
-                                typeErrorAtNode(arg.name, `'${uiName}' is not a recognized parameter for this ${isNewExpr ? "constructor" : "function"}.`);
+                                issueDiagnosticAtNode(arg.name, `'${uiName}' is not a recognized parameter for this ${isNewExpr ? "constructor" : "function"}.`);
                             }
                         }
                         else {
                             const argType = getCachedEvaluatedNodeType(arg);
                             const paramType = paramPair.param.type;
                             if (!isAssignable(argType, paramType)) {
-                                typeErrorAtNode(arg, `Argument of type '${stringifyType(argType)}' is not assignable to parameter of type '${stringifyType(paramType)}'.`);
+                                issueDiagnosticAtNode(arg, `Argument of type '${stringifyType(argType)}' is not assignable to parameter of type '${stringifyType(paramType)}'.`);
                             }
                         }
                         
@@ -1235,7 +1284,7 @@ export function Checker(options: ProjectOptions) {
                     }
                     if (requiredNamedParams.size > 0) {
                         const missingNamedParams = [...requiredNamedParams.values()].map(uiName => "'" + uiName + "'").join(", ");
-                        typeErrorAtNode(node.left, `Required named parameters are missing: ${missingNamedParams}`);
+                        issueDiagnosticAtNode(node.left, `Required named parameters are missing: ${missingNamedParams}`);
                     }
                 }
             }
@@ -1245,8 +1294,8 @@ export function Checker(options: ProjectOptions) {
                 for (let i = 0; i < minToCheck; i++) {
                     const argType = getCachedEvaluatedNodeType(node.args[i]);
                     const paramType = sig.params[i].type;
-                    if (!isAssignable(argType, paramType)) {
-                        typeErrorAtNode(node.args[i], `Argument of type '${stringifyType(argType)}' is not assignable to parameter of type '${stringifyType(paramType)}'.`);
+                    if (!isAssignable(argType, paramType, isLiteralExpr(node.args[i].expr))) {
+                        issueDiagnosticAtNode(node.args[i], `Argument of type '${stringifyType(argType)}' is not assignable to parameter of type '${stringifyType(paramType)}'.`);
                     }
                 }
             }
@@ -1258,7 +1307,7 @@ export function Checker(options: ProjectOptions) {
                     else msg = `Expected between ${minRequiredParams} and ${maxParams} arguments, but got ${node.args.length}`;
                 }
                 else msg = `Expected ${maxParams} arguments, but got ${node.args.length}`;
-                typeErrorAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), msg);
+                issueDiagnosticAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), msg);
             }
 
             // most of this is done above, with the exception of "push type into inline function definition"
@@ -1329,7 +1378,7 @@ export function Checker(options: ProjectOptions) {
                     }
                     else {
                         if (node.typeAnnotation) {
-                            typeErrorAtNode(node, "_Type annotations can only be bound to an identifier's first assignment.");
+                            issueDiagnosticAtNode(node, "_Type annotations can only be bound to an identifier's first assignment.");
                         }
                         if (isAssignable(/*assignThis*/rhsType, /*to*/lhsType)) {
                             // setCachedEvaluatedFlowType(node.left.flow!, lValIdent.canonical, rhsType);
@@ -1337,7 +1386,7 @@ export function Checker(options: ProjectOptions) {
                         else {
                             const l = stringifyType(lhsType);
                             const r = stringifyType(rhsType);
-                            typeErrorAtNode(node.right, `Type '${r}' is not assignable to type '${l}'`);
+                            issueDiagnosticAtNode(node.right, `Type '${r}' is not assignable to type '${l}'`);
                         }
                     }
                 }
@@ -1413,7 +1462,7 @@ export function Checker(options: ProjectOptions) {
         const func = getContainingFunction(node);
         if (!func) {
             const errNode = node.fromTag ? node.tagOrigin.startTag! : node.returnToken!;
-            typeErrorAtNode(errNode, "A return statement must be contained inside a function body.");
+            issueDiagnosticAtNode(errNode, "A return statement must be contained inside a function body.");
             return;
         }
 
@@ -1438,7 +1487,7 @@ export function Checker(options: ProjectOptions) {
             // if we got an exprType, we got an expr or a just return token; if this is from tag, we definitely got a tag
             const errNode = node.fromTag ? node.tagOrigin.startTag : (node.expr || node.returnToken);
             if (errNode) {
-                typeErrorAtNode(errNode, `Type '${stringifyType(exprType)}' is not assignable to declared return type '${stringifyType(sig.returns)}'`);
+                issueDiagnosticAtNode(errNode, `Type '${stringifyType(exprType)}' is not assignable to declared return type '${stringifyType(sig.returns)}'`);
             }
         }
         else {
@@ -1474,7 +1523,7 @@ export function Checker(options: ProjectOptions) {
              (node.parent.subType === ForSubType.for && node === node.parent.initExpr));
 
         if (isForInit && node.finalModifier) {
-            typeErrorAtRange(mergeRanges(node.finalModifier, node.expr), `final-qualified declaration in a for initializer will fail at runtime.`);
+            issueDiagnosticAtRange(mergeRanges(node.finalModifier, node.expr), `final-qualified declaration in a for initializer will fail at runtime.`);
         }
 
         if (engineVersion.engine === Engine.Adobe && canonicalPath.length === 1) {
@@ -1482,7 +1531,7 @@ export function Checker(options: ProjectOptions) {
             if (enclosingFunction) {
                 for (const param of enclosingFunction.params) {
                     if (param.canonicalName === name.canonical) {
-                        typeErrorAtNode(node, `Identifier '${name.ui}' is already declared in arguments scope.`)
+                        issueDiagnosticAtNode(node, `Identifier '${name.ui}' is already declared in arguments scope.`)
                     }
                 }
             }
@@ -1524,25 +1573,12 @@ export function Checker(options: ProjectOptions) {
 
         //if (node.finalModifier) rhsType.flags |= TypeFlags.final; // need to clone the type
 
-        function isLiteralExpr(node: Node) {
-            switch (node.kind) {
-                case NodeKind.arrayLiteral:
-                case NodeKind.structLiteral:
-                case NodeKind.simpleStringLiteral:
-                case NodeKind.booleanLiteral:
-                case NodeKind.numericLiteral:
-                    return true;
-                default:
-                    return false;
-            }
-        }
-
         if (symbol && hasDeclaredType(symbol)) {
             const instantiatedDeclaredType = getInstantiatedDeclaredType(node, symbol);
             if (!isAssignable(rhsType, instantiatedDeclaredType, isLiteralExpr(rhsExpr))) {
                 const l = stringifyType(symbol.declaredType);
                 const r = stringifyType(rhsType);
-                typeErrorAtNode(assignabilityErrorNode, `Type '${r}' is not assignable to type '${l}'`);
+                issueDiagnosticAtNode(assignabilityErrorNode, `Type '${r}' is not assignable to type '${l}'`);
             }
         }
 
@@ -1638,11 +1674,13 @@ export function Checker(options: ProjectOptions) {
         }
 
         const name = node.canonicalName;
+        let isBuiltinScopeName = false;
 
         if (name !== undefined) {
             //const useContainer = getContainer(node);
 
             if (isStaticallyKnownScopeName(name)) {
+                isBuiltinScopeName = true;
                 switch (name) {
                     case "local":
                     case "arguments": {
@@ -1688,7 +1726,16 @@ export function Checker(options: ProjectOptions) {
                 setCachedEvaluatedNodeType(node, evaluatedType);
                 setResolvedSymbol(node, resolvedSymbol);
             }
-
+            else {
+                // {x:y} -- don't warn on "x" being undefined, it's just a struct key
+                const isKeyofKVPairStructLiteral = node.parent?.kind === NodeKind.structLiteralInitializerMember
+                    && node.parent.subType === StructLiteralInitializerMemberSubtype.keyed
+                    && node.parent.key === node
+                    && !node.parent.shorthand;
+                if (warnOnUndefined && !isBuiltinScopeName && !isKeyofKVPairStructLiteral) {
+                    issueDiagnosticAtNode(node, `Cannot find name '${name}'.`, DiagnosticKind.warning);
+                }
+            }
             // let flowType : _Type | undefined = undefined; determineFlowType(node, name);
 
             // // we know the symbol, but it has no flow type yet
@@ -1793,11 +1840,11 @@ export function Checker(options: ProjectOptions) {
 
                     if (!type || (type.flags & TypeFlags.any)) {
                         type = SyntheticType.any; // subsequent access elements will also be any
-                        if (noUndefinedVars && propertyName) {
+                        if (warnOnUndefined && propertyName) {
                             const errNode = element.accessType === IndexedAccessType.dot
                                 ? element.property
                                 : element.expr;
-                            typeErrorAtNode(errNode, `Property '${propertyName}' does not exist on type`);
+                            issueDiagnosticAtNode(errNode, `Cannot find property name '${propertyName}'.`, DiagnosticKind.warning);
                         }
                     }
                 }
@@ -1863,6 +1910,7 @@ export function Checker(options: ProjectOptions) {
         if (isMemberFunction) {
             if (node.kind === NodeKind.functionDefinition && node.canonicalName) {
                 const symbol = walkupScopesToResolveSymbol(sourceFile, (node as any).canonicalName);
+                if (symbol) setResolvedSymbol(node, symbol);
                 if (symbol?.symTabEntry.type && isFunctionSignature(symbol.symTabEntry.type)) {
                     const freshType = evaluateType(symbol.container, symbol.symTabEntry.type);
                     if (isFunctionSignature(freshType) && !isFunctionOverloadSet(freshType)) { // fixme: why would this ever evaluate into an overload set
@@ -1897,7 +1945,7 @@ export function Checker(options: ProjectOptions) {
             const evaluatedSignature = evaluateType(node, node.typeAnnotation);
             if (isFunctionSignature(evaluatedSignature)) {
                 if (!isAnnotatedSigCompatibleWithCfFunctionSig(evaluatedSignature, cfSyntaxDirectedTypeSig)) {
-                    typeErrorAtNode(node, `Type '${stringifyType(cfSyntaxDirectedTypeSig)}' is not assignable to the annotated type '${stringifyType(evaluatedSignature)}'.`)
+                    issueDiagnosticAtNode(node, `Type '${stringifyType(cfSyntaxDirectedTypeSig)}' is not assignable to the annotated type '${stringifyType(node.typeAnnotation)}'.`)
                 }
                 else {
                     // copy cf-sig param names into annotated-type param names
@@ -1916,7 +1964,7 @@ export function Checker(options: ProjectOptions) {
                 }
             }
             else if (!(evaluatedSignature.flags & TypeFlags.any)) {
-                typeErrorAtNode(node, `Expected a function signature as an annotated type, but got type '${stringifyType(evaluatedSignature)}'.`)
+                issueDiagnosticAtNode(node, `Expected a function signature as an annotated type, but got type '${stringifyType(evaluatedSignature)}'.`)
             }
         }
 
@@ -1955,11 +2003,11 @@ export function Checker(options: ProjectOptions) {
                 
                 if (node.finalFlow !== UnreachableFlow && literalReturnType && (literalReturnType.canonical !== "void" && literalReturnType.canonical !== "any")) {
                     const range = node.fromTag ? getAttributeValue(node.attrs, "returntype")!.range : node.returnType!.range;
-                    typeErrorAtRange(range, `Function does not have a final return statement, and may return 'null' which is not assignable to declared return type '${literalReturnType.ui}'.`);
+                    issueDiagnosticAtRange(range, `Function does not have a final return statement, and may return 'null' which is not assignable to declared return type '${literalReturnType.ui}'.`);
                 }
                 else {
                     const range = node.fromTag ? node.tagOrigin.startTag!.range : mergeRanges(node.accessModifier, node.returnType, node.functionToken, node.nameToken);
-                    typeErrorAtRange(range, `Function declares return type '${stringifyType(finalType.returns)}' but actual return type is '${stringifyType(actualReturnType)}'.}`);
+                    issueDiagnosticAtRange(range, `Function declares return type '${stringifyType(finalType.returns)}' but actual return type is '${stringifyType(actualReturnType)}'.}`);
                 }
             }
         }
@@ -2164,12 +2212,12 @@ export function Checker(options: ProjectOptions) {
             case StructLiteralInitializerMemberSubtype.keyed: {
                 if (node.shorthand) {
                     if (!supports.structLiteralShorthand(engineVersion)) {
-                        typeErrorAtNode(node, `CF engine ${engineVersion.uiString} does not support struct literal shorthand notation.`);
+                        issueDiagnosticAtNode(node, `CF engine ${engineVersion.uiString} does not support struct literal shorthand notation.`);
                         setCachedEvaluatedNodeType(node, SyntheticType.never);
                         break;
                     }
                     if (node.key.kind !== NodeKind.identifier || !node.key.canonicalName) { // fixme: when is this undefined or empty?
-                        typeErrorAtNode(node, "Shorthand struct literal initializers must be identifiers.");
+                        issueDiagnosticAtNode(node, "Shorthand struct literal initializers must be identifiers.");
                         setCachedEvaluatedNodeType(node, SyntheticType.never);
                         break;
                     }
@@ -2187,7 +2235,7 @@ export function Checker(options: ProjectOptions) {
             }
             case StructLiteralInitializerMemberSubtype.spread: {
                 if (!supports.structLiteralSpread(engineVersion)) {
-                    typeErrorAtNode(node, `CF engine ${engineVersion} does not support struct literal spread syntax.`)
+                    issueDiagnosticAtNode(node, `CF engine ${engineVersion} does not support struct literal spread syntax.`)
                     setCachedEvaluatedNodeType(node, SyntheticType.never);
                 }
                 checkNode(node.expr);

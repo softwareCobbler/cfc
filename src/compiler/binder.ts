@@ -1,4 +1,4 @@
-import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, ConditionalSubtype, SymbolTable, TypeShim, Property, ParamStatement, ParamStatementSubType, typedefs, Flow, FlowType, freshFlow, UnreachableFlow, SwitchCaseType, StaticallyKnownScopeName } from "./node";
+import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, UnreachableFlow, FlowType, ConditionalSubtype, SymbolTable, TypeShim, Property, ParamStatement, ParamStatementSubType, typedefs, DiagnosticKind, StaticallyKnownScopeName, SwitchCaseType } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol, findAncestor } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { SyntheticType, _Type, extractCfFunctionSignature, isFunctionSignature, Interface, isInterface } from "./types";
@@ -100,6 +100,9 @@ export function Binder(options: ProjectOptions) {
             case NodeKind.sourceFile:
                 throw "Bind source files by binding its content";
             case NodeKind.comment:
+                // fixme: a better solution might be to have the parser do the same thing to typedefs that it does to type annotations
+                // this has issues with typedefs bound to trailing trivia, i.e. `function foo{} /** @!typedef ... */ function bar() {}`
+                // the typedef above is attached to foo, not bar (and really it should be attached to whatever the outer container is)
                 if (node.typedefs) {
                     bindList(node.typedefs, node);
                 }
@@ -180,7 +183,8 @@ export function Binder(options: ProjectOptions) {
                 bindFunctionDefinition(node);
                 return;
             case NodeKind.dottedPath:
-                // ?
+                bindNode(node.headKey, node);
+                bindList(node.rest, node);
                 return;
             case NodeKind.dottedPathRest:
                 // no-op, taken care of by dottedpath
@@ -254,7 +258,7 @@ export function Binder(options: ProjectOptions) {
         });
     }
 
-    function bindList(nodes: Node[], parent: Node) {
+    function bindList(nodes: readonly Node[], parent: Node) {
         for (let i = 0; i < nodes.length; ++i) {
             bindNode(nodes[i], parent);
         }
@@ -911,6 +915,23 @@ export function Binder(options: ProjectOptions) {
                         addFreshSymbolToTable(sourceFile.containedScope.variables!, "local", node);
                     }
                 }
+                else if (targetBaseName === "variables") {
+                    if (sourceFile.cfFileType === CfFileType.cfc) {
+                        const containingFunction = getContainingFunction(node);
+                        // only write into variables table in a cfc if we're in init...
+                        // seems reasonable
+                        if (containingFunction?.kind === NodeKind.functionDefinition && containingFunction.canonicalName === "init") {
+                            if (targetBaseName in sourceFile.containedScope) {
+                                addFreshSymbolToTable(sourceFile.containedScope[targetBaseName]!, firstAccessAsString, node);
+                            }    
+                        }
+                    }
+                    else {
+                        if (targetBaseName in sourceFile.containedScope) {
+                            addFreshSymbolToTable(sourceFile.containedScope[targetBaseName]!, firstAccessAsString, node);
+                        }
+                    }
+                }
                 else {
                     if (targetBaseName in sourceFile.containedScope) {
                         addFreshSymbolToTable(sourceFile.containedScope[targetBaseName]!, firstAccessAsString, node);
@@ -920,7 +941,7 @@ export function Binder(options: ProjectOptions) {
             // not a built-in scope name, just use target base name as identifier
             // this is not a declaration so it binds to the root variables scope
             else {
-                //weakBindIdentifierToScope(targetBaseName, RootNode.containedScope.variables!);
+                //weakBindIdentifierToScope(targetBaseName, sourceFile.containedScope.variables!);
             }
         }
         else {
@@ -1356,7 +1377,7 @@ export function Binder(options: ProjectOptions) {
     }
 
     function errorAtSpan(fromInclusive: number, toExclusive: number, msg: string) {
-        const freshDiagnostic : Diagnostic = {fromInclusive, toExclusive, msg };
+        const freshDiagnostic : Diagnostic = {kind: DiagnosticKind.error, fromInclusive, toExclusive, msg };
 
         if (debug) {
             const debugFrom = scanner.getAnnotatedChar(freshDiagnostic.fromInclusive);

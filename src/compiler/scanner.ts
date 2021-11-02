@@ -1003,10 +1003,10 @@ export function Scanner(source_: string | Buffer) {
             token.__debug_type = TokenTypeUiString[tokenType];
         }
 
-        (token.range.fromColInclusive as Mutable<number>) = annotatedFrom.col;
         (token.range.fromLineInclusive as Mutable<number>) = annotatedFrom.line;
-        (token.range.toColInclusive as Mutable<number>) = annotatedTo.col;
+        (token.range.fromColInclusive as Mutable<number>) = annotatedFrom.col;
         (token.range.toLineInclusive as Mutable<number>) = annotatedTo.line;
+        (token.range.toColInclusive as Mutable<number>) = annotatedTo.col;
 
         return token;
     }

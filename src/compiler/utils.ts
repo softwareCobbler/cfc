@@ -1160,6 +1160,19 @@ export function isObjectLiteralPropertyName(node: Node) {
         && node.parent.key === node;
 }
 
+export function isLiteralExpr(node: Node) {
+    switch (node.kind) {
+        case NodeKind.structLiteral:
+        case NodeKind.arrayLiteral:
+        case NodeKind.simpleStringLiteral:
+        case NodeKind.numericLiteral:
+        case NodeKind.booleanLiteral:
+            return true;
+        default:
+            return false;
+    }
+}
+
 export function isInScriptBlock(node: Node) {
     // @fixme perhaps better to just mark script nodes as such with a flag, during parse node finalization
     // `return !!(node.flags & NodeFlags.script)` would be way faster than a tree walk

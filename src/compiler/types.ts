@@ -124,7 +124,7 @@ export interface _Type {
     readonly underlyingType?: _Type,
     readonly types?: _Type[],
     readonly cfc?: Readonly<SourceFile>, // kludge for connecting a cfstruct that represents a cfc to its cfc
-    readonly literalValue?: string | number,
+    readonly literalValue?: string | number | boolean,
     readonly capturedContext?: ReadonlyMap<string, _Type>,
     readonly memberType?: _Type,
 }
@@ -328,6 +328,10 @@ export function isStructLike(t: _Type) : t is Struct {
 // fixme: narrowing on `structKind` not working?
 export function isInterface(t: _Type) : t is Interface {
     return isStructLike(t) && t.structKind === StructKind.interface;
+}
+
+export function isCfcTypeWrapper(t: _Type) : t is CfcTypeWrapper {
+    return isStructLike(t) && t.structKind === StructKind.cfcTypeWrapper;
 }
 
 export interface cfFunctionSignature extends _Type {
@@ -736,6 +740,18 @@ export const SyntheticType = (function() {
     } as _Type;
     (boolean as Mutable<_Type>).underlyingType = boolean;
 
+    const _true : _Type = {
+        flags: TypeFlags.synthetic | TypeFlags.boolean,
+        literalValue: true,
+        underlyingType: boolean,
+    } as _Type;
+
+    const _false : _Type = {
+        flags: TypeFlags.synthetic | TypeFlags.boolean,
+        literalValue: false,
+        underlyingType: boolean,
+    } as _Type;
+
     const struct = (membersMap: ReadonlyMap<string, SymTabEntry> = new Map()) => {
         const v = Struct(membersMap);
         (v.flags as TypeFlags) |= TypeFlags.synthetic;
@@ -754,6 +770,8 @@ export const SyntheticType = (function() {
         string: createType(string),
         numeric: createType(numeric),
         boolean: createType(boolean),
+        true: createType(_true),
+        false: createType(_false),
         never: createType(never),
         struct, // this is a function
         anyFunction: anyFunction, // already created via call to cfFunctionSignature
@@ -901,7 +919,7 @@ export function createLiteralType(value: string | number) : _Type {
 // fixme: ran out of flags, need a better way to discriminate a literal type
 const __literalTypeKey : keyof _Type = "literalValue";
 export interface _LiteralType extends _Type {
-    literalValue: string | number,
+    literalValue: string | number | boolean,
     underlyingType: _Type
 }
 export type LiteralType = _LiteralType;
@@ -912,6 +930,8 @@ export function isLiteralType(_type: _Type) : _type is LiteralType {
 
 export function stringifyType(type: _Type, depth = 0) : string {
     if (depth > 4) return "<<TYPE-TOO-DEEP>>";
+    if (type === SyntheticType.true) return "true";
+    if (type === SyntheticType.false) return "false";
     if (type.flags & TypeFlags.any) return "any";
     if (type.flags & TypeFlags.void) return "void";
     if (type.flags & TypeFlags.numeric) return "numeric";
@@ -931,8 +951,10 @@ export function stringifyType(type: _Type, depth = 0) : string {
         }
         else {
             const builder = [];
-            for (const [propName, {type: memberType}] of type.members) {
-                builder.push(propName + ": " + stringifyType(memberType, depth+1));
+            for (const [propName, member] of type.members) {
+                const type = member.type;
+                const colon = member.optional ? "?: " : ": ";
+                builder.push(propName + colon + stringifyType(type, depth+1));
             }
             const result = builder.join(", ");
             return "{" + result + "}";

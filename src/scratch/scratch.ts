@@ -28,43 +28,9 @@ function projectFiddle() {
                         placeholder: any // map: <U>(callback: (e: T, i?: numeric, a?: T[]) => U, parallel?: boolean, maxThreads?: boolean) => U[]
                     }
                 `,
-                "realLib.d.cfm": fs.readFileSync("C:\\Users\\anon\\dev\\cfc\\src\\lang-server\\server\\src\\runtimelib\\lib.cf2018.d.cfm").toString(),
+                //"realLib.d.cfm": fs.readFileSync("C:\\Users\\anon\\dev\\cfc\\src\\lang-server\\server\\src\\runtimelib\\lib.cf2018.d.cfm").toString(),
                 "someFile.cfc": `
-                /**
-                 * Expression is a simple wrapper around text that should not
-                 * be parsed or evaluated or modified in any way.
-                 * Expressions are included as-is in a sql statement.
-                 */
-                component displayname="Expression" accessors="true" {
-                
-                    /**
-                     * The raw sql value
-                     */
-                    property name="sql" type="string" default="";
-                    property name="bindings" type="array";
-                
-                    this.isExpression = true;
-                
-                    /**
-                     * Create a new Expression wrapping up some sql.
-                     *
-                     * @sql The sql string to wrap up.
-                     *
-                     * @return qb.models.Query.Expression
-                     */
-                    public Expression function init( required string sql, array bindings = [] ) {
-                        variables.sql = arguments.sql;
-                        variables.bindings = arguments.bindings;
-                        return this;
-                    }
-                
-                    // @!type <T>(g: string) => T
-                    string function foo(string g) {
-                        return + ddd;
-                    }
-                
-                }
-                
+
                     `,
                 "a": {
                     "b": {
@@ -112,7 +78,10 @@ function projectFiddle() {
         console.log(diagnostic);
     }
 }
-projectFiddle();
+
+for (let i = 0; i < 10; i++) {
+    projectFiddle();
+}
 
 
 /*function xfiddle() {

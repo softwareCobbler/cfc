@@ -24,7 +24,7 @@ import {
     New,
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
-    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, TypeShim, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember } from "./node";
+    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, TypeShim, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard } from "./utils";
 import { cfIndexedType, Interface, cfIntersection, isIntersection, isStructLike, isTypeId, isUnion, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, Decorator, TypeConstructor, IndexSignature, isUninstantiatedArray } from "./types";
@@ -234,19 +234,10 @@ export function Parser(config: ProjectOptions) {
         const result = scanner.next(mode);
         token_ = result;
         lookahead_ = peek().type;
-        return result;
-    }
-
-    /**
-     * move the scanner forward, update lookahead, run appropriate state updates
-     * fixme: get rid of this, just use next()
-     */
-    function parseNextToken() : Token {
-        const token = next();
         if (!isInSomeContext(ParseContext.trivia)) {
-            lastNonTriviaToken = token;
+            lastNonTriviaToken = result;
         }
-        return token;
+        return result;
     }
 
     function scanToNextToken(token: TokenType[], endOnOrAfter: "on" | "after" = "on") : void {
@@ -406,6 +397,7 @@ export function Parser(config: ProjectOptions) {
 
         const lastDiagnostic = diagnostics.length > 0 ? diagnostics[diagnostics.length-1] : undefined;
         const freshDiagnostic : Diagnostic = {
+            kind: DiagnosticKind.error,
             fromInclusive: from,
             toExclusive: to,
             msg: msg ?? (toExclusiveOrMsg as string)
@@ -494,7 +486,7 @@ export function Parser(config: ProjectOptions) {
 
         if (!tagName) {
             parseErrorAtCurrentToken("Expected a tag name.");
-            return createMissingNode(Terminal(parseNextToken()));
+            return createMissingNode(Terminal(next()));
         }
 
         return Terminal(tagName, parseTrivia());
@@ -555,7 +547,7 @@ export function Parser(config: ProjectOptions) {
         if (lookahead() !== TokenType.CF_TAG_COMMENT_END) {
             if (nestedComments.length > 0) parseErrorAtRange(commentStart.range.fromInclusive, nestedComments[0].range.fromInclusive, "Unterminated tag comment.");
             else parseErrorAtRange(commentStart.range.fromInclusive, scanner.getIndex(), "Unterminated tag comment.");
-            const commentEnd = createMissingNode(Terminal(parseNextToken()));
+            const commentEnd = createMissingNode(Terminal(next()));
             result = CfTag.Comment(commentStart, nestedComments, commentEnd);
         }
         else {
@@ -1943,12 +1935,7 @@ export function Parser(config: ProjectOptions) {
             return parseAnonymousFunctionDefinition();
         }
 
-        const maybeArrowFunction = SpeculationHelper.speculate(tryParseArrowFunctionDefinition);
-        if (maybeArrowFunction) {
-            return maybeArrowFunction;
-        }
-
-        return parseExpression();
+        return tryParseArrowFunctionDefinition() ?? parseExpression();
     }
 
     function parseExpression(descendIntoOr = true) : Node { // todo: does this get the AND and OR precedences correct?
@@ -2517,6 +2504,7 @@ export function Parser(config: ProjectOptions) {
 
     function isStartOfType() : boolean {
         switch (lookahead()) {
+            case TokenType.PIPE:
             case TokenType.LEFT_BRACKET:
             case TokenType.LEFT_PAREN:
             case TokenType.LEFT_BRACE:
@@ -2915,7 +2903,7 @@ export function Parser(config: ProjectOptions) {
             const dot = parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
             
             if (allowTrailingGlob && lookahead() === TokenType.STAR) {
-                const glob = parseNextToken();
+                const glob = next();
                 const trivia = parseTrivia();
                 const key = Terminal(glob, trivia);
                 pushDottedPathElement(result, dot, key);
@@ -3063,7 +3051,8 @@ export function Parser(config: ProjectOptions) {
             //                                                                                ^^^^^
             if (lookahead() === TokenType.LEXEME) {
                 if (defaultValue) {
-                    parseErrorAtCurrentToken("Parameter attributes cannot follow a default value expression; to combine a default value with other attributes, use an explicit 'default' attribute.")
+                    const errorRange = peek().range;
+                    parseErrorAtRange(errorRange, "Parameter attributes cannot follow a default value expression; to combine a default value with other attributes, use an explicit 'default' attribute.")
                 }
                 else {
                     attrs = parseTagAttributes();
@@ -3205,6 +3194,7 @@ export function Parser(config: ProjectOptions) {
                 cases.push(Script.SwitchDefault(defaultToken, colon, body));
             }
             else {
+                next();
                 parseErrorAtCurrentToken("Expected a switch case or default.");
                 break;
             }
@@ -3376,7 +3366,7 @@ export function Parser(config: ProjectOptions) {
                 init = createMissingNode(Identifier(NilTerminal(pos()), ""));
                 parseErrorAtRange(leftParen.range.fromInclusive+1, leftParen.range.toExclusive+1, "Declaration expected.");
             }
-            const inToken = Terminal(parseNextToken(), parseTrivia());
+            const inToken = Terminal(next(), parseTrivia());
             const expr = parseExpression();
             const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
 
@@ -3609,7 +3599,7 @@ export function Parser(config: ProjectOptions) {
 
                     // special case for sugared `abort`
                     if (peekedCanonicalText === "abort" && !isInSomeContext(ParseContext.sugaredAbort)) {
-                        const terminal = Terminal(parseNextToken(), parseTrivia());
+                        const terminal = Terminal(next(), parseTrivia());
                         if (lookahead() === TokenType.SEMICOLON) {
                             return ScriptSugaredTagCallStatement(terminal, [], parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia));
                         }
@@ -4116,7 +4106,7 @@ export function Parser(config: ProjectOptions) {
     function parseType() : _Type;
     function parseType(fromInclusive: number, toExclusive: number) : _Type;
     function parseType(fromInclusive?: number, toExclusive?: number) : _Type {
-        function textToType(lexeme: Token) {
+        function tokenToType(lexeme: Token) {
             switch (lexeme.text) {
                 case "numeric":
                     return SyntheticType.numeric;
@@ -4127,9 +4117,9 @@ export function Parser(config: ProjectOptions) {
                 case "boolean":
                     return SyntheticType.boolean;
                 case "true":
-                    return SyntheticType.boolean;
+                    return SyntheticType.true;
                 case "false":
-                    return SyntheticType.boolean;
+                    return SyntheticType.false;
                 case "void":
                     return SyntheticType.void;
                 case "never":
@@ -4167,7 +4157,7 @@ export function Parser(config: ProjectOptions) {
                         parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
                         const maybeTypeId = maybeLexeme();
                         if (maybeTypeId) {
-                            let typeId : _Type | null = textToType(maybeTypeId.token);
+                            let typeId : _Type | null = tokenToType(maybeTypeId.token);
                             if (!isTypeId(typeId)) {
                                 typeId = null;
                             }
@@ -4209,7 +4199,7 @@ export function Parser(config: ProjectOptions) {
 
         const enum StructMemberParseResult_t { keyTypePair, spread, indexSignature };
         type StructMemberParseResult =
-            | {resultKind: StructMemberParseResult_t.keyTypePair, name: Terminal, type: _Type}
+            | {resultKind: StructMemberParseResult_t.keyTypePair, name: Terminal, type: _Type, optional: boolean}
             | {resultKind: StructMemberParseResult_t.indexSignature, indexSignature: IndexSignature}
             | {resultKind: StructMemberParseResult_t.spread, type: _Type };
 
@@ -4262,6 +4252,7 @@ export function Parser(config: ProjectOptions) {
                 //     parseErrorAtCurrentToken("Expected a struct key.");
                 // }
 
+                const optional = !!parseOptionalTerminal(TokenType.QUESTION_MARK, ParseOptions.withTrivia);
                 parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
                 type = parseType();
 
@@ -4270,7 +4261,8 @@ export function Parser(config: ProjectOptions) {
                 return {
                     resultKind: StructMemberParseResult_t.keyTypePair,
                     name,
-                    type
+                    type,
+                    optional,
                 }
             }
         }
@@ -4342,7 +4334,7 @@ export function Parser(config: ProjectOptions) {
                             spreads);
                     }
                     else {
-                        result = textToType(terminal.token);
+                        result = tokenToType(terminal.token);
                         if (terminal.token.text.toLowerCase() === "cfc") {
                             parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
                             const dottedPath = parseDottedPath();
@@ -4483,6 +4475,7 @@ export function Parser(config: ProjectOptions) {
                                     canonicalName: member.name.token.text.toLowerCase(),
                                     declarations: null,
                                     type: member.type,
+                                    optional: member.optional
                                 })
                             }
                         }
@@ -4519,6 +4512,11 @@ export function Parser(config: ProjectOptions) {
                     const value = parseFloat(n.literal.token.text);
                     result = createLiteralType(value);
                 }
+                default: {
+                    if (isValidTypeId(lookahead())) {
+                        result = tokenToType(next());
+                    }
+                }
             }
 
             return result;
@@ -4532,6 +4530,9 @@ export function Parser(config: ProjectOptions) {
             return cfFunctionSignature("", params, returnType, []);
         }
 
+        // in `type T = | A` --- we have a union of one element, which gets collapsed to A anyway (and we'll actually just parse exactly A), so this seems legit
+        // makes multiline unions nicer
+        parseOptionalTerminal(TokenType.PIPE, ParseOptions.withTrivia); // discarded
         let result = localParseType();
 
         if (isStructLike(result) && result.structKind === StructKind.interface) {

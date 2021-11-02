@@ -148,7 +148,8 @@ export interface SymTabEntry {
     declarations: Node[] | null,
     type: _Type,
     declaredType?: _Type,
-    instantiatedDeclaredType?: _Type
+    instantiatedDeclaredType?: _Type,
+    optional?: boolean,
 }
 
 export function hasDeclaredType(symbol: SymTabEntry) : symbol is SymTabEntry & {declaredType: _Type} {
@@ -308,10 +309,12 @@ export function mergeRanges(...nodes : (SourceRange | Node | Node[] | undefined 
     return result;
 }
 
+export const enum DiagnosticKind { error, warning }
 export interface Diagnostic {
-    fromInclusive: number;
-    toExclusive: number;
-    msg: string;
+    kind: DiagnosticKind,
+    fromInclusive: number,
+    toExclusive: number,
+    msg: string,
     __debug_from_line?: number,
     __debug_from_col?: number,
     __debug_to_line?: number,
@@ -1704,9 +1707,10 @@ export interface DottedPath extends NodeBase {
 }
 
 export function DottedPath(headKey: Terminal) : DottedPath {
-    const v = NodeBase<DottedPath>(NodeKind.dottedPath, headKey.range);
+    const v = NodeBase<Mutable<DottedPath>>(NodeKind.dottedPath, headKey.range);
     v.headKey = headKey;
-    (v as Mutable<DottedPath>).rest = [];
+    v.rest = [];
+    v.length = 1;
     return v;
 }
 

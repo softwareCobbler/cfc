@@ -43,15 +43,16 @@ import { URI } from "vscode-uri";
 import * as path from "path";
 import { NodeId, SourceFile, Parser, Binder, Node, Diagnostic as cfcDiagnostic, cfmOrCfc, NodeSourceMap, Checker, NodeKind } from "compiler";
 
-import { _Type } from '../../../compiler/types';
+import { isCfcTypeWrapper, isFunctionSignature, _Type } from '../../../compiler/types';
 import { FileSystem, Project } from "../../../compiler/project";
 import { EngineVersions, EngineVersion } from "../../../compiler/engines";
 import * as cfls from "../../../services/completions";
 import { getAttribute, getAttributeValue, getSourceFile, getTriviallyComputableString } from '../../../compiler/utils';
-import { BlockType, FunctionDefinition, NodeFlags, Property } from '../../../compiler/node';
-import { SourceRange, Token } from '../../../compiler/scanner';
+import { BinaryOpType, BlockType, DiagnosticKind, FunctionDefinition, NodeFlags, Property } from '../../../compiler/node';
+import { Scanner, SourceRange, Token } from '../../../compiler/scanner';
 
 type TextDocumentUri = string;
+type AbsPath = string;
 
 interface CflsConfig {
 	engineLibAbsPath: string | null
@@ -63,13 +64,28 @@ interface CflsConfig {
 	x_genericFunctionInference: boolean,
 }
 
-let project : Project; // init this before using it
+const workspaceProjects = new Map<AbsPath, Project>(); // init this before using it
+
+function getOwningProjectFromUri(uri: TextDocumentUri) : Project | undefined {
+	const fsPath = path.parse(URI.parse(uri).fsPath).dir;
+	return getOwningProjectFromAbsPath(fsPath);
+}
+
+function getOwningProjectFromAbsPath(absPath: string) : Project | undefined {
+	for (const workspaceRoot of workspaceProjects.keys()) {
+		if (absPath.startsWith(workspaceRoot)) {
+			return workspaceProjects.get(workspaceRoot)!;
+		}
+	}
+	return undefined;
+}
 
 let workspaceRoots : WorkspaceFolder[] = [];
 
 let cflsConfig! : CflsConfig;
 
 function naiveGetDiagnostics(uri: TextDocumentUri, freshText: string | Buffer) : cfcDiagnostic[] {
+	const project = getOwningProjectFromUri(uri);
 	if (!project) return [];
 
 	const fsPath = URI.parse(uri).fsPath;
@@ -144,6 +160,7 @@ interface ClientRequest {
 	position: Position,
 }
 
+/** @deprecated use cfRangeToVsRange_scanner */
 function cfRangeToVsRange(sourceRange: SourceRange) : Range {
 	return {
 		start: {line: sourceRange.fromLineInclusive!, character: sourceRange.fromColInclusive!},
@@ -151,10 +168,23 @@ function cfRangeToVsRange(sourceRange: SourceRange) : Range {
 	}
 }
 
+function cfRangeToVsRange_viaScanner(scanner: Scanner, sourceRange: SourceRange) {
+	const from = scanner.getAnnotatedChar(sourceRange.fromInclusive);
+	const to = scanner.getAnnotatedChar(sourceRange.toExclusive);
+	return {
+		start: {line: from.line, character: from.col},
+		end: {line: to.line, character: to.col}
+	}
+}
+
 // show where a symbol is defined at
 connection.onDefinition((params) : Location[] | undefined  => {
 	const document = documents.get(params.textDocument.uri);
 	if (!document) return undefined;
+
+	const project = getOwningProjectFromUri(document.uri);
+	if (!project) return undefined;
+
 	const fsPath = URI.parse(document.uri).fsPath;
 	const targetIndex = document.offsetAt(params.position);
 
@@ -166,6 +196,22 @@ connection.onDefinition((params) : Location[] | undefined  => {
 	
 	const targetNode = project.getInterestingNodeToLeftOfCursor(fsPath, targetIndex);
 	if (!targetNode) return undefined;
+
+	const checker = project.__unsafe_dev_getChecker();
+
+	if (targetNode.parent?.kind === NodeKind.functionDefinition && !targetNode.parent.fromTag && targetNode.parent.returnType === targetNode) {
+		const symbol = checker.getSymbol(targetNode.parent, sourceFile)
+		if (symbol && isFunctionSignature(symbol.symTabEntry.type) && isCfcTypeWrapper(symbol.symTabEntry.type.returns)) {
+			return [{
+				uri: URI.file(symbol.symTabEntry.type.returns.cfc.absPath).toString(),
+				range: {
+					start: {line: 0, character: 0},
+					end: {line: 0, character: 0},
+				}
+			}];
+		}
+		return undefined;
+	}
 
 	if (targetNode.kind === NodeKind.simpleStringLiteral) {
 		if (targetNode.parent?.kind === NodeKind.tagAttribute && targetNode.parent.canonicalName === "extends") {
@@ -186,7 +232,32 @@ connection.onDefinition((params) : Location[] | undefined  => {
 		}
 		return undefined;
 	}
-	const checker = project.__unsafe_dev_getChecker();
+
+	const newExpr = targetNode.kind === NodeKind.dottedPathRest
+		&& targetNode.parent?.kind === NodeKind.dottedPath
+		&& targetNode.parent.parent?.kind === NodeKind.callExpression
+		&& targetNode.parent.parent.parent?.kind === NodeKind.new
+		? targetNode.parent.parent.parent
+		: targetNode.kind === NodeKind.dottedPath
+		&& targetNode.parent?.kind === NodeKind.callExpression
+		&& targetNode.parent.parent?.kind === NodeKind.new
+		? targetNode.parent.parent
+		: undefined;
+
+	if (newExpr) {
+		const type = checker.getCachedEvaluatedNodeType(newExpr, sourceFile);
+		if (type && isCfcTypeWrapper(type)) {
+			return [{
+				uri: URI.file(type.cfc.absPath).toString(),
+				range: {
+					start: {line: 0, character: 0},
+					end: {line: 0, character: 0},
+				}
+			}]
+		}
+		return undefined;
+	}
+	
 	const symbol = checker.getSymbol(targetNode, sourceFile);
 	if (!symbol || !symbol.symTabEntry.declarations) return undefined;
 
@@ -208,6 +279,15 @@ connection.onDefinition((params) : Location[] | undefined  => {
 				if (!location) continue;
 				result.push(location);
 				break;
+			}
+			case NodeKind.binaryOperator: {
+				if (decl.optype !== BinaryOpType.assign) continue;
+				const declSourceFile = getSourceFile(decl);
+				if (!declSourceFile) continue;
+				result.push({
+					uri: declFileUri.toString(),
+					range: cfRangeToVsRange_viaScanner(declSourceFile.scanner, decl.left.range)
+				});
 			}
 		}
 	}
@@ -263,47 +343,51 @@ function resetCfls(why: string) {
 		if (!fileSystem.caseSensitive) wireboxConfigFileAbsPath = wireboxConfigFileAbsPath.toLowerCase();
 	}
 
-	const workspaceRoot = workspaceRoots[0];
-	if (!workspaceRoot) {
-		//project = null;
-		return;
-	}
+	workspaceProjects.clear();
 
-	project = Project(
-		URI.parse(workspaceRoot.uri).fsPath,
-		fileSystem,
-		{
-			parseTypes: cflsConfig.x_parseTypes,
-			debug: true,
-			engineVersion: cflsConfig.engineVersion,
-			withWireboxResolution: cflsConfig.wireboxResolution,
-			wireboxConfigFileCanonicalAbsPath: wireboxConfigFileAbsPath,
-			checkReturnTypes: cflsConfig.x_checkReturnTypes,
-			genericFunctionInference: cflsConfig.x_genericFunctionInference,
-		});
+	for (const workspace of workspaceRoots) {
+		const rootAbsPath = URI.parse(workspace.uri).fsPath;
+		const project = Project(
+			URI.parse(workspace.uri).fsPath,
+			fileSystem,
+			{
+				parseTypes: cflsConfig.x_parseTypes,
+				debug: true,
+				engineVersion: cflsConfig.engineVersion,
+				withWireboxResolution: cflsConfig.wireboxResolution,
+				wireboxConfigFileCanonicalAbsPath: wireboxConfigFileAbsPath,
+				checkReturnTypes: cflsConfig.x_checkReturnTypes,
+				genericFunctionInference: cflsConfig.x_genericFunctionInference,
+			}
+		);
 
-	if (cflsConfig.engineLibAbsPath) project.addEngineLib(cflsConfig.engineLibAbsPath);
+		if (cflsConfig.engineLibAbsPath) project.addEngineLib(cflsConfig.engineLibAbsPath);
 
-	// if we're doing wirebox resolution, add the wirebox config file immediately so we get the mappings
-	if (cflsConfig.wireboxResolution && wireboxConfigFileAbsPath) {
-		project.addFile(wireboxConfigFileAbsPath);
+		// if we're doing wirebox resolution, add the wirebox config file immediately so we get the mappings
+		if (cflsConfig.wireboxResolution && wireboxConfigFileAbsPath) {
+			project.addFile(wireboxConfigFileAbsPath);
+		}
+
+		workspaceProjects.set(rootAbsPath, project);
 	}
 }
 
 function reemitDiagnostics() {
-	const absPaths = project.getFileListing();
-	connection.console.info("reemit diagnositcs for " + absPaths.length + " file URIs");
-	for (const absPath of absPaths) {
-		const uri = URI.parse(absPath).toString();
-		const textDocument = documents.get(uri);
-		const text = textDocument?.getText();
-		const fileType = cfmOrCfc(uri);
+	for (const project of workspaceProjects.values()) {
+		const absPaths = project.getFileListing();
+		connection.console.info("reemit diagnositcs for " + absPaths.length + " file URIs");
+		for (const absPath of absPaths) {
+			const uri = URI.parse(absPath).toString();
+			const textDocument = documents.get(uri);
+			const text = textDocument?.getText();
+			const fileType = cfmOrCfc(uri);
 
-		if (text && fileType) {
-			connection.sendDiagnostics({
-				uri: uri,
-				diagnostics: cfcDiagnosticsToLspDiagnostics(textDocument!, naiveGetDiagnostics(uri, text))
-			});
+			if (text && fileType) {
+				connection.sendDiagnostics({
+					uri: uri,
+					diagnostics: cfcDiagnosticsToLspDiagnostics(textDocument!, naiveGetDiagnostics(uri, text))
+				});
+			}
 		}
 	}
 	connection.console.info("...done with diagnostic reemit");
@@ -375,14 +459,23 @@ function engineVersionConfigToEngineVersion(key: any) {
 	else return EngineVersions["lucee.5"];
 }
 
+function configDidChange(freshConfig: any) : boolean {
+	for (const key of Object.keys(cflsConfig) as (keyof CflsConfig)[]) {
+		if (freshConfig.hasOwnProperty(key) && freshConfig[key] !== cflsConfig[key]) return true;
+	}
+	return false;
+}
+
 connection.onDidChangeConfiguration(async change => {
 	if (hasConfigurationCapability) {
 		// Reset all cached document settings
 		documentSettings.clear();
 		connection.workspace.getConfiguration("cflsp").then((config) => {
-			updateConfig(config);
-			resetCfls("onDidChangeConfiguration with configCapability");
-			documents.all().forEach(validateTextDocument);
+			if (configDidChange(config)) {
+				updateConfig(config);
+				resetCfls("onDidChangeConfiguration with configCapability");
+				documents.all().forEach(validateTextDocument);
+			}
 		});
 	}
 	else {
@@ -452,7 +545,7 @@ function cfcDiagnosticsToLspDiagnostics(textDocument: TextDocument, cfDiagnostic
 
 	for (const diagnostic of cfDiagnostics) {
 		diagnostics.push({
-			severity: DiagnosticSeverity.Error,
+			severity: diagnostic.kind === DiagnosticKind.error ? DiagnosticSeverity.Error : DiagnosticSeverity.Warning,
 			range: {
 				start: textDocument.positionAt(diagnostic.fromInclusive),
 				end: textDocument.positionAt(diagnostic.toExclusive)
@@ -522,6 +615,10 @@ function mapCflsCompletionToVsCodeCompletion(completion: cfls.CompletionItem) : 
 connection.onCompletion((completionParams: CompletionParams): CompletionItem[] => {
 	const document = documents.get(completionParams.textDocument.uri);
 	if (!document) return [];
+	
+	const project = getOwningProjectFromUri(document.uri);
+	if (!project) return [];
+
 	const fsPath = URI.parse(document.uri).fsPath;
 	const targetIndex = document.offsetAt(completionParams.position);
 	const completions = cfls.getCompletions(
@@ -592,14 +689,17 @@ connection.onHover((hoverParams: HoverParams) : Hover | null => {
 
 connection.onNotification("cflsp/libpath", (libAbsPath: string) => {
 	connection.console.info("received cflsp/libpath notification, path=" + libAbsPath);
-	if (!project) {
+	if (!workspaceProjects) {
 		connection.console.warn("Aborting engine library load: `project` was not yet initialized.");
 		return;
 	}
 
 	cflsConfig.engineLibAbsPath = libAbsPath;
 
-	project.addEngineLib(libAbsPath);
+	for (const project of workspaceProjects.values()) {
+		project.addEngineLib(libAbsPath);
+	}
+	
 	reemitDiagnostics();
 
 	/*connection.console.info("received cflsp/libpath notification, path=" + libAbsPath);
@@ -618,6 +718,8 @@ connection.onNotification("cflsp/cache-cfcs", (cfcAbsPaths: string[]) => {
 	let i = 0;
 	for (const absPath of cfcAbsPaths) {
 		connection.console.log(`Staring ${absPath}...`);
+		const project = getOwningProjectFromAbsPath(path.parse(absPath).dir);
+		if (!project) continue;
 		const start = new Date().getTime();
 		project.addFile(absPath);
 		const elapsed = new Date().getTime() - start;
