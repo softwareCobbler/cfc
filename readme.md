@@ -8,11 +8,13 @@ The VsCode plugin based on this tool is "cflsp", downloadable from within VsCode
 * Recognize syntactic and semantic errors and emit reasonable diagnostics for them.
 * Offer autocomplete and navigate-to-symbol
 * Extract type information from source text in a gradual, unobtrusive way that permits flagging code that will fail at runtime and that supports an improved in-editor development experience.
+* Don't crash on invalid source text, always produce an AST
 
 ### Experiments
 * Resolve Coldbox modules via Wirebox's `getInstance` and in-cfc property declarations, treating it as the de-facto package manager, ala `npm` in the nodejs world
 * Type annotations for functions and variable declarations to support type checking of expressions
 * "interface extended engine scopes" &mdash;&nbsp; `@interface variables { x: string }` in a CFC preamble is the equivalent of declaring `x: string` in the global scope (since `variables` always participates in name lookup); the same can be done for `cgi`, `application`, `this`, etc.
+* define interfaces, typedefs and decorators with the following syntax in a comment: `@!interface <interface-name> { <interface-structlike-kv-pairs }`, `@!type <type-here>` `@!typedef <name> = <type>` `@!decorate <decorator-name>`
 
 ## building
 

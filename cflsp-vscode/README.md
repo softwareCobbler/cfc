@@ -4,6 +4,18 @@ A language plugin to see how far we can push ColdFusion language tooling.
 
 If we are marking a tag, expression or statement as an error and you know it shouldn't (or it isn't and it should), please let me know [on github](https://github.com/softwareCobbler/cfc).
 
+1.0.32
+- member function autocompletions for `array` argument types, using an `Array<T>` interface defined in the always visible standard library;
+- some generic inference for signatures like `Array.map`, hidden behind
+  `x_genericFunctionInference` option; pretty alpha-level quality but it does work in limited circumstances (i.e in straightforward cases we can infer U in `<U>map(m: (e: T) => U) => U[]` and fill in `T` in an inline body of `m` and get the expected autocomplete)
+- actually respect "x_" options (experimental features)
+- don't reboot the server on configuration change, if the configuration was for some other plugin
+- somewhat hidden feature - a "warn-undefined" attribute on a cfc will emit warnings on all symbols in the cfc that we couldn't find
+  - this is probably going to light up like crazy on existing projects that expect symbols to be magically visible at runtime,
+  - but on files with no `<cfinclude>`'s and a resolved inheritance chain, it works pretty well
+- shouldn't crash on bootup?...at least one user hit an OOM death on initial CFC caching
+  - logs now show what file we're *about* to process instead of the one we just sucesfully processed
+
 1.0.29
 - Issue a diagnostic on unparenthesized single-argument arrow functions when in Lucee language mode
 
