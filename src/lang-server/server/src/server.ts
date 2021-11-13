@@ -32,8 +32,8 @@ import {
 	Hover,
 } from 'vscode-languageserver/node';
 
+import * as child_process from "child_process"
 import { SignatureHelp, Position, Location, Range } from "vscode-languageserver-types"
-
 import {
 	TextDocument
 } from 'vscode-languageserver-textdocument';
@@ -47,53 +47,17 @@ import { isCfcTypeWrapper, isFunctionSignature, _Type } from '../../../compiler/
 import { FileSystem, Project } from "../../../compiler/project";
 import { EngineVersions, EngineVersion } from "../../../compiler/engines";
 import * as cfls from "../../../services/completions";
-import { getAttribute, getAttributeValue, getSourceFile, getTriviallyComputableString } from '../../../compiler/utils';
+import { getAttribute, getAttributeValue, getSourceFile, getTriviallyComputableString, exhaustiveCaseGuard } from '../../../compiler/utils';
 import { BinaryOpType, BlockType, DiagnosticKind, FunctionDefinition, NodeFlags, Property } from '../../../compiler/node';
 import { Scanner, SourceRange, Token } from '../../../compiler/scanner';
+import { LanguageService } from "../../../services/languageService"
+import { CflsConfig } from "../../../services/cflsTypes"
 
 type TextDocumentUri = string;
 type AbsPath = string;
 
-interface CflsConfig {
-	engineLibAbsPath: string | null
-	x_parseTypes: boolean,
-	engineVersion: EngineVersion,
-	wireboxConfigFile: string | null,
-	wireboxResolution: boolean,
-	x_checkReturnTypes: boolean,
-	x_genericFunctionInference: boolean,
-}
-
-const workspaceProjects = new Map<AbsPath, Project>(); // init this before using it
-
-function getOwningProjectFromUri(uri: TextDocumentUri) : Project | undefined {
-	const fsPath = path.parse(URI.parse(uri).fsPath).dir;
-	return getOwningProjectFromAbsPath(fsPath);
-}
-
-function getOwningProjectFromAbsPath(absPath: string) : Project | undefined {
-	for (const workspaceRoot of workspaceProjects.keys()) {
-		if (absPath.startsWith(workspaceRoot)) {
-			return workspaceProjects.get(workspaceRoot)!;
-		}
-	}
-	return undefined;
-}
-
-let workspaceRoots : WorkspaceFolder[] = [];
-
-let cflsConfig! : CflsConfig;
-
-function naiveGetDiagnostics(uri: TextDocumentUri, freshText: string | Buffer) : cfcDiagnostic[] {
-	const project = getOwningProjectFromUri(uri);
-	if (!project) return [];
-
-	const fsPath = URI.parse(uri).fsPath;
-
-	const timing = project.parseBindCheck(fsPath, freshText);
-	connection.console.info(`${uri}\n\tparse ${timing.parse} // bind ${timing.bind} // check ${timing.check}`);
-	return project.getDiagnostics(fsPath) ?? [];
-}
+let languageService! : LanguageService;
+const cflsConfig = CflsConfig();
 
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
@@ -101,10 +65,12 @@ let connection = createConnection(ProposedFeatures.all);
 
 // Create a simple text document manager.
 let documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
+let workspaceRoots : WorkspaceFolder[] = [];
 
 let hasConfigurationCapability: boolean = false;
 let hasWorkspaceFolderCapability: boolean = false;
 let hasDiagnosticRelatedInformationCapability: boolean = false;
+let didForkCfls = false;
 
 connection.onInitialize((params: InitializeParams) => {
 	let capabilities = params.capabilities;
@@ -141,24 +107,22 @@ connection.onInitialize((params: InitializeParams) => {
 		}
 	};
 
-	if (params.initializationOptions?.libpath) {
-		
+	if (typeof params.initializationOptions?.libAbsPath === "string") {
+		cflsConfig.engineLibAbsPath = params.initializationOptions?.libAbsPath;
 	}
-	/*
-	if (hasWorkspaceFolderCapability) {
-		result.capabilities.workspace = {
-			workspaceFolders: {
-				supported: true
-			}
-		};
-	}*/
+	
+	languageService = LanguageService(path.join(__dirname, "/cfls-service.js"), path.join(__dirname, "/vscode-adapter.js"));
+	languageService.on("diagnostics", (fsPath: AbsPath, diagnostics: unknown[]) => {
+		connection.sendDiagnostics({
+			uri: URI.file(fsPath).toString(),
+			diagnostics: diagnostics as Diagnostic[]
+		});
+	})
+
 	return result;
 });
 
-interface ClientRequest {
-	textDocument: {uri: TextDocumentUri},
-	position: Position,
-}
+
 
 /** @deprecated use cfRangeToVsRange_scanner */
 function cfRangeToVsRange(sourceRange: SourceRange) : Range {
@@ -179,223 +143,171 @@ function cfRangeToVsRange_viaScanner(scanner: Scanner, sourceRange: SourceRange)
 
 // show where a symbol is defined at
 connection.onDefinition((params) : Location[] | undefined  => {
-	const document = documents.get(params.textDocument.uri);
-	if (!document) return undefined;
+	return undefined;
+	// const document = documents.get(params.textDocument.uri);
+	// if (!document) return undefined;
 
-	const project = getOwningProjectFromUri(document.uri);
-	if (!project) return undefined;
+	// const fsPath = URI.parse(document.uri).fsPath;
+	// const targetIndex = document.offsetAt(params.position);
 
-	const fsPath = URI.parse(document.uri).fsPath;
-	const targetIndex = document.offsetAt(params.position);
+	// return hoistable(fsPath);
 
-	const doc = documents.get(params.textDocument.uri);
-	if (!doc) return;
+	// function hoistable(absPath: AbsPath) {
+	// 	const project = getOwningProjectFromAbsPath(absPath);
+	// 	if (!project) return undefined;
 
-	const sourceFile = project.__unsafe_dev_getFile(fsPath)?.parsedSourceFile;
-	if (!sourceFile) return undefined;
-	
-	const targetNode = project.getInterestingNodeToLeftOfCursor(fsPath, targetIndex);
-	if (!targetNode) return undefined;
+	// 	const doc = documents.get(params.textDocument.uri);
+	// 	if (!doc) return;
 
-	const checker = project.__unsafe_dev_getChecker();
+	// 	const sourceFile = project.__unsafe_dev_getFile(fsPath)?.parsedSourceFile;
+	// 	if (!sourceFile) return undefined;
+		
+	// 	const targetNode = project.getInterestingNodeToLeftOfCursor(fsPath, targetIndex);
+	// 	if (!targetNode) return undefined;
 
-	if (targetNode.parent?.kind === NodeKind.functionDefinition && !targetNode.parent.fromTag && targetNode.parent.returnType === targetNode) {
-		const symbol = checker.getSymbol(targetNode.parent, sourceFile)
-		if (symbol && isFunctionSignature(symbol.symTabEntry.type) && isCfcTypeWrapper(symbol.symTabEntry.type.returns)) {
-			return [{
-				uri: URI.file(symbol.symTabEntry.type.returns.cfc.absPath).toString(),
-				range: {
-					start: {line: 0, character: 0},
-					end: {line: 0, character: 0},
-				}
-			}];
-		}
-		return undefined;
-	}
+	// 	const checker = project.__unsafe_dev_getChecker();
 
-	if (targetNode.kind === NodeKind.simpleStringLiteral) {
-		if (targetNode.parent?.kind === NodeKind.tagAttribute && targetNode.parent.canonicalName === "extends") {
-			if (targetNode.parent?.parent?.kind === NodeKind.block
-					&& targetNode.parent.parent.subType === BlockType.scriptSugaredTagCallBlock
-					&& targetNode.parent.parent.name?.token.text.toLowerCase() === "component") {
-					if (sourceFile.cfc?.extends) {
-						return [{
-							uri: URI.file(sourceFile.cfc.extends.absPath).toString(),
-							range: {
-								start: {line: 0, character: 0},
-								end: {line: 0, character: 0},
-							}
-						}]
-					}
+	// 	if (targetNode.parent?.kind === NodeKind.functionDefinition && !targetNode.parent.fromTag && targetNode.parent.returnType === targetNode) {
+	// 		const symbol = checker.getSymbol(targetNode.parent, sourceFile)
+	// 		if (symbol && isFunctionSignature(symbol.symTabEntry.type) && isCfcTypeWrapper(symbol.symTabEntry.type.returns)) {
+	// 			return [{
+	// 				uri: URI.file(symbol.symTabEntry.type.returns.cfc.absPath).toString(),
+	// 				range: {
+	// 					start: {line: 0, character: 0},
+	// 					end: {line: 0, character: 0},
+	// 				}
+	// 			}];
+	// 		}
+	// 		return undefined;
+	// 	}
 
-			}
-		}
-		return undefined;
-	}
+	// 	if (targetNode.kind === NodeKind.simpleStringLiteral) {
+	// 		if (targetNode.parent?.kind === NodeKind.tagAttribute && targetNode.parent.canonicalName === "extends") {
+	// 			if (targetNode.parent?.parent?.kind === NodeKind.block
+	// 					&& targetNode.parent.parent.subType === BlockType.scriptSugaredTagCallBlock
+	// 					&& targetNode.parent.parent.name?.token.text.toLowerCase() === "component") {
+	// 					if (sourceFile.cfc?.extends) {
+	// 						return [{
+	// 							uri: URI.file(sourceFile.cfc.extends.absPath).toString(),
+	// 							range: {
+	// 								start: {line: 0, character: 0},
+	// 								end: {line: 0, character: 0},
+	// 							}
+	// 						}]
+	// 					}
 
-	const newExpr = targetNode.kind === NodeKind.dottedPathRest
-		&& targetNode.parent?.kind === NodeKind.dottedPath
-		&& targetNode.parent.parent?.kind === NodeKind.callExpression
-		&& targetNode.parent.parent.parent?.kind === NodeKind.new
-		? targetNode.parent.parent.parent
-		: targetNode.kind === NodeKind.dottedPath
-		&& targetNode.parent?.kind === NodeKind.callExpression
-		&& targetNode.parent.parent?.kind === NodeKind.new
-		? targetNode.parent.parent
-		: undefined;
+	// 			}
+	// 		}
+	// 		return undefined;
+	// 	}
 
-	if (newExpr) {
-		const type = checker.getCachedEvaluatedNodeType(newExpr, sourceFile);
-		if (type && isCfcTypeWrapper(type)) {
-			return [{
-				uri: URI.file(type.cfc.absPath).toString(),
-				range: {
-					start: {line: 0, character: 0},
-					end: {line: 0, character: 0},
-				}
-			}]
-		}
-		return undefined;
-	}
-	
-	const symbol = checker.getSymbol(targetNode, sourceFile);
-	if (!symbol || !symbol.symTabEntry.declarations) return undefined;
+	// 	const newExpr = targetNode.kind === NodeKind.dottedPathRest
+	// 		&& targetNode.parent?.kind === NodeKind.dottedPath
+	// 		&& targetNode.parent.parent?.kind === NodeKind.callExpression
+	// 		&& targetNode.parent.parent.parent?.kind === NodeKind.new
+	// 		? targetNode.parent.parent.parent
+	// 		: targetNode.kind === NodeKind.dottedPath
+	// 		&& targetNode.parent?.kind === NodeKind.callExpression
+	// 		&& targetNode.parent.parent?.kind === NodeKind.new
+	// 		? targetNode.parent.parent
+	// 		: undefined;
 
-	const result : Location[] = [];
-	for (const decl of symbol.symTabEntry.declarations) {
-		const declFile = getSourceFile(decl);
-		if (!declFile) continue;
-		const declFileUri = URI.file(declFile.absPath);
+	// 	if (newExpr) {
+	// 		const type = checker.getCachedEvaluatedNodeType(newExpr, sourceFile);
+	// 		if (type && isCfcTypeWrapper(type)) {
+	// 			return [{
+	// 				uri: URI.file(type.cfc.absPath).toString(),
+	// 				range: {
+	// 					start: {line: 0, character: 0},
+	// 					end: {line: 0, character: 0},
+	// 				}
+	// 			}]
+	// 		}
+	// 		return undefined;
+	// 	}
+		
+	// 	const symbol = checker.getSymbol(targetNode, sourceFile);
+	// 	if (!symbol || !symbol.symTabEntry.declarations) return undefined;
 
-		switch (decl.kind) {
-			case NodeKind.property: {
-				const location = getPropertyDefinitionLocation(decl, declFileUri.toString());
-				if (!location) continue;
-				result.push(location);
-				break;
-			}
-			case NodeKind.functionDefinition: {
-				const location = getFunctionDefinitionLocation(decl, declFileUri.toString());
-				if (!location) continue;
-				result.push(location);
-				break;
-			}
-			case NodeKind.binaryOperator: {
-				if (decl.optype !== BinaryOpType.assign) continue;
-				const declSourceFile = getSourceFile(decl);
-				if (!declSourceFile) continue;
-				result.push({
-					uri: declFileUri.toString(),
-					range: cfRangeToVsRange_viaScanner(declSourceFile.scanner, decl.left.range)
-				});
-			}
-		}
-	}
+	// 	const result : Location[] = [];
+	// 	for (const decl of symbol.symTabEntry.declarations) {
+	// 		const declFile = getSourceFile(decl);
+	// 		if (!declFile) continue;
+	// 		const declFileUri = URI.file(declFile.absPath);
 
-	return result;
+	// 		switch (decl.kind) {
+	// 			case NodeKind.property: {
+	// 				const location = getPropertyDefinitionLocation(decl, declFileUri.toString());
+	// 				if (!location) continue;
+	// 				result.push(location);
+	// 				break;
+	// 			}
+	// 			case NodeKind.functionDefinition: {
+	// 				const location = getFunctionDefinitionLocation(decl, declFileUri.toString());
+	// 				if (!location) continue;
+	// 				result.push(location);
+	// 				break;
+	// 			}
+	// 			case NodeKind.binaryOperator: {
+	// 				if (decl.optype !== BinaryOpType.assign) continue;
+	// 				const declSourceFile = getSourceFile(decl);
+	// 				if (!declSourceFile) continue;
+	// 				result.push({
+	// 					uri: declFileUri.toString(),
+	// 					range: cfRangeToVsRange_viaScanner(declSourceFile.scanner, decl.left.range)
+	// 				});
+	// 			}
+	// 		}
+	// 	}
 
-	
+	// 	return result;
 
-	function getFunctionDefinitionLocation(node: FunctionDefinition, uri: string) : Location | undefined {
-		if (node.fromTag) {
-			if (!node.tagOrigin?.startTag?.range) return undefined;
-			return {
-				uri: uri,
-				range: cfRangeToVsRange(node.tagOrigin.startTag.range)
-			}
-		}
-		else {
-			if (!node.nameToken) return undefined;
-			return {
-				uri: uri,
-				range: cfRangeToVsRange(node.nameToken.range)
-			}
-		}
-	}
+		
 
-	function getPropertyDefinitionLocation(node: Property, uri: string) : Location | undefined {
-		if (node.fromTag) {
-			return {
-				uri: uri,
-				range: cfRangeToVsRange(node.range)
-			}
-		}
-		else {
-			const nameAttr = getAttribute(node.attrs, "name");
-			if (!nameAttr) return undefined;
-			return {
-				uri: uri,
-				range: cfRangeToVsRange(nameAttr.name.range)
-			}
-		}
-	}
+	// 	function getFunctionDefinitionLocation(node: FunctionDefinition, uri: string) : Location | undefined {
+	// 		if (node.fromTag) {
+	// 			if (!node.tagOrigin?.startTag?.range) return undefined;
+	// 			return {
+	// 				uri: uri,
+	// 				range: cfRangeToVsRange(node.tagOrigin.startTag.range)
+	// 			}
+	// 		}
+	// 		else {
+	// 			if (!node.nameToken) return undefined;
+	// 			return {
+	// 				uri: uri,
+	// 				range: cfRangeToVsRange(node.nameToken.range)
+	// 			}
+	// 		}
+	// 	}
+
+	// 	function getPropertyDefinitionLocation(node: Property, uri: string) : Location | undefined {
+	// 		if (node.fromTag) {
+	// 			return {
+	// 				uri: uri,
+	// 				range: cfRangeToVsRange(node.range)
+	// 			}
+	// 		}
+	// 		else {
+	// 			const nameAttr = getAttribute(node.attrs, "name");
+	// 			if (!nameAttr) return undefined;
+	// 			return {
+	// 				uri: uri,
+	// 				range: cfRangeToVsRange(nameAttr.name.range)
+	// 			}
+	// 		}
+	// 	}
+	// }
 });
 
-function resetCfls(why: string) {
-	connection.console.info("[reset] -- " + why);
-	connection.console.info("[reset] libPath is: " + cflsConfig.engineLibAbsPath ?? "null");
-
-	const fileSystem = FileSystem();
-	let wireboxConfigFileAbsPath : string | null = null;
-
-	if (cflsConfig.wireboxConfigFile && workspaceRoots[0]) {
-		wireboxConfigFileAbsPath = path.join(URI.parse(workspaceRoots[0].uri).fsPath, cflsConfig.wireboxConfigFile);
-		if (!fileSystem.caseSensitive) wireboxConfigFileAbsPath = wireboxConfigFileAbsPath.toLowerCase();
-	}
-
-	workspaceProjects.clear();
-
-	for (const workspace of workspaceRoots) {
-		const rootAbsPath = URI.parse(workspace.uri).fsPath;
-		const project = Project(
-			URI.parse(workspace.uri).fsPath,
-			fileSystem,
-			{
-				parseTypes: cflsConfig.x_parseTypes,
-				debug: true,
-				engineVersion: cflsConfig.engineVersion,
-				withWireboxResolution: cflsConfig.wireboxResolution,
-				wireboxConfigFileCanonicalAbsPath: wireboxConfigFileAbsPath,
-				checkReturnTypes: cflsConfig.x_checkReturnTypes,
-				genericFunctionInference: cflsConfig.x_genericFunctionInference,
-			}
-		);
-
-		if (cflsConfig.engineLibAbsPath) project.addEngineLib(cflsConfig.engineLibAbsPath);
-
-		// if we're doing wirebox resolution, add the wirebox config file immediately so we get the mappings
-		if (cflsConfig.wireboxResolution && wireboxConfigFileAbsPath) {
-			project.addFile(wireboxConfigFileAbsPath);
-		}
-
-		workspaceProjects.set(rootAbsPath, project);
-	}
+function engineVersionConfigToEngineVersion(key: any) {
+	if (typeof key === "string" && EngineVersions.hasOwnProperty(key)) return EngineVersions[key as keyof typeof EngineVersions];
+	else return EngineVersions["lucee.5"];
 }
 
-function reemitDiagnostics() {
-	for (const project of workspaceProjects.values()) {
-		const absPaths = project.getFileListing();
-		connection.console.info("reemit diagnositcs for " + absPaths.length + " file URIs");
-		for (const absPath of absPaths) {
-			const uri = URI.parse(absPath).toString();
-			const textDocument = documents.get(uri);
-			const text = textDocument?.getText();
-			const fileType = cfmOrCfc(uri);
-
-			if (text && fileType) {
-				connection.sendDiagnostics({
-					uri: uri,
-					diagnostics: cfcDiagnosticsToLspDiagnostics(textDocument!, naiveGetDiagnostics(uri, text))
-				});
-			}
-		}
-	}
-	connection.console.info("...done with diagnostic reemit");
-}
-
-function updateConfig(config: Record<string, any> | null) {
-	cflsConfig = {
-		// engineLibAbsPath doesn't come from config, so we just carry it forward if it exists
+function extractConfig(config: Record<string, any> | null) : CflsConfig {
+	// engineLibAbsPath doesn't come from config, so we just carry it forward if it exists
+	return {
 		engineLibAbsPath: cflsConfig?.engineLibAbsPath ?? null,
 		// the rest of these are supplied via config
 		x_parseTypes: !!config?.x_parseTypes,
@@ -404,275 +316,105 @@ function updateConfig(config: Record<string, any> | null) {
 		engineVersion: engineVersionConfigToEngineVersion(config?.engineVersion),
 		wireboxConfigFile: config?.wireboxConfigFile ?? null,
 		wireboxResolution: config?.wireboxResolution ?? false,
-	};
+	}
 }
 
-connection.onInitialized(() => {
+connection.onInitialized(async () => {
 	if (hasConfigurationCapability) {
 		// Register for all configuration changes.
 		connection.client.register(DidChangeConfigurationNotification.type, undefined);
-
-		// immediately configure ourselves
-		updateConfig(null);
-		resetCfls("onInitialized"); // how to get init'd value instead of waiting on it below ?
-
-		// ok, now we can wait to ask the client for the workspace configuration; this might take a while to complete
-		// and completions requests and etc. can be arriving and getting serviced during the wait
-		connection.workspace.getConfiguration("cflsp").then((config) => {
-			updateConfig(config);
-			resetCfls("onInitialized and after config");
-		});
+		
+		const config = await connection.workspace.getConfiguration("cflsp");
+		const freshConfig = extractConfig(config);
+		languageService.fork(freshConfig, workspaceRoots.map((root) => URI.parse(root.uri).fsPath));
+		connection.sendNotification("cflsp/ready");
 	}
 	else {
-		//resetCfls(/*x_types*/false);
+		const freshConfig = CflsConfig();
+		languageService.fork(freshConfig, workspaceRoots.map((root) => URI.parse(root.uri).fsPath));
+		connection.sendNotification("cflsp/ready");
 	}
 
-	connection.sendNotification("cflsp/libpath");
-	connection.sendNotification("cflsp/ready");
-
-	/*
-	if (hasWorkspaceFolderCapability) {
-		connection.workspace.onDidChangeWorkspaceFolders(_event => {
-			connection.console.log('Workspace folder change event received.');
-		});
-	}*/
-
+	didForkCfls = true;
 	connection.console.info("cflsp server initialized");
 });
 
-// The example settings
-interface ExampleSettings {
-	maxNumberOfProblems: number;
-}
-
-// The global settings, used when the `workspace/configuration` request is not supported by the client.
-// Please note that this is not the case when using this server with the client provided in this example
-// but could happen with other clients.
-const defaultSettings: ExampleSettings = { maxNumberOfProblems: 1000 };
-let globalSettings: ExampleSettings = defaultSettings;
-
-// Cache the settings of all open documents
-let documentSettings: Map<string, Thenable<ExampleSettings>> = new Map();
-
-function engineVersionConfigToEngineVersion(key: any) {
-	if (typeof key === "string" && EngineVersions.hasOwnProperty(key)) return EngineVersions[key as keyof typeof EngineVersions];
-	else return EngineVersions["lucee.5"];
-}
-
-function configDidChange(freshConfig: any) : boolean {
-	for (const key of Object.keys(cflsConfig) as (keyof CflsConfig)[]) {
-		if (freshConfig.hasOwnProperty(key) && freshConfig[key] !== cflsConfig[key]) return true;
-	}
-	return false;
-}
 
 connection.onDidChangeConfiguration(async change => {
 	if (hasConfigurationCapability) {
 		// Reset all cached document settings
-		documentSettings.clear();
-		connection.workspace.getConfiguration("cflsp").then((config) => {
-			if (configDidChange(config)) {
-				updateConfig(config);
-				resetCfls("onDidChangeConfiguration with configCapability");
-				documents.all().forEach(validateTextDocument);
-			}
-		});
+		const config = await connection.workspace.getConfiguration("cflsp");
+		languageService.reset(config);
 	}
 	else {
-		updateConfig(null);
-		resetCfls("onDidChangeConfiguration no configCapability");
-
-		// Revalidate all open text documents
-		documents.all().forEach(validateTextDocument);
+		// ? is this reachable if we don't have configurationCapability
 	}
 });
-
-connection.onDocumentSymbol((params: DocumentSymbolParams) => {
-	return [];
-	/*
-	params.textDocument.uri;
-	const textDocument = documents.get(params.textDocument.uri);
-
-	if (!textDocument) return [];
-
-	const v : SymbolInformation[] = [{
-			name: "someSymbol",
-			kind: SymbolKind.Variable,
-			location: {
-				uri: params.textDocument.uri,
-				range: {
-					start: textDocument?.positionAt(0),
-					end: textDocument?.positionAt(4)
-				}
-			}
-		}];
-
-	return v;*/
-});
-
-function getDocumentSettings(resource: string): Thenable<ExampleSettings> {
-	if (!hasConfigurationCapability) {
-		return Promise.resolve(globalSettings);
-	}
-	let result = documentSettings.get(resource);
-	if (!result) {
-		result = connection.workspace.getConfiguration({
-			scopeUri: resource,
-			section: 'languageServerExample'
-		});
-		documentSettings.set(resource, result);
-	}
-	return result;
-}
 
 // Only keep settings for open documents
 documents.onDidClose(e => {
-	documentSettings.delete(e.document.uri);
+	//languageService.closeFile(e.document.uri);
 	connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] });
 });
 
 // The content of a text document has changed. This event is emitted
 // when the text document first opened or when its content has changed.
 documents.onDidChangeContent(change => {
-	validateTextDocument(change.document);
-});
-
-const cfmPattern = /cfml?$/i;
-const cfcPattern = /cfc$/i;
-
-function cfcDiagnosticsToLspDiagnostics(textDocument: TextDocument, cfDiagnostics: cfcDiagnostic[]) {
-	let diagnostics: Diagnostic[] = [];
-
-	for (const diagnostic of cfDiagnostics) {
-		diagnostics.push({
-			severity: diagnostic.kind === DiagnosticKind.error ? DiagnosticSeverity.Error : DiagnosticSeverity.Warning,
-			range: {
-				start: textDocument.positionAt(diagnostic.fromInclusive),
-				end: textDocument.positionAt(diagnostic.toExclusive)
-			},
-			message: diagnostic.msg,
-			source: "cfls"
-		});
-	}
-
-	return diagnostics;
-}
-
-async function validateTextDocument(textDocument: TextDocument): Promise<void> {
-	// In this simple example we get the settings for every validate run.
-	//let settings = await getDocumentSettings(textDocument.uri);
-	
-	let cfDiagnostics : cfcDiagnostic[] = [];
-
-	if (cfmOrCfc(textDocument.uri) !== undefined) {
-		cfDiagnostics = naiveGetDiagnostics(textDocument.uri, textDocument.getText());
-	}
-
-	const diagnostics = cfcDiagnosticsToLspDiagnostics(textDocument, cfDiagnostics);
-
-	// Send the computed diagnostics to VSCode.
-	connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
-}
-
-connection.onDidChangeWatchedFiles(_change => {
-	// Monitored files have change in VSCode
-	connection.console.log('We received an file change event');
-});
-
-function assertExhaustiveCase(_: never) : never {
-	throw "non-exhaustive case or unintentional fallthrough";
-}
-
-function mapCflsCompletionItemKindToVsCodeCompletionItemKind(kind: cfls.CompletionItemKind) : CompletionItemKind {
-	switch (kind) {
-		case cfls.CompletionItemKind.function: return CompletionItemKind.Function;
-		case cfls.CompletionItemKind.structMember: return CompletionItemKind.Field;
-		case cfls.CompletionItemKind.tagName: return CompletionItemKind.Property;
-		case cfls.CompletionItemKind.variable: return CompletionItemKind.Variable;
-		case cfls.CompletionItemKind.stringLiteral: return CompletionItemKind.Constant; // not value
-		default: assertExhaustiveCase(kind);
-	}
-}
-
-function mapCflsCompletionToVsCodeCompletion(completion: cfls.CompletionItem) : CompletionItem {
-	const result : Partial<CompletionItem> = {};
-	result.label = completion.label;
-	result.kind = mapCflsCompletionItemKindToVsCodeCompletionItemKind(completion.kind);
-	if (completion.detail) result.detail = completion.detail;
-	if (completion.insertText) result.insertText = completion.insertText;
-	if (completion.sortText) result.sortText = completion.sortText;
-	if (completion.textEdit) {
-		result.textEdit = {
-			insert: cfRangeToVsRange(completion.textEdit.range),
-			newText: completion.textEdit.newText,
-			replace: cfRangeToVsRange(completion.textEdit.replace),
+	if (didForkCfls) {
+		const textDocument = change.document;
+		if (cfmOrCfc(textDocument.uri) !== undefined) {
+			const fsPath = URI.parse(textDocument.uri).fsPath;
+			languageService.emitDiagnostics(fsPath, textDocument.getText());
 		}
 	}
-	return result as CompletionItem;
-}
+});
+
+// function mapCflsCompletionItemKindToVsCodeCompletionItemKind(kind: cfls.CompletionItemKind) : CompletionItemKind {
+// 	switch (kind) {
+// 		case cfls.CompletionItemKind.function: return CompletionItemKind.Function;
+// 		case cfls.CompletionItemKind.structMember: return CompletionItemKind.Field;
+// 		case cfls.CompletionItemKind.tagName: return CompletionItemKind.Property;
+// 		case cfls.CompletionItemKind.variable: return CompletionItemKind.Variable;
+// 		case cfls.CompletionItemKind.stringLiteral: return CompletionItemKind.Constant; // not value
+// 		default: exhaustiveCaseGuard(kind);
+// 	}
+// }
+
+// function mapCflsCompletionToVsCodeCompletion(completion: cfls.CompletionItem) : CompletionItem {
+// 	const result : Partial<CompletionItem> = {};
+// 	result.label = completion.label;
+// 	result.kind = mapCflsCompletionItemKindToVsCodeCompletionItemKind(completion.kind);
+// 	if (completion.detail) result.detail = completion.detail;
+// 	if (completion.insertText) result.insertText = completion.insertText;
+// 	if (completion.sortText) result.sortText = completion.sortText;
+// 	if (completion.textEdit) {
+// 		result.textEdit = {
+// 			insert: cfRangeToVsRange(completion.textEdit.range),
+// 			newText: completion.textEdit.newText,
+// 			replace: cfRangeToVsRange(completion.textEdit.replace),
+// 		}
+// 	}
+// 	return result as CompletionItem;
+// }
 
 // This handler provides the initial list of the completion items.
-connection.onCompletion((completionParams: CompletionParams): CompletionItem[] => {
-	const document = documents.get(completionParams.textDocument.uri);
-	if (!document) return [];
+connection.onCompletion(async (completionParams: CompletionParams): Promise<CompletionItem[]> => {
+	return [];
+	// const document = documents.get(completionParams.textDocument.uri);
+	// if (!document) return [];
 	
-	const project = getOwningProjectFromUri(document.uri);
-	if (!project) return [];
+	// const project = getOwningProjectFromUri(document.uri);
+	// if (!project) return [];
 
-	const fsPath = URI.parse(document.uri).fsPath;
-	const targetIndex = document.offsetAt(completionParams.position);
-	const completions = cfls.getCompletions(
-		project,
-		fsPath,
-		targetIndex,
-		completionParams.context?.triggerCharacter ?? null);
-	return completions.map(mapCflsCompletionToVsCodeCompletion);
+	// const fsPath = URI.parse(document.uri).fsPath;
+	// const targetIndex = document.offsetAt(completionParams.position);
+	// const completions = cfls.getCompletions(
+	// 	project,
+	// 	fsPath,
+	// 	targetIndex,
+	// 	completionParams.context?.triggerCharacter ?? null);
+	// return completions.map(mapCflsCompletionToVsCodeCompletion);
 });
-
-/*
-connection.onHover((hoverParams: HoverParams) : Hover | null => {
-	const document = documents.get(hoverParams.textDocument.uri);
-	if (!document) return null;
-	const fsPath = URI.parse(document.uri).fsPath;
-	const targetIndex = document.offsetAt(hoverParams.position);
-
-	const targetNode = project.getInterestingNodeToLeftOfCursor(fsPath, targetIndex);
-	if (!targetNode) return null;
-	if (targetNode.kind === NodeKind.textSpan || targetNode.kind === NodeKind.comment) return null;
-	
-	const checker = project.__unsafe_dev_getChecker();
-	const symbol = checker.getSymbol(targetNode, project.getParsedSourceFile(fsPath)!);
-	if (symbol) {
-		if (symbol.declarations) {
-			const decl = Array.isArray(symbol.declarations)
-				? symbol.declarations.length === 0
-				? symbol.declarations[0]
-				: null
-				: symbol.declarations;
-			if (!decl || decl.kind !== NodeKind.functionDefinition) return null;
-			const attrVal = getAttributeValue(decl.attrs, "hint");
-			let text;
-			if (attrVal && attrVal.kind === NodeKind.textSpan) {
-				text = attrVal.text;
-			}
-			if (attrVal && attrVal.kind === NodeKind.simpleStringLiteral) {
-				text = getTriviallyComputableString(attrVal)!;
-			}
-			
-			if (!text) return null;
-
-			return {
-				contents: {
-					kind: "plaintext"
-					value: text
-				}
-			}
-		}
-	}
-
-	return null;
-})
-*/
 
 /*connection.onSignatureHelp((params) : SignatureHelp => {
 	params;
@@ -687,49 +429,24 @@ connection.onHover((hoverParams: HoverParams) : Hover | null => {
 	}
 })*/
 
-connection.onNotification("cflsp/libpath", (libAbsPath: string) => {
-	connection.console.info("received cflsp/libpath notification, path=" + libAbsPath);
-	if (!workspaceProjects) {
-		connection.console.warn("Aborting engine library load: `project` was not yet initialized.");
-		return;
-	}
-
-	cflsConfig.engineLibAbsPath = libAbsPath;
-
-	for (const project of workspaceProjects.values()) {
-		project.addEngineLib(libAbsPath);
-	}
-	
-	reemitDiagnostics();
-
-	/*connection.console.info("received cflsp/libpath notification, path=" + libAbsPath);
-	if (!libAbsPath) return;
-	const path = libAbsPath;
-	const sourceFile = SourceFile(path, CfFileType.dCfm, fs.readFileSync(path));
-	cflsConfig.parser.setSourceFile(sourceFile).parse();
-	cflsConfig.binder.bind(sourceFile);
-	cflsConfig.lib = sourceFile;
-	reemitDiagnostics();*/
-});
-
-connection.onNotification("cflsp/cache-cfcs", (cfcAbsPaths: string[]) => {
-	const start = new Date().getTime();
-	let addFileTime = 0;
-	let i = 0;
-	for (const absPath of cfcAbsPaths) {
-		connection.console.log(`Staring ${absPath}...`);
-		const project = getOwningProjectFromAbsPath(path.parse(absPath).dir);
-		if (!project) continue;
-		const start = new Date().getTime();
-		project.addFile(absPath);
-		const elapsed = new Date().getTime() - start;
-		connection.console.log(`${absPath} (cachetime): ${elapsed}`);
-		addFileTime += elapsed;
-		connection.sendNotification("cflsp/cached-cfc"); // just saying "hey we're done with one more"
-	}
-	const elapsed = (new Date().getTime()) - start;
-	connection.console.info("Cached " + cfcAbsPaths.length + " CFCs in " + elapsed + "ms, time spend in addfile: " + addFileTime + "ms");
-});
+// connection.onNotification("cflsp/cache-cfcs", (cfcAbsPaths: string[]) => {
+// 	const start = new Date().getTime();
+// 	let addFileTime = 0;
+// 	let i = 0;
+// 	for (const absPath of cfcAbsPaths) {
+// 		connection.console.log(`Staring ${absPath}...`);
+// 		const project = getOwningProjectFromAbsPath(path.parse(absPath).dir);
+// 		if (!project) continue;
+// 		const start = new Date().getTime();
+// 		project.addFile(absPath);
+// 		const elapsed = new Date().getTime() - start;
+// 		connection.console.log(`${absPath} (cachetime): ${elapsed}`);
+// 		addFileTime += elapsed;
+// 		connection.sendNotification("cflsp/cached-cfc"); // just saying "hey we're done with one more"
+// 	}
+// 	const elapsed = (new Date().getTime()) - start;
+// 	connection.console.info("Cached " + cfcAbsPaths.length + " CFCs in " + elapsed + "ms, time spend in addfile: " + addFileTime + "ms");
+// });
 
 // This handler resolves additional information for the item selected in
 // the completion list.
