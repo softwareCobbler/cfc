@@ -1,5 +1,5 @@
 # cfc
-A compiler for Coldfusion, designed primarily for editor tooling support
+A compiler for Coldfusion, designed primarily for editor tooling support.
 
 The VsCode plugin based on this tool is "cflsp", downloadable from within VsCode or on the [extensions marketplace](https://marketplace.visualstudio.com/items?itemName=DavidRogers.cflsp)
 

@@ -1,7 +1,7 @@
 import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, UnreachableFlow, FlowType, ConditionalSubtype, SymbolTable, TypeShim, Property, ParamStatement, ParamStatementSubType, typedefs, DiagnosticKind, StaticallyKnownScopeName, SwitchCaseType } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol, findAncestor } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
-import { SyntheticType, _Type, extractCfFunctionSignature, isFunctionSignature, Interface, isInterface } from "./types";
+import { SyntheticType, _Type, extractCfFunctionSignature, isFunctionSignature, Interface, isInterface, cfTypeId } from "./types";
 import { Engine, supports } from "./engines";
 import { ProjectOptions } from "./project";
 
@@ -695,6 +695,7 @@ export function Binder(options: ProjectOptions) {
         }
 
         let attrName : string | undefined = undefined;
+        let engineInterfaceTypeIdName: string | undefined = undefined; // fixme: parser will need to prevent users from spelling these names, which means we need a list of them to check against
 
         switch (tag.canonicalName) {
             case "directory":
@@ -708,6 +709,7 @@ export function Binder(options: ProjectOptions) {
                 break;
             }
             case "http": {
+                engineInterfaceTypeIdName = "__cfHTTP";
                 attrName = "result";
                 break;
             }
@@ -785,7 +787,14 @@ export function Binder(options: ProjectOptions) {
         }
 
         resolvePendingSymbolResolutions(targetName);
-        addFreshSymbolToTable(targetScope, targetName, tag, tag.typeAnnotation);
+        addFreshSymbolToTable(
+            targetScope,
+            targetName,
+            tag,
+            tag.typeAnnotation,
+            engineInterfaceTypeIdName
+                ? cfTypeId(engineInterfaceTypeIdName)
+                : null);
     }
 
     function bindSimpleStringLiteral(node: SimpleStringLiteral) {

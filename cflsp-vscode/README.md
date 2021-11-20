@@ -2,7 +2,13 @@
 
 A language plugin to see how far we can push ColdFusion language tooling.
 
-If we are marking a tag, expression or statement as an error and you know it shouldn't (or it isn't and it should), please let me know [on github](https://github.com/softwareCobbler/cfc).
+If we are marking a tag, expression or statement as an error and you know it shouldn't (or it isn't and it should), let me know [on github](https://github.com/softwareCobbler/cfc), or twitter `@__dwr__`
+
+1.0.33
+- optional warning for "inconsistent use of required/default", to flag function declarations like `function foo(required bar = 42)`
+- move lang server into seperate process so we have more control over stopping it during a long parse
+  - Prior to this, on larger files (say 4000 lines), and with every document-changing-keystroke queueing a fresh parse, we could end up with a long queue of lang server requests to chew through, and we could watch
+  the diagnostic squigglies slowly evolve as they made their way through each full parse to where there cursor is now. Instead we can now just cancel the request and start over.
 
 1.0.32
 - member function autocompletions for `array` argument types, using an `Array<T>` interface defined in the always visible standard library;

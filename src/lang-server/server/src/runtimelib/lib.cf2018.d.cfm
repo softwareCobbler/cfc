@@ -807,3 +807,13 @@
     ArrayReduce	someVar.reduce()
 --->
 }
+
+@!interface __cfHTTP {
+    errorDetail: string,
+    fileContent: string,
+    header: string,
+    mimeType: string,
+    responseHeader: {},
+    statusCode: string,
+    text: string
+}
