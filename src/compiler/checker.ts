@@ -722,7 +722,8 @@ export function Checker(options: ProjectOptions) {
                 // any is a subtype of every type; every type is a subtype of any
                 if (l.flags & TypeFlags.any || r.flags & TypeFlags.any) return true;
 
-                // `void function foo() {}` is valid, in effect foo() returns null
+                // `void function foo() { return; }` is valid, in effect `return <unit>` returns null
+                // so for a return type, null is assignable to void
                 if (forReturnType && l.flags & TypeFlags.null && r.flags & TypeFlags.void) return true;
 
                 // except for the above return type case, void is not a subtype of anything except itself and any
@@ -800,6 +801,10 @@ export function Checker(options: ProjectOptions) {
                     */
                     if (l.structKind === StructKind.cfcTypeWrapper && r.structKind === StructKind.cfcTypeWrapper) {
                         return !!findAncestor(l.cfc, (node) => node === r.cfc, /*followCfcInheritance*/ true);
+                    }
+
+                    if (l.structKind === StructKind.struct && r === SyntheticType.EmptyInterface) {
+                        return true;
                     }
 
                     //if (sourceIsLiteralExpr && l.members.size !== r.members.size) return false; // barring optional properties...
@@ -1483,7 +1488,7 @@ export function Checker(options: ProjectOptions) {
 
         const exprType = node.expr ? getCachedEvaluatedNodeType(node.expr) : SyntheticType.null;
 
-        if (!isAssignable(exprType, sig.returns)) {
+        if (!isAssignable(exprType, sig.returns, /*sourceIsLiteralExpr*/ node.expr ? isLiteralExpr(node.expr) : false, /*forReturnType*/ true)) {
             // if we got an exprType, we got an expr or a just return token; if this is from tag, we definitely got a tag
             const errNode = node.fromTag ? node.tagOrigin.startTag : (node.expr || node.returnToken);
             if (errNode) {

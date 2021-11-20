@@ -15,7 +15,11 @@ const options : ProjectOptions = {
     wireboxConfigFileCanonicalAbsPath: null,
     engineVersion: EngineVersions["acf.2018"],
     genericFunctionInference: false,
-    checkReturnTypes: false
+    checkReturnTypes: false,
+    cancellationToken: {
+        cancellationRequested: () => false,
+        throwIfCancellationRequested: () => void 0,
+    }
 }
 
 const parser = Parser(options);

@@ -1362,3 +1362,6 @@ export function isPublicMethod(sig: cfFunctionSignature) : boolean {
     // really what we need is a way to check if a function is "cfc-bound"
     return !(sig.flags & TypeFlags.private || sig.flags & TypeFlags.protected);
 }
+
+export type AbsPath = string;
+export type SafeOmit<T extends {}, S extends keyof T> = Omit<T, S>;

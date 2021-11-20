@@ -23,11 +23,13 @@
         {
 			"type": "node",
 			"request": "attach",
-			"name": "Attach to cfls (server process)",
+			"name": "Attach to vs-code server process",
 			"port": 6011,
-			"restart": true,
+			"restart": false,
+			"autoAttachChildProcesses": true,
 			"outFiles": ["${workspaceRoot}/cflsp-vscode/out/**/*.js"],
 			"trace": true,
+			
 		},
 		{
 			"name": "Debug current test",
@@ -44,8 +46,11 @@
     ],
     "compounds": [
 		{
-			"name": "Client + Server",
-			"configurations": ["Launch cflsp (client plugin)", "Attach to cfls (server process)"]
+			"name": "Client + vsServer + cflsServer",
+			"configurations": [
+				"Launch cflsp (client plugin)",
+				"Attach to vs-code server process"
+			]
 		}
 	]
 }

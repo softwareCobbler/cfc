@@ -3494,6 +3494,8 @@ export function Parser(config: ProjectOptions) {
     function parseStatement() : Node {
         outer:
         while (lookahead() !== TokenType.EOF) {
+            config.cancellationToken.throwIfCancellationRequested();
+
             switch (lookahead()) {
                 case TokenType.WHITESPACE: {
                     // @fixme: attach this to a node somehow to get a beter round-trip

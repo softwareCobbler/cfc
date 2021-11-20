@@ -1,5 +1,6 @@
 {
   "files": [
+    "cancellationToken.ts",
     "engines.ts",
     "scanner.ts",
     "node.ts",

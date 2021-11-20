@@ -11,6 +11,8 @@ import { CfcTypeWrapper, cfFunctionOverloadSet, cfFunctionSignatureParam, Interf
 
 import { cfmOrCfc, findNodeInFlatSourceMap, flattenTree, getAttributeValue, getComponentAttrs, getComponentBlock, getTriviallyComputableString, NodeSourceMap, visit } from "./utils";
 
+import { CancellationException, CancellationTokenConsumer } from "./cancellationToken";
+
 interface CachedFile {
     parsedSourceFile: SourceFile,
     flatTree: NodeSourceMap[],
@@ -186,6 +188,7 @@ export interface ProjectOptions {
     wireboxConfigFileCanonicalAbsPath: string | null,
     genericFunctionInference: boolean,
     checkReturnTypes: boolean,
+    cancellationToken: CancellationTokenConsumer,
 }
 
 export function Project(__const__projectRoot: string, fileSystem: FileSystem, options: ProjectOptions) {
@@ -196,6 +199,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         const t = path.parse(projectRoot).base.split(fileSystem.pathSep);
         return t.length > 0 ? t[t.length - 1] : "";
     })();
+
     const parser = Parser(options);
     const binder = Binder(options);
     const checker = Checker(options);
@@ -220,59 +224,68 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     }
 
     function parseBindCheckWorker(sourceFile: SourceFile) : DevTimingInfo {
-        parser.setSourceFile(sourceFile);
-        const parseStart = new Date().getTime();
-        parser.parse();
-        const parseElapsed = new Date().getTime() - parseStart;
+        try {
+            parser.setSourceFile(sourceFile);
+            const parseStart = new Date().getTime();
+            parser.parse();
+            const parseElapsed = new Date().getTime() - parseStart;
 
-        if (engineLib && engineLib.parsedSourceFile !== sourceFile) {
-            sourceFile.libRefs.set("<<engine>>", engineLib.parsedSourceFile);
-        }
+            if (engineLib && engineLib.parsedSourceFile !== sourceFile) {
+                sourceFile.libRefs.set("<<engine>>", engineLib.parsedSourceFile);
+            }
 
-        const bindStart = new Date().getTime();
-        binder.bind(sourceFile);
-        const bindElapsed = new Date().getTime() - bindStart;
+            const bindStart = new Date().getTime();
+            binder.bind(sourceFile);
+            const bindElapsed = new Date().getTime() - bindStart;
 
-        // (nodeMap is mapping from nodeId to node, helpful for flat list of terminal nodes back to their tree position)
-        // note that if we ascend into a parent cfc, we'll run another bind, which would destroy
-        // the node map as it is now unless we get a ref to it now
-        // fix this api
-        const nodeMap = binder.getNodeMap();
-        
-        maybeFollowParentComponents(sourceFile);
+            // (nodeMap is mapping from nodeId to node, helpful for flat list of terminal nodes back to their tree position)
+            // note that if we ascend into a parent cfc, we'll run another bind, which would destroy
+            // the node map as it is now unless we get a ref to it now
+            // fix this api
+            const nodeMap = binder.getNodeMap();
+            
+            maybeFollowParentComponents(sourceFile);
 
-        // do before checking so resolving a self-referential cfc in the checker works
-        // e.g. in foo.cfc `public foo function bar() { return this; }`
-        files.set(canonicalizePath(sourceFile.absPath), {
-            parsedSourceFile: sourceFile,
-            flatTree: flattenTree(sourceFile),
-            nodeMap
-        });
+            // do before checking so resolving a self-referential cfc in the checker works
+            // e.g. in foo.cfc `public foo function bar() { return this; }`
+            files.set(canonicalizePath(sourceFile.absPath), {
+                parsedSourceFile: sourceFile,
+                flatTree: flattenTree(sourceFile),
+                nodeMap
+            });
 
-        const checkStart = new Date().getTime();
+            const checkStart = new Date().getTime();
 
-        if (options.withWireboxResolution && sourceFile.absPath === options.wireboxConfigFileCanonicalAbsPath) {
-            const wireboxInterface = constructWireboxInterface(sourceFile);
-            if (wireboxInterface) {
-                if (!wireboxLib) wireboxLib = SourceFile("<<magic/wirebox>>", CfFileType.dCfm, "");
-                wireboxLib.containedScope.typedefs.mergedInterfaces.set("Wirebox", wireboxInterface);
+            if (options.withWireboxResolution && sourceFile.absPath === options.wireboxConfigFileCanonicalAbsPath) {
+                const wireboxInterface = constructWireboxInterface(sourceFile);
+                if (wireboxInterface) {
+                    if (!wireboxLib) wireboxLib = SourceFile("<<magic/wirebox>>", CfFileType.dCfm, "");
+                    wireboxLib.containedScope.typedefs.mergedInterfaces.set("Wirebox", wireboxInterface);
+                }
+                else {
+                    wireboxLib = null;
+                }
+            }
+
+            if (options.withWireboxResolution && wireboxLib) {
+                sourceFile.libRefs.set("<<magic/wirebox>>", wireboxLib);
             }
             else {
-                wireboxLib = null;
+                sourceFile.libRefs.delete("<<magic/wirebox>>");
             }
-        }
 
-        if (options.withWireboxResolution && wireboxLib) {
-            sourceFile.libRefs.set("<<magic/wirebox>>", wireboxLib);
-        }
-        else {
-            sourceFile.libRefs.delete("<<magic/wirebox>>");
-        }
+            checker.check(sourceFile);
+            const checkElapsed = new Date().getTime() - checkStart;
 
-        checker.check(sourceFile);
-        const checkElapsed = new Date().getTime() - checkStart;
-
-        return { parse: parseElapsed, bind: bindElapsed, check: checkElapsed };
+            return { parse: parseElapsed, bind: bindElapsed, check: checkElapsed };
+        }
+        catch (error) {
+            // swallow CancellationExceptions, everything else gets rethrown
+            if (error instanceof CancellationException) {
+                return { parse: NaN, bind: NaN, check: NaN };
+            }
+            throw error;
+        }
     }
 
     function addFile(absPath: string) {

@@ -932,12 +932,15 @@ export function stringifyType(type: _Type, depth = 0) : string {
     if (depth > 4) return "<<TYPE-TOO-DEEP>>";
     if (type === SyntheticType.true) return "true";
     if (type === SyntheticType.false) return "false";
+    if (type === SyntheticType.null) return "null";
+    
     if (type.flags & TypeFlags.any) return "any";
     if (type.flags & TypeFlags.void) return "void";
     if (type.flags & TypeFlags.numeric) return "numeric";
     if (type.flags & TypeFlags.string) return "string";
     if (type.flags & TypeFlags.boolean) return "boolean";
     if (type.flags & TypeFlags.never) return "never";
+
     if (isTypeId(type)) {
         return type.name;
     }

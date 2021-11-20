@@ -1,35 +1,99 @@
 import * as child_process from "child_process";
-import { CflsResponse, CflsResponseType, CflsRequest, CflsRequestType, CflsConfig } from "./cflsTypes";
-
-type AbsPath = string;
+import { CancellationToken } from "../compiler/cancellationToken";
+import { CflsResponse, CflsResponseType, CflsRequest, CflsRequestType, CflsConfig, InitArgs } from "./cflsTypes";
+import { ClientAdapter } from "./clientAdapter";
+import type { AbsPath } from "../compiler/utils";
 
 interface EventHandlers {
     diagnostics: (fsPath: string, diagnostics: unknown[]) => void
 }
 
-export function LanguageService(serverFilePath: AbsPath, clientAdaptersFilePath: AbsPath) {
+export function LanguageService<T extends ClientAdapter>(serverFilePath: AbsPath, clientAdaptersFilePath: AbsPath) {
     let server! : child_process.ChildProcess;
-    let config! : CflsConfig;
+    let config! : InitArgs["config"]; // we keep a copy to diff reset requests against; this is probably unnecessary, a holdover from when we were accidentally registering to receive all client configuration changes
+    const cancellationToken = CancellationToken();
     const handlerMappings : Partial<EventHandlers> = {};
 
-    function fork(freshConfig: CflsConfig, workspaceRoots: AbsPath[]) {
+    interface TaskDef {
+        type: CflsRequestType,
+        task: () => void,
+        onSuccess?: (payload: any) => void
+        onNoResponse?: () => void
+    }
+
+    let taskQueue : TaskDef[] = [];
+    let currentTask: TaskDef | null = null;
+    let requestTimeoutId : NodeJS.Timeout | null = null;
+
+    const messageId = (() => {
+        let id = 0;
+        return {
+            bump: () => {
+                id = id === Number.MAX_SAFE_INTEGER
+                    ? 0
+                    : id + 1;
+                return id;
+            },
+            current: () => id
+        }
+    })();
+
+    function fork(freshConfig: InitArgs["config"], workspaceRoots: AbsPath[]) {
         config = freshConfig;
-        server = child_process.fork(serverFilePath, {execArgv: ["--inspect=6012"]});
+        server = child_process.fork(serverFilePath);
 
         server.on("message", (msg: CflsResponse) => {
-            switch (msg.type) {
-                case CflsResponseType.diagnostic: {
-                    handlerMappings.diagnostics?.(msg.fsPath, msg.diagnostics);
-                    return;
+            if (messageId.current() === msg.id) {
+                clearRequestTimeout();
+                switch (msg.type) {
+                    case CflsResponseType.diagnostics: {
+                        handlerMappings.diagnostics?.(msg.fsPath, msg.diagnostics);
+                        break;
+                    }
+                    case CflsResponseType.completions: {
+                        if (currentTask?.onSuccess) currentTask.onSuccess(msg.completionItems);
+                        break;
+                    }
+                    case CflsResponseType.definitionLocations: {
+                        if (currentTask?.onSuccess) currentTask.onSuccess(msg.locations);
+                        break;
+                    }
                 }
             }
+            runNextTask();
         })
 
-        send({type: CflsRequestType.init, initArgs: {
+        send({type: CflsRequestType.init, id: messageId.current(), initArgs: {
             config,
             workspaceRoots,
+            cancellationTokenId: cancellationToken.getId(),
             clientAdaptersFilePath,
         }});
+    }
+
+    function runNextTask() {
+        clearRequestTimeout();
+        const task = taskQueue.shift();
+        if (task) {
+            currentTask = task;
+            requestTimeoutId = setTimeout(noResponseAndRunNext, 5000);
+            task.task();
+        }
+        else {
+            currentTask = null;
+        }
+    }
+
+    function noResponseAndRunNext() {
+        currentTask?.onNoResponse?.();
+        runNextTask();
+    }
+
+    function clearRequestTimeout() {
+        if (requestTimeoutId) {
+            clearTimeout(requestTimeoutId);
+            requestTimeoutId = null;
+        }
     }
 
     function on<T extends keyof EventHandlers>(eventName: T, handler: EventHandlers[T]) {
@@ -41,10 +105,41 @@ export function LanguageService(serverFilePath: AbsPath, clientAdaptersFilePath:
     }
 
     function emitDiagnostics(fsPath: AbsPath, freshText: string) {
-        send({type: CflsRequestType.diagnostic, fsPath, freshText});
+        const task = () => {
+            const request : CflsRequest = {type: CflsRequestType.diagnostics, id: messageId.bump(), fsPath, freshText};
+            send(request);
+        }
+        pushTask({type: CflsRequestType.diagnostics, task});
     }
 
-    function reset(freshConfig: CflsConfig) {
+    function pushTask(taskDef: TaskDef) {
+        if (currentTask) {
+            // "diagnostic" task is conceptually overloaded to be responsible for doing all the heavy lifiting of loading a file into the project,
+            // and parse/bind/check to get a tree, so that other tasks have a good tree to pull info from
+            // so we treat it specially, and if the current task is diagnostics, we cancel the current diagnostic request and queue up another run
+            if (taskDef.type === CflsRequestType.diagnostics && currentTask.type === CflsRequestType.diagnostics) {
+                taskQueue = [{
+                    type: taskDef.type,
+                    task: () => {
+                        cancellationToken.reset();
+                        taskDef.task()
+                    }
+                }];
+
+                cancellationToken.requestCancellation();
+            }
+            else {
+                taskQueue.push(taskDef);
+            }
+        }
+        else {
+            // no current tasks; queue it and then immediately run it
+            taskQueue.push(taskDef);
+            runNextTask();
+        }
+    }
+
+    function reset(freshConfig: InitArgs["config"]) {
         let didChange = false;
         for (const key of Object.keys(freshConfig) as (keyof CflsConfig)[]) {
             if (freshConfig[key] !== config[key]) {
@@ -58,7 +153,59 @@ export function LanguageService(serverFilePath: AbsPath, clientAdaptersFilePath:
         }
 
         config = freshConfig;
-        send({type: CflsRequestType.reset, config});
+        send({type: CflsRequestType.reset, id: messageId.bump(), config});
+    }
+
+    function explodedPromise<T>() {
+        let resolve!: (value: T) => void;
+        let reject!: () => void;
+        const promise = new Promise<T>((ok, fail) => [resolve, reject] = [ok, fail]);
+        return {resolve, reject, promise};
+    }
+
+    function getCompletions(fsPath: AbsPath, targetIndex: number, triggerCharacter: string | null) : Promise<ReturnType<T["completionItem"]>[]> {
+        const {promise, resolve} = explodedPromise<ReturnType<T["completionItem"]>[]>();
+
+        pushTask({
+            type: CflsRequestType.completions,
+            task: () => {
+                send({
+                    type: CflsRequestType.completions,
+                    id: messageId.bump(),
+                    fsPath,
+                    targetIndex,
+                    triggerCharacter
+                })
+            },
+            onSuccess: (payload: ReturnType<T["completionItem"]>[]) => {
+                resolve(payload);
+            },
+            onNoResponse: () => resolve([])
+        })
+
+        return promise;
+    }
+
+    function getDefinitionLocations(fsPath: AbsPath, targetIndex: number) {
+        const {promise, resolve} = explodedPromise<ReturnType<T["sourceLocation"]>[]>();
+
+        pushTask({
+            type: CflsRequestType.definitionLocations,
+            task: () => {
+                send({
+                    type: CflsRequestType.definitionLocations,
+                    id: messageId.bump(),
+                    fsPath,
+                    targetIndex,
+                })
+            },
+            onSuccess: (payload: ReturnType<T["sourceLocation"]>[]) => {
+                resolve(payload);
+            },
+            onNoResponse: () => resolve([])
+        })
+
+        return promise;
     }
 
     return {
@@ -66,7 +213,13 @@ export function LanguageService(serverFilePath: AbsPath, clientAdaptersFilePath:
         fork,
         on,
         emitDiagnostics,
+        getCompletions,
+        getDefinitionLocations,
     }
 }
 
-export type LanguageService = ReturnType<typeof LanguageService>;
+class _LanguageService<T extends ClientAdapter> {
+    _LanguageService() { return LanguageService<T>("", ""); }
+}
+
+export type LanguageService<T extends ClientAdapter> = ReturnType<_LanguageService<T>["_LanguageService"]>;

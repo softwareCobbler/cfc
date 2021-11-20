@@ -1,59 +1,100 @@
 import { EngineVersion, EngineVersions } from "../compiler/engines";
-
-type AbsPath = string;
-
-export const enum CflsResponseType {
-    diagnostic
-}
-
-export type CflsResponse  =
-    | DiagnosticResponse
-
-interface CflsResponseBase {
-    type: CflsResponseType,
-}
-
-interface DiagnosticResponse extends CflsResponseBase {
-    type: CflsResponseType.diagnostic,
-    fsPath: AbsPath,
-    diagnostics: unknown[]
-}
+import type { AbsPath, SafeOmit } from "../compiler/utils";
 
 export type CflsRequest =
-    | DiagnosticRequest
+    | DiagnosticsRequest
+    | CompletionsRequest
+    | DefinitionLocationsRequest
     | InitRequest
     | ResetRequest
 
 export const enum CflsRequestType {
-    diagnostic,
+    diagnostics,
+    completions,
+    definitionLocations,
     init,
     reset
 }
 
 interface CflsRequestBase {
     type: CflsRequestType,
+    id: number,
+}
+
+// EngineVersion isn't serializeable, we need to transport just the engine name
+export type SerializableCflsConfig = SafeOmit<CflsConfig, "engineVersion"> & {engineVersion: keyof typeof EngineVersions};
+export interface InitArgs {
+    config: SerializableCflsConfig,
+    workspaceRoots: AbsPath[],
+    cancellationTokenId: string,
+    clientAdaptersFilePath: AbsPath,
 }
 
 export interface InitRequest extends CflsRequestBase {
     type: CflsRequestType.init,
-    initArgs: {
-        config: CflsConfig,
-        workspaceRoots: AbsPath[],
-        clientAdaptersFilePath: AbsPath,
-    }
+    initArgs: InitArgs,
 }
 
-export interface DiagnosticRequest extends CflsRequestBase {
-    type: CflsRequestType.diagnostic,
+export interface DiagnosticsRequest extends CflsRequestBase {
+    type: CflsRequestType.diagnostics,
     fsPath: string,
     freshText: string
 }
 
-export interface ResetRequest extends CflsRequestBase {
-    type: CflsRequestType.reset
-    config: CflsConfig
+export interface CompletionsRequest extends CflsRequestBase {
+    type: CflsRequestType.completions,
+    fsPath: string,
+    targetIndex: number,
+    triggerCharacter: string | null
 }
 
+export interface DefinitionLocationsRequest extends CflsRequestBase {
+    type: CflsRequestType.definitionLocations,
+    fsPath: string,
+    targetIndex: number
+}
+export interface ResetRequest extends CflsRequestBase {
+    type: CflsRequestType.reset
+    config: SerializableCflsConfig
+}
+
+export const enum CflsResponseType {
+    definitionLocations,
+    diagnostics,
+    completions,
+    cancelled
+}
+
+export type CflsResponse  =
+    | DiagnosticsResponse
+    | CompletionsResponse
+    | DefinitionLocationsResponse
+    | CancelledResponse
+
+interface CflsResponseBase {
+    type: CflsResponseType,
+    id: number,
+}
+
+interface DiagnosticsResponse extends CflsResponseBase {
+    type: CflsResponseType.diagnostics,
+    fsPath: AbsPath,
+    diagnostics: unknown[]
+}
+
+interface CompletionsResponse extends CflsResponseBase {
+    type: CflsResponseType.completions,
+    fsPath: AbsPath,
+    completionItems: unknown[]
+}
+
+interface DefinitionLocationsResponse extends CflsResponseBase {
+    type: CflsResponseType.definitionLocations,
+    locations: unknown[]
+}
+interface CancelledResponse extends CflsResponseBase {
+    type: CflsResponseType.cancelled
+}
 
 export interface CflsConfig {
 	engineLibAbsPath: string | null
@@ -70,6 +111,18 @@ export function CflsConfig() : CflsConfig {
         engineLibAbsPath: null,
         x_parseTypes: false,
         engineVersion: EngineVersions["lucee.5"],
+        wireboxConfigFile: null,
+        wireboxResolution: false,
+        x_checkReturnTypes: false,
+        x_genericFunctionInference: false,
+    }
+}
+
+export function CflsInitArgs(): InitArgs["config"] {
+    return {
+        engineLibAbsPath: null,
+        x_parseTypes: false,
+        engineVersion: "lucee.5",
         wireboxConfigFile: null,
         wireboxResolution: false,
         x_checkReturnTypes: false,

@@ -20,7 +20,11 @@
 		"onLanguage:cfml"
 	],
 	"main": "./out/cflsp.js",
-	"files": ["out/lib.cf2018.d.cfm"],
+	"files": [
+		"out/vscode-adapter.js",
+		"out/cfls-service.js",
+		"out/lib.cf2018.d.cfm"
+	],
 	"contributes": {
 		"languages": [
 			{

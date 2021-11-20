@@ -1,5 +1,6 @@
 export const enum Engine { Adobe = 1, Lucee = 2 };
 
+// fixme - predicates are wrong 
 export class Semver {
     major: number;
     minor: number;
@@ -41,7 +42,11 @@ export interface EngineVersion {
     uiString: string,
 }
 
-export const EngineVersions = {
+function LiteralRecord<T>() {
+    return <U extends Record<string, T>>(v: U) : {[k in keyof U]: T} => v;
+};
+
+export const EngineVersions = LiteralRecord<EngineVersion>()({
     "acf.2018": {
             engine: Engine.Adobe,
             semver: new Semver(2018, 0, 0),
@@ -57,7 +62,7 @@ export const EngineVersions = {
         semver: new Semver(5, 0, 0),
         uiString: "Lucee/5",
     }
-} as const;
+} as const)
 
 export const supports = {
     trailingStructLiteralComma(ev: EngineVersion) {
