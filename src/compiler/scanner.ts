@@ -1,4 +1,4 @@
-import { Mutable } from "./utils";
+import { exhaustiveCaseGuard, Mutable } from "./utils";
 
 export const enum AsciiMap {
     TAB = 9,
@@ -302,12 +302,14 @@ export interface AnnotatedChar {
 // from within the type system would be nice
 //
 export class SourceRange {
+    // todo: readonly
     fromInclusive: number;
     toExclusive: number;
 
     // shim for interacting with vscode which often wants (line, col) instead of just (pos)
     // the intent here is that on creating a real token (not a synthetic token! we only want this from real sourcecode), we explicitly set these
     // and it is only used for editor navigation, not for error spans or etc.
+    // todo: we can probably drop these, since the vscode shim no dispatches out to the scanner to ask for annotated chars, instead of relying on in-token SourceRange info
     readonly fromLineInclusive: number | undefined;
     readonly fromColInclusive: number | undefined;
     readonly toLineInclusive: number | undefined;
@@ -338,6 +340,62 @@ export const enum CfFileType { /* first is non-zero */ cfm = 1, cfc, dCfm };
 let debugScanner = false;
 export function setScannerDebug(isDebug: boolean) {
     debugScanner = isDebug;
+}
+
+export const enum BOM {
+    // start at non-zero
+    utf_8 = 1, utf_16_le, utf_16_be
+}
+
+export function getBOMType(buffer: string | Buffer) : BOM | undefined {
+    if (buffer.length >= 3) {
+        if (buffer[0] === 0xEF && buffer[1] === 0xBB && buffer[2] === 0xBF) {
+            return BOM.utf_8;
+        }
+    }
+    else if (buffer.length >= 2) {
+        if (buffer[0] === 0xFE && buffer[1] === 0xFF) {
+            return BOM.utf_16_be;
+        }
+        else if (buffer[0] === 0xFF && buffer[1] === 0xFE) {
+            return BOM.utf_16_le;
+        }
+    }
+    return undefined;
+}
+
+export const BOMBytes = {
+    utf_8: (() => {
+        const result = new ArrayBuffer(4);
+        const view = new Uint8Array(result);
+        view[0] = 0xEF;
+        view[1] = 0xBB;
+        view[2] = 0xBF;
+        return Buffer.from(result, 0, 3);
+    })(),
+    utf_16_be: (() => {
+        const result = new ArrayBuffer(2);
+        const view = new Uint8Array(result);
+        view[0] = 0xFE;
+        view[1] = 0xFF;
+        return Buffer.from(result);
+    })(),
+    utf_16_le: (() => {
+        const result = new ArrayBuffer(2);
+        const view = new Uint8Array(result);
+        view[0] = 0xFF;
+        view[1] = 0xFE;
+        return Buffer.from(result);
+    })()
+} as const;
+
+export function getBOMBytes(bom: BOM) : Buffer {
+    switch (bom) {
+        case BOM.utf_8: return BOMBytes.utf_8;
+        case BOM.utf_16_be: return BOMBytes.utf_16_be;
+        case BOM.utf_16_le: return BOMBytes.utf_16_le;
+        default: exhaustiveCaseGuard(bom);
+    }
 }
 
 export function Scanner(source_: string | Buffer) {

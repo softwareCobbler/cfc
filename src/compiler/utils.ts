@@ -29,6 +29,7 @@ const tagFacts = {
     continue:       TagFact.DISALLOW_BODY,
     cookie:         TagFact.DISALLOW_BODY,
     directory:      TagFact.DISALLOW_BODY,
+    document:       TagFact.ALLOW_BODY,
     documentitem:   TagFact.DISALLOW_BODY,
     dump:           TagFact.DISALLOW_BODY,
     else:           TagFact.REQUIRE_BODY,
@@ -65,6 +66,7 @@ const tagFacts = {
     reportparam:    TagFact.DISALLOW_BODY,
     rethrow:        TagFact.DISALLOW_BODY,
     return:         TagFact.DISALLOW_BODY,
+    savecontent:    TagFact.REQUIRE_BODY,
     set:            TagFact.DISALLOW_BODY,
     setting:        TagFact.DISALLOW_BODY,
     spreadsheet:    TagFact.DISALLOW_BODY,
@@ -102,9 +104,9 @@ export function requiresEndTag(tag: CfTag) : boolean {
 
 export function allowTagBody(tag: CfTag) : boolean {
     const facts = getTagFacts(tag);
-    return !!(facts && (
-        (facts & TagFact.ALLOW_BODY) ||
-        (facts & TagFact.REQUIRE_BODY)));
+    return !facts // if we don't recognize a tag, assume it allows a body
+        || !!(facts & TagFact.ALLOW_BODY)
+        || !!(facts & TagFact.REQUIRE_BODY);
 }
 
 export function isLexemeLikeToken(token: Token, allowNumeric = false) : boolean {
@@ -307,7 +309,10 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                         || visitor(node.tagName)
                         || visitor(node.voidSlash)
                         || visitor(node.tagEnd);
-                default: return;
+                case CfTag.TagType.text:
+                case CfTag.TagType.comment:
+                    throw "Should have been taken care during tag treeification and turned into text/comment nodes wrapping the tag node."
+                default: exhaustiveCaseGuard(node);
             }
         case NodeKind.callExpression:
             return visitor(node.left)
@@ -370,13 +375,26 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                 case StatementType.fromTag:
                     return visitor(node.tagOrigin.startTag);
                 case StatementType.scriptSugaredTagCallStatement:
+                    return visitor(node.expr)
+                        || forEachNode(node.scriptSugaredTagStatement!.attrs, visitor) // fixme: better types for statement
+                        || visitor(node.semicolon);
                 case StatementType.scriptTagCallStatement:
+                        return visitor(node.expr)
+                            || visitor(node.callStatement!.leftParen)
+                            || forEachNode(node.callStatement!.args, visitor)
+                            || visitor(node.callStatement!.rightParen)
+                            || visitor(node.semicolon);
                 default: return;
             }
         case NodeKind.returnStatement:
-            return visitor(node.returnToken)
-                || visitor(node.expr)
-                || visitor(node.semicolon);
+            if (node.fromTag) {
+                return visitor(node.tagOrigin.startTag)
+            }
+            else {
+                return visitor(node.returnToken)
+                    || visitor(node.expr)
+                    || visitor(node.semicolon);
+            }
         case NodeKind.breakStatement:
             return visitor(node.breakToken)
                 || visitor(node.semicolon);
@@ -466,6 +484,7 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                 || visitor(node.identifier)
                 || visitor(node.equals)
                 || visitor(node.defaultValue)
+                || forEachNode(node.attrs, visitor)
                 || visitor(node.comma)
         case NodeKind.functionDefinition:
             if (node.fromTag) {
@@ -648,7 +667,8 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                 || forEachNode(node.attrs, visitor)
             }
         case NodeKind.paramStatement: 
-            return (node.subType === ParamStatementSubType.withImplicitTypeAndName ? visitor(node.implicitType) : undefined)
+            return visitor(node.paramToken)
+                || (node.subType === ParamStatementSubType.withImplicitTypeAndName ? visitor(node.implicitType) : undefined)
                 || (node.subType === ParamStatementSubType.withImplicitName ? visitor(node.implicitName) || visitor(node.implicitNameEquals) || visitor(node.implicitNameExpr) : undefined)
                 || forEachNode(node.attrs, visitor);
         default:

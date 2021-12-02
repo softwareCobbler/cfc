@@ -10,12 +10,13 @@ export function setDebug(isDebug: boolean) {
 }
 
 export const enum NodeFlags {
-    none         = 0,
-    error        = 1 << 0,
-    missing      = 1 << 1,
-    checkerError = 1 << 2,
-    docBlock     = 1 << 3,
-    unreachable  = 1 << 4,
+    none           = 0,
+    error          = 1 << 0,
+    missing        = 1 << 1,
+    checkerError   = 1 << 2,
+    docBlock       = 1 << 3,
+    unreachable    = 1 << 4,
+    isCfcInterface = 1 << 5, // a cfc that is an `interface {...}` definition
 }
 
 export const enum NodeKind {
@@ -1098,24 +1099,29 @@ export namespace FromTag {
     }
 }
 
-export interface ReturnStatement extends Omit<Statement, "kind"> {
+export interface ReturnStatement extends Omit<Statement, "kind"> { // fixme: use namespaces `Script` and `Tag`
     kind: NodeKind.returnStatement;
+    fromTag: boolean,
     returnToken: Terminal | null; // null if from tag
 }
+
 export function ReturnStatement(returnToken: Terminal, expr: Node | null, semicolon: Terminal | null) : ReturnStatement {
     const v = NodeBase<ReturnStatement>(NodeKind.returnStatement, mergeRanges(returnToken, expr, semicolon))
     v.returnToken = returnToken;
+    v.fromTag = false;
     v.expr = expr;
-    v.semicolon;
+    v.semicolon = semicolon;
     return v;
 }
+
 export namespace FromTag {
     export function ReturnStatement(tag: CfTag.ScriptLike) : ReturnStatement {
         const v = NodeBase<ReturnStatement>(NodeKind.returnStatement, tag.range);
-        v.tagOrigin.startTag = tag;
         v.returnToken = null;
+        v.fromTag = true;
         v.expr = tag.expr;
         v.semicolon = null;
+        v.tagOrigin.startTag = tag;
         return v;
     }
 }

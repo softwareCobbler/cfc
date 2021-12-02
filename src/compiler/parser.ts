@@ -636,6 +636,17 @@ export function Parser(config: ProjectOptions) {
         }
 
         let finalizedResult : Node[];
+
+        //
+        // if we're in a tag or a hash-wrapped expr in tag mode, we want to parse tag trivia,
+        // but immediately convert it to script-like trivia
+        // this way, the tag treeifier doesn't need to concern itself with descending into hash-wrapped exprs to perform these transformations
+        // (where it is otherwise responsible for transforming all tags into some common script syntax tree)
+        // all other trivia during tag-treeification is loose
+        // @fixme: does this only handle "top-level" comments, i.e., we need to handle `#1 + <!--- foo ---> 2#`
+        // also the same logic applies to something like <cfset x = {x: "tag comment in struct" <!--- tag comment here --->}
+        // which is maybe just on script-like tags
+        //
         if (isInSomeContext(ParseContext.hashWrappedExpr) || isInSomeContext(ParseContext.insideCfTagAngles)) {
             finalizedResult = (result as CfTag[]).map((v) => {
                 if (v.tagType === CfTag.TagType.comment) {
@@ -687,14 +698,15 @@ export function Parser(config: ProjectOptions) {
                 else {
                     const expr = doInExtendedContext(ParseContext.awaitingVoidSlash, parseAnonymousFunctionDefinitionOrExpression);
                     const maybeVoidSlash = parseOptionalTerminal(TokenType.FORWARD_SLASH, ParseOptions.withTrivia);
-                    const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
+                    const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia); // can't parse trivia, it's raw text here
                     return CfTag.ScriptLike(CfTag.Which.start, tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, expr);
                 }
             }
             default: {
                 const tagAttrs = parseTagAttributes();
                 const maybeVoidSlash = parseOptionalTerminal(TokenType.FORWARD_SLASH, ParseOptions.withTrivia);
-                const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
+                const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia); // can't parse trivia, it's raw text here
+
                 if (canonicalName === "script") {
                     if (tagAttrs.length > 0) {
                         parseErrorAtRange(mergeRanges(tagAttrs), "A <cfscript> tag cannot contain attributes.");
@@ -713,8 +725,12 @@ export function Parser(config: ProjectOptions) {
                     // this has implications in the tag treeifier, where we use the "last tag position" to compute missing tag zero-length positions
                     // if the last tag is a <cfscript> tag and the cfscript ate to EOF, the "last tag position" of the <cfscript>'s right angle is incorrect
 
-                    const startPos = pos();            // start pos is before any possible trivia
-                    rightAngle.trivia = parseTrivia(); // <cfscript> is a tag but it gets script-based trivia (so it can have script comments attached to it)
+                    const startPos = pos(); // start pos is before any possible trivia
+
+                    // <cfscript> is a tag but it gets script-based trivia (so it can have script comments attached to it)
+                    rightAngle.trivia = parseTrivia(); 
+                    rightAngle.rangeWithTrivia.toExclusive = mergeRanges(rightAngle.trivia).toExclusive;
+
                     const stmtList = parseList(ParseContext.cfScriptTagBody, parseStatement);
                     const endPos = pos();
 
@@ -829,6 +845,27 @@ export function Parser(config: ProjectOptions) {
             return peek().type === TokenType.LEFT_BRACE ? cOrI : null;
         }
 
+        let discardedRawText : SourceRange | undefined = undefined;
+
+        const pushDiscardedRawText = () => {
+            const startInclusive = pos();
+            next();
+            const endExclusive = pos();
+            if (discardedRawText === undefined) {
+                discardedRawText = new SourceRange(startInclusive, endExclusive);
+            }
+            else {
+                discardedRawText.toExclusive = endExclusive;
+            }
+        }
+
+        const finalizeDiscardedRawText = () => {
+            if (discardedRawText) {
+                preamble.push(TextSpan(discardedRawText, ""));
+                discardedRawText = undefined;
+            }
+        }
+
         let gotNonComment = false;
         let gotTagComment = false;
         let gotScriptComment = false;
@@ -839,25 +876,29 @@ export function Parser(config: ProjectOptions) {
         while (lookahead() !== TokenType.EOF) {
             switch (lookahead()) {
                 case TokenType.CF_TAG_COMMENT_START: {
+                    finalizeDiscardedRawText();
                     preamble.push(parseTagComment());
                     gotTagComment = true;
                     continue;
                 }
                 case TokenType.DBL_FORWARD_SLASH: {
+                    finalizeDiscardedRawText();
                     preamble.push(parseScriptSingleLineComment());
                     gotScriptComment = true;
                     continue;
                 }
                 case TokenType.FORWARD_SLASH_STAR: {
+                    finalizeDiscardedRawText();
                     const comment = parseScriptMultiLineComment();
                     preamble.push(comment);
                     if (comment.flags & NodeFlags.docBlock) {
-                        parseDocBlockFromPreParsedComment(comment);
+                        parseDocBlockFromPreParsedComment(comment); // fixme: we just did this in parseScriptMultiLineComment
                     }
                     gotScriptComment = true;
                     continue;
                 }
                 case TokenType.LEXEME: {
+                    finalizeDiscardedRawText();
                     const maybeCOrI = SpeculationHelper.lookahead(isScriptComponentOrInterfaceBlock);
                     if (maybeCOrI) {
                         syntaxType = ComponentSyntaxType.script;
@@ -865,7 +906,7 @@ export function Parser(config: ProjectOptions) {
                         break outer;
                     }
                     gotNonComment = true;
-                    next();
+                    pushDiscardedRawText();
                     continue;
                 }
                 case TokenType.CF_START_TAG_START: {
@@ -876,20 +917,22 @@ export function Parser(config: ProjectOptions) {
                         break outer;
                     }
                     gotNonComment = true;
-                    next();
+                    pushDiscardedRawText();
                     continue;
                 }
                 case TokenType.WHITESPACE: {
-                    next();
+                    pushDiscardedRawText();
                     continue;
                 }
                 default: {
                     gotNonComment = true;
-                    next();
+                    pushDiscardedRawText();
                     continue;
                 }
             }
         }
+
+        finalizeDiscardedRawText();
 
         if (gotNonComment) {
             // should be "only comments or import statements"
@@ -916,7 +959,8 @@ export function Parser(config: ProjectOptions) {
 
     // fixme: we can supply a filetype, but have to set the sourceFile with an earlier call?
     function parse(cfFileType: CfFileType = sourceFile?.cfFileType || CfFileType.cfm) : Node[] {
-        const savedContext = parseContext;
+        const initalScannerState = getScannerState();
+        const initialParseContext = parseContext;
         switch (cfFileType) {
             case CfFileType.cfm:
                 sourceFile.content = parseTags();
@@ -932,6 +976,7 @@ export function Parser(config: ProjectOptions) {
                     // fixme:
                     // we don't parse interface files yet, mostly because we don't parse function declarations
                     // we also don't later check that a cfc correctly implements the interfaces it says it implements, either
+                    sourceFile.flags |= NodeFlags.isCfcInterface;
                     return [];
                     //updateParseContext(ParseContext.interface);
                 }
@@ -951,11 +996,10 @@ export function Parser(config: ProjectOptions) {
                     updateParseContext(ParseContext.cfcPsuedoConstructor);
                 }
 
-                sourceFile.content.push(...componentInfo.preamble);
-
                 // extract parsed types into working node's typedefs
                 // should probably break this out so we can use it on any current working node
                 // also this more of the binder's responsibility, it would do a better job of checking for duplicate declarations and etc.
+                // fixme: this will be out-of-place now that we might restore scanner state if we recognized a "tag" component
                 if (lastDocBlock) {
                     for (const typeshim of lastDocBlock.typedefs) {
                         if (typeshim.what === "typedef") {
@@ -978,9 +1022,15 @@ export function Parser(config: ProjectOptions) {
                 }
 
                 if (componentInfo.primarySyntax === ComponentSyntaxType.tag) {
+                    // it would be better to hold onto the already parsed preamble;
+                    // but it's easier to just give the source text back and have the tag parser deal with it
+                    // we need to feed it into the flat tag list for tag treeifier; parseTags maybe could receive a preamble arg, or we could split parseTags into "parse/treeify"
+                    restoreScannerState(initalScannerState);
+                    parseContext = initialParseContext;
                     sourceFile.content.push(...parseTags());
                 }
                 else {
+                    sourceFile.content.push(...componentInfo.preamble); // unlike with tags, we'll hold onto the preamble when we're in script mode, there's nothing special to do with it
                     sourceFile.content.push(...parseScript());
                 }
 
@@ -992,7 +1042,7 @@ export function Parser(config: ProjectOptions) {
             }
         }
 
-        parseContext = savedContext;
+        parseContext = initialParseContext;
         return sourceFile.content;
     }
 
@@ -1223,20 +1273,19 @@ export function Parser(config: ProjectOptions) {
             function treeifyTagFunction(startTag: CfTag.Common, body: Node[], endTag: CfTag.Common) {
                 const params : Tag.FunctionParameter[] = [];
 
-                function getTriviaOwner() : Node[] {
-                    if (params.length === 0) {
-                        return startTag.tagEnd.trivia;
-                    }
-                    else {
-                        return params[params.length-1].tagOrigin.startTag!.tagEnd.trivia;
-                    }
+                function pushTrivia(node: Node) : void {
+                    const triviaOwner = params.length === 0
+                        ? startTag.tagEnd
+                        : params[params.length-1].tagOrigin.startTag!.tagEnd;
+                    triviaOwner.trivia.push(node);
+                    triviaOwner.rangeWithTrivia.toExclusive = node.range.toExclusive;
                 }
 
                 let i = 0;
                 while (i < body.length) {
                     const node = body[i];
                     if (node.kind === NodeKind.textSpan || node.kind === NodeKind.comment) {
-                        getTriviaOwner().push(node);
+                        pushTrivia(node);
                         i++;
                         continue;
                     }
@@ -1285,18 +1334,19 @@ export function Parser(config: ProjectOptions) {
                     }
                 }
 
-                function getTriviaOwner() : Node[] {
-                    if (finallyBlock) {
-                        return finallyBlock.tagOrigin.endTag!.tagEnd.trivia;
+                function pushTrivia(node: Node) : void {
+                    const triviaOwner = finallyBlock
+                        ? finallyBlock.tagOrigin.endTag!.tagEnd
+                        : gotCatch
+                        ? (catchBlocks[catchBlocks.length-1].tagOrigin.endTag?.tagEnd // if a <catch>...</catch> block, it has an end tag
+                            || catchBlocks[catchBlocks.length-1].tagOrigin.startTag?.tagEnd) // if a <catch /> statement, it is just a start tag
+                        : undefined;
+
+                    if (!triviaOwner) {
+                        throw "no trivia owner?";
                     }
-                    else if (gotCatch) {
-                        return (catchBlocks[catchBlocks.length-1].tagOrigin.endTag?.tagEnd.trivia // if a <catch>...</catch> block, it has an end tag
-                            || catchBlocks[catchBlocks.length-1].tagOrigin.startTag?.tagEnd.trivia)!; // if a <catch /> statement, it is just a start tag
-                    }
-                    else {
-                        if (debug) throw "no trivia owner?";
-                        else return [];
-                    }
+                    triviaOwner.trivia.push(node);
+                    triviaOwner.rangeWithTrivia.toExclusive = node.range.toExclusive;
                 }
 
                 if (gotCatch) {
@@ -1310,10 +1360,12 @@ export function Parser(config: ProjectOptions) {
                         if (node.kind === NodeKind.catch) {
                             catchBlocks.push(node as Tag.Catch);
                         }
-                        else if (node.kind !== NodeKind.textSpan && node.kind !== NodeKind.comment) {
-                            parseErrorAtRange(node.range, "Only comments and whitespace are valid between <cfcatch> and <cffinally> blocks.")
-                            node.flags |= NodeFlags.error; // maybe invalidTagPosition or similar? also maybe mark the whole try block an error?
-                            getTriviaOwner().push(node);
+                        else {
+                            if (node.kind !== NodeKind.textSpan && node.kind !== NodeKind.comment) {
+                                parseErrorAtRange(node.range, "Only comments and whitespace are valid between <cfcatch> and <cffinally> blocks.")
+                                node.flags |= NodeFlags.error; // maybe invalidTagPosition or similar? also maybe mark the whole try block an error?
+                            }
+                            pushTrivia(node);
                         }
                         
                         index++;
@@ -1338,7 +1390,7 @@ export function Parser(config: ProjectOptions) {
                         if (node.kind !== NodeKind.textSpan && node.kind !== NodeKind.comment) {
                             parseErrorAtRange(node.range, "Only comments and whitespace are valid between <cfcatch> and <cffinally> blocks.")
                         }
-                        getTriviaOwner().push(node);
+                        pushTrivia(node);
                         index++;
                     }
                 }
@@ -1349,13 +1401,13 @@ export function Parser(config: ProjectOptions) {
             function treeifyTagSwitch(startTag: CfTag.Common, body: Node[], endTag: CfTag.Common) {
                 const cases : Tag.SwitchCase[] = [];
 
-                function getTriviaOwner() : Node[] {
-                    if (cases.length === 0) {
-                        return startTag.tagEnd.trivia;
-                    }
-                    else {
-                        return cases[cases.length-1].tagOrigin.endTag!.tagEnd.trivia;
-                    }
+                function pushTrivia(node: Node) : void {
+                    const triviaOwner = cases.length === 0
+                        ? startTag.tagEnd
+                        : cases[cases.length-1].tagOrigin.endTag!.tagEnd
+
+                    triviaOwner.trivia.push(node);
+                    triviaOwner.rangeWithTrivia.toExclusive = node.range.toExclusive;
                 }
 
                 for (let i = 0; i < body.length; i++) {
@@ -1368,7 +1420,7 @@ export function Parser(config: ProjectOptions) {
                         parseErrorAtRange(node.range, "Only comments and whitespace are valid outside of <cfcase> & <cfdefaultcase> blocks inside a <cfswitch> block.");
                     }
                     // push non-case blocks as trivia
-                    getTriviaOwner().push(node);
+                    pushTrivia(node);
                 }
 
                 return Tag.Switch(startTag, cases, endTag);
@@ -1892,7 +1944,7 @@ export function Parser(config: ProjectOptions) {
         while (isAssignmentOperator() && isAssignmentTarget(rhs)) {
             operator = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
             rhs = parseAnonymousFunctionDefinitionOrExpression();
-            assignmentExpr = BinaryOperator(root, operator, rhs);
+            assignmentExpr = BinaryOperator(assignmentExpr, operator, rhs);
         }
 
         if (finalModifier || varModifier) {
@@ -3304,7 +3356,7 @@ export function Parser(config: ProjectOptions) {
         leftParen     = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
         params        = tryParseFunctionDefinitionParameters(/*speculative*/ false, asDeclaration);
         
-        if (asDeclaration) {
+        if (asDeclaration) { // as in for a cf interface file
             rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
 
             attrs = parseTagAttributes();
@@ -3510,7 +3562,7 @@ export function Parser(config: ProjectOptions) {
 
                     // we may want to hold onto the semicolon later, but right now we can just discard it
                     // it is valid in this position though so we need to parse it
-                    if (scriptMode()) parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia);
+                    // if (scriptMode()) parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia);
 
                     return stmt;
                 }
@@ -3680,7 +3732,7 @@ export function Parser(config: ProjectOptions) {
                             if (nextIsLiterallyNameEquals) {
                                 // we got `"param" "name" "=" ...` which is just a basic param statement
                                 const attrs = [nextIsLiterallyNameEquals, ...parseTagAttributes()];
-                                /*discarded*/parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia);
+                                // leave semi as loose null stmt? /*discarded*/parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia);
                                 return ParamStatement(paramToken, attrs);
                             }
 
@@ -3691,7 +3743,7 @@ export function Parser(config: ProjectOptions) {
                                 const equals = parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
                                 const expr = equals ? parseExpression() : null;
                                 const attrs = parseTagAttributes();
-                                /*discarded*/parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia);
+                                // leave semi as loose null stmt? /*discarded*/parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia);
 
                                 return ParamStatementWithImplicitTypeAndName(paramToken, typeName, name, equals, expr, attrs);
                             });
@@ -3704,7 +3756,7 @@ export function Parser(config: ProjectOptions) {
                             const equals = parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
                             const expr = equals ? parseExpression() : null;
                             const attrs = parseTagAttributes();
-                            /*discarded*/parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia);
+                            // leave semi as loose null stmt? /*discarded*/parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia);
 
                             return ParamStatementWithImplicitName(paramToken, name, equals, expr, attrs);
                         }
