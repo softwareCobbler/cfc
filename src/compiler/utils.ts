@@ -1365,3 +1365,87 @@ export function isPublicMethod(sig: cfFunctionSignature) : boolean {
 
 export type AbsPath = string;
 export type SafeOmit<T extends {}, S extends keyof T> = Omit<T, S>;
+
+const enum MapType { normal, weak };
+class _TupleKeyedMap<Ks extends any[], V> {
+    make(mapType: MapType) {
+        const map = fresh();
+
+        function fresh() {
+            return mapType === MapType.weak
+                ? new WeakMap()
+                : new Map();
+        }
+
+        function get(ks: Ks) {
+            let workingMap = map.get(ks[0]);
+            for (let i = 1; i < ks.length - 1; i++) {
+                if (workingMap) {
+                    workingMap = workingMap.get(ks[i]);
+                }
+                else {
+                    return undefined;
+                }
+            }
+            return workingMap.get(ks[ks.length-1]);
+        }
+
+        function has(ks: Ks) {
+            let workingMap = map.get(ks[0]);
+            for (let i = 1; i < ks.length - 1; i++) {
+                if (workingMap) {
+                    workingMap = workingMap.get(ks[i]);
+                }
+                else {
+                    return false;
+                }
+            }
+            return workingMap.has(ks[ks.length-1]);
+        }
+
+        function set(ks: Ks, v: V) {
+            let workingMap = map;
+            for (let i = 0; i < ks.length - 1; i++) {
+                if (!workingMap.has(ks[i])) {
+                    const v = fresh();
+                    workingMap.set(ks[i], v);
+                    workingMap = v;
+                }
+                else {
+                    workingMap = map.get(ks[i]);
+                }
+            }
+            workingMap.set(ks[ks.length-1], v);
+        }
+
+        function _delete(ks: Ks) {
+            let workingMap = map.get(ks[0]);
+            for (let i = 1; i < ks.length - 1; i++) {
+                if (workingMap) {
+                    workingMap = workingMap.get(ks[i]);
+                }
+                else {
+                    return;
+                }
+            }
+            workingMap.delete(ks[ks.length-1]);
+        }
+
+        return {
+            get,
+            set,
+            has,
+            delete: _delete
+        }
+    }
+}
+
+export type TupleKeyedWeakMap<Ks extends any[], V> = ReturnType<_TupleKeyedMap<Ks, V>["make"]>;
+export type TupleKeyedMap<Ks extends any[], V> = ReturnType<_TupleKeyedMap<Ks, V>["make"]>;
+
+export function TupleKeyedWeakMap<Ks extends any[], V>() {
+    return new _TupleKeyedMap<Ks, V>().make(MapType.weak);
+}
+export function TupleKeyedMap<Ks extends any[], V>() {
+    return new _TupleKeyedMap<Ks, V>().make(MapType.normal);
+}

@@ -1,5 +1,5 @@
 import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, UnreachableFlow, FlowType, ConditionalSubtype, SymbolTable, TypeShim, Property, ParamStatement, ParamStatementSubType, typedefs, DiagnosticKind, StaticallyKnownScopeName, SwitchCaseType } from "./node";
-import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol, findAncestor } from "./utils";
+import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, isHoistableFunctionDefinition, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol, findAncestor, TupleKeyedMap } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { SyntheticType, _Type, extractCfFunctionSignature, isFunctionSignature, Interface, isInterface, cfTypeId } from "./types";
 import { Engine, supports } from "./engines";
@@ -13,6 +13,7 @@ export function Binder(options: ProjectOptions) {
     let currentContainer : NodeWithScope;
     let scanner : Scanner;
     let diagnostics: Diagnostic[];
+    let diagnosticIssuanceMap! : TupleKeyedMap<[number, number, string], Diagnostic>;
     
     let currentFlow! : Flow;
     let currentJumpTargetPredecessors : Flow[] = [];
@@ -29,7 +30,10 @@ export function Binder(options: ProjectOptions) {
         }
 
         scanner = sourceFile_.scanner;
-        diagnostics = sourceFile_.diagnostics;
+
+        diagnostics = sourceFile_.diagnostics; // can probably remove this assignment, and assign from issuanceMap into sourceFile at end of this function
+        diagnosticIssuanceMap = TupleKeyedMap();
+
         nodeMap = new Map<NodeId, Node>();
         withPropertyAccessors = false;
         pendingSymbolResolutionStack = [new Map()];
@@ -474,7 +478,7 @@ export function Binder(options: ProjectOptions) {
         if (node.varModifier) {
             const containingFunction = getContainingFunction(node);
             if (!containingFunction) {
-                errorAtRange(node.expr.range, "Local variables may not be declared at top-level scope.");
+                issueDiagnosticAtRange(node.expr.range, "Local variables may not be declared at top-level scope.");
                 return;
             }
             targetScope = containingFunction.containedScope?.local!;
@@ -544,7 +548,7 @@ export function Binder(options: ProjectOptions) {
             }
             else {
                 // we're not in a function, so we must be at top-level scope
-                errorAtRange(mergeRanges(node.finalModifier, node.varModifier, (<BinaryOperator>node.expr)?.left), "Local variables may not be declared at top-level scope.");
+                issueDiagnosticAtRange(mergeRanges(node.finalModifier, node.varModifier, (<BinaryOperator>node.expr)?.left), "Local variables may not be declared at top-level scope.");
             }
         }
     }
@@ -1043,7 +1047,7 @@ export function Binder(options: ProjectOptions) {
         if (node.kind === NodeKind.arrowFunctionDefinition
             && node.params.length === 1 && !node.parens
             && !supports.noParenSingleArgArrowFunction(engineVersion)) {
-            errorAtRange(node.params[0].range, `CF engine '${engineVersion.uiString}' requires arrow function parameter lists to be parenthesized.`)
+            issueDiagnosticAtRange(node.params[0].range, `CF engine '${engineVersion.uiString}' requires arrow function parameter lists to be parenthesized.`)
         }
 
         const signature = extractCfFunctionSignature(node);
@@ -1071,6 +1075,17 @@ export function Binder(options: ProjectOptions) {
             }
             else if (sourceFile.cfFileType === CfFileType.cfc && isInCfcPsuedoConstructor(node)) {
                 scopeTargets = [sourceFile.containedScope.this!, sourceFile.containedScope.variables!];
+                const maybeAlreadyDefined = sourceFile.containedScope.this!.get(node.uiName!);
+                if (maybeAlreadyDefined && maybeAlreadyDefined.declarations) {
+                    for (const decl of [...maybeAlreadyDefined.declarations, node]) {
+                        if (decl.kind === NodeKind.functionDefinition) {
+                            const range = decl.fromTag
+                                ? decl.tagOrigin.startTag!.range
+                                : mergeRanges(decl.accessModifier, decl.returnType, decl.functionToken, decl.nameToken);
+                            issueDiagnosticAtRange(range, "Duplicate component method declaration.", DiagnosticKind.warning);
+                        }
+                    }
+                }
             }
             else {
                 scopeTargets = [sourceFile.containedScope.variables!];
@@ -1236,12 +1251,12 @@ export function Binder(options: ProjectOptions) {
             const isLast = i === node.members.length - 1;
             const member = node.members[i];
             if (isLast && member.comma && !supports.trailingStructLiteralComma(engineVersion)) {
-                errorAtRange(new SourceRange(member.range.toExclusive, member.range.toExclusive), "Illegal trailing comma.");
+                issueDiagnosticAtRange(new SourceRange(member.range.toExclusive, member.range.toExclusive), "Illegal trailing comma.");
             }
             if (!isLast && !member.comma) {
                 const nextNode = node.members[i+1];
                 const targetRange = nextNode.subType === StructLiteralInitializerMemberSubtype.keyed ? nextNode.key.range : nextNode.expr.range;
-                errorAtRange(targetRange, "Expected ','");
+                issueDiagnosticAtRange(targetRange, "Expected ','");
             }
         }
     }
@@ -1295,7 +1310,7 @@ export function Binder(options: ProjectOptions) {
             bindNode(node.tagOrigin.endTag, node);
             if (!getAncestorOfType(node, NodeKind.try)) {
                 if (node.tagOrigin.startTag) {
-                    errorAtRange(node.tagOrigin.startTag.range, "A catch tag must be contained within a try tag-block.");
+                    issueDiagnosticAtRange(node.tagOrigin.startTag.range, "A catch tag must be contained within a try tag-block.");
                 }
             }
             return;
@@ -1312,7 +1327,7 @@ export function Binder(options: ProjectOptions) {
             bindList(node.body, node);
             bindNode(node.tagOrigin.endTag, node);
             if (!getAncestorOfType(node, NodeKind.try)) {
-                errorAtRange(node.tagOrigin.startTag.range, "A finally tag must be contained within a try tag-block.");
+                issueDiagnosticAtRange(node.tagOrigin.startTag.range, "A finally tag must be contained within a try tag-block.");
             }
             return;
         }
@@ -1331,19 +1346,19 @@ export function Binder(options: ProjectOptions) {
     function bindProperty(node: Property) {
         if (node.fromTag) {            
             if (!isInCfcPsuedoConstructor(node)) {
-                errorAtRange(node.range, "Properties must be declared at the top-level of a component.")
+                issueDiagnosticAtRange(node.range, "Properties must be declared at the top-level of a component.")
             }
         }
         else {
             const uiNameAttr = getAttributeValue(node.attrs, "name");
             if (!uiNameAttr) {
-                errorAtRange(node.range, "Properties must have a 'name' attribute.");
+                issueDiagnosticAtRange(node.range, "Properties must have a 'name' attribute.");
                 return;
             }
 
             const uiName = getTriviallyComputableString(uiNameAttr);
             if (!uiName) {
-                errorAtRange(node.range, "Property names cannot be dynamic.");
+                issueDiagnosticAtRange(node.range, "Property names cannot be dynamic.");
                 return;
             }
 
@@ -1368,7 +1383,7 @@ export function Binder(options: ProjectOptions) {
         if (node.subType === ParamStatementSubType.withImplicitTypeAndName) {
             const typeIndex = node.attrs.findIndex(tagAttr => tagAttr.canonicalName === "type");
             if (typeIndex !== -1) {
-                errorAtRange(node.attrs[typeIndex].range, `Explicit type attribute shadows implicit type attribute '${stringifyDottedPath(node.implicitType).ui}'.`);
+                issueDiagnosticAtRange(node.attrs[typeIndex].range, `Explicit type attribute shadows implicit type attribute '${stringifyDottedPath(node.implicitType).ui}'.`);
             }
         }
 
@@ -1377,16 +1392,20 @@ export function Binder(options: ProjectOptions) {
             const defaultIndex = node.implicitNameExpr ? node.attrs.findIndex(tagAttr => tagAttr.canonicalName === "default") : -1;
 
             if (nameIndex !== -1) {
-                errorAtRange(node.attrs[nameIndex].range, `Explicit name attribute shadows implicit name attribute '${stringifyDottedPath(node.implicitName).ui}'.`);
+                issueDiagnosticAtRange(node.attrs[nameIndex].range, `Explicit name attribute shadows implicit name attribute '${stringifyDottedPath(node.implicitName).ui}'.`);
             }
             if (defaultIndex !== -1) {
-                errorAtRange(node.attrs[defaultIndex].range, `Explicit default attribute shadows implicit default value.`);
+                issueDiagnosticAtRange(node.attrs[defaultIndex].range, `Explicit default attribute shadows implicit default value.`);
             }
         }
     }
 
-    function errorAtSpan(fromInclusive: number, toExclusive: number, msg: string) {
-        const freshDiagnostic : Diagnostic = {kind: DiagnosticKind.error, fromInclusive, toExclusive, msg };
+    function issueDiagnosticAtSpan(fromInclusive: number, toExclusive: number, msg: string, kind = DiagnosticKind.error) {
+        const freshDiagnostic : Diagnostic = {kind, fromInclusive, toExclusive, msg };
+
+        if (diagnosticIssuanceMap.has([fromInclusive, toExclusive, msg])) {
+            return;
+        }
 
         if (debug) {
             const debugFrom = scanner.getAnnotatedChar(freshDiagnostic.fromInclusive);
@@ -1398,6 +1417,7 @@ export function Binder(options: ProjectOptions) {
             freshDiagnostic.__debug_to_col = debugTo.col+1;
         }
 
+        diagnosticIssuanceMap.set([fromInclusive, toExclusive, msg], freshDiagnostic);
         diagnostics.push(freshDiagnostic);
     }
 
@@ -1421,7 +1441,7 @@ export function Binder(options: ProjectOptions) {
                 }
             }
             else {
-                errorAtRange(node.range, "Illegal non-declaration in declaration file.");
+                issueDiagnosticAtRange(node.range, "Illegal non-declaration in declaration file.");
                 continue;
             }
         }
@@ -1443,19 +1463,19 @@ export function Binder(options: ProjectOptions) {
                         }
                         else if (engineVersion.engine === Engine.Adobe) {
                             // invalid as an identifier, both tag and script
-                            errorAtRange(node.range, defaultMsg(node));
+                            issueDiagnosticAtRange(node.range, defaultMsg(node));
                         }
                         break;
                     }
                     case "not": {
                         if (isObjectLiteralPropertyName(node)) {
                             // x = {not: 0} fails on both lucee and acf
-                            errorAtRange(node.range, "The identifier 'not' cannot be used to define an object property name. Consider quote-escaping it.");
+                            issueDiagnosticAtRange(node.range, "The identifier 'not' cannot be used to define an object property name. Consider quote-escaping it.");
                             break;
                         }
 
                         if (engineVersion.engine === Engine.Adobe) {
-                            errorAtRange(node.range, defaultMsg(node));
+                            issueDiagnosticAtRange(node.range, defaultMsg(node));
                             break;
                         }
                     }
@@ -1481,11 +1501,11 @@ export function Binder(options: ProjectOptions) {
                     case "var":
                     case "while": {
                         if (node.canonicalName === "function" && node.parent?.kind === NodeKind.functionDefinition) {
-                            errorAtRange(node.range, defaultMsg(node));
+                            issueDiagnosticAtRange(node.range, defaultMsg(node));
                             break;
                         }
                         else if (engineVersion.engine === Engine.Adobe && !isNamedFunctionArgumentName(node) && !isObjectLiteralPropertyName(node) && isInScriptBlock(node)) {
-                            errorAtRange(node.range, defaultMsg(node));
+                            issueDiagnosticAtRange(node.range, defaultMsg(node));
                             break;
                         }
                     }
@@ -1495,8 +1515,8 @@ export function Binder(options: ProjectOptions) {
         }
     }
 
-    function errorAtRange(range: SourceRange, msg: string) : void {
-        errorAtSpan(range.fromInclusive, range.toExclusive, msg);
+    function issueDiagnosticAtRange(range: SourceRange, msg: string, kind = DiagnosticKind.error) : void {
+        issueDiagnosticAtSpan(range.fromInclusive, range.toExclusive, msg, kind);
     }
 
     const self = {

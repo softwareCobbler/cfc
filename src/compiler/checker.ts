@@ -3,10 +3,10 @@ import { CfcResolver, EngineSymbolResolver, LibTypeResolver, ProjectOptions } fr
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, Struct, cfUnion, SyntheticType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStructLike, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, stringifyType, cfFunctionSignatureParam, isFunctionOverloadSet, cfFunctionOverloadSet, isLiteralType, cfTypeId, SymbolTableTypeWrapper, CfcTypeWrapper, Interface, StructKind, isCfcLookupType, isInstantiatedArray, isInterface, createType, createLiteralType, isUninstantiatedArray, isGenericFunctionSignature, TypeConstructor, typeFromJavaLikeTypename } from "./types";
 import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, getAttributeValue, getComponentAttrs, getContainingFunction, getFunctionDefinitionAccessLiteral, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isLiteralExpr, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
-import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol } from "./utils";
+import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol, TupleKeyedWeakMap } from "./utils";
 import { Engine, supports } from "./engines";
 
-const structViewCache = WeakPairMap<SymbolTable, Interface, Struct>(); // map a SymbolTable -> Interface -> Struct, used to check prior existence of a wrapping of a symbol table into a struct with a possible interface extension
+const structViewCache = TupleKeyedWeakMap<[SymbolTable, Interface], Struct>(); // map a SymbolTable -> Interface -> Struct, used to check prior existence of a wrapping of a symbol table into a struct with a possible interface extension
 const EmptyInstantiationContext = SourceFile("", CfFileType.cfc, ""); // an empty type type instantiation context, no symbols are visible; there we rely entirely on captured or provided contexts attached the instantiable target
 
 export function Checker(options: ProjectOptions) {
@@ -686,7 +686,7 @@ export function Checker(options: ProjectOptions) {
                 else {
                     if (isLiteralType(l) && isLiteralType(r)) return l.literalValue === r.literalValue;
                     if (!isLiteralType(l) && isLiteralType(r)) return false; // number is not a subtype of `0`
-                    if (isLiteralType(l) && !isLiteralType(r) && l.underlyingType === r) return true; // `0` is a subtype of number
+                    if (isLiteralType(l) && !isLiteralType(r) && worker(l.underlyingType, r)) return true; // `0` is a subtype of number
 
                     // numeric is a subtype of string
                     // however, string is not a subtype of numeric
@@ -806,7 +806,10 @@ export function Checker(options: ProjectOptions) {
                     // also every parameter needs the same names...?
 
                     const hasSpread = !!(r.params.length > 0 && r.params[r.params.length-1].flags & TypeFlags.spread);
-                    if (!hasSpread && l.params.length != r.params.length) return false;
+                    const minParams = r.params.filter(param => !(param.flags & TypeFlags.optional)).length;
+                    if (!hasSpread && l.params.length < minParams) {
+                        return false;
+                    }
 
                     for (let i = 0; i < l.params.length; i++) {
                         // if the arg in the right side is a spread, just check remaining left types against the (un-array-wrapped) spread type
@@ -1678,12 +1681,12 @@ export function Checker(options: ProjectOptions) {
     // we cache and reuse already-wrapped sybmol tables so that we can compare types by identity
     function structViewOfScope(scopeContents: SymbolTable, interfaceExtension?: Interface) : Struct {
         if (!interfaceExtension) interfaceExtension = SyntheticType.EmptyInterface;
-        if (structViewCache.has(scopeContents, interfaceExtension)) {
-            return structViewCache.get(scopeContents, interfaceExtension)!;
+        if (structViewCache.has([scopeContents, interfaceExtension])) {
+            return structViewCache.get([scopeContents, interfaceExtension])!;
         }
         else {
             const type = SymbolTableTypeWrapper(scopeContents, interfaceExtension);
-            structViewCache.set(scopeContents, interfaceExtension, type);
+            structViewCache.set([scopeContents, interfaceExtension], type);
             return type;
         }
         
@@ -2026,9 +2029,7 @@ export function Checker(options: ProjectOptions) {
             }
             (finalType as Mutable<_Type>).flags |= accessModifierFlag;
         }
-
-        setCachedEvaluatedNodeType(node, finalType);
-        
+      
         const actualReturnType = checkFunctionBody(node);
 
         if (CHECK_RETURN_TYPES && !isAssignable(actualReturnType, finalType.returns, /*sourceIsLiteralExpr*/ false, /*forReturnType*/ true)) {
@@ -2056,6 +2057,13 @@ export function Checker(options: ProjectOptions) {
                 }
             }
         }
+        else {
+            // we're not checking actual return type, or we did, and the actual return type is a subtype of the declared return type
+            // note that arrow function "declare return types" are always 'any'
+            (finalType as Mutable<cfFunctionSignature>).returns = actualReturnType;
+        }
+
+        setCachedEvaluatedNodeType(node, finalType);
     }
 
     function checkFunctionBody(node: FunctionDefinition | ArrowFunctionDefinition) : _Type {
@@ -2951,43 +2959,5 @@ function QuickInstance(sourceFile: SourceFile) : void {
 
     for (const method of methodsToAdd) {
         sourceFile.containedScope.this!.set(method.canonicalName, method);
-    }
-}
-
-function WeakPairMap<K0 extends Object, K1 extends Object, V>() {
-    const map = new WeakMap<K0, WeakMap<K1, V>>();
-
-    function get(k0: K0, k1: K1) {
-        return map.get(k0)?.get(k1);
-    }
-
-    function has(k0: K0, k1: K1) {
-        return map.has(k0) ? map.get(k0)!.has(k1) : false;
-    }
-
-    function set(k0: K0, k1: K1, v: V) {
-        const subMap = map.get(k0);
-        if (subMap) {
-            subMap.set(k1, v);
-        }
-        else {
-            map.set(k0, new WeakMap([[k1, v]]));
-        }
-    }
-
-    function _delete(k0: K0, k1?: K1) {
-        if (k1) {
-            map.get(k0)?.delete(k1);
-        }
-        else {
-            map.delete(k0);
-        }
-    }
-
-    return {
-        get,
-        set,
-        has,
-        delete: _delete
     }
 }
