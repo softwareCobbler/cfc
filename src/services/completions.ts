@@ -3,9 +3,8 @@
 import { Project } from "../compiler/project"
 import { Node, NodeKind, CallExpression, CfTag, StaticallyKnownScopeName, SymbolTable, SymTabEntry, SimpleStringLiteral, SourceFile } from "../compiler/node"
 import { CfFileType, SourceRange, TokenType } from "../compiler/scanner";
-import { isFunctionOverloadSet, isFunctionSignature, isGenericFunctionSignature, isLiteralType, isStructLike, StructKind, SymbolTableTypeWrapper, TypeFlags, _Type } from "../compiler/types";
+import { cfFunctionSignatureParam, isFunctionOverloadSet, isFunctionSignature, isGenericFunctionSignature, isLiteralType, isStructLike, isUnion, StructKind, SymbolTableTypeWrapper, TypeFlags, _Type } from "../compiler/types";
 import { isExpressionContext, isCfScriptTagBlock, stringifyCallExprArgName, getSourceFile, cfcIsDescendantOf, isPublicMethod } from "../compiler/utils";
-import { tagNames } from "./tagnames";
 import { Checker } from "../compiler/checker";
 
 export const enum CompletionItemKind {
@@ -44,6 +43,8 @@ function getCallExprArgIndex(callExpr: CallExpression, node: Node) {
 }
 
 function getStringLiteralCompletions(checker: Checker, sourceFile: SourceFile, node: SimpleStringLiteral) : CompletionItem[] | undefined {
+    const strings = new Set<string>();
+
     if (node.parent?.kind === NodeKind.callArgument && node.parent.parent?.kind === NodeKind.callExpression) {
         const ziArgIndex = getCallExprArgIndex(node.parent.parent, node);
         if (ziArgIndex === undefined) return undefined;
@@ -52,23 +53,46 @@ function getStringLiteralCompletions(checker: Checker, sourceFile: SourceFile, n
         const type = checker.getCachedEvaluatedNodeType(node.parent.parent.left, sourceFile);
         if (!type) return undefined;
 
-        let strings : string[] = [];
-        if (isFunctionOverloadSet(type)) {
+        if (isFunctionOverloadSet(type)) { // this was primarily to investigate wirebox typename completions in `getInstance`
             for (const overload of type.overloads) {
                 const type = overload.params[ziArgIndex]?.type;
                 if (!type) continue;
                 if (type.flags & TypeFlags.string && isLiteralType(type)) {
-                    strings.push(type.literalValue as string);
+                    strings.add(type.literalValue as string);
                 }
             }
         }
         else if (isFunctionSignature(type)) {
             return undefined; // not yet impl'd
         }
+        else {
+            // no-op
+        }
+    }
+    else if (node.parent?.kind === NodeKind.tagAttribute) {
+        const attrType = checker.getCachedEvaluatedNodeType(node.parent, sourceFile);
+        if (isUnion(attrType)) {
+            
+            for (const member of attrType.types) {
+                if (isLiteralType(member) && member.flags & TypeFlags.string) {
+                    strings.add(member.literalValue as string);
+                }
+                if (member.flags & TypeFlags.boolean) {
+                    strings.add("yes");
+                    strings.add("no");
+                }
+            }
+        }
+    }
 
-        return strings.length > 0 ? strings.map((s) => {
+    if (strings.size === 0) {
+        return undefined;
+    }
+    else {
+        const result : CompletionItem[] = [];
+        strings.forEach((s) => {
             const v = new SourceRange(node.range.fromInclusive+1, node.range.fromInclusive+1+s.length);
-            return {
+            result.push({
                 label: s,
                 kind: CompletionItemKind.stringLiteral,
                 textEdit: {
@@ -77,11 +101,11 @@ function getStringLiteralCompletions(checker: Checker, sourceFile: SourceFile, n
                     insert: v,
                     replace: v
                 }
-            }
-        }) : undefined;
-    }
+            });
+        });
 
-    return undefined;
+        return result;
+    }
 }
 
 export function getCompletions(project: Project, fsPath: string, targetIndex: number, triggerCharacter: string | null) : CompletionItem[] {
@@ -111,7 +135,32 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
         return [];
     }
 
-    let callExpr : CallExpression | null = (node.parent?.parent?.kind === NodeKind.callArgument && !node.parent.parent.equals)
+    const expressionContext = isExpressionContext(node);
+
+    if (!expressionContext) {
+        const maybeTagCall = node.parent?.kind === NodeKind.terminal && node.parent.parent?.kind === NodeKind.tag
+            ? node.parent.parent
+            : node.parent?.kind === NodeKind.tagAttribute && node.parent.parent?.kind === NodeKind.tag
+            ? node.parent.parent
+            : node.parent?.kind === NodeKind.terminal && node.parent.parent?.kind === NodeKind.tagAttribute && node.parent.parent.parent?.kind === NodeKind.tag
+            ? node.parent.parent.parent
+            : node.parent?.kind === NodeKind.terminal && node.parent.parent?.parent?.kind === NodeKind.tagAttribute && node.parent.parent.parent.parent?.kind === NodeKind.tag
+            ? node.parent.parent.parent.parent
+            : null;
+
+        if (!maybeTagCall) {
+            return [];
+        }
+
+        const sig = checker.getCachedEvaluatedNodeType(maybeTagCall, parsedSourceFile);
+        if (!isFunctionSignature(sig)) {
+            return [];
+        }
+
+        return namedCallArgumentCompletions(sig.params, new Set(sig.params.map(param => param.canonicalName)), "Tag attribute");
+    }
+
+    const callExpr : CallExpression | null = (node.parent?.parent?.kind === NodeKind.callArgument && !node.parent.parent.equals)
         ? node.parent.parent.parent as CallExpression // inside a named argument `foo(a|)
         : (node.kind === NodeKind.terminal && node.token.type === TokenType.LEFT_PAREN && node.parent?.kind === NodeKind.callExpression)
         ? node.parent as CallExpression // right on `foo(|`
@@ -124,21 +173,6 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
     // a whitespace or left-paren trigger character is only used for showing named parameters inside a call argument list
     if ((triggerCharacter === " " || triggerCharacter === "(") && !callExpr) {
         if (!callExpr) return [];
-    }
-
-    const expressionContext = isExpressionContext(node);
-
-    if (!expressionContext) {
-        if (node.parent?.kind === NodeKind.tag && (node === node.parent.tagStart || node === node.parent.tagName)) {
-            return tagNames.map((name) : CompletionItem => {
-                return { 
-                    label: "cf" + name,
-                    kind: CompletionItemKind.tagName,
-                    detail: "cflsp:<<taginfo?>>"
-                }
-            });
-        }
-        return [];
     }
 
     if (isCfScriptTagBlock(node)) {
@@ -167,6 +201,23 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
     
     const result : CompletionItem[] = [];
 
+    // fixme: hoist out
+    function namedCallArgumentCompletions(params: readonly cfFunctionSignatureParam[], yetToBeUsedParams: ReadonlySet<string>, detail: string) : CompletionItem[] {
+        const result : CompletionItem[] = [];
+        for (const param of params) {
+            if (!yetToBeUsedParams.has(param.canonicalName)) continue;
+            if (!param.uiName) continue;
+            if (param.flags & TypeFlags.spread) continue; // don't show a name for a spread arg
+            result.push({
+                label: param.uiName + "=",
+                kind: CompletionItemKind.variable,
+                detail: detail,
+                sortText: "000_" + param.uiName, // we'd like param name suggestions first
+            });
+        }
+        return result;
+    }
+
     // `foo(bar = baz, |)`
     // `foo(b|`
     // `foo( |)`
@@ -183,18 +234,7 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
         }
 
         const detail = callExpr.parent?.kind === NodeKind.new ? "named constructor argument" : "named function argument";
-
-        for (const param of sig.params) {
-            if (!yetToBeUsedParams.has(param.canonicalName)) continue;
-            if (!param.uiName) continue;
-            if (param.flags & TypeFlags.spread) continue; // don't show a name for a spread arg
-            result.push({
-                label: param.uiName + "=",
-                kind: CompletionItemKind.variable,
-                detail: detail,
-                sortText: "000_" + param.uiName, // we'd like param name suggestions first
-            });
-        }
+        return namedCallArgumentCompletions(sig.params, yetToBeUsedParams, detail);
     }
 
     if (node.parent?.kind === NodeKind.indexedAccessChainElement) {

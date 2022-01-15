@@ -1,4 +1,4 @@
-import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, Property, hasDeclaredType, UnreachableFlow, DiagnosticKind } from "./node";
+import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, Property, hasDeclaredType, UnreachableFlow, DiagnosticKind, TagAttribute } from "./node";
 import { CfcResolver, EngineSymbolResolver, LibTypeResolver, ProjectOptions } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, Struct, cfUnion, SyntheticType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStructLike, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, stringifyType, cfFunctionSignatureParam, isFunctionOverloadSet, cfFunctionOverloadSet, isLiteralType, cfTypeId, SymbolTableTypeWrapper, CfcTypeWrapper, Interface, StructKind, isCfcLookupType, isInstantiatedArray, isInterface, createType, createLiteralType, isUninstantiatedArray, isGenericFunctionSignature, TypeConstructor, typeFromJavaLikeTypename } from "./types";
@@ -193,8 +193,13 @@ export function Checker(options: ProjectOptions) {
                 return;
             case NodeKind.statement:
                 switch (node.subType) {
+                    case StatementType.fromTag: {
+                        checkTag(node.tagOrigin.startTag as CfTag.Common);
+                        break;
+                    }
                     case StatementType.expressionWrapper: {
                         checkNode(node.expr);
+                        break;
                     }
                 }
                 return;
@@ -1032,7 +1037,7 @@ export function Checker(options: ProjectOptions) {
         }
         else if (isFunctionSignature(sig)) {
             checkList(node.args);
-            checkCallLikeArguments(sig, node);
+            checkCallLikeArguments(sig, node.args, node.left.range, /*isNewExpr*/false);
             setCachedEvaluatedNodeType(node, returnType = sig.returns);
         }
         else if (isGenericFunctionSignature(sig)) {
@@ -1217,17 +1222,15 @@ export function Checker(options: ProjectOptions) {
         }
     }
 
-    function checkCallLikeArguments(sig: _Type, node: CallExpression) : void {
+    function checkCallLikeArguments(sig: _Type, args: CallArgument[], nameRange: SourceRange, isNewExpr: boolean, requireNamedArgs = false) : void {
         if (sig.flags & TypeFlags.any) {
             return;
         }
         if (isFunctionSignature(sig)) {
-            const namedArgCount = node.args.filter(arg => !!arg.equals).length;
-            if (namedArgCount > 0 && namedArgCount !== node.args.length) {
-                issueDiagnosticAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), "All arguments must be named, if any are named.");
+            const namedArgCount = args.filter(arg => !!arg.equals).length;
+            if (namedArgCount > 0 && namedArgCount !== args.length) {
+                issueDiagnosticAtRange(nameRange, "All arguments must be named, if any are named.");
             }
-
-            const isNewExpr = node.parent?.kind === NodeKind.new;
 
             const minRequiredParams = sig.params.filter(param => !(param.flags & TypeFlags.optional) && !(param.flags & TypeFlags.spread)).length;
             // maxParams is undefined if there was a spread param, since it accepts any number of trailing args
@@ -1237,13 +1240,16 @@ export function Checker(options: ProjectOptions) {
             
             let hasArgumentCollectionArg = false;
 
-            if (namedArgCount > 0) {
+            // If the user supplied at least one named arg, we require all args to be named
+            // It is also possible that the callsite requires named args (or rather, does not support unnamed args by position only),
+            // which is the case for a tag call
+            if (namedArgCount > 0 || requireNamedArgs) {
                 const paramNameMap = new Map<string, {uiName: string, param: cfFunctionSignatureParam}>();
                 for (const param of sig.params) {
                     paramNameMap.set(param.canonicalName, {uiName: param.uiName, param});
                 }
                 const seenArgs = new Set<string>();
-                for (const arg of node.args) {
+                for (const arg of args) {
                     const argName = arg.name?.kind === NodeKind.identifier
                         ? stringifyLValue(arg.name)
                         : isSimpleOrInterpolatedStringLiteral(arg.name)
@@ -1289,30 +1295,30 @@ export function Checker(options: ProjectOptions) {
                     }
                     if (requiredNamedParams.size > 0) {
                         const missingNamedParams = [...requiredNamedParams.values()].map(uiName => "'" + uiName + "'").join(", ");
-                        issueDiagnosticAtNode(node.left, `Required named parameters are missing: ${missingNamedParams}`);
+                        issueDiagnosticAtRange(nameRange, `Required named parameters are missing: ${missingNamedParams}`);
                     }
                 }
             }
             else {
                 const spreadAdjust = maxParams === undefined ? -1 : 0; // if there was a trailing spread arg, drop the spread count by 1
-                const minToCheck = Math.min(node.args.length, sig.params.length + spreadAdjust);
+                const minToCheck = Math.min(args.length, sig.params.length + spreadAdjust);
                 for (let i = 0; i < minToCheck; i++) {
-                    const argType = getCachedEvaluatedNodeType(node.args[i]);
+                    const argType = getCachedEvaluatedNodeType(args[i]);
                     const paramType = sig.params[i].type;
-                    if (!isAssignable(argType, paramType, isLiteralExpr(node.args[i].expr))) {
-                        issueDiagnosticAtNode(node.args[i], `Argument of type '${stringifyType(argType)}' is not assignable to parameter of type '${stringifyType(paramType)}'.`);
+                    if (!isAssignable(argType, paramType, isLiteralExpr(args[i].expr))) {
+                        issueDiagnosticAtNode(args[i], `Argument of type '${stringifyType(argType)}' is not assignable to parameter of type '${stringifyType(paramType)}'.`);
                     }
                 }
             }
 
-            if (!hasArgumentCollectionArg && (node.args.length < minRequiredParams || (maxParams !== undefined && node.args.length > maxParams))) {
+            if (!hasArgumentCollectionArg && (args.length < minRequiredParams || (maxParams !== undefined && args.length > maxParams))) {
                 let msg;
                 if (minRequiredParams !== maxParams) {
-                    if (maxParams === undefined) msg = `Expected at least ${minRequiredParams} arguments, but got ${node.args.length}`;
-                    else msg = `Expected between ${minRequiredParams} and ${maxParams} arguments, but got ${node.args.length}`;
+                    if (maxParams === undefined) msg = `Expected at least ${minRequiredParams} arguments, but got ${args.length}`;
+                    else msg = `Expected between ${minRequiredParams} and ${maxParams} arguments, but got ${args.length}`;
                 }
-                else msg = `Expected ${maxParams} arguments, but got ${node.args.length}`;
-                issueDiagnosticAtRange(mergeRanges(node.leftParen, node.args, node.rightParen), msg);
+                else msg = `Expected ${maxParams} arguments, but got ${args.length}`;
+                issueDiagnosticAtRange(nameRange, msg);
             }
 
             // most of this is done above, with the exception of "push type into inline function definition"
@@ -1588,6 +1594,58 @@ export function Checker(options: ProjectOptions) {
         }
 
         setCachedEvaluatedFlowType(lValue.flow!, name.canonical, rhsType); // hm, rhs type or instantiated declared type?
+    }
+
+    function checkTag(tag: CfTag.Common) {
+        const tagCallSignature = tryGetTagCallSignature(tag.canonicalName);
+        if (!tagCallSignature || !isFunctionSignature(tagCallSignature)) {
+            return;
+        }
+
+        function callArgsFromTagAttrs(tag: CfTag.Common) : CallArgument[] {
+            const args : CallArgument[] = [];
+            for (const attr of tag.attrs)   {
+                const name = Identifier(attr.name, attr.name.token.text);
+                const expr = getAttributeValue(tag.attrs, attr.name.token.text);
+                if (!expr) {
+                    issueDiagnosticAtNode(attr.name, "Tag attribute has no associated value.", DiagnosticKind.error);
+                }
+                else {
+                    args.push(CallArgument(name, /*equals*/null, /*dotDotDot*/null, expr, /*comma*/null));
+                }
+            }
+            
+            return args;
+        }
+
+        function assignTypesToAttrsFromSignature(sig: cfFunctionSignature, attrs: TagAttribute[]) {
+            const nameToType = (() => {
+                const result = new Map<string, _Type>();
+                for (const param of sig.params) {
+                    result.set(param.canonicalName, param.type);
+                }
+                return result;
+            })();
+
+            for (const attr of attrs) {
+                const type = nameToType.get(attr.canonicalName);
+                if (type) {
+                    setCachedEvaluatedNodeType(attr, type);
+                }
+            }
+        }
+
+        assignTypesToAttrsFromSignature(tagCallSignature, tag.attrs);
+        setCachedEvaluatedNodeType(tag, tagCallSignature);
+
+        const args = callArgsFromTagAttrs(tag);
+        const nameRange = (() => {
+            const r = mergeRanges(tag.tagStart, tag.tagName);
+            return r.fromInclusive === r.toExclusive
+                ? r // it's a 0-length error span, not much else to do with it
+                : new SourceRange(r.fromInclusive+1, r.toExclusive) // otherwise, it's the "<cftagname" but starting on the char after the "<"
+        })();
+        checkCallLikeArguments(tagCallSignature, args, nameRange, /*isNewExpr*/ false, /*requireNamedArgs*/ true);
     }
 
     // fixme: SymTabEntry has a "container" property, which should be the context, so probably this should be just a single arg function
@@ -2119,6 +2177,16 @@ export function Checker(options: ProjectOptions) {
     //
     // type lookup
     //
+    function tryGetTagCallSignature(tagName: string) : _Type | undefined {
+        const taglib = libTypeResolver("__cfTags")
+        if (taglib && isInterface(taglib)) {
+            return taglib.members.get(tagName)?.type;
+        }
+        else {
+            return undefined;
+        }
+    }
+
     function walkUpContainersToResolveType(context: Node, type: cfTypeId) : _Type | undefined {
         let node : Node | null = context;
         const typeName = type.name;
@@ -2295,7 +2363,7 @@ export function Checker(options: ProjectOptions) {
         const initSig = cfcThis.members.get("init");
         if (initSig && isFunctionSignature(initSig.type)) {
             setCachedEvaluatedNodeType(node.callExpr.left, initSig.type);
-            checkCallLikeArguments(initSig.type, node.callExpr)
+            checkCallLikeArguments(initSig.type, node.callExpr.args, node.callExpr.left.range, /*isNewExpr*/ true);
         }
     }
 

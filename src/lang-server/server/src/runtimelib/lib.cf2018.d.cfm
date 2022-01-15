@@ -755,6 +755,75 @@
     yesNoFormat: (value: any) => any,
 }
 
+@!interface __cfTags {
+    queryparam: (
+        value: any,
+        cfsqltype?:
+        | "CF_SQL_BIGINT"
+        | "CF_SQL_BIT"
+        | "CF_SQL_CHAR"
+        | "CF_SQL_BLOB"
+        | "CF_SQL_CLOB"
+        | "CF_SQL_DATE"
+        | "CF_SQL_DECIMAL"
+        | "CF_SQL_DOUBLE"
+        | "CF_SQL_FLOAT"
+        | "CF_SQL_IDSTAMP"
+        | "CF_SQL_INTEGER"
+        | "CF_SQL_LONGNVARCHAR"
+        | "CF_SQL_LONGVARCHAR"
+        | "CF_SQL_MONEY"
+        | "CF_SQL_MONEY4"
+        | "CF_SQL_NCHAR"
+        | "CF_SQL_NCLOB"
+        | "CF_SQL_NVARCHAR"
+        | "CF_SQL_NUMERIC"
+        | "CF_SQL_REAL"
+        | "CF_SQL_REFCURSOR"
+        | "CF_SQL_SMALLINT"
+        | "CF_SQL_SQLXML"
+        | "CF_SQL_TIME"
+        | "CF_SQL_TIMESTAMP"
+        | "CF_SQL_TINYINT"
+        | "CF_SQL_VARCHAR",
+        list?: boolean,
+        maxLength?: numeric,
+        null?: boolean,
+        scale?: numeric,
+        separator?: string) => void
+    http: (
+        url: string,
+        charset?: string,
+        clientCert?: string,
+        clientCertPassword?: string,
+        columns?: string,
+        delimiter?: string,
+        file?: string,
+        firstrowasheaders?: boolean,
+        getAsBinary?: "auto" | "never" | boolean,
+        method?: string,
+        multipart?: boolean,
+        name?: string,
+        password?: string,
+        path?: string,
+        port?: numeric,
+        proxyServer?: string,
+        proxyPort?: numeric,
+        proxyUser?: string,
+        proxyPassword?: string,
+        redirect?: boolean,
+        resolveURL?: boolean,
+        result?: boolean,
+        textQualifier?: string,
+        throwOnError?: boolean,
+        timeout?: numeric,
+        username?: string,
+        userAgent?: string,
+        authType?: "BASIC" | "NTLM",
+        domain?: string,
+        workstation?: string) => void
+}
+
 @!interface Array<T> {
     append: (value: T, merge?: boolean) => T[],
     avg: () => numeric,
