@@ -51,6 +51,12 @@
 					"default": false,
 					"description": "experimental: check return types of functions against function signatures"
 				},
+				"cflsp.x_checkFlowTypes": {
+					"scope": "resource",
+					"type": "boolean",
+					"default": false,
+					"description": "experimental: use flow analysis to aid type checking"
+				},
 				"cflsp.x_genericFunctionInference": {
 					"scope": "resource",
 					"type": "boolean",

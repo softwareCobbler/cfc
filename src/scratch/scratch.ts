@@ -24,6 +24,7 @@ function projectFiddle() {
                         }
                     }`,
                 "lib.d.cfm": `
+                    @!interface Array<T> { MARKER: {}[] }
                 `,
                 //"realLib.d.cfm": fs.readFileSync("C:\\Users\\anon\\dev\\cfc\\src\\lang-server\\server\\src\\runtimelib\\lib.cf2018.d.cfm").toString(),
                 "someFile.cfm": `
@@ -33,7 +34,7 @@ function projectFiddle() {
                     "b": {
                         "x.cfc": `
                         /**
-                         * @!typedef X_t = {A: 0, B: 1, C: 2}
+                         * @!typedef X_t = {A: 0, B: 1, C: 2} | any[]
                          */
                          component accessors="true" {
                              /**
@@ -41,7 +42,7 @@ function projectFiddle() {
                              */
                              function doit() {
                                  var v = {
-                                     A: 42, 
+                                     A: 0, 
                                      B: 1,
                                      C: 2
                                  }
@@ -68,6 +69,7 @@ function projectFiddle() {
         withWireboxResolution: true,
         wireboxConfigFileCanonicalAbsPath: "/Wirebox.cfc",
         checkReturnTypes: true,
+        checkFlowTypes: true,
         genericFunctionInference: true,
         cancellationToken: {
             cancellationRequested: () => false,
@@ -77,7 +79,7 @@ function projectFiddle() {
     //const project = Project([path.resolve(".")], FileSystem(), {debug: true, parseTypes: true, language: LanguageVersion.lucee5});
     //const target = path.join(path.resolve("./test/"), "mxunit/framework/javaloader/JavaProxy.cfc");
     
-     //project.addEngineLib("/lib.d.cfm");
+    project.addEngineLib("/lib.d.cfm");
     // project.addEngineLib("/realLib.d.cfm");
     project.addFile("/a/b/x.cfc");
     //project.addFile("C:\\Users\\anon\\dev\\cb\\testbox\\tests\\resources\\coldbox\\system\\EventHandler.cfc");

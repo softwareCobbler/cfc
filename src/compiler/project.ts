@@ -188,6 +188,7 @@ export interface ProjectOptions {
     wireboxConfigFileCanonicalAbsPath: string | null,
     genericFunctionInference: boolean,
     checkReturnTypes: boolean,
+    checkFlowTypes: boolean,
     cancellationToken: CancellationTokenConsumer,
 }
 

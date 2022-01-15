@@ -608,14 +608,25 @@ export interface cfUnion extends _Type {
     types: _Type[],
 }
 
-export function cfUnion(types: _Type[], flags: TypeFlags = TypeFlags.none) {
+export function cfUnion(types: readonly _Type[], flags: TypeFlags = TypeFlags.none) {
     if  (types.length === 1) {
         return types[0];
     }
     else {
+        const workingTypes = types.slice();
+        const result = new Set<_Type>();
+        while (workingTypes.length > 0) {
+            const type = workingTypes.shift()!;
+            if (isUnion(type)) {
+                workingTypes.push(...type.types)
+            }
+            else {
+                result.add(type);
+            }
+        }
         return createType({
             flags: TypeFlags.union | flags,
-            types: [...types],
+            types: [...result],
         });
     }
 }

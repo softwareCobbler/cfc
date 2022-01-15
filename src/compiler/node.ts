@@ -147,11 +147,12 @@ export interface SymTabEntry {
     canonicalName: string,
     declarations: Node[] | null,
     type: _Type,
-    declaredType?: _Type,
+    declaredType?: _Type, // fixme: "annotated type" ? this comes from a lexically preceding `@!type` annotation, right?
     instantiatedDeclaredType?: _Type,
     optional?: boolean,
 }
 
+// fixme: "hasAnnotatedType"
 export function hasDeclaredType(symbol: SymTabEntry) : symbol is SymTabEntry & {declaredType: _Type} {
     return !!symbol.declaredType;
 }

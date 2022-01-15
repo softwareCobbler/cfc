@@ -145,6 +145,7 @@ function mungeConfig(config: Record<string, any> | null) : SerializableCflsConfi
 		x_parseTypes: !!config?.x_parseTypes,
 		x_genericFunctionInference: !!config?.x_genericFunctionInference,
 		x_checkReturnTypes: !!config?.x_checkReturnTypes,
+		x_checkFlowTypes: !!config?.x_checkFlowTypes,
 		engineVersion: config?.engineVersion ?? "lucee.5",
 		wireboxConfigFile: config?.wireboxConfigFile ?? null,
 		wireboxResolution: config?.wireboxResolution ?? false,

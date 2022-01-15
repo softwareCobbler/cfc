@@ -103,6 +103,7 @@ export interface CflsConfig {
 	wireboxConfigFile: string | null,
 	wireboxResolution: boolean,
 	x_checkReturnTypes: boolean,
+    x_checkFlowTypes: boolean,
 	x_genericFunctionInference: boolean,
 }
 
@@ -114,6 +115,7 @@ export function CflsConfig() : CflsConfig {
         wireboxConfigFile: null,
         wireboxResolution: false,
         x_checkReturnTypes: false,
+        x_checkFlowTypes: false,
         x_genericFunctionInference: false,
     }
 }
@@ -126,6 +128,7 @@ export function CflsInitArgs(): InitArgs["config"] {
         wireboxConfigFile: null,
         wireboxResolution: false,
         x_checkReturnTypes: false,
+        x_checkFlowTypes: false,
         x_genericFunctionInference: false,
     }
 }
