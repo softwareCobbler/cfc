@@ -137,6 +137,7 @@ export function Parser(config: ProjectOptions) {
     let token_ : Token;
     let lastNonTriviaToken : Token;
     let diagnostics : Diagnostic[] = [];
+    let typedefContainer! : Node;
 
     const parseTypes = config.parseTypes;
     const debug = config.debug;
@@ -917,6 +918,8 @@ export function Parser(config: ProjectOptions) {
     // fixme: we can supply a filetype, but have to set the sourceFile with an earlier call?
     function parse(cfFileType: CfFileType = sourceFile?.cfFileType || CfFileType.cfm) : Node[] {
         const savedContext = parseContext;
+        typedefContainer = sourceFile;
+
         switch (cfFileType) {
             case CfFileType.cfm:
                 sourceFile.content = parseTags();
@@ -2492,7 +2495,7 @@ export function Parser(config: ProjectOptions) {
         }
     }
 
-    function isValidTypeId(tokenType: TokenType) : boolean {
+    function isValidTypeIdOrBuiltinTypename(tokenType: TokenType) : boolean {
         // things like NOT and FUNCTION can be type names
         return tokenType === TokenType.LEXEME || (TokenType._FIRST_KW < tokenType && tokenType < TokenType._LAST_KW)
             || (TokenType._FIRST_LIT < tokenType
@@ -2515,7 +2518,7 @@ export function Parser(config: ProjectOptions) {
             case TokenType.LEXEME:
                 return true;
             default:
-                return isValidTypeId(lookahead());
+                return isValidTypeIdOrBuiltinTypename(lookahead());
         }
     }
 
@@ -2619,7 +2622,7 @@ export function Parser(config: ProjectOptions) {
             case ParseContext.typeTupleOrArrayElement:
                 return isStartOfType();
             case ParseContext.typeParamList:
-                return isValidTypeId(lookahead());
+                return isValidTypeIdOrBuiltinTypename(lookahead());
             default:
                 return false;
         }
@@ -3266,10 +3269,24 @@ export function Parser(config: ProjectOptions) {
         return Script.FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body, null);
     }
 
+    function maybePushTypedefsToCurrentTypedefContainer(typeshims: TypeShim[] | undefined) : void {
+        if (!typeshims) {
+            return;
+        }
+        for (const typeshim of typeshims) {
+            if (typeshim.what === "typedef") {
+                typedefContainer.containedScope?.typedefs.aliases.set(typeshim.type.name || "<<error>>", typeshim.type);
+            }
+        }
+    }
+
     function tryParseNamedFunctionDefinition(speculative: false, asDeclaration: boolean) : Script.FunctionDefinition;
     function tryParseNamedFunctionDefinition(speculative: true) : Script.FunctionDefinition | null;
     function tryParseNamedFunctionDefinition(speculative: boolean, asDeclaration = false) : Script.FunctionDefinition | null {
+        maybePushTypedefsToCurrentTypedefContainer(lastDocBlock?.typedefs);
+
         const savedLastDocBlock = lastDocBlock;
+        const savedTypedefContainer = typedefContainer;
         lastDocBlock = null;
 
         let accessModifier: Terminal | null = null;
@@ -3293,6 +3310,7 @@ export function Parser(config: ProjectOptions) {
             functionToken = parseOptionalTerminal(TokenType.KW_FUNCTION, ParseOptions.withTrivia);
             if (!functionToken) {
                 lastDocBlock = savedLastDocBlock;
+                typedefContainer = savedTypedefContainer;
                 return null;
             }
         }
@@ -3323,12 +3341,17 @@ export function Parser(config: ProjectOptions) {
             attrs.push(...savedLastDocBlock.docBlockAttrs);
         }
 
-        let returnTypeAnnotation : _Type | null = null;
+        let returnTypeAnnotation : _Type | null = null; // fixme: unecessary?
         const result = Script.FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body, returnTypeAnnotation);
 
         result.typeAnnotation = savedLastDocBlock?.type ?? null;
         
-        if (lastDocBlock === savedLastDocBlock) lastDocBlock = null; // the next legit docblock might be parsed as trivia "attached" to the end of this function's final brace
+        // the next legit docblock might be parsed as trivia "attached" to the end of this function's final brace
+        if (lastDocBlock === savedLastDocBlock) {
+            lastDocBlock = null;
+        }
+
+        typedefContainer = savedTypedefContainer;
 
         return result;
     }
@@ -3481,6 +3504,8 @@ export function Parser(config: ProjectOptions) {
         setScannerMode(parseBlockInMode);
         const leftBrace = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
         const body = parseList(ParseContext.blockStatements, parseStatement);
+        
+        lastDocBlock = null; // any doc block in body should have been consumed, or is loose and is discarded (how will this handle a trailing typedef in a function or component?)
 
         // if left brace was missing we don't eat right brace
         const rightBrace = (leftBrace.flags & NodeFlags.missing)
@@ -3488,6 +3513,7 @@ export function Parser(config: ProjectOptions) {
             : parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
 
         setScannerMode(savedMode);
+
         return Block(leftBrace, body, rightBrace);
     }
 
@@ -3924,7 +3950,7 @@ export function Parser(config: ProjectOptions) {
 
         lastDocBlock = {type: typeAnnotation, typedefs: typedefs, docBlockAttrs: docBlockAttrs};
 
-        if (typedefs) {
+        if (typedefs) { // fixme: probably unnecessary if we later attach these to the typedef container
             node.typedefs = typedefs;
         }
 
@@ -4515,8 +4541,10 @@ export function Parser(config: ProjectOptions) {
                     result = createLiteralType(value);
                 }
                 default: {
-                    if (isValidTypeId(lookahead())) {
-                        result = tokenToType(next());
+                    if (isValidTypeIdOrBuiltinTypename(lookahead())) {
+                        const token = next();
+                        parseTrivia();
+                        result = tokenToType(token);
                     }
                 }
             }

@@ -24,22 +24,30 @@ function projectFiddle() {
                         }
                     }`,
                 "lib.d.cfm": `
-                    @interface Array<T> {
-                        placeholder: any // map: <U>(callback: (e: T, i?: numeric, a?: T[]) => U, parallel?: boolean, maxThreads?: boolean) => U[]
-                    }
                 `,
                 //"realLib.d.cfm": fs.readFileSync("C:\\Users\\anon\\dev\\cfc\\src\\lang-server\\server\\src\\runtimelib\\lib.cf2018.d.cfm").toString(),
-                "someFile.cfc": `
-
-                    `,
+                "someFile.cfm": `
+                    <cfqueryparam cfsqltype="">
+                `,
                 "a": {
                     "b": {
                         "x.cfc": `
-                        component extends="someFile" {
-                            function foobar() {
-                                foo();
-                            }
-                        }
+                        /**
+                         * @!typedef X_t = {A: 0, B: 1, C: 2}
+                         */
+                         component accessors="true" {
+                             /**
+                             * @!type () => X_t
+                             */
+                             function doit() {
+                                 var v = {
+                                     A: 42, 
+                                     B: 1,
+                                     C: 2
+                                 }
+                                 return v; // should error ...
+                             }
+                         }
                         `,
                         "y.cfc": "component { function mlem() {} }",
                     },
@@ -60,16 +68,20 @@ function projectFiddle() {
         withWireboxResolution: true,
         wireboxConfigFileCanonicalAbsPath: "/Wirebox.cfc",
         checkReturnTypes: true,
-        genericFunctionInference: true
+        genericFunctionInference: true,
+        cancellationToken: {
+            cancellationRequested: () => false,
+            throwIfCancellationRequested: () => void 0
+        }
     });
     //const project = Project([path.resolve(".")], FileSystem(), {debug: true, parseTypes: true, language: LanguageVersion.lucee5});
     //const target = path.join(path.resolve("./test/"), "mxunit/framework/javaloader/JavaProxy.cfc");
     
-    // project.addEngineLib("/lib.d.cfm");
+     //project.addEngineLib("/lib.d.cfm");
     // project.addEngineLib("/realLib.d.cfm");
-    project.addFile("/someFile.cfc");
+    project.addFile("/a/b/x.cfc");
     //project.addFile("C:\\Users\\anon\\dev\\cb\\testbox\\tests\\resources\\coldbox\\system\\EventHandler.cfc");
-    const diagnostics = project.getDiagnostics("/someFile.cfc");
+    const diagnostics = project.getDiagnostics("/a/b/x.cfc");
 
     //const x = project.getInterestingNodeToLeftOfCursor("/someFile.cfc", 378);
     //const completions = getCompletions(project, "/someFile.cfc", 381, null);
@@ -79,9 +91,7 @@ function projectFiddle() {
     }
 }
 
-for (let i = 0; i < 10; i++) {
-    projectFiddle();
-}
+projectFiddle();
 
 
 /*function xfiddle() {

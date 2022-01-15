@@ -2654,15 +2654,12 @@ export function Checker(options: ProjectOptions) {
                         return type;
                         //return cfUnion(type.types.map(type => typeWorker(type))); // need to dedupe and etc.
                     }
-                    if (isStructLike(type)) {
-                        return type;
-                        /*const evaluatedStructContents = new Map<string, SymTabEntry>();
+                    if (isStructLike(type) && type.structKind == StructKind.struct) {
+                        const evaluatedStructContents = new Map<string, SymTabEntry>();
                         let concrete = true;
                         for (const key of type.members.keys()) {
-                            //const preEvaluatedId = type.members.get(key)!.type.nodeId;
                             const evaluatedType = typeWorker(type.members.get(key)!.type);
-                            //const postEvaluatedId = evaluatedType.nodeId;
-                            if (type !== evaluatedType) {
+                            if (type !== evaluatedType) { // fixme: merely expanding a non-generic alias will trigger this, since (alias !== *alias)
                                 concrete = false;
                             }
                             evaluatedStructContents.set(key, {
@@ -2675,7 +2672,7 @@ export function Checker(options: ProjectOptions) {
                         if (concrete) {
                             return type;
                         }
-                        return SyntheticType.struct(evaluatedStructContents);*/
+                        return SyntheticType.struct(evaluatedStructContents);
                     }
                     if ((isGenericFunctionSignature(type) && partiallyApplyGenericFunctionSigs) || isFunctionSignature(type) && !isFunctionOverloadSet(type)) {
                         const sig = isGenericFunctionSignature(type) ? type.body : type;
