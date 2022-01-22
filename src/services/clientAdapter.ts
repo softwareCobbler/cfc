@@ -1,3 +1,9 @@
+/**
+ * unenforceable but required (need a 'module interface' or something):
+ * an "implementing module" export the single constant value `adapter : ClientAdapter`
+ * it is then `require("path-to-impl").adapter`'d where it is needed
+ */
+
 import { AnnotatedChar, SourceRange } from "../compiler/scanner"
 import { Diagnostic } from "../compiler/node";
 import { CompletionItem } from "../services/completions";

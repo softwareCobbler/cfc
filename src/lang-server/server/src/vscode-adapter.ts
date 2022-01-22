@@ -73,10 +73,8 @@ function sourceLocation(getAnnotatedChar: AnnotatedCharGetter, fsPath: AbsPath, 
 	}
 }
 
-const VsClientAdapter = asClientAdapter(Object.freeze({
+export const adapter = asClientAdapter(Object.freeze({
     diagnostic,
     completionItem: mapCflsCompletionToVsCodeCompletion,
 	sourceLocation
 }));
-
-export default VsClientAdapter;

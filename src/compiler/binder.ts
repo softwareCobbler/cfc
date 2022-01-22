@@ -1506,7 +1506,6 @@ export function Binder(options: ProjectOptions) {
                     case "do":
                     case "else":
                     case "false":
-                    case "final":
                     case "finally":
                     case "for":
                     case "function":

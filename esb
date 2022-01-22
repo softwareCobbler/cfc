@@ -1,0 +1,39 @@
+tsc --build src/compiler &&    \
+tsc --build src/services &&    \
+tsc --build src/lang-server && \
+
+# actual language tool
+# should run in its own process because it will block on long parses or etc.
+./node_modules/esbuild/bin/esbuild \
+    --bundle ./src/services/cfls.ts \
+    --platform=node \
+    --format=cjs \
+    --external:vscode \
+    --outfile=./cflsp-vscode/out/cfls-service.js \
+    --define:REPLACED_AT_BUILD.ClientAdapterModule=\"../lang-server/server/src/vscode-adapter\" \
+    --sourcemap \
+&& \
+
+# "server frontend", handles LSP and asks language tool for diagnostics and etc.
+./node_modules/esbuild/bin/esbuild \
+    --bundle ./src/lang-server/server/src/server.ts \
+    --platform=node \
+    --format=cjs \
+    --external:vscode \
+    --outfile=./cflsp-vscode/out/server.js \
+    --sourcemap \
+&& \
+
+# vscode extension entry point, kicks off the "server frontend" in its own process
+# vscode manages the LSP here, crafting requests as a result of user interactions with the editor
+# and interpreting the responses of the server as "put squiggly under these characters" or etc.
+./node_modules/esbuild/bin/esbuild \
+    --bundle ./src/lang-server/client/src/extension.ts \
+    --format=cjs \
+    --platform=node \
+    --external:vscode \
+    --outfile=./cflsp-vscode/out/cflsp.js \
+    --sourcemap \
+&& \
+
+cp src/lang-server/server/src/runtimelib/lib.cf2018.d.cfm ./cflsp-vscode/out/lib.cf2018.d.cfm

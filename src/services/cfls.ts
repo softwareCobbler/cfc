@@ -85,7 +85,12 @@ process.on("message", (msg: CflsRequest) => {
 
 type AbsPath = string;
 
-declare const REPLACED_BY_WEBPACK_AT_BUILD : {ClientAdapterModule: string};
+declare const REPLACED_AT_BUILD : {ClientAdapterModule: string};
+
+function getClientAdapter() : ClientAdapter {
+    // adapter module is expected to `export const adapter : ClientAdapter = ...`
+    return require(REPLACED_AT_BUILD.ClientAdapterModule).adapter;
+}
 
 function LanguageService() {
     let config! : CflsConfig;
@@ -97,7 +102,7 @@ function LanguageService() {
     function init(initArgs : InitArgs) {
         workspaceProjects = new Map();
         workspaceRoots = initArgs.workspaceRoots;
-        clientAdapter = require(REPLACED_BY_WEBPACK_AT_BUILD.ClientAdapterModule);
+        clientAdapter = getClientAdapter();
         cancellationToken = CancellationTokenConsumer(initArgs.cancellationTokenId)
         
         reset(initArgs.config);

@@ -49,7 +49,7 @@ import { EngineVersions, EngineVersion } from "../../../compiler/engines";
 // import * as cfls from "../../../services/completions";
 // import { Scanner, SourceRange, Token } from '../../../compiler/scanner';
 import { LanguageService } from "../../../services/languageService"
-import VsClientAdapter from "./vscode-adapter";
+import { adapter as VsClientAdapter } from "./vscode-adapter";
 import { CflsInitArgs, SerializableCflsConfig } from "../../../services/cflsTypes"
 
 type TextDocumentUri = string;

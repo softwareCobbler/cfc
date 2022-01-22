@@ -117,7 +117,7 @@ export function LanguageService<T extends ClientAdapter>(serverFilePath: AbsPath
         }
     }
 
-    function on<T extends keyof EventHandlers>(eventName: T, handler: EventHandlers[T]) {
+    function on<K extends keyof EventHandlers>(eventName: K, handler: EventHandlers[K]) {
         handlerMappings[eventName] = handler;
     }
 

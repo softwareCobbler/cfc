@@ -2616,7 +2616,6 @@ export function Parser(config: ProjectOptions) {
             case ParseContext.argOrParamList:
                 return isStartOfExpression();
             case ParseContext.cfScriptTagBody:
-            case ParseContext.blockStatements:
             case ParseContext.switchClause:
             case ParseContext.blockStatements:
                 return isStartOfStatement();
