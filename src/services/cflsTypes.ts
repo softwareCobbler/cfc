@@ -59,13 +59,15 @@ export interface ResetRequest extends CflsRequestBase {
 }
 
 export const enum CflsResponseType {
+    initialized,
     definitionLocations,
     diagnostics,
     completions,
-    cancelled
+    cancelled,
 }
 
 export type CflsResponse  =
+    | InitializedResponse
     | DiagnosticsResponse
     | CompletionsResponse
     | DefinitionLocationsResponse
@@ -76,6 +78,10 @@ interface CflsResponseBase {
     id: number,
 }
 
+interface InitializedResponse extends CflsResponseBase {
+    type: CflsResponseType.initialized,
+    // no other info, just "yes we are initialized"
+}
 interface DiagnosticsResponse extends CflsResponseBase {
     type: CflsResponseType.diagnostics,
     fsPath: AbsPath,

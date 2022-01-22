@@ -7,7 +7,7 @@ import { EngineVersion } from "./engines";
 import { BlockType, CallExpression, mergeRanges, Node, NodeId, NodeKind, SourceFile, StatementType, SymTabEntry, setDebug as setNodeFactoryDebug, DiagnosticKind } from "./node";
 import { Parser } from "./parser";
 import { CfFileType, SourceRange } from "./scanner";
-import { Cfc, cfFunctionOverloadSet, cfFunctionSignatureParam, Interface, createLiteralType, Type, Struct } from "./types";
+import { cfFunctionOverloadSet, cfFunctionSignatureParam, Interface, createLiteralType, Type, Struct, CfcLookup } from "./types";
 
 import { isNamedFunction, cfmOrCfc, findNodeInFlatSourceMap, flattenTree, getAttributeValue, getComponentAttrs, getComponentBlock, getTriviallyComputableString, NodeSourceMap, visit } from "./utils";
 
@@ -226,7 +226,6 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
 
     function parseBindCheckWorker(sourceFile: SourceFile) : DevTimingInfo {
         try {
-            console.log(sourceFile.absPath);
             parser.setSourceFile(sourceFile);
             const parseStart = new Date().getTime();
             parser.parse();
@@ -259,8 +258,6 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             const checkStart = new Date().getTime();
 
             if (options.withWireboxResolution && sourceFile.absPath === options.wireboxConfigFileCanonicalAbsPath) {
-                const start = new Date().getTime();
-                console.log("Building wirebox config...");
                 const wireboxInterface = constructWireboxInterface(sourceFile);
                 if (wireboxInterface) {
                     if (!wireboxLib) wireboxLib = SourceFile("<<magic/wirebox>>", CfFileType.dCfm, "");
@@ -269,27 +266,17 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
                 else {
                     wireboxLib = null;
                 }
-                const end = new Date().getTime();
-                console.log("Done with wirebox config in " + (end - start) + "ms");
             }
 
-            let x : string;
             if (options.withWireboxResolution && wireboxLib) {
-                x = "GOT";
-                console.log(sourceFile.absPath + " got wirebox lib");
                 sourceFile.libRefs.set("<<magic/wirebox>>", wireboxLib);
             }
             else {
-                x = "NO-GOT";
                 sourceFile.libRefs.delete("<<magic/wirebox>>");
             }
             
-            console.log(sourceFile.absPath + " " + x + " wirebox lib");
-
             checker.check(sourceFile);
             const checkElapsed = new Date().getTime() - checkStart;
-
-            console.log("done with " + sourceFile.absPath);
 
             return { parse: parseElapsed, bind: bindElapsed, check: checkElapsed };
         }
@@ -347,20 +334,18 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
                         }
                         if (!target.isFile()) continue;
                         if (cfmOrCfc(target.name) !== CfFileType.cfc) continue;
-                        const file = tryAddFile(fileSystem.join(absPath, target.name));
-                        if (!file) continue;
 
                         const instantiableName = target.name.replace(/\.cfc$/i, "");
                         const instantiableNameAsLiteralType = createLiteralType(instantiableName);
 
                         const param = cfFunctionSignatureParam(/*required*/true, instantiableNameAsLiteralType, "name")
-                        var cfcTypeWrapper = Cfc(file.parsedSourceFile);
-                        overloads.push({params: [param], returns: cfcTypeWrapper});
+                        var cfcRefType = CfcLookup(instantiableNameAsLiteralType, ComponentSpecifier(fileSystem.join(absPath, target.name)));
+                        overloads.push({params: [param], returns: cfcRefType});
                         const canonicalName = instantiableName.toLowerCase();
                         mappingsBuilder.set(canonicalName, {
                             canonicalName,
                             uiName: instantiableName,
-                            type: cfcTypeWrapper,
+                            type: cfcRefType,
                             declarations: null,
                             symbolId: -1,
                         });
@@ -460,7 +445,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         if (!heritageInfo) return undefined;
         const {extendsSpecifier, extendsAttr} = heritageInfo;
         if (!extendsSpecifier) return undefined;
-        const noSelfExtendsSpecifier = extendsSpecifier.filter(specifier => specifier.path !== sourceFile.absPath);
+        const noSelfExtendsSpecifier = extendsSpecifier.filter(specifier => specifier.absPath !== sourceFile.absPath);
         if (extendsSpecifier.length !== noSelfExtendsSpecifier.length && noSelfExtendsSpecifier.length === 0) {
             errorAtNode(sourceFile, extendsAttr, "A component may not extend itself.");
             return undefined;
@@ -468,7 +453,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
 
         let result : CachedFile | undefined = undefined;
         for (const specifier of noSelfExtendsSpecifier) {
-            result = getCachedFile(specifier.path) ?? tryAddFile(specifier.path);
+            result = getCachedFile(specifier.absPath) ?? tryAddFile(specifier.absPath);
             if (result) break;
         }
 
@@ -511,17 +496,45 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
 
     let cfcDepth = 0;
     const cfcDepthLimit = 16;
-    function CfcResolver(args: {resolveFrom: string, cfcName: string}) {
+    function CfcResolver(args: ComponentResolutionArgs | ComponentSpecifier) {
+        const hasExplicitPath = args.type === ComponentResolutionArgType.explicit;
+
         if (cfcDepth > cfcDepthLimit) {
-            console.log(`hit cfc resolution depth limit of ${cfcDepthLimit} resolving from ` + args.resolveFrom);
+            if (hasExplicitPath) {
+                console.log(`hit cfc resolution depth limit of ${cfcDepthLimit} resolving ` + args.absPath);
+            }
+            else {
+                console.log(`hit cfc resolution depth limit of ${cfcDepthLimit} resolving from ` + args.resolveFrom);
+            }
             return undefined;
         }
+
         try {
             cfcDepth++;
+
+            if (hasExplicitPath) {
+                if (cfcDepth > cfcDepthLimit) {
+                    console.log(`hit cfc resolution depth limit of ${cfcDepthLimit} on attempt to resolve cfc at '${args.absPath}'`);
+                    return undefined;
+                }
+    
+                const file =  tryAddFile(args.absPath)?.parsedSourceFile;
+    
+                if (file) {
+                    return {
+                        sourceFile: file,
+                        symbolTable: file.containedScope.this || new Map()
+                    }
+                }
+                else {
+                    return undefined;
+                }
+            }
+
             const specifiers = buildPossibleCfcResolutionPaths(args.resolveFrom, args.cfcName);
             if (!specifiers) return undefined;
             for (const specifier of specifiers) {
-                const file = getCachedFile(specifier.path)?.parsedSourceFile;
+                const file = getCachedFile(specifier.absPath)?.parsedSourceFile;
                 if (file) {
                     return {
                         sourceFile: file,
@@ -530,7 +543,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
                 }
             }
             for (const specifier of specifiers) {
-                const file =  tryAddFile(specifier.path)?.parsedSourceFile;
+                const file =  tryAddFile(specifier.absPath)?.parsedSourceFile;
                 if (file) {
                     return {
                         sourceFile: file,
@@ -622,35 +635,20 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         //   - /root/proj/proj/foo/bar.cfc
         const cfcNameStartsWithProjectRootDirName = canonicalCfcName.startsWith(projectRootDirName);
 
-        const common = {
-            canonicalName: canonicalCfcName,
-            uiName: inCodeCfcName,
-        } as const;
-
-        const result = [{
-            ...common,    
-            path: fileSystem.join(resolveFrom, ...cfcComponents)
-        }];
+        const result = [
+            ComponentSpecifier(fileSystem.join(resolveFrom, ...cfcComponents))
+        ];
 
         // magic coldbox/wirebox resolution, might want something to toggle this
         for (const coldboxModulePath of parentModulesFolders) {
-            result.push({
-                ...common,
-                path: path.join(coldboxModulePath, ...cfcComponents)
-            });    
+            result.push(ComponentSpecifier(path.join(coldboxModulePath, ...cfcComponents)));
         }
 
         if (cfcNameStartsWithProjectRootDirName) {
-            result.push({
-                ...common,
-                path: fileSystem.join(projectRoot, ...(cfcComponents.slice(1)))
-            });
+            result.push(ComponentSpecifier(fileSystem.join(projectRoot, ...(cfcComponents.slice(1)))));
         }
 
-        result.push({
-            ...common,
-            path: fileSystem.join(projectRoot, ...cfcComponents)
-        });
+        result.push(ComponentSpecifier(fileSystem.join(projectRoot, ...cfcComponents)));
 
         return result;
     }
@@ -682,14 +680,36 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
 }
 
 export type Project = ReturnType<typeof Project>;
-export type CfcResolver = (args: {resolveFrom: string, cfcName: string}) => {sourceFile: SourceFile, symbolTable: ReadonlyMap<string, SymTabEntry>} | undefined;
+export interface CfcResolution {
+    sourceFile: SourceFile,
+    symbolTable: ReadonlyMap<string, SymTabEntry>
+}
+export type CfcResolver = (args: ComponentResolutionArgs | ComponentSpecifier) => CfcResolution | undefined;
 export type EngineSymbolResolver = (name: string) => SymTabEntry | undefined;
 export type LibTypeResolver = (name: string) => Type | undefined;
 
+const enum ComponentResolutionArgType { explicit, lookup }
 export interface ComponentSpecifier {
-    canonicalName: string,
-    uiName: string,
-    path: string,
+    type: ComponentResolutionArgType.explicit,
+    absPath: string,
+}
+export function ComponentSpecifier(absPath: string) : ComponentSpecifier {
+    return {
+        type: ComponentResolutionArgType.explicit,
+        absPath
+    }
+}
+interface ComponentResolutionArgs {
+    type: ComponentResolutionArgType.lookup,
+    resolveFrom: string,
+    cfcName: string
+};
+export function ComponentResolutionArgs(resolveFrom: string, cfcName: string) : ComponentResolutionArgs {
+    return {
+        type: ComponentResolutionArgType.lookup,
+        resolveFrom,
+        cfcName
+    }
 }
 
 interface WireboxMappingDef {

@@ -2,6 +2,7 @@ import type { ArrowFunctionDefinition, CfTag, DottedPath, FunctionDefinition, Sc
 import { NodeKind } from "./node";
 import { exhaustiveCaseGuard, getAttributeValue, getTriviallyComputableString, Mutable } from "./utils";
 import * as path from "path"; // !! for stringifying CFC types...do we really want this dependency here?
+import { ComponentSpecifier } from "./project";
 
 let debugTypeModule = true;
 debugTypeModule;
@@ -456,14 +457,21 @@ export function TypeConstructor(params: readonly cfTypeConstructorParam[], body:
 export interface CfcLookup extends TypeBase {
     readonly kind: TypeKind.cfcLookup,
     readonly cfcName: cfLiteralType,
+    readonly explicitSpecifier?: ComponentSpecifier // takes precedence over the `cfcName` if this exists
 }
 
-export function CfcLookup(param: string | cfLiteralType) : CfcLookup {
-    return createType({
+export function CfcLookup(param: string | cfLiteralType, explicitSpecifier?: ComponentSpecifier) : CfcLookup {
+    const type : CfcLookup= {
         kind: TypeKind.cfcLookup,
         flags: TypeFlags.none,
         cfcName: typeof param === "string" ? createLiteralType(param) : param
-    })
+    };
+
+    if (explicitSpecifier) {
+        (type as Mutable<CfcLookup>).explicitSpecifier = explicitSpecifier;
+    }
+
+    return createType(type);
 }
 
 export interface cfTypeConstructorParam extends TypeBase {

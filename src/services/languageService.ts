@@ -17,7 +17,8 @@ export function LanguageService<T extends ClientAdapter>(serverFilePath: AbsPath
     interface TaskDef {
         type: CflsRequestType,
         task: () => void,
-        onSuccess?: (payload: any) => void
+        timeout_ms?: number,
+        onSuccess?: (payload?: any) => void
         onNoResponse?: () => void
     }
 
@@ -38,7 +39,7 @@ export function LanguageService<T extends ClientAdapter>(serverFilePath: AbsPath
         }
     })();
 
-    function fork(freshConfig: InitArgs["config"], workspaceRoots: AbsPath[]) {
+    function fork(freshConfig: InitArgs["config"], workspaceRoots: AbsPath[]) : Promise<void> {
         config = freshConfig;
         server = child_process.fork(serverFilePath, {execArgv: ["--nolazy", "--inspect=6012", /*"--inspect-brk"*/]});
 
@@ -46,6 +47,10 @@ export function LanguageService<T extends ClientAdapter>(serverFilePath: AbsPath
             if (messageId.current() === msg.id) {
                 clearRequestTimeout();
                 switch (msg.type) {
+                    case CflsResponseType.initialized: {
+                        if (currentTask?.onSuccess) currentTask.onSuccess();
+                        break;
+                    }
                     case CflsResponseType.diagnostics: {
                         handlerMappings.diagnostics?.(msg.fsPath, msg.diagnostics);
                         break;
@@ -63,12 +68,28 @@ export function LanguageService<T extends ClientAdapter>(serverFilePath: AbsPath
             runNextTask();
         })
 
-        send({type: CflsRequestType.init, id: messageId.current(), initArgs: {
-            config,
-            workspaceRoots,
-            cancellationTokenId: cancellationToken.getId(),
-            clientAdaptersFilePath,
-        }});
+        const {resolve, promise} = explodedPromise<void>();
+        const initTask : TaskDef = {
+            type: CflsRequestType.init,
+            task: () => send({
+                type: CflsRequestType.init,
+                id: messageId.bump(),
+                initArgs: {
+                    config,
+                    workspaceRoots,
+                    cancellationTokenId: cancellationToken.getId(),
+                    clientAdaptersFilePath,
+                },
+            }),
+            timeout_ms: 1000 * 60 * 2, // long timeout for init request, to allow for setting up path mappings and etc.
+            onSuccess: () => {
+                resolve(void 0);
+            }
+        };
+
+        pushTask(initTask);
+
+        return promise;
     }
 
     function runNextTask() {
@@ -76,7 +97,7 @@ export function LanguageService<T extends ClientAdapter>(serverFilePath: AbsPath
         const task = taskQueue.shift();
         if (task) {
             currentTask = task;
-            requestTimeoutId = setTimeout(noResponseAndRunNext, 5000);
+            requestTimeoutId = setTimeout(noResponseAndRunNext, task.timeout_ms ?? 5000);
             task.task();
         }
         else {

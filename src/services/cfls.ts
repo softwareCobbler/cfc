@@ -27,6 +27,7 @@ process.on("message", (msg: CflsRequest) => {
     switch (msg.type) {
         case CflsRequestType.init: {
             service.init(msg.initArgs);
+            response = {type: CflsResponseType.initialized, id: msg.id};
             break;
         }
         case CflsRequestType.diagnostics: {

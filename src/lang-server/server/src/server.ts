@@ -158,13 +158,11 @@ connection.onInitialized(async (x) => {
 		connection.client.register(DidChangeConfigurationNotification.type, {section: "cflsp"});
 		
 		const freshInitArgs = mungeConfig(await connection.workspace.getConfiguration("cflsp"));
-		languageService.fork(freshInitArgs, workspaceRoots.map((root) => URI.parse(root.uri).fsPath));
-		connection.sendNotification("cflsp/ready");
+		await languageService.fork(freshInitArgs, workspaceRoots.map((root) => URI.parse(root.uri).fsPath));
 	}
 	else {
 		const freshInitArgs = mungeConfig(null);
-		languageService.fork(freshInitArgs, workspaceRoots.map((root) => URI.parse(root.uri).fsPath));
-		connection.sendNotification("cflsp/ready");
+		await languageService.fork(freshInitArgs, workspaceRoots.map((root) => URI.parse(root.uri).fsPath));
 	}
 
 	didForkCfls = true;

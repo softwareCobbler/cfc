@@ -331,7 +331,11 @@ describe("general smoke test for particular constructs", () => {
         pushFsNode(fsRoot, "/a.cfc", `
                 component {
                     function foo(required a, required b) {
-                        foo(argumentCollection=arguments);
+                        return bar(argumentCollection=arguments);
+                    }
+
+                    function bar(required a, required b, required x) {
+                        
                     }
                 }`
         );
@@ -343,8 +347,8 @@ describe("general smoke test for particular constructs", () => {
             "/": {
                 "a.cfc": `
                     component {
-                        function foo(required a, required b) {
-                            foo(42);
+                        string function foo(required a, required b) {
+                            return foo(42);
                         }
                     }`
             }

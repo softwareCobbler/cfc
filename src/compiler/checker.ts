@@ -1,5 +1,5 @@
 import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, hasDeclaredType, UnreachableFlow, DiagnosticKind, TagAttribute, SymbolId } from "./node";
-import { CfcResolver, EngineSymbolResolver, LibTypeResolver, ProjectOptions } from "./project";
+import { CfcResolution, CfcResolver, ComponentResolutionArgs, EngineSymbolResolver, LibTypeResolver, ProjectOptions } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, Struct, cfUnion, BuiltinType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, Type, stringifyType, cfFunctionSignatureParam, cfFunctionOverloadSet, cfTypeId, SymbolTableTypeWrapper, Cfc, Interface, createType, createLiteralType, TypeConstructor, typeFromJavaLikeTypename, structurallyCompareTypes, TypeKind, isStructLike, cfArray, cfStructLike, isStructLikeOrArray } from "./types";
 import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, functionDefinitionHasUserSpecifiedReturnType, getAttributeValue, getComponentAttrs, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionNameTerminalErrorNode, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isLiteralExpr, isNamedFunction, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue, tryGetCfcMemberFunctionDefinition } from "./utils";
@@ -1015,7 +1015,7 @@ export function Checker(options: ProjectOptions) {
                 setCachedEvaluatedNodeType(node, returnType = BuiltinType.any);
             }
             else {
-                setCachedEvaluatedNodeType(node, returnType = overloads[0].returns);
+                setCachedEvaluatedNodeType(node, returnType = evaluateType(node, overloads[0].returns));
             }
         }
         else if (sig.kind === TypeKind.functionSignature) {
@@ -1871,6 +1871,8 @@ export function Checker(options: ProjectOptions) {
                 return;
             }
 
+            let forcedType : Type | undefined = undefined;
+
             if (maybeMemberFunctionDefinition) {
                 const decl = maybeMemberFunctionDefinition;
                 if (!(decl.flags & NodeFlags.checked)) {
@@ -1879,7 +1881,8 @@ export function Checker(options: ProjectOptions) {
                             const name = decl.name?.ui;
                             const errorNode = getFunctionDefinitionNameTerminalErrorNode(decl);
                             issueDiagnosticAtNode(errorNode, `Function '${name}' requires an explicit return type because it directly or indirectly references itself.`);
-                            forcedReturnTypes.set(decl, BuiltinType.any);
+                            forcedType = BuiltinType.any;
+                            forcedReturnTypes.set(decl, forcedType);
                         }
                     }
 
@@ -1891,15 +1894,18 @@ export function Checker(options: ProjectOptions) {
 
             //
             // precedence:
-            // 1) flow-deduced type
-            // 2) annotation-declared type (@!type Foo)
-            // 3) cf-syntax-directed-declared type (like a typed function argument)
+            // 1) forced type
+            // 2) flow-deduced type
+            // 3) annotation-declared type (@!type Foo)
+            // 4) cf-syntax-directed-declared type (like a typed function argument)
             //
-            // "getInstantiatedDeclaredType" does work for #2
-            // "evaluateType" for #1
+            // "evaluateType" for #2
+            // "getInstantiatedDeclaredType" does for #3
             // probably the two methods could merge, and internally choose the right thing
             //
-            const apparentType = flowType
+            const apparentType = forcedType
+                ? forcedType
+                : flowType
                 ? evaluateType(node, flowType)
                 : hasDeclaredType(resolvedSymbol.symTabEntry)
                 ? getInstantiatedDeclaredType(resolvedSymbol.container, resolvedSymbol.symTabEntry)
@@ -2485,7 +2491,7 @@ export function Checker(options: ProjectOptions) {
     function checkNew(node: New) {
         if (node.callExpr.left.kind !== NodeKind.dottedPath) return;
         const cfcName = stringifyDottedPath(node.callExpr.left).ui;
-        const cfc = cfcResolver({resolveFrom: sourceFile.absPath, cfcName: cfcName});
+        const cfc = cfcResolver(ComponentResolutionArgs(sourceFile.absPath, cfcName));
         if (!cfc) return;
         const cfcThis = Cfc(cfc.sourceFile);
         setCachedEvaluatedNodeType(node, cfcThis);
@@ -2852,9 +2858,16 @@ export function Checker(options: ProjectOptions) {
                     }
 
                     if (type.kind === TypeKind.cfcLookup) {
-                        const cfcName = type.cfcName.literalValue.toString();
-                        
-                        const resolvedCfc = cfcResolver({resolveFrom: sourceFile.absPath, cfcName: cfcName})
+                        let resolvedCfc : CfcResolution | undefined;
+
+                        if (type.explicitSpecifier) {
+                            resolvedCfc = cfcResolver(type.explicitSpecifier);
+                        }
+                        else {
+                            const cfcName = type.cfcName.literalValue.toString();
+                            resolvedCfc = cfcResolver(ComponentResolutionArgs(sourceFile.absPath, cfcName));
+                        }
+
                         if (resolvedCfc) {
                             const freshType = Cfc(resolvedCfc.sourceFile);
                             (freshType as Mutable<Type>).underlyingType = type;

@@ -66,6 +66,14 @@
 				"Launch cflsp (client plugin)",
 				"Attach to parse/bind/check process",
 			]
+		},
+		{
+			"name": "all",
+			"configurations": [
+				"Launch cflsp (client plugin)",
+				"Attach to parse/bind/check process",
+				"Attach to vs-code server process",
+			]
 		}
 	]
 }
