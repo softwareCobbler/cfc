@@ -34,21 +34,27 @@ function projectFiddle() {
                     "b": {
                         "x.cfc": `
                         /**
-                         * @!typedef X_t = {A: 0, B: 1, C: 2} | any[]
+                         * @!typedef X_t = {A: X_t, B: 1, C: 2}
                          */
-                         component accessors="true" {
-                             /**
-                             * @!type () => X_t
+                        component accessors="true" {
+                            /**
+                             * @!type () => string
                              */
-                             function doit() {
-                                 var v = {
-                                     A: 0, 
-                                     B: 1,
-                                     C: 2
-                                 }
-                                 return v; // should error ...
-                             }
-                         }
+                            function v() {
+                                return doit().ok
+                            }
+
+                            /**
+                             * @!type () => {ok: string}
+                             */
+                            function doit() {
+                                return bleggleston();
+                            }
+
+                            function bleggleston() {
+                                return {ok: v()}
+                            }
+                        }
                         `,
                         "y.cfc": "component { function mlem() {} }",
                     },

@@ -16,6 +16,7 @@ const options : ProjectOptions = {
     engineVersion: EngineVersions["acf.2018"],
     genericFunctionInference: false,
     checkReturnTypes: false,
+    checkFlowTypes: false,
     cancellationToken: {
         cancellationRequested: () => false,
         throwIfCancellationRequested: () => void 0,

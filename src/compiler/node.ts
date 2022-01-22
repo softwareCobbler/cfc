@@ -1,6 +1,6 @@
 import { Scanner, SourceRange, TokenType, Token, NilToken, TokenTypeUiString, CfFileType } from "./scanner";
 import { exhaustiveCaseGuard, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, Mutable } from "./utils";
-import type { Decorator, Interface, _Type } from "./types";
+import { Interface, Type } from "./types";
 
 let debug = false;
 let nextNodeId : NodeId = 0;
@@ -16,6 +16,7 @@ export const enum NodeFlags {
     checkerError = 1 << 2,
     docBlock     = 1 << 3,
     unreachable  = 1 << 4,
+    checked      = 1 << 5,
 }
 
 export const enum NodeKind {
@@ -146,31 +147,32 @@ export interface SymTabEntry {
     uiName: string,
     canonicalName: string,
     declarations: Node[] | null,
-    type: _Type,
-    declaredType?: _Type, // fixme: "annotated type" ? this comes from a lexically preceding `@!type` annotation, right?
-    instantiatedDeclaredType?: _Type,
+    type: Type,
+    symbolId: SymbolId,
+    declaredType?: Type, // fixme: "annotated type" ? this comes from a lexically preceding `@!type` annotation, right?
+    instantiatedDeclaredType?: Type,
     optional?: boolean,
 }
 
 // fixme: "hasAnnotatedType"
-export function hasDeclaredType(symbol: SymTabEntry) : symbol is SymTabEntry & {declaredType: _Type} {
+export function hasDeclaredType(symbol: SymTabEntry) : symbol is SymTabEntry & {declaredType: Type} {
     return !!symbol.declaredType;
 }
 
 export type SymbolTable = Map<string, SymTabEntry>;
 
-export function typedefs() {
+export function typeinfo() {
     return {
         interfaces: new Map<string, Interface[]>(),
         mergedInterfaces: new Map<string, Interface>(),
-        decorators: <Decorator[]>[],
-        aliases: new Map<string, _Type>(),
+        // decorators: <Decorator[]>[], // 1/21/22 -- not supporting this
+        aliases: new Map<string, Type>(),
     };
 }
 
 export type ScopeDisplay = {
     parentContainer: Node | null,
-    typedefs: ReturnType<typeof typedefs>,
+    typeinfo: ReturnType<typeof typeinfo>,
 } & {[name in StaticallyKnownScopeName]?: Map<string, SymTabEntry>}
 
 const staticallyKnownScopeName = [
@@ -211,11 +213,13 @@ export const isStaticallyKnownScopeName = (() => {
 export type NodeId = number;
 export type TypeId = number;
 export type FlowId = number;
-export type IdentifierId = number;
+export type SymbolId = number;
+
 export type NodeWithScope<N extends Node = Node, T extends (StaticallyKnownScopeName | never) = never> = N & {containedScope: ScopeDisplay & {[k in T]: SymbolTable}};
 
 export const enum FlowType {
     default,
+    start,
     assignment,
     jumpTarget,
     switchCase,
@@ -236,7 +240,7 @@ export interface NodeBase {
     parent: Node | null,
     range: SourceRange,
 
-    typeAnnotation: _Type | null,
+    typeAnnotation: Type | null,
 
     fromTag?: boolean,
     tagOrigin: { // todo: make this only present on particular tags, and flatten it
@@ -343,9 +347,10 @@ export interface SourceFile extends NodeBase {
     libRefs: Map<string, SourceFile>,
     diagnostics: Diagnostic[],
     scanner: Scanner,
-    cachedNodeTypes: Map<NodeId, _Type>, // type of a particular node, exactly zero or one per node
-    cachedFlowTypes: Map<FlowId, Map<string, _Type>>, // types for symbols as determined at particular flow nodes, zero or more per flow node
+    cachedNodeTypes: Map<NodeId, Type>, // type of a particular node, exactly zero or one per node
+    cachedFlowTypes: Map<FlowId, Map<SymbolId, Type>>, // types for symbols as determined at particular flow nodes, zero or more per flow node
     nodeToSymbol: Map<NodeId, SymbolResolution>,
+    symbolIdToSymbol: Map<SymbolId, SymTabEntry>,
     endOfNodeFlowMap: Map<NodeId, Flow>,
     cfc: {
         extends: SourceFile | null,
@@ -355,14 +360,15 @@ export interface SourceFile extends NodeBase {
 }
 
 function resetSourceFileInPlace(target: SourceFile, newSource: string | Buffer) : void {
-    target.containedScope = {parentContainer: null, typedefs: typedefs()};
+    target.containedScope = {parentContainer: null, typeinfo: typeinfo()};
     target.content = [];
     // target.libRefs untouched
     target.diagnostics = [];
     target.scanner = Scanner(newSource);
     target.cachedNodeTypes = new Map();
     target.cachedFlowTypes = new Map();
-    target.nodeToSymbol = new Map<NodeId, SymbolResolution>();
+    target.nodeToSymbol = new Map();
+    target.symbolIdToSymbol = new Map();
     target.endOfNodeFlowMap = new Map<NodeId, Flow>();
     target.cfc = undefined;
 }
@@ -373,15 +379,16 @@ export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: 
     sourceFile.cfFileType = cfFileType;
     sourceFile.containedScope = {
         parentContainer: null,
-        typedefs: typedefs(),
+        typeinfo: typeinfo(),
     };
     sourceFile.content = [];
     sourceFile.libRefs = new Map();
     sourceFile.diagnostics = [];
     sourceFile.scanner = Scanner(sourceText);
-    sourceFile.cachedNodeTypes = new Map<NodeId, _Type>();
-    sourceFile.cachedFlowTypes = new Map<FlowId, Map<string, _Type>>();
+    sourceFile.cachedNodeTypes = new Map<NodeId, Type>();
+    sourceFile.cachedFlowTypes = new Map<FlowId, Map<SymbolId, Type>>();
     sourceFile.nodeToSymbol = new Map<NodeId, SymbolResolution>();
+    sourceFile.symbolIdToSymbol = new Map();
     sourceFile.endOfNodeFlowMap = new Map<NodeId, Flow>();
     sourceFile.resetInPlaceWithNewSource = (newSource: string | Buffer) => resetSourceFileInPlace(sourceFile, newSource);
     return sourceFile;
@@ -433,6 +440,7 @@ export const freshFlow = (function() {
                         case FlowType.jumpTarget: return "jumpTarget";
                         case FlowType.unreachable: return "unreachable";
                         case FlowType.switchCase: return "switchCase";
+                        case FlowType.start: return "start";
                         default: exhaustiveCaseGuard(flowType);
                     }
                 }
@@ -448,12 +456,12 @@ export const enum CommentType { tag, scriptSingleLine, scriptMultiLine };
 export interface Comment extends NodeBase {
     kind: NodeKind.comment;
     commentType: CommentType;
-    typedefs?: TypeShim[],
+    typedefs?: Typedef[],
 }
 
 export function Comment(tagOrigin: CfTag.Comment) : Comment;
-export function Comment(commentType: CommentType, isDocBlock: boolean, range: SourceRange, typedefs?: TypeShim[]) : Comment;
-export function Comment(commentType: CfTag.Comment | CommentType, isDocBlock?: boolean, range?: SourceRange, typedefs?: TypeShim[]) {
+export function Comment(commentType: CommentType, isDocBlock: boolean, range: SourceRange, typedefs?: Typedef[]) : Comment;
+export function Comment(commentType: CfTag.Comment | CommentType, isDocBlock?: boolean, range?: SourceRange, typedefs?: Typedef[]) {
     if (typeof commentType === /*CommentType enum*/ "number") { // overload 2
         const comment = NodeBase<Comment>(NodeKind.comment, range);
         comment.commentType = commentType;
@@ -649,7 +657,7 @@ export namespace CfTag {
     export interface Comment extends TagBase {
         tagType: TagType.comment,
         body: TagBase[],
-        typedefs?: TypeShim[],
+        typedefs?: Typedef[],
     }
     export function Comment(
         tagStart: Terminal,
@@ -1517,7 +1525,7 @@ interface FunctionParameterBase extends NodeBase {
     canonicalName: string,
     uiName: string,
     attrs: TagAttribute[],
-    type: _Type | null
+    type: Type | null
     javaLikeTypename: string | DottedPath | null // fixme: can this be just `string | null`
 }
 
@@ -1544,7 +1552,7 @@ export namespace Script {
         defaultValue: Node | null,
         attrs: TagAttribute[],
         comma: Terminal | null,
-        type: _Type | null) : FunctionParameter {
+        type: Type | null) : FunctionParameter {
         const v = NodeBase<FunctionParameter>(NodeKind.functionParameter, mergeRanges(requiredTerminal, javaLikeTypename, identifier, defaultValue, comma));
         v.fromTag = false;
         v.requiredTerminal = requiredTerminal;
@@ -1599,13 +1607,16 @@ export namespace Tag {
 interface FunctionDefinitionBase extends NodeBase {
     kind: NodeKind.functionDefinition,
     fromTag: boolean,
-    canonicalName  : string | null,
-    uiName         : string | null,
+    name: null | {
+        canonical: string,
+        ui: string
+    },
     attrs          : TagAttribute[],
     finalFlow      : Flow,
 }
 
 export type FunctionDefinition = Script.FunctionDefinition | Tag.FunctionDefinition;
+export type NamedFunctionDefinition = FunctionDefinition & {[k in keyof Pick<FunctionDefinitionBase, "name">]: Exclude<FunctionDefinitionBase[k], null>};
 
 export namespace Script {
     export interface FunctionDefinition extends FunctionDefinitionBase {
@@ -1619,7 +1630,7 @@ export namespace Script {
         params         : FunctionParameter[],
         rightParen     : Terminal,
         body           : Block,
-        returnTypeAnnotation : _Type | null, // fixme: this will be either in the full node type annotation, or as an attribute
+        returnTypeAnnotation : Type | null, // fixme: this will be either in the full node type annotation, or as an attribute
     }
 
     export function FunctionDefinition(
@@ -1632,7 +1643,7 @@ export namespace Script {
         rightParen    : Terminal,
         attrs         : TagAttribute[],
         body          : Block,
-        returnTypeAnnotation : _Type | null
+        returnTypeAnnotation : Type | null
     ) : FunctionDefinition {
         const v = NodeBase<FunctionDefinition>(NodeKind.functionDefinition, mergeRanges(accessModifier, returnType, functionToken, body));
         v.fromTag        = false;
@@ -1646,8 +1657,17 @@ export namespace Script {
         v.attrs          = attrs;
         v.body           = body;
         v.returnTypeAnnotation = returnTypeAnnotation;
-        v.canonicalName  = nameToken?.canonicalName ?? null;
-        v.uiName         = nameToken?.uiName ?? null;
+
+        if (nameToken?.canonicalName && nameToken.uiName) {
+            v.name = {
+                canonical: nameToken.canonicalName,
+                ui: nameToken.uiName,
+            }
+        }
+        else {
+            v.name = null;
+        }
+
         return v;
     }
 }
@@ -1668,8 +1688,17 @@ export namespace Tag {
         v.tagOrigin.endTag   = endTag;
         v.params             = params;
         v.body               = body;
-        v.uiName             = name;
-        v.canonicalName      = name?.toLowerCase() ?? null;
+        
+        if (name) {
+            v.name = {
+                canonical: name.toLowerCase(),
+                ui: name,
+            }
+        }
+        else {
+            v.name = null;
+        }
+
         v.attrs              = startTag.attrs;
         return v;
     }
@@ -1680,8 +1709,8 @@ export interface ArrowFunctionDefinition extends NodeBase {
     parens: {left: Terminal, right: Terminal} | null,
     params: Script.FunctionParameter[]; // not possible to have a tag based arrow function def
     fatArrow: Terminal,
-    body: Node;
-    finalFlow: Flow;
+    body: Node,
+    finalFlow: Flow,
 }
 
 export function ArrowFunctionDefinition(leftParen: Terminal | null, params: Script.FunctionParameter[], rightParen: Terminal | null, fatArrow: Terminal, body: Node) : ArrowFunctionDefinition {
@@ -2417,26 +2446,52 @@ export function New(
     return v;
 }
 
-export interface TypeShim extends NodeBase {
+export const enum TypeShimKind {
+    typedef,         // `@!typedef Foo = sometype`, declaring the typeid "Foo" to be bound to "sometype"
+    interfacedef,    // `@!interface XYZ {}`, basically a typedef but different enough to need a separate treatement
+    annotation,      // `@!type sometype`, annotates the subsequent statement with a type
+    /*, decorator */ // unused
+};
+
+export type TypeShim = Typedef | Interfacedef | TypeAnnotation;
+interface TypeShimBase extends NodeBase {
     kind: NodeKind.typeShim,
-    what: "typedef" | "annotation" | "decorator"
-    type: _Type
-    // type has name if typedef is an alias
-    // otherwise if typedef is for interface, the name is in the interface type node
-    // annotations have no name
-    // decorators just wrap typeIds
+    shimKind: TypeShimKind,
+    type: Type,
 }
 
-export function TypeShim(what: "typedef", type: _Type, name?: string) : TypeShim;
-export function TypeShim(what: "annotation" | "decorator", type: _Type) : TypeShim;
-export function TypeShim(what: TypeShim["what"], type: _Type, name?: string) : TypeShim {
-    const v = NodeBase<TypeShim>(NodeKind.typeShim, SourceRange.Nil());
-    v.type = type;
-    v.what = what;
+export interface Typedef extends TypeShimBase {
+    shimKind: TypeShimKind.typedef,
+    name: string,
+}
 
-    if (what === "typedef" && typeof name === "string") {
-        (type as Mutable<_Type>).name = name;
-    }
+export interface Interfacedef extends TypeShimBase {
+    shimKind: TypeShimKind.interfacedef,
+    type: Interface,
+}
+export interface TypeAnnotation extends TypeShimBase {
+    shimKind: TypeShimKind.annotation,
+}
+
+export function Typedef(type: Type, name: string) : Typedef {
+    const v = NodeBase<TypeShimBase>(NodeKind.typeShim, SourceRange.Nil()) as Typedef;
+    v.shimKind = TypeShimKind.typedef;
+    v.type = type;
+    v.name = name;
+    return v;
+}
+
+export function Interfacedef(type: Interface) : Interfacedef {
+    const v = NodeBase<TypeShimBase>(NodeKind.typeShim, SourceRange.Nil()) as Interfacedef;
+    v.shimKind = TypeShimKind.interfacedef;
+    v.type = type;
+    return v;
+}
+
+export function TypeAnnotation(type: Type) : TypeAnnotation {
+    const v = NodeBase<TypeShimBase>(NodeKind.typeShim, SourceRange.Nil()) as TypeAnnotation;
+    v.shimKind = TypeShimKind.annotation;
+    v.type = type;
     return v;
 }
 

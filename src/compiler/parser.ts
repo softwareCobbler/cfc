@@ -24,11 +24,11 @@ import {
     New,
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
-    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, TypeShim, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind } from "./node";
+    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType } from "./scanner";
-import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard } from "./utils";
-import { cfIndexedType, Interface, cfIntersection, isIntersection, isStructLike, isTypeId, isUnion, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, Decorator, TypeConstructor, IndexSignature, isUninstantiatedArray } from "./types";
-import { _Type, UninstantiatedArray, Struct, StructKind, cfTuple, cfFunctionSignature, cfTypeId, cfUnion, SyntheticType, cfFunctionSignatureParam } from "./types";
+import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard, Mutable } from "./utils";
+import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam } from "./types";
+import { Type, UninstantiatedArray, Struct, cfFunctionSignature, cfTypeId, cfUnion, BuiltinType, cfFunctionSignatureParam } from "./types";
 import { Engine } from "./engines";
 import { ProjectOptions } from "./project";
 
@@ -143,7 +143,7 @@ export function Parser(config: ProjectOptions) {
     const debug = config.debug;
     const engineVersion = config.engineVersion;
 
-    let lastDocBlock : {type: _Type | null, typedefs: TypeShim[], docBlockAttrs: TagAttribute[] } | null = null;
+    let lastDocBlock : {type: Type | null, typedefs: (Typedef | Interfacedef)[], docBlockAttrs: TagAttribute[] } | null = null;
     
     let parseErrorMsg : string | null = null;
 
@@ -961,22 +961,26 @@ export function Parser(config: ProjectOptions) {
                 // also this more of the binder's responsibility, it would do a better job of checking for duplicate declarations and etc.
                 if (lastDocBlock) {
                     for (const typeshim of lastDocBlock.typedefs) {
-                        if (typeshim.what === "typedef") {
-                            if (isStructLike(typeshim.type) && typeshim.type.structKind === StructKind.interface) {
-                                if (sourceFile.containedScope.typedefs.interfaces.has((typeshim.type as Interface).name)) {
-                                    sourceFile.containedScope.typedefs.interfaces.get((typeshim.type as Interface).name)!.push(typeshim.type as Interface);
+                        switch (typeshim.shimKind) {
+                            case TypeShimKind.interfacedef: {
+                                if (sourceFile.containedScope.typeinfo.interfaces.has((typeshim.type as Interface).name)) {
+                                    sourceFile.containedScope.typeinfo.interfaces.get((typeshim.type as Interface).name)!.push(typeshim.type as Interface);
                                 }
                                 else {
-                                    sourceFile.containedScope.typedefs.interfaces.set((typeshim.type as Interface).name, [typeshim.type as Interface]);
+                                    sourceFile.containedScope.typeinfo.interfaces.set((typeshim.type as Interface).name, [typeshim.type as Interface]);
                                 }
+                                break;
                             }
-                            else if (typeshim.type.name) {
-                                sourceFile.containedScope.typedefs.aliases.set(typeshim.type.name, typeshim.type);
+                            case TypeShimKind.typedef: {
+                                sourceFile.containedScope.typeinfo.aliases.set(typeshim.name, typeshim.type);
+                                break;
                             }
+                            default: exhaustiveCaseGuard(typeshim);
                         }
-                        else if (typeshim.what === "decorator") {
-                            sourceFile.containedScope.typedefs.decorators.push(typeshim.type as Decorator);
-                        }
+                        // @decorator -- not supporting decorators
+                        // else if (typeshim.what === "decorator") {
+                        //     sourceFile.containedScope.typedefs.decorators.push(typeshim.type as Decorator);
+                        // }
                     }
                 }
 
@@ -990,7 +994,7 @@ export function Parser(config: ProjectOptions) {
                 break;
             }
             case CfFileType.dCfm: {
-                sourceFile.content = parseTypeAnnotations();
+                sourceFile.content = parseTypeAnnotations().defs;
                 break;
             }
         }
@@ -2927,7 +2931,7 @@ export function Parser(config: ProjectOptions) {
     // }
 
     function parseFunctionTypeParametersArrowLike() : cfFunctionSignatureParam[] {
-        const params : {name: Terminal, optional: boolean, spread: boolean, type: _Type, range: SourceRange}[] = [];
+        const params : {name: Terminal, optional: boolean, spread: boolean, type: Type, range: SourceRange}[] = [];
         while (lookahead() !== TokenType.RIGHT_PAREN && lookahead() !== TokenType.EOF) {
             let isSpread = false;
             if (lookahead() === TokenType.DOT_DOT_DOT) {
@@ -2955,16 +2959,16 @@ export function Parser(config: ProjectOptions) {
             if (param.spread) {
                 if (!isLast) {
                     parseErrorAtRange(param.range, "Spread parameter must be in last parameter position.");
-                    param.type = SyntheticType.any;
+                    param.type = BuiltinType.any;
                 }
                 if (!isUninstantiatedArray(param.type) && param.name.token.text.toLowerCase() !== "arguments") {
                     parseErrorAtRange(param.range, "A spread parameter must be an array type (unless it is the only parameter, and its name is 'arguments').");
-                    param.type = SyntheticType.any;
+                    param.type = BuiltinType.any;
                 }
                 if (param.name.token.text.toLowerCase() === "arguments") {
-                    if (params.length > 1 || !isUninstantiatedArray(param.type) || param.type.args[0] !== SyntheticType.any) {
+                    if (params.length > 1 || !isUninstantiatedArray(param.type) || param.type.args[0] !== BuiltinType.any) {
                         parseErrorAtRange(param.range, "The well-known spread parameter 'arguments' must be the only parameter in the signature, and it must have type 'any[]'.")
-                        param.type = SyntheticType.any;
+                        param.type = BuiltinType.any;
                     }
                 }
             }
@@ -2999,7 +3003,7 @@ export function Parser(config: ProjectOptions) {
             let defaultValue : Node | null = null;
             let attrs : TagAttribute[] = [];
             let comma : Terminal | null = null;
-            let type : _Type | null = null;
+            let type : Type | null = null;
 
             //
             // required is a contextual keyword when in left-most parameter definition position
@@ -3269,13 +3273,24 @@ export function Parser(config: ProjectOptions) {
         return Script.FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body, null);
     }
 
-    function maybePushTypedefsToCurrentTypedefContainer(typeshims: TypeShim[] | undefined) : void {
-        if (!typeshims) {
+    function maybePushTypedefsToCurrentTypedefContainer(typedefs: (Typedef|Interfacedef)[] | undefined) : void {
+        if (!typedefs) {
             return;
         }
-        for (const typeshim of typeshims) {
-            if (typeshim.what === "typedef") {
-                typedefContainer.containedScope?.typedefs.aliases.set(typeshim.type.name || "<<error>>", typeshim.type);
+        for (const typeshim of typedefs) {
+            if (typeshim.shimKind === TypeShimKind.interfacedef) {
+                // fixme: this pattern repeats here, and in the top-level parser when parsing a cfc
+                // the idea is "push typedefs into some owning container"
+                if (sourceFile.containedScope.typeinfo.interfaces.has((typeshim.type as Interface).name)) {
+                    sourceFile.containedScope.typeinfo.interfaces.get((typeshim.type as Interface).name)!.push(typeshim.type as Interface);
+                }
+                else {
+                    sourceFile.containedScope.typeinfo.interfaces.set((typeshim.type as Interface).name, [typeshim.type as Interface]);
+                }
+                break;
+            }
+            else {
+                typedefContainer.containedScope?.typeinfo.aliases.set(typeshim.name, typeshim.type);
             }
         }
     }
@@ -3341,7 +3356,7 @@ export function Parser(config: ProjectOptions) {
             attrs.push(...savedLastDocBlock.docBlockAttrs);
         }
 
-        let returnTypeAnnotation : _Type | null = null; // fixme: unecessary?
+        let returnTypeAnnotation : Type | null = null; // fixme: unecessary?
         const result = Script.FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body, returnTypeAnnotation);
 
         result.typeAnnotation = savedLastDocBlock?.type ?? null;
@@ -3878,8 +3893,8 @@ export function Parser(config: ProjectOptions) {
 
         let workingAttributeUiName : Terminal = NilTerminal(pos(), "hint");
         const docBlockAttrs : TagAttribute[] = [];
-        const typedefs : TypeShim[] = [];
-        let typeAnnotation : _Type | null = null;
+        const defs : (Typedef | Interfacedef)[] = [];
+        let typeAnnotation : Type | null = null;
 
         function eatWhitespace() {
             while (lookahead() === TokenType.WHITESPACE) { // fixme: we are in trivia context, right?
@@ -3909,12 +3924,14 @@ export function Parser(config: ProjectOptions) {
                     if (parseTypes && name === "!interface") {
                         restoreScannerState({...getScannerState(), index: getIndex() - name.length + 1}); // backup to start of `interface` "token" (without the "!")
                         const interfaceDef = parseType();
-                        typedefs.push(TypeShim("typedef", interfaceDef));
+                        if (interfaceDef.kind === TypeKind.interface) {
+                            defs.push(Interfacedef(interfaceDef));
+                        }
                         continue;
                     }
                     else if (parseTypes && name === "!typedef") {
                         eatWhitespace();
-                        typedefs.push(parseTypeDef());
+                        defs.push(parseTypeDef());
                         continue;
                     }
                     else if (parseTypes && name == "!type") {
@@ -3922,12 +3939,13 @@ export function Parser(config: ProjectOptions) {
                         typeAnnotation = parseType();
                         continue;
                     }
-                    else if (parseTypes && name === "!decorate") {
-                        eatWhitespace();
-                        const decoratorName = stringifyDottedPath(parseDottedPath());
-                        typedefs.push(TypeShim("decorator", Decorator(decoratorName.ui)));
-                        continue;
-                    }
+                    // 1/21/22 -- not supporting decorators, the idea is/was to allow some kind of hook into the binder, to add/remove cfc member functions or properties or etc.
+                    // else if (parseTypes && name === "!decorate") {
+                    //     eatWhitespace();
+                    //     const decoratorName = stringifyDottedPath(parseDottedPath());
+                    //     typedefs.push(TypeShim("decorator", Decorator(decoratorName.ui)));
+                    //     continue;
+                    // }
                     else {
                         parseErrorAtRange(start, pos(), "Invalid extended type syntax - only '@!interface', '@!typedef', '@!type' and '@!decorate' are supported.");
                         scanDocBlockAttrText(); // discard text until next attribute
@@ -3948,11 +3966,7 @@ export function Parser(config: ProjectOptions) {
             docBlockAttrs.push(docBlockAttr);
         }
 
-        lastDocBlock = {type: typeAnnotation, typedefs: typedefs, docBlockAttrs: docBlockAttrs};
-
-        if (typedefs) { // fixme: probably unnecessary if we later attach these to the typedef container
-            node.typedefs = typedefs;
-        }
+        lastDocBlock = {type: typeAnnotation, typedefs: defs, docBlockAttrs: docBlockAttrs};
 
         restoreScannerState(savedScannerState);
     }
@@ -4000,15 +4014,9 @@ export function Parser(config: ProjectOptions) {
             mode: ScannerMode.tag | ScannerMode.script, // set docblock mode if we're in a docblock...
         })
 
-        const types = parseTypeAnnotations();
+        const {defs, annotations} = parseTypeAnnotations();
         
-        const typedefs = types.filter(typeShim => typeShim.what === "typedef")
-        if (typedefs.length > 0) {
-            node.typedefs = typedefs; // store the parsed type functions on the trivia node
-        }
-
-        const typeAnnotations = types.filter(typeShim => typeShim.what === "annotation")
-        if (typeAnnotations.length > 1) {
+        if (annotations.length > 1) {
             // we need to get the type's ranges and terminals and etc.
             parseErrorAtRange(node.range, "Only one @type annotation is permitted per comment.");
         }
@@ -4016,8 +4024,8 @@ export function Parser(config: ProjectOptions) {
         // <whitespace><comment><whitespace><comment>
         // only the last final comment's type annotation will be considered for the next non-trivial production
         lastDocBlock = {
-            type: typeAnnotations.length === 1 ? typeAnnotations[0].type : null,
-            typedefs: typedefs,
+            type: annotations.length === 1 ? annotations[0].type : null,
+            typedefs: defs,
             docBlockAttrs: [] // this is not a docblock, if it were, we'd be using "parseDocBlockFromPreParsedTrivia"
         };
 
@@ -4026,9 +4034,9 @@ export function Parser(config: ProjectOptions) {
     }
 
     /**
-     * parse type annotations, 
+     * parse type annotations
      */
-     function parseTypeAnnotations() : TypeShim[] {
+    function parseTypeAnnotations() {
         const savedContext = parseContext;
         const savedScannerMode = getScannerState().mode;
         
@@ -4038,7 +4046,10 @@ export function Parser(config: ProjectOptions) {
         parseContext = 1 << ParseContext.typeAnnotation;
         parseTrivia();
         
-        const result : TypeShim[] = [];
+        const result = {
+            defs: <(Typedef | Interfacedef)[]>[],
+            annotations: <TypeAnnotation[]>[]
+        }
 
         while (lookahead() !== TokenType.EOF) {
             if (peek().text === "@" && peek(1).text === "!") {
@@ -4063,17 +4074,20 @@ export function Parser(config: ProjectOptions) {
                 //     }
                 // }
                 if (contextualKeyword.text === "interface") {
+                    // leave scanner alone, type parser needs "interface"
                     const ifaceDef = parseType();
-                    result.push(TypeShim("typedef", ifaceDef));
+                    if (ifaceDef.kind === TypeKind.interface) {
+                        result.defs.push(Interfacedef(ifaceDef));
+                    }
                 }
                 else if (contextualKeyword.text === "type") {
                     next(), parseTrivia();
-                    result.push(TypeShim("annotation", parseType()));
+                    result.annotations.push(TypeAnnotation(parseType()));
                 }
                 else if (contextualKeyword.text === "typedef") {
                     next(), parseTrivia();
                     const typeDef = parseTypeDef();
-                    result.push(typeDef);
+                    result.defs.push(typeDef);
                 }
                 else {
                     next(), parseTrivia();
@@ -4091,21 +4105,21 @@ export function Parser(config: ProjectOptions) {
         return result;
     }
 
-    function parseTypeDef() : TypeShim {
+    function parseTypeDef() : Typedef {
         const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/true, /*allowNumeric*/ false);
         if (lookahead() === TokenType.LEFT_ANGLE) {
             function parseTypeId() : cfTypeId {
                 const start = pos();
                 let element = parseType();
                 const end = pos();
-                if (!isTypeId(element)) {
+                if (element.kind !== TypeKind.typeId) {
                     parseErrorAtRange(new SourceRange(start, end), "A generic type alias parameter's names must be identifiers.");
                     return cfTypeId("<<ERROR-TYPE>>");
                 }
                 return element;
             }
 
-            const params : TypeConstructorParam[] = [];
+            const params : cfTypeConstructorParam[] = [];
 
             while (lookahead() !== TokenType.RIGHT_ANGLE && lookahead() !== TokenType.EOF) {
                 // fixme: types don't have ranges
@@ -4122,58 +4136,42 @@ export function Parser(config: ProjectOptions) {
             parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia); // discarded
             const body = parseType();
             const type = TypeConstructor(params, body);
-            return TypeShim("typedef", type, name.token.text);
+            return Typedef(type, name.token.text);
         }
         else {
             parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia); // discarded
             const type = parseType();
-            return TypeShim("typedef", type, name.token.text);
+            return Typedef(type, name.token.text);
         }
     }
 
-    function parseType() : _Type;
-    function parseType(fromInclusive: number, toExclusive: number) : _Type;
-    function parseType(fromInclusive?: number, toExclusive?: number) : _Type {
+    function parseType() : Type;
+    function parseType(fromInclusive: number, toExclusive: number) : Type;
+    function parseType(fromInclusive?: number, toExclusive?: number) : Type {
         function tokenToType(lexeme: Token) {
             switch (lexeme.text) {
                 case "numeric":
-                    return SyntheticType.numeric;
+                    return BuiltinType.numeric;
                 case "string":
-                    return SyntheticType.string;
+                    return BuiltinType.string;
                 case "any":
-                    return SyntheticType.any;
+                    return BuiltinType.any;
                 case "boolean":
-                    return SyntheticType.boolean;
+                    return BuiltinType.boolean;
                 case "true":
-                    return SyntheticType.true;
+                    return BuiltinType.true;
                 case "false":
-                    return SyntheticType.false;
+                    return BuiltinType.false;
                 case "void":
-                    return SyntheticType.void;
+                    return BuiltinType.void;
                 case "never":
-                    return SyntheticType.never;
+                    return BuiltinType.never;
                 default:
                     return cfTypeId(lexeme.text);
             }
         }
 
-        // rmme 10/17/21
-        // function parseTypeParam() : TypeConstructorParam {
-        //     const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ false);
-        //     const equal = parseOptionalTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
-        //     if (equal) {
-        //         const defaultType = parseType();
-        //         parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
-        //         return TypeConstructorParam(name.token.text, defaultType);
-        //     }
-        //     else {
-        //         parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
-        //         return TypeConstructorParam(name.token.text);
-        //     }
-        // }
-
-
-        function maybeParseArrayModifier(type: _Type) : _Type {
+        function maybeParseArrayModifier(type: Type) : Type {
             function maybeLexeme() {
                 return isLexemeLikeToken(peek()) ? parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/false, /*allowNumeric*/ false) : null;
             }
@@ -4185,8 +4183,8 @@ export function Parser(config: ProjectOptions) {
                         parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
                         const maybeTypeId = maybeLexeme();
                         if (maybeTypeId) {
-                            let typeId : _Type | null = tokenToType(maybeTypeId.token);
-                            if (!isTypeId(typeId)) {
+                            let typeId : Type | null = tokenToType(maybeTypeId.token);
+                            if (typeId.kind !== TypeKind.typeId) {
                                 typeId = null;
                             }
                             type = cfIndexedType(type, typeId ?? cfTypeId("<<ERROR>>"));
@@ -4206,13 +4204,7 @@ export function Parser(config: ProjectOptions) {
             return type;
         }
 
-        function parseTypeListElement() : _Type {
-            const type = parseType();
-            parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
-            return type;
-        }
-
-        function parseTypeParamListElement() : TypeConstructorParam {
+        function parseTypeParamListElement() : cfTypeConstructorParam {
             const terminal = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/true, /*allowNumeric*/false);
             const defaultType = lookahead() === TokenType.EQUAL
                 ? parseType()
@@ -4227,13 +4219,13 @@ export function Parser(config: ProjectOptions) {
 
         const enum StructMemberParseResult_t { keyTypePair, spread, indexSignature };
         type StructMemberParseResult =
-            | {resultKind: StructMemberParseResult_t.keyTypePair, name: Terminal, type: _Type, optional: boolean}
+            | {resultKind: StructMemberParseResult_t.keyTypePair, name: Terminal, type: Type, optional: boolean}
             | {resultKind: StructMemberParseResult_t.indexSignature, indexSignature: IndexSignature}
-            | {resultKind: StructMemberParseResult_t.spread, type: _Type };
+            | {resultKind: StructMemberParseResult_t.spread, type: Type };
 
         function parseTypeStructMemberElement() : StructMemberParseResult {
             let name : Terminal | null;
-            let type : _Type;
+            let type : Type;
 
             if (lookahead() === TokenType.DOT_DOT_DOT) {
                 parseExpectedTerminal(TokenType.DOT_DOT_DOT, ParseOptions.withTrivia);
@@ -4254,9 +4246,9 @@ export function Parser(config: ProjectOptions) {
                 let indexType = parseType();
                 const end = pos();
 
-                if (indexType !== SyntheticType.string && indexType !== SyntheticType.numeric) {
+                if (indexType !== BuiltinType.string && indexType !== BuiltinType.numeric) {
                     parseErrorAtRange(new SourceRange(start, end), "An index signature parameter type must be 'string' or 'numeric'");
-                    type = SyntheticType.numeric;
+                    type = BuiltinType.numeric;
                 }
 
                 parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
@@ -4310,26 +4302,27 @@ export function Parser(config: ProjectOptions) {
         if (!isStartOfType()) {
             parseErrorAtPos(pos(), "Expected a type expression.");
             next(), parseTrivia();
-            return SyntheticType.any;
+            return BuiltinType.any;
         }
 
-        function localParseType() : _Type {
-            let result : _Type = SyntheticType.any;
+        function localParseType() : Type {
+            let result : Type = BuiltinType.any;
 
             switch (lookahead()) {
-                case TokenType.LEFT_BRACKET: {
-                    parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
-                    const tupleTypes = parseList(ParseContext.typeTupleOrArrayElement, parseTypeListElement);
-                    parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
-                    result = maybeParseArrayModifier(cfTuple(tupleTypes));
-                    break;
-                }
+                // 1/21/22 - refactor types, we don't support tuples (and really before this all we did was try to parse them, we didn't reason about them)
+                // case TokenType.LEFT_BRACKET: {
+                //     parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
+                //     const tupleTypes = parseList(ParseContext.typeTupleOrArrayElement, parseTypeListElement);
+                //     parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
+                //     result = maybeParseArrayModifier(cfTuple(tupleTypes));
+                //     break;
+                // }
                 case TokenType.LEXEME: {
                     const terminal = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
 
                     if (!isInSomeContext(ParseContext.interface) && terminal.token.text === "interface") {
                         const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ false);
-                        let typeParams : TypeConstructorParam[] | undefined;
+                        let typeParams : cfTypeConstructorParam[] | undefined;
                         if (lookahead() === TokenType.LEFT_ANGLE) {
                             parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
                             typeParams = parseList(ParseContext.typeParamList, parseTypeParamListElement);
@@ -4340,18 +4333,19 @@ export function Parser(config: ProjectOptions) {
                         const def = doInExtendedContext(ParseContext.interface, parseType);
                         const end = pos();
 
-                        if (!isStructLike(def) || def.structKind !== StructKind.struct) {
+                        if (!isStructLike(def) || def.kind !== TypeKind.struct) {
                             parseErrorAtRange(new SourceRange(start, end), "Expected an interface definition");
                         }
 
                         let members : ReadonlyMap<string, Readonly<SymTabEntry>> | undefined;
                         let indexSignature : IndexSignature | undefined;
-                        let spreads : readonly _Type[] | undefined;
+                        let spreads : readonly Type[] | undefined;
 
-                        if (isStructLike(def)) {
+                        if (def.kind === TypeKind.struct) {
                             members = def.members;
                             indexSignature = def.indexSignature;
-                            spreads = def.instantiableSpreads;
+                            // @instantiableSpreads
+                            // spreads = def.instantiableSpreads;
                         }
 
                         return Interface(
@@ -4370,7 +4364,7 @@ export function Parser(config: ProjectOptions) {
                             const cfcPathNameAsLiteralType = createLiteralType(stringifyDottedPath(dottedPath).ui);
                             result = CfcLookup(cfcPathNameAsLiteralType);
                         }
-                        else if (isTypeId(result)) {
+                        else if (result.kind === TypeKind.typeId) {
                             const rest : string[] = [];
                             while (lookahead() !== TokenType.EOF) {
                                 parseTrivia();
@@ -4390,7 +4384,7 @@ export function Parser(config: ProjectOptions) {
 
                             if (lookahead() === TokenType.LEFT_ANGLE) {
                                 parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
-                                const args : _Type[] = [];
+                                const args : Type[] = [];
                                 while (lookahead() !== TokenType.RIGHT_ANGLE && lookahead() !== TokenType.EOF) {
                                     args.push(parseType());
                                     if (lookahead() !== TokenType.RIGHT_ANGLE) {
@@ -4486,7 +4480,7 @@ export function Parser(config: ProjectOptions) {
                         parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
 
                         const members = new Map<string, SymTabEntry>();
-                        const instantiableSpreads : _Type[] = [];
+                        const instantiableSpreads : Type[] = [];
                         let indexSignature : IndexSignature | undefined = undefined;
                         for (const member of kvPairs) {
                             if (member.resultKind === StructMemberParseResult_t.spread) {
@@ -4503,7 +4497,8 @@ export function Parser(config: ProjectOptions) {
                                     canonicalName: member.name.token.text.toLowerCase(),
                                     declarations: null,
                                     type: member.type,
-                                    optional: member.optional
+                                    optional: member.optional,
+                                    symbolId: -1,
                                 })
                             }
                         }
@@ -4531,7 +4526,7 @@ export function Parser(config: ProjectOptions) {
                         result = createLiteralType(s.textSpan.text);
                     }
                     else {
-                        result = SyntheticType.string; // should never happen, parseStringLiteral(false) should always return a simpleStringLiteral
+                        result = BuiltinType.string; // should never happen, parseStringLiteral(false) should always return a simpleStringLiteral
                     }
                     break;
                 }
@@ -4565,7 +4560,7 @@ export function Parser(config: ProjectOptions) {
         parseOptionalTerminal(TokenType.PIPE, ParseOptions.withTrivia); // discarded
         let result = localParseType();
 
-        if (isStructLike(result) && result.structKind === StructKind.interface) {
+        if (isStructLike(result) && result.kind === TypeKind.interface) {
             return result;
         }
 
@@ -4574,21 +4569,25 @@ export function Parser(config: ProjectOptions) {
             switch (lookahead()) {
                 case TokenType.AMPERSAND: {
                     next(), parseTrivia();
-                    if (isIntersection(result)) {
-                        result.types.push(localParseType());
+                    if (result.kind === TypeKind.intersection) {
+                        // we'll parse it but we don't do anything with it
+                        //result.types.push(localParseType());
+                        localParseType();
                     }
                     else {
-                        result = cfIntersection(result, localParseType());
+                        // not supporting intersections just yet
+                        // result = cfIntersection(result, localParseType());
+                        localParseType();
                     }
                     break;
                 }
                 case TokenType.PIPE: {
                     next(), parseTrivia();
-                    if (isUnion(result)) {
-                        result.types.push(localParseType());
+                    if (result.kind === TypeKind.union) {
+                        (result as Mutable<cfUnion>).types = [...result.types, localParseType()];
                     }
                     else {
-                        result = cfUnion([result, localParseType()]);
+                        result = cfUnion(new Set([result, localParseType()]));
                     }
                     break;
                 }

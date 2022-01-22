@@ -7,9 +7,9 @@ import { EngineVersion } from "./engines";
 import { BlockType, CallExpression, mergeRanges, Node, NodeId, NodeKind, SourceFile, StatementType, SymTabEntry, setDebug as setNodeFactoryDebug, DiagnosticKind } from "./node";
 import { Parser } from "./parser";
 import { CfFileType, SourceRange } from "./scanner";
-import { CfcTypeWrapper, cfFunctionOverloadSet, cfFunctionSignatureParam, Interface, createLiteralType, _Type, Struct } from "./types";
+import { Cfc, cfFunctionOverloadSet, cfFunctionSignatureParam, Interface, createLiteralType, Type, Struct } from "./types";
 
-import { cfmOrCfc, findNodeInFlatSourceMap, flattenTree, getAttributeValue, getComponentAttrs, getComponentBlock, getTriviallyComputableString, NodeSourceMap, visit } from "./utils";
+import { isNamedFunction, cfmOrCfc, findNodeInFlatSourceMap, flattenTree, getAttributeValue, getComponentAttrs, getComponentBlock, getTriviallyComputableString, NodeSourceMap, visit } from "./utils";
 
 import { CancellationException, CancellationTokenConsumer } from "./cancellationToken";
 
@@ -195,7 +195,7 @@ export interface ProjectOptions {
 export function Project(__const__projectRoot: string, fileSystem: FileSystem, options: ProjectOptions) {
     type AbsPath = string;
     
-    const projectRoot = canonicalizePath(__const__projectRoot);
+    const projectRoot = canonicalizePath(__const__projectRoot); // the value passed in is inconvenient to name; the convenient name is immutable
     const projectRootDirName = (() => {
         const t = path.parse(projectRoot).base.split(fileSystem.pathSep);
         return t.length > 0 ? t[t.length - 1] : "";
@@ -226,6 +226,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
 
     function parseBindCheckWorker(sourceFile: SourceFile) : DevTimingInfo {
         try {
+            console.log(sourceFile.absPath);
             parser.setSourceFile(sourceFile);
             const parseStart = new Date().getTime();
             parser.parse();
@@ -258,25 +259,37 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             const checkStart = new Date().getTime();
 
             if (options.withWireboxResolution && sourceFile.absPath === options.wireboxConfigFileCanonicalAbsPath) {
+                const start = new Date().getTime();
+                console.log("Building wirebox config...");
                 const wireboxInterface = constructWireboxInterface(sourceFile);
                 if (wireboxInterface) {
                     if (!wireboxLib) wireboxLib = SourceFile("<<magic/wirebox>>", CfFileType.dCfm, "");
-                    wireboxLib.containedScope.typedefs.mergedInterfaces.set("Wirebox", wireboxInterface);
+                    wireboxLib.containedScope.typeinfo.mergedInterfaces.set("Wirebox", wireboxInterface);
                 }
                 else {
                     wireboxLib = null;
                 }
+                const end = new Date().getTime();
+                console.log("Done with wirebox config in " + (end - start) + "ms");
             }
 
+            let x : string;
             if (options.withWireboxResolution && wireboxLib) {
+                x = "GOT";
+                console.log(sourceFile.absPath + " got wirebox lib");
                 sourceFile.libRefs.set("<<magic/wirebox>>", wireboxLib);
             }
             else {
+                x = "NO-GOT";
                 sourceFile.libRefs.delete("<<magic/wirebox>>");
             }
+            
+            console.log(sourceFile.absPath + " " + x + " wirebox lib");
 
             checker.check(sourceFile);
             const checkElapsed = new Date().getTime() - checkStart;
+
+            console.log("done with " + sourceFile.absPath);
 
             return { parse: parseElapsed, bind: bindElapsed, check: checkElapsed };
         }
@@ -310,13 +323,13 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         return files.get(absPath)!;
     }
 
-    function constructWireboxInterface(sourceFile: SourceFile) {
+    function constructWireboxInterface(sourceFile: SourceFile) : Interface | undefined {
         const mappings = buildWireboxMappings(sourceFile);
         if (!mappings) {
             return undefined;
         }
 
-        const overloads : {params: cfFunctionSignatureParam[], returns: _Type}[] = [];
+        const overloads : {params: cfFunctionSignatureParam[], returns: Type}[] = [];
         const mappingsBuilder = new Map<string, SymTabEntry>();
         for (const mapping of mappings) {
             if (mapping.kind === "dir") {
@@ -341,25 +354,27 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
                         const instantiableNameAsLiteralType = createLiteralType(instantiableName);
 
                         const param = cfFunctionSignatureParam(/*required*/true, instantiableNameAsLiteralType, "name")
-                        var cfcTypeWrapper = CfcTypeWrapper(file.parsedSourceFile);
+                        var cfcTypeWrapper = Cfc(file.parsedSourceFile);
                         overloads.push({params: [param], returns: cfcTypeWrapper});
                         const canonicalName = instantiableName.toLowerCase();
                         mappingsBuilder.set(canonicalName, {
                             canonicalName,
                             uiName: instantiableName,
                             type: cfcTypeWrapper,
-                            declarations: null
+                            declarations: null,
+                            symbolId: -1,
                         });
                     }
                 }
             }
         }
 
-        const wireboxGetInstanceSymbol = {
+        const wireboxGetInstanceSymbol : SymTabEntry = {
             uiName: "getInstance",
             canonicalName: "getinstance",
             declarations: null,
-            type: cfFunctionOverloadSet("getInstance", overloads, [])
+            type: cfFunctionOverloadSet("getInstance", overloads, []),
+            symbolId: -1,
         };
 
         const wireboxMembers = new Map<string, SymTabEntry>([
@@ -368,7 +383,8 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
                 canonicalName: "mappings",
                 uiName: "mappings",
                 declarations: null,
-                type: Struct(mappingsBuilder)
+                type: Struct(mappingsBuilder),
+                symbolId: -1,
             }]
         ]);
         
@@ -641,14 +657,14 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
 
     function EngineSymbolResolver(canonicalName: string) : SymTabEntry | undefined {
         if (!engineLib) return undefined;
-        if (!engineLib.parsedSourceFile.containedScope.typedefs.mergedInterfaces.has("__cfEngine")) return undefined;
-        return engineLib.parsedSourceFile.containedScope.typedefs.mergedInterfaces.get("__cfEngine")!.members.get(canonicalName);
+        if (!engineLib.parsedSourceFile.containedScope.typeinfo.mergedInterfaces.has("__cfEngine")) return undefined;
+        return engineLib.parsedSourceFile.containedScope.typeinfo.mergedInterfaces.get("__cfEngine")!.members.get(canonicalName);
     }
 
     // resolve types (right now, just interfaces) from *the* lib file
-    function LibTypeResolver(name: string) : _Type | undefined {
+    function LibTypeResolver(name: string) : Type | undefined {
         if (!engineLib) return undefined;
-        return engineLib.parsedSourceFile.containedScope.typedefs.mergedInterfaces.get(name);
+        return engineLib.parsedSourceFile.containedScope.typeinfo.mergedInterfaces.get(name);
     }
 
     return {
@@ -668,7 +684,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
 export type Project = ReturnType<typeof Project>;
 export type CfcResolver = (args: {resolveFrom: string, cfcName: string}) => {sourceFile: SourceFile, symbolTable: ReadonlyMap<string, SymTabEntry>} | undefined;
 export type EngineSymbolResolver = (name: string) => SymTabEntry | undefined;
-export type LibTypeResolver = (name: string) => _Type | undefined;
+export type LibTypeResolver = (name: string) => Type | undefined;
 
 export interface ComponentSpecifier {
     canonicalName: string,
@@ -689,7 +705,7 @@ export function buildWireboxMappings(root: SourceFile) {
     if (!component) return undefined;
     for (const node of component.stmtList) {
         // find the `configure` function, and descend into it, to extract mapping definitions
-        if (node.kind === NodeKind.functionDefinition && !node.fromTag && node.canonicalName === "configure") {
+        if (!node.fromTag && isNamedFunction(node) && node.name.canonical === "configure") {
             visit(node.body.stmtList, wireboxConfigureFunctionMappingExtractingVisitor);
             break;
         }

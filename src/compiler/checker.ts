@@ -1,13 +1,25 @@
-import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, Property, hasDeclaredType, UnreachableFlow, DiagnosticKind, TagAttribute } from "./node";
+import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, hasDeclaredType, UnreachableFlow, DiagnosticKind, TagAttribute, SymbolId } from "./node";
 import { CfcResolver, EngineSymbolResolver, LibTypeResolver, ProjectOptions } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
-import { cfFunctionSignature, Struct, cfUnion, SyntheticType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, _Type, isTypeId, isIntersection, isStructLike, isUnion, isFunctionSignature, isTypeConstructorInvocation, isCachedTypeConstructorInvocation, isArray, stringifyType, cfFunctionSignatureParam, isFunctionOverloadSet, cfFunctionOverloadSet, isLiteralType, cfTypeId, SymbolTableTypeWrapper, CfcTypeWrapper, Interface, StructKind, isCfcLookupType, isInstantiatedArray, isInterface, createType, createLiteralType, isUninstantiatedArray, isGenericFunctionSignature, TypeConstructor, typeFromJavaLikeTypename } from "./types";
-import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, getAttributeValue, getComponentAttrs, getContainingFunction, getFunctionDefinitionAccessLiteral, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isLiteralExpr, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue } from "./utils";
+import { cfFunctionSignature, Struct, cfUnion, BuiltinType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, Type, stringifyType, cfFunctionSignatureParam, cfFunctionOverloadSet, cfTypeId, SymbolTableTypeWrapper, Cfc, Interface, createType, createLiteralType, TypeConstructor, typeFromJavaLikeTypename, structurallyCompareTypes, TypeKind, isStructLike, cfArray, cfStructLike, isStructLikeOrArray } from "./types";
+import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, functionDefinitionHasUserSpecifiedReturnType, getAttributeValue, getComponentAttrs, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionNameTerminalErrorNode, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isLiteralExpr, isNamedFunction, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue, tryGetCfcMemberFunctionDefinition } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol, TupleKeyedWeakMap } from "./utils";
 import { Engine, supports } from "./engines";
 
-const structViewCache = TupleKeyedWeakMap<[SymbolTable, Interface], Struct>(); // map a SymbolTable -> Interface -> Struct, used to check prior existence of a wrapping of a symbol table into a struct with a possible interface extension
+const structViewCache = TupleKeyedWeakMap<[SymbolTable, Interface], SymbolTableTypeWrapper>(); // map a SymbolTable -> Interface -> Struct, used to check prior existence of a wrapping of a symbol table into a struct with a possible interface extension
 const EmptyInstantiationContext = SourceFile("", CfFileType.cfc, ""); // an empty type type instantiation context, no symbols are visible; there we rely entirely on captured or provided contexts attached the instantiable target
+
+// the "debug" object should be moved into the Project object, and passed into the checker
+// but this gets it going
+function Debug() {
+    function out(...args: any[]) {
+        console.log(...args);
+    }
+
+    return {
+        out
+    }
+}
 
 export function Checker(options: ProjectOptions) {
     const engineVersion = options.engineVersion;
@@ -16,25 +28,32 @@ export function Checker(options: ProjectOptions) {
     const GENERIC_FUNCTION_INFERENCE = options.genericFunctionInference;
     const CHECK_RETURN_TYPES = options.checkReturnTypes;
     const CHECK_FLOW_TYPES = options.checkFlowTypes;
+    const debug = Debug();
 
     let sourceFile!: SourceFile;
     let scanner!: Scanner;
     let diagnostics!: Diagnostic[];
     let noUndefinedVars = false;
-    let returnTypes: _Type[] = [];
+    let returnTypes: Type[] = [];
     let flowBecameUnreachable = false;
     let warnOnUndefined!: boolean;
+    let checkerStack! : Node[];
+    let forcedReturnTypes : WeakMap<Node, Type>;
 
     function check(sourceFile_: SourceFile) {
         // we're using the Checker as a singleton, and checking one source file might trigger checking another
         // so, we have to save state before descending into the next check
         const savedSourceFile = sourceFile;
         const savedWarnOnUndefined = warnOnUndefined;
+        const savedCheckerStack = checkerStack;
+        const savedForcedReturnTypes = forcedReturnTypes;
         
         sourceFile = sourceFile_;
         scanner = sourceFile.scanner;
         diagnostics = sourceFile.diagnostics;
         warnOnUndefined = false;
+        checkerStack = [];
+        forcedReturnTypes = new WeakMap();
 
         if (sourceFile.cfFileType === CfFileType.cfc) {
             warnOnUndefined = getAttributeValue(getComponentAttrs(sourceFile) ?? [], "warn-undefined") !== null;
@@ -47,46 +66,54 @@ export function Checker(options: ProjectOptions) {
         instantiateInterfaces(sourceFile);
         checkList(sourceFile.content);
 
-        for (const decorator of sourceFile.containedScope.typedefs.decorators) {
-            if (decorator.name === "QuickInstance") {
-                QuickInstance(sourceFile);
-            }
-        }
+        // 1/22/21 -- not supporting decorators
+        // for (const decorator of sourceFile.containedScope.typedefs.decorators) {
+        //     if (decorator.name === "QuickInstance") {
+        //         QuickInstance(sourceFile);
+        //     }
+        // }
 
         sourceFile = savedSourceFile;
         scanner = savedSourceFile?.scanner;
         diagnostics = savedSourceFile?.diagnostics;
         warnOnUndefined = savedWarnOnUndefined;
+        checkerStack = savedCheckerStack;
+        forcedReturnTypes = savedForcedReturnTypes;
+    }
+
+    function checkerStackContains(node: Node) {
+        return checkerStack.indexOf(node) !== -1;
     }
 
     function instantiateInterfaces(node: Node) {
-        if (node.containedScope?.typedefs.mergedInterfaces) {
-            for (const [ifaceName, iface] of node.containedScope.typedefs.mergedInterfaces) {
+        if (node.containedScope?.typeinfo.mergedInterfaces) {
+            for (const [ifaceName, iface] of node.containedScope.typeinfo.mergedInterfaces) {
                 if (iface.typeParams) {
                     // we can't instantiate a generic interface without type args
                     continue;
                 }
                 // fixme: preserve order; all spreads happend first right now
                 const freshMembers = new Map<string, SymTabEntry>();
-                if (iface.instantiableSpreads) {
-                    for (const spread of iface.instantiableSpreads) {
-                        const type = evaluateType(node, spread);
-                        if (isStructLike(type)) {
-                            for (const [k,v] of type.members) {
-                                freshMembers.set(k,v);                                
-                            }
-                        }
-                    }
-                }
+                // @instantiableSpreads
+                // if (iface.instantiableSpreads) {
+                //     for (const spread of iface.instantiableSpreads) {
+                //         const type = evaluateType(node, spread);
+                //         if (isStructLike(type)) {
+                //             for (const [k,v] of type.members) {
+                //                 freshMembers.set(k,v);                                
+                //             }
+                //         }
+                //     }
+                // }
                 for (const [memberName, member] of iface.members) {
-                    if (isCfcLookupType(member.type)) {
+                    if (member.type.kind === TypeKind.cfcLookup) {
                         (member as Mutable<SymTabEntry>).type = evaluateType(node, member.type);
                     }
                     freshMembers.set(memberName, member);
                 }
                 const freshType = Interface(ifaceName, freshMembers);
                 (freshType as Mutable<Interface>).underlyingType = iface;
-                node.containedScope.typedefs.mergedInterfaces.set(ifaceName, freshType);
+                node.containedScope.typeinfo.mergedInterfaces.set(ifaceName, freshType);
             }
         }
     }
@@ -229,20 +256,20 @@ export function Checker(options: ProjectOptions) {
                 }
                 return;
             case NodeKind.simpleStringLiteral:
-                setCachedEvaluatedNodeType(node, SyntheticType.string);
+                setCachedEvaluatedNodeType(node, createLiteralType(node.textSpan.text));
                 return;
             case NodeKind.interpolatedStringLiteral:
                 checkList(node.elements);
-                setCachedEvaluatedNodeType(node, SyntheticType.string);
+                setCachedEvaluatedNodeType(node, BuiltinType.string);
                 return;
             case NodeKind.numericLiteral: {
                 const val = parseFloat(node.literal.token.text);
                 if (!isNaN(val)) setCachedEvaluatedNodeType(node, createLiteralType(val));
-                else setCachedEvaluatedNodeType(node, SyntheticType.numeric);
+                else setCachedEvaluatedNodeType(node, BuiltinType.numeric);
                 return;
             }
             case NodeKind.booleanLiteral:
-                setCachedEvaluatedNodeType(node, node.booleanValue ? SyntheticType.true : SyntheticType.false);
+                setCachedEvaluatedNodeType(node, node.booleanValue ? BuiltinType.true : BuiltinType.false);
                 return;
             case NodeKind.identifier:
                 // klude/fixme!: identifier.source can be an indexed access
@@ -332,9 +359,9 @@ export function Checker(options: ProjectOptions) {
                     const injectStringVal = getTriviallyComputableString(injectAttrVal)?.toLowerCase();
                     if (!injectStringVal || !nameStringVal) return;
 
-                    const mappings = sourceFile.libRefs.get("<<magic/wirebox>>")!.containedScope.typedefs.mergedInterfaces.get("Wirebox")?.members.get("mappings");
+                    const mappings = sourceFile.libRefs.get("<<magic/wirebox>>")!.containedScope.typeinfo.mergedInterfaces.get("Wirebox")?.members.get("mappings");
                     const targetSymbol = sourceFile.containedScope.variables!.get(nameStringVal);
-                    if (!mappings || !targetSymbol || !isStructLike(mappings.type)) return;
+                    if (!mappings || !targetSymbol || mappings.type.kind !== TypeKind.interface) return;
 
                     const cfc = mappings.type.members.get(injectStringVal);
                     if (!cfc) return;
@@ -458,46 +485,53 @@ export function Checker(options: ProjectOptions) {
     }
     */
 
-    function determineFlowType(base: Flow, canonicalName: string) : _Type | undefined {
+    function determineFlowType(base: Flow, symbolId: SymbolId) : Type | undefined {
+        const seen = new Set<Flow>();
         return work(base);
 
-        function work(flow: Flow) : _Type | undefined {
-            const type = getCachedEvaluatedFlowType(flow, canonicalName);
+        function work(flow: Flow) : Type | undefined {
+            const type = getCachedEvaluatedFlowType(flow, symbolId);
 
             if (type) {
                 return type;
             }
 
-            if (flow.predecessors.length === 1) {
-                return work(flow.predecessors[0]);
-            }
-            else {
-                let containsUndefined = false;
-                const flowTypes : _Type[] = [];
-                for (let i = 0; i < flow.predecessors.length; i++) {
-                    const type = work(flow.predecessors[i]);
-                    if (type) flowTypes.push(type);
-                    else containsUndefined = true;
+            seen.add(flow);
+
+            let containsUndefined = false;
+            const flowTypes : Type[] = [];
+
+            for (let i = 0; i < flow.predecessors.length; i++) {
+                if (seen.has(flow.predecessors[i])) {
+                    continue;
                 }
-                return flowTypes.length === 0 ? undefined : unionify(flowTypes, containsUndefined);
+                const type = work(flow.predecessors[i]);
+                if (type) flowTypes.push(type);
+                else containsUndefined = true;
             }
+
+            if (containsUndefined) {
+                flowTypes.push(BuiltinType.null);
+            }
+
+            return flowTypes.length === 0
+                ? undefined
+                : unionify(flowTypes);
         }
     }
 
-    function mergeTypes(l: _Type, r: _Type) : _Type {
+    function mergeTypes(l: Type, r: Type) : Type {
         if (l === r) return l;
 
-        if (isLiteralType(l) && isLiteralType(r)) {
-            if (l.flags & TypeFlags.numeric && r.flags & TypeFlags.numeric) return SyntheticType.numeric;
-            if (l.flags & TypeFlags.string && r.flags & TypeFlags.string) return SyntheticType.string;
-            if (l.flags & TypeFlags.numeric && r.flags & TypeFlags.string) return SyntheticType.string;
-            if (l.flags & TypeFlags.string && r.flags & TypeFlags.numeric) return SyntheticType.string;
+        if (l.kind === TypeKind.literal && r.kind === TypeKind.literal) {
+            if (l.underlyingType === BuiltinType.numeric && r.underlyingType === BuiltinType.numeric) return BuiltinType.numeric;
+            if (l.underlyingType === BuiltinType.string || r.underlyingType === BuiltinType.string) return BuiltinType.string;
         }
 
         if (isStructLike(l) && isStructLike(r)) {
             // merge arrays ... ?
             // merge cfc types ? ... probably not desireable?
-            if (l.structKind === StructKind.struct && r.structKind === StructKind.struct) {
+            if (l.kind === TypeKind.struct && r.kind === TypeKind.struct) {
                 const keys = [...l.members.keys(), ...r.members.keys()];
                 const mergedMembers = new Map<string, SymTabEntry>();
                 for (const key of keys) {
@@ -507,7 +541,8 @@ export function Checker(options: ProjectOptions) {
                             canonicalName: key,
                             uiName: l.members.get(key)!.uiName,
                             declarations: [],
-                            type: mergedType
+                            type: mergedType,
+                            symbolId: -1,
                         })
                     }
                     else {
@@ -529,45 +564,41 @@ export function Checker(options: ProjectOptions) {
     // "instantiated type": {flags: TypeFlag, type: _Type} so we can share "any" and "void" and etc.
     // the "undefined" typeflag needs, at a minimum, to be renamed "containsNull", and should be a BulitinType.null
     // unions could maybe have flags that indicate whether they contain primitives
-    function unionify(types: _Type[], definitelyContainsUndefined = false) : _Type {
-        let flags : TypeFlags = definitelyContainsUndefined ? TypeFlags.containsUndefined : TypeFlags.none;
-        const membersBuilder = new Set<_Type>();
+    function unionify(types: Type[]) : Type {
+        let flags : TypeFlags = TypeFlags.none;
+        const membersBuilder = new Set<Type>();
         for (const type of types) {
-            if (type.flags & TypeFlags.containsUndefined) {
-                flags |= TypeFlags.containsUndefined;
-            }
-            else if (type.flags & TypeFlags.any || type.flags & TypeFlags.never) {
+            if (type === BuiltinType.any || type === BuiltinType.never) {
                 return type;
             }
-            else {
-                // merge types that are subtypes of each others
-                // the check is bivariant
-                // l: {x: 1, y:1, z:1}, r: {x: 1, y:1} -> merge ok
-                // l: {x: 1, y:1}, r: {x: 1, y:1, z: 1} -> merge ok
-                // l: {x:1}, r: {z:1} -> no merge
-                const deletables : _Type[] = [];
-                let addedViaMerge = false;
-                for (const existingUnionMember of membersBuilder) {
-                    if (isLeftSubtypeOfRight(existingUnionMember, type, false, false, true) || isLeftSubtypeOfRight(type, existingUnionMember, false, false, true)) {
-                        deletables.push(existingUnionMember);
-                        const merged = mergeTypes(existingUnionMember, type);
-                        membersBuilder.add(merged);
-                        addedViaMerge = true;
-                        break;
-                    }
+
+            // merge types that are subtypes of each others
+            // the check is bivariant
+            // l: {x: 1, y:1, z:1}, r: {x: 1, y:1} -> merge ok
+            // l: {x: 1, y:1}, r: {x: 1, y:1, z: 1} -> merge ok
+            // l: {x:1}, r: {z:1} -> no merge
+            const deletables : Type[] = [];
+            let addedViaMerge = false;
+            for (const existingUnionMember of membersBuilder) {
+                if (isLeftSubtypeOfRight(existingUnionMember, type, false, false, true) || isLeftSubtypeOfRight(type, existingUnionMember, false, false, true)) {
+                    deletables.push(existingUnionMember);
+                    const merged = mergeTypes(existingUnionMember, type);
+                    membersBuilder.add(merged);
+                    addedViaMerge = true;
+                    break;
                 }
-                if (!addedViaMerge) {
-                    membersBuilder.add(type);
-                }
-                for (const deleteable of deletables) {
-                    membersBuilder.delete(deleteable);
-                }
+            }
+            if (!addedViaMerge) {
+                membersBuilder.add(type);
+            }
+            for (const deleteable of deletables) {
+                membersBuilder.delete(deleteable);
             }
         }
 
-        if (membersBuilder.size === 0) return SyntheticType.any;
+        if (membersBuilder.size === 0) return BuiltinType.any;
 
-        return cfUnion([...membersBuilder], flags);
+        return cfUnion(membersBuilder, flags);
     }
 
 
@@ -576,7 +607,7 @@ export function Checker(options: ProjectOptions) {
      * @param assignThis 
      * @param to 
      */
-    function isAssignable(assignThis: _Type, to: _Type, sourceIsLiteralExpr = false, forReturnType = false) : boolean {
+    function isAssignable(assignThis: Type, to: Type, sourceIsLiteralExpr = false, forReturnType = false) : boolean {
         return isLeftSubtypeOfRight(assignThis, to, sourceIsLiteralExpr, forReturnType);
     }
 
@@ -591,11 +622,20 @@ export function Checker(options: ProjectOptions) {
     //
     function functionSignatureIsLegacyCfIndefiniteArityMarker(sig: cfFunctionSignature) : boolean {
         const exactlyOneParam = sig.params.length === 1;
-        const spread = exactlyOneParam && !!(sig.params[0].flags & TypeFlags.spread);
-        const nameIsArguments = exactlyOneParam && sig.params[0].canonicalName === "arguments";
-        const isArray = exactlyOneParam && isInstantiatedArray(sig.params[0].type);
-        const arrayMemberIsAny = isArray && sig.params[0].type.memberType === SyntheticType.any;
-        return exactlyOneParam && spread && nameIsArguments && isArray && arrayMemberIsAny;
+        if (!exactlyOneParam) {
+            return false;
+        }
+
+        const param = sig.params[0];
+        const spread = !!(param.flags & TypeFlags.spread);
+        const nameIsArguments = param.canonicalName === "arguments";
+        const isArray = param.paramType.kind === TypeKind.array;
+        const arrayMemberIsAny = isArray && param.paramType.memberType === BuiltinType.any;
+
+        return spread
+            && nameIsArguments
+            && isArray
+            && arrayMemberIsAny;
     }
     //
     // for an annotated function definition, the user will generally want to refine existing types
@@ -619,9 +659,34 @@ export function Checker(options: ProjectOptions) {
         if (cfSig.params.length != annotatedSig.params.length) return false;
 
         for (let i = 0; i < cfSig.params.length; i++) {
-            // covariant param check
-            if (!isAssignable(annotatedSig.params[i].type, cfSig.params[i].type)) return false;
+            // covariant param check, not contravariant; we're trying to tighten the type
+            if (!isAssignable(annotatedSig.params[i].paramType, cfSig.params[i].paramType)) return false;
         }
+        return true;
+    }
+
+    function isAnnotatedOverloadCompatibleWithCfFunctionSig(lParams: readonly cfFunctionSignatureParam[], rParams: readonly cfFunctionSignatureParam[], lReturns: Type, rReturns: Type) {
+        if (!isLeftSubtypeOfRight(lReturns, rReturns)) {
+            return false;
+        }
+
+        // T <: U
+        // L = @!type (a) => T
+        // R = function foo(a, b) U
+        const requiredLeft = lParams.filter((p) => !(p.flags & TypeFlags.optional)).length;
+        const requiredRight = rParams.filter((p) => !(p.flags & TypeFlags.optional)).length;
+        
+        if (requiredLeft > requiredRight) {
+            return false;
+        }
+
+        // hm, should probably enforce same order of names
+        for (let i = 0; i <= Math.min(lParams.length, rParams.length); i++) {
+            if (!isAssignable(lParams[i], rParams[i])) {
+                return false;
+            }
+        }
+
         return true;
     }
 
@@ -631,15 +696,15 @@ export function Checker(options: ProjectOptions) {
     // it is maybe helpful to note that "sub" means "substitutable" in addition to "a descendant in a heirarchy"
     // i.e. `l <: r` means l is substitutable for r (you can safely use an l in r's place)
     //
-    function isLeftSubtypeOfRight(l: _Type, r: _Type, sourceIsLiteralExpr = false, forReturnType = false, widenLiterals = false) : boolean {
+    function isLeftSubtypeOfRight(l: Type, r: Type, sourceIsLiteralExpr = false, forReturnType = false, widenLiterals = false) : boolean {
         let depth = 0;
         let tooDeep = false;
         tooDeep ? 0 : 1; // yes compiler this is used
-        const runningComparisonMap = new Map<_Type, _Type>();
+        const runningComparisonMap = new Map<Type, Type>();
 
         return worker(l, r);
 
-        function worker(l: _Type, r: _Type) : boolean {
+        function worker(l: Type, r: Type) : boolean {
             if (runningComparisonMap.get(l) === r) {
                 // we're already comparing these types
                 return true;
@@ -657,46 +722,46 @@ export function Checker(options: ProjectOptions) {
                 if (l === r) return true;
 
                 // any is a subtype of every type; every type is a subtype of any
-                if (l.flags & TypeFlags.any || r.flags & TypeFlags.any) return true;
+                if (l === BuiltinType.any || r === BuiltinType.any) return true;
 
                 // `void function foo() { return; }` is valid, in effect `return <unit>` returns null
                 // so for a return type, null is assignable to void
-                if (forReturnType && l.flags & TypeFlags.null && r.flags & TypeFlags.void) return true;
+                if (forReturnType && l === BuiltinType.null && r === BuiltinType.void) return true;
 
                 // except for the above return type case, void is not a subtype of anything except itself and any
-                if (l.flags & TypeFlags.void || r.flags & TypeFlags.void) return false;
+                if (l === BuiltinType.void || r === BuiltinType.void) return false;
 
                 // it would be nice to error on this, but plenty of legacy code relies on
                 // number being assignable to boolean
-                if (l.flags & TypeFlags.numeric && r.flags & TypeFlags.boolean) return true;
+                if (l === BuiltinType.numeric && r === BuiltinType.boolean) return true;
 
                 if (widenLiterals) {
-                    const widenedLeft = isLiteralType(l) ? l.underlyingType : undefined;
-                    const widenedRight = isLiteralType(r) ? r.underlyingType : undefined;
+                    const widenedLeft = l.kind === TypeKind.literal ? l.underlyingType : undefined;
+                    const widenedRight = r.kind === TypeKind.literal ? r.underlyingType : undefined;
                     if (widenedLeft && widenedRight && widenedLeft === widenedRight) {
                         return true;
                     }
 
                     // numeric is a subtype of string
                     // however, string is not a subtype of numeric
-                    if (widenedLeft === SyntheticType.numeric && widenedRight === SyntheticType.string) {
+                    if (widenedLeft === BuiltinType.numeric && widenedRight === BuiltinType.string) {
                         return true;
                     }
                 }
                 else {
-                    if (isLiteralType(l) && isLiteralType(r)) return l.literalValue === r.literalValue;
-                    if (!isLiteralType(l) && isLiteralType(r)) return false; // number is not a subtype of `0`
-                    if (isLiteralType(l) && !isLiteralType(r) && worker(l.underlyingType, r)) return true; // `0` is a subtype of number
+                    if (l.kind == TypeKind.literal && r.kind === TypeKind.literal) return l.literalValue === r.literalValue;
+                    if (l.kind !== TypeKind.literal && r.kind === TypeKind.literal) return false; // number is not a subtype of `0`
+                    if (l.kind === TypeKind.literal && r.kind !== TypeKind.literal && worker(l.underlyingType, r)) return true; // `0` is a subtype of number
 
                     // numeric is a subtype of string
                     // however, string is not a subtype of numeric
-                    if (l === SyntheticType.numeric && r === SyntheticType.string) {
+                    if (l === BuiltinType.numeric && r === BuiltinType.string) {
                         return true;
                     }
                 }
 
 
-                function propertyCounts(structLike: Struct) {
+                function propertyCounts(structLike: cfStructLike) {
                     // doesn't make too much sense for an object literal
                     let optional = 0;
                     let required = 0;
@@ -719,7 +784,7 @@ export function Checker(options: ProjectOptions) {
                 // {x: number, y: number} <: {x: number}, because L has AT LEAST all the properties of R
                 // {x: number} !<: {x: number, y: number}
                 //
-                function isLeftStructSubtypeOfRightStruct(l: Struct, r: Struct) {
+                function isLeftStructSubtypeOfRightStruct(l: cfStructLike, r: cfStructLike) {
                     // the outer types may be different wrappers for the same underlying struct
                     // e.g. a SymbolTableWrapper around `this` from within a CFC, and a CFC wrapper wrapping the same `this` but for a reference from another file
                     if (l.members === r.members) return true;
@@ -736,11 +801,11 @@ export function Checker(options: ProjectOptions) {
                             Child function init() { return super.init(); } // super.init : Parent, but Parent :> Child, we could probably treat "super.init as this.init"
                         }
                     */
-                    if (l.structKind === StructKind.cfcTypeWrapper && r.structKind === StructKind.cfcTypeWrapper) {
+                    if (l.kind === TypeKind.cfc && r.kind === TypeKind.cfc) {
                         return !!findAncestor(l.cfc, (node) => node === r.cfc, /*followCfcInheritance*/ true);
                     }
 
-                    if (l.structKind === StructKind.struct && r === SyntheticType.EmptyInterface) {
+                    if (l.kind === TypeKind.struct && r === BuiltinType.EmptyInterface) {
                         return true;
                     }
 
@@ -774,31 +839,14 @@ export function Checker(options: ProjectOptions) {
                     return true;
                 }
 
-                if (l.flags & TypeFlags.numeric && r.flags & TypeFlags.numeric) {
-                    return true;
-                }
-                if (l.flags & TypeFlags.string && r.flags & TypeFlags.string) {
-                    return true;
-                }
-                if (l.flags & TypeFlags.boolean && r.flags & TypeFlags.boolean) {
-                    return true;
+                if (l.kind === TypeKind.array && r.kind === TypeKind.array) {
+                    return worker(l.memberType, r.memberType);
                 }
                 if (isStructLike(l) && isStructLike(r)) {
-                    if (isInstantiatedArray(l) && isInstantiatedArray(r)) {
-                        return worker(l.memberType, r.memberType);
-                    }
                     return isLeftStructSubtypeOfRightStruct(l, r);
                 }
-                // rmme 10/22/21
-                // if (isArray(l) && isArray(r)) { // these will be "instantiated" arrays, which are structlike; we'll never hit this
-                //     if (sourceIsLiteralExpr) {
-                //         return worker(l.memberType, r.memberType);
-                //     }
-                //     else {
-                //         return worker(l.memberType, r.memberType);
-                //     }
-                // }
-                if (isFunctionSignature(l) && isFunctionSignature(r)) {
+                
+                if (l.kind === TypeKind.functionSignature && r.kind === TypeKind.functionSignature) {
                     // covariant in return type
                     if (!worker(l.returns, r.returns)) return false;
 
@@ -814,11 +862,11 @@ export function Checker(options: ProjectOptions) {
                     for (let i = 0; i < l.params.length; i++) {
                         // if the arg in the right side is a spread, just check remaining left types against the (un-array-wrapped) spread type
                         if (r.params[i].flags & TypeFlags.spread) {
-                            const rType = r.params[i].type;
-                            const spreadType = isArray(rType) ? rType.memberType : null;
+                            const rType = r.params[i].paramType;
+                            const spreadType = rType.kind === TypeKind.array ? rType.memberType : null;
                             if (!spreadType) return false; // all spread types must be arrays, we should have caught this before getting here
                             for (let j = i; j < l.params.length; j++) {
-                                const lpt = l.params[i].type;
+                                const lpt = l.params[i].paramType;
                                 // contravariant, flip left/right
                                 if (!worker(spreadType, lpt)) return false;
                             }
@@ -826,8 +874,8 @@ export function Checker(options: ProjectOptions) {
                             break;
                         }
 
-                        const lpt = l.params[i].type;
-                        const rpt = r.params[i].type;
+                        const lpt = l.params[i].paramType;
+                        const rpt = r.params[i].paramType;
                         // contravariant, flip left/right
                         if (!worker(rpt, lpt)) return false;
                     }
@@ -840,25 +888,25 @@ export function Checker(options: ProjectOptions) {
                 // S&T <: U     iff S <: U || T <: U   (e.g `U = S&T` is valid if either S or T is a subtype of U)
                 // U   <: S&T   iff U <: S && U <: T   (e.g `S&T = U` is valid only if U is a subtype of both S and T)
                 //
-                if (isUnion(l)) {
+                if (l.kind === TypeKind.union) {
                     for (const leftConstituent of l.types) {
                         if (!worker(leftConstituent, r)) return false;
                     }
                     return true;
                 }
-                if (isUnion(r)) {
+                if (r.kind === TypeKind.union) {
                     for (const rightConstituent of r.types) {
                         if (worker(l, rightConstituent)) return true;
                     }
                     return false;
                 }
-                if (isIntersection(l)) {
+                if (l.kind === TypeKind.intersection) {
                     for (const leftConstituent of l.types) {
                         if (worker(leftConstituent, r)) return true;
                     }
                     return false;
                 }
-                if (isIntersection(r)) {
+                if (r.kind === TypeKind.intersection) {
                     for (const rightConstituent of r.types) {
                         if (!worker(l, rightConstituent)) return false;
                     }
@@ -867,11 +915,11 @@ export function Checker(options: ProjectOptions) {
                 
                 // can we instantiate these any further?
                 let didReinstantiate = false;
-                if (isTypeConstructorInvocation(l)) {
+                if (l.kind === TypeKind.typeConstructorInvocation) {
                     didReinstantiate = true;
                     l = evaluateType(EmptyInstantiationContext, l);
                 }
-                if (isTypeConstructorInvocation(r)) {
+                if (r.kind === TypeKind.typeConstructorInvocation) {
                     didReinstantiate = true;
                     r = evaluateType(EmptyInstantiationContext, r);
                 }
@@ -915,7 +963,7 @@ export function Checker(options: ProjectOptions) {
                     deleteableOverloads.add(overload);
                     continue;
                 }
-                const paramType = overload.params[i].type;
+                const paramType = overload.params[i].paramType;
                 if (!isAssignable(/*assignThis*/argType, /*to*/paramType)) {
                     deleteableOverloads.add(overload);
                     continue;
@@ -943,11 +991,11 @@ export function Checker(options: ProjectOptions) {
         const isBuiltinSymbol = symbol?.scopeName === "__cfEngine";
         if (shadowsBuiltinSymbol || isBuiltinSymbol) {
             const sig = symbol.symTabEntry.type;
-            if (isFunctionSignature(sig)) {
+            if (sig.kind === TypeKind.functionSignature) {
                 setCachedEvaluatedNodeType(node.left, sig);
                 setCachedEvaluatedNodeType(node, sig.returns);
 
-                if (sig.returns === SyntheticType.never) {
+                if (sig.returns === BuiltinType.never) {
                     flowBecameUnreachable = true;
                 }
                 
@@ -958,49 +1006,52 @@ export function Checker(options: ProjectOptions) {
         }
 
         const sig = getCachedEvaluatedNodeType(node.left);
-        let returnType : _Type;
+        let returnType : Type;
 
-        if (isFunctionOverloadSet(sig)) {
+        if (sig.kind === TypeKind.functionOverloadSet) {
             checkList(node.args);
             const overloads = chooseOverload(sig, node.args);
             if (overloads.length !== 1) {
-                setCachedEvaluatedNodeType(node, returnType = SyntheticType.any);
+                setCachedEvaluatedNodeType(node, returnType = BuiltinType.any);
             }
             else {
                 setCachedEvaluatedNodeType(node, returnType = overloads[0].returns);
             }
         }
-        else if (isFunctionSignature(sig)) {
+        else if (sig.kind === TypeKind.functionSignature) {
             checkList(node.args);
             checkCallLikeArguments(sig, node.args, node.left.range, /*isNewExpr*/false);
             setCachedEvaluatedNodeType(node, returnType = sig.returns);
         }
-        else if (isGenericFunctionSignature(sig)) {
+        else if (sig.kind === TypeKind.genericFunctionSignature) {
             if (!GENERIC_FUNCTION_INFERENCE) {
                 return;
             }
 
-            const typeParamMap = new Map<string, _Type | undefined>();
-            const definitelyResolvedTypeParamMap = new Map<string, _Type>();
-            const pushResolution = (name: string, type: _Type) => {
+            const typeParamMap = new Map<string, Type | undefined>();
+            const definitelyResolvedTypeParamMap = new Map<string, Type>();
+            const pushResolution = (name: string, type: Type) => {
                 typeParamMap.set(name, type);
                 definitelyResolvedTypeParamMap.set(name, type);
             }
 
-            for (const p of sig.params) typeParamMap.set(p.name, undefined);
-            for (let i = 0; i < sig.body.params.length && i < node.args.length; i++) {
-                const sigParamType = sig.body.params[i].type;
+            for (const p of sig.typeParams) {
+                typeParamMap.set(p.name, undefined);
+            }
+
+            for (let i = 0; i < sig.params.length && i < node.args.length; i++) {
+                const sigParamType = sig.params[i].paramType;
                 const callSiteArg = node.args[i];
 
 
-                if (isFunctionSignature(sigParamType)) {
-                    const isGenericInReturnPosition = isTypeId(sigParamType.returns) && typeParamMap.has(sigParamType.returns.name);
+                if (sigParamType.kind === TypeKind.functionSignature) {
+                    const isGenericInReturnPosition = sigParamType.returns.kind === TypeKind.typeId && typeParamMap.has(sigParamType.returns.name);
 
                     if (isGenericInReturnPosition && (callSiteArg.expr.kind === NodeKind.functionDefinition || callSiteArg.expr.kind === NodeKind.arrowFunctionDefinition)) {
                         for (let j = 0; j < callSiteArg.expr.params.length; j++) {
                             const resolutions = resolveGenericFunctionTypeParams(
                                 typeParamMap,
-                                sigParamType.params[j].type,
+                                sigParamType.params[j].paramType,
                                 evaluateType(callSiteArg, typeFromJavaLikeTypename(callSiteArg.expr.params[j].javaLikeTypename)));
                             if (resolutions) {
                                 for (const [k,v] of resolutions) {
@@ -1013,14 +1064,18 @@ export function Checker(options: ProjectOptions) {
 
                         for (let j = 0; j < callSiteArg.expr.params.length; j++) {
                             const argScopeSymTabEntry = callSiteArg.expr.containedScope!.arguments!.get(callSiteArg.expr.params[j].canonicalName)!;
-                            argScopeSymTabEntry.type = evaluateType(callSiteArg, sigParamType.params[j].type, definitelyResolvedTypeParamMap);
+                            argScopeSymTabEntry.type = evaluateType(callSiteArg, sigParamType.params[j].paramType, definitelyResolvedTypeParamMap);
                         }
 
                         if (callSiteArg.expr.fromTag) {
                             // not possible, can't have a tag expr in an inline function expression, like `needsACallback(<cffunction>....)`
                         }
                         else {
-                            const returnType = checkFunctionBody(callSiteArg.expr);
+                            const returnType = checkFunctionBody(
+                                callSiteArg.expr,
+                                // fixme: we need to send the actual determined types;
+                                // have they been checked by virtue of `resolveGenericFunctionTypeParams`?
+                                sig.params.map((param) => createType({...param, paramType: BuiltinType.any})));
                             pushResolution((sigParamType.returns as cfTypeId).name, returnType);
                         }
                     }
@@ -1043,23 +1098,23 @@ export function Checker(options: ProjectOptions) {
             }
 
             if (definitelyResolvedTypeParamMap.size === typeParamMap.size) {
-                returnType = evaluateType(EmptyInstantiationContext, sig.body.returns, definitelyResolvedTypeParamMap);
+                returnType = evaluateType(EmptyInstantiationContext, sig.returns, definitelyResolvedTypeParamMap);
                 setCachedEvaluatedNodeType(node, returnType);
             }
             else {
-                returnType = SyntheticType.any;
+                returnType = BuiltinType.any;
             }
 
-            function widenToCommonType(t: _Type, u: _Type) : _Type | undefined {
-                if (isLiteralType(t) && isLiteralType(u)) {
-                    if (t.flags & TypeFlags.string && u.flags & TypeFlags.string) return SyntheticType.string;
-                    if (t.flags & TypeFlags.numeric && u.flags & TypeFlags.numeric) return SyntheticType.numeric;
+            function widenToCommonType(t: Type, u: Type) : Type | undefined {
+                if (t.kind === TypeKind.literal && u.kind === TypeKind.literal) {
+                    if (t.underlyingType === BuiltinType.string || u.underlyingType === BuiltinType.string) return BuiltinType.string;
+                    if (t.underlyingType === BuiltinType.numeric && u.underlyingType === BuiltinType.numeric) return BuiltinType.numeric;
                 }
                 return undefined;
             }
 
-            function resolveGenericFunctionTypeParams(unifiees: ReadonlyMap<string, _Type | undefined>, target: _Type, source: _Type) : ReadonlyMap<string, _Type | undefined> | undefined {
-                if (isTypeId(target)) {
+            function resolveGenericFunctionTypeParams(unifiees: ReadonlyMap<string, Type | undefined>, target: Type, source: Type) : ReadonlyMap<string, Type | undefined> | undefined {
+                if (target.kind === TypeKind.typeId) {
                     if (unifiees.has(target.name)) {
                         if (!unifiees.get(target.name)) {
                             return new Map([[target.name, source]]);
@@ -1082,19 +1137,18 @@ export function Checker(options: ProjectOptions) {
                         throw "these types are closed -- we're not looking up arbitrary generic type IDs, they should have been resolved already during the containing type's instantiation"
                     }
                 }
-                else if (isUninstantiatedArray(target) && isInstantiatedArray(source)) {
-                    const memberTypeOfUninstantiatedArray = target.args[0]; // because T[] is Array<T>, T[][] is Array<Array<T>> etc
-                    return resolveGenericFunctionTypeParams(unifiees, memberTypeOfUninstantiatedArray, source.memberType);
+                else if (target.kind === TypeKind.array && source.kind === TypeKind.array) {
+                    return resolveGenericFunctionTypeParams(unifiees, target.memberType, source.memberType);
                 }
                 else if (isStructLike(target) && isStructLike(source)) {
-                    if (target.structKind === StructKind.cfcTypeWrapper && source.structKind === StructKind.cfcTypeWrapper) {
+                    if (target.kind === TypeKind.cfc && source.kind === TypeKind.cfc) {
                         // uh, cfcs can't be generic?
                         return undefined;
                     }
                     if (source.members.size < target.members.size) {
                         return undefined;
                     }
-                    const freshResolutions = new Map<string, _Type | undefined>([...unifiees]);
+                    const freshResolutions = new Map<string, Type | undefined>([...unifiees]);
                     for (const [name, symTabEntry] of target.members) {
                         const targetType = symTabEntry.type;
                         if (!source.members.has(name)) return;
@@ -1106,14 +1160,14 @@ export function Checker(options: ProjectOptions) {
 
                     return freshResolutions;
                 }
-                else if (isFunctionSignature(target) && isFunctionSignature(source)) {
+                else if (target.kind === TypeKind.functionSignature && source.kind === TypeKind.functionSignature) {
                     if (target.params.length !== source.params.length) return undefined;
 
-                    const freshResolutions = new Map<string, _Type | undefined>([...unifiees]);
+                    const freshResolutions = new Map<string, Type | undefined>([...unifiees]);
 
                     for (let i = 0; i < target.params.length; i++) {
-                        const targetParamType = target.params[i].type;
-                        const sourceParamType = source.params[i].type;
+                        const targetParamType = target.params[i].paramType;
+                        const sourceParamType = source.params[i].paramType;
                         const result = resolveGenericFunctionTypeParams(unifiees, targetParamType, sourceParamType);
                         if (result) {
                             for (const[k,v] of result) freshResolutions.set(k,v);
@@ -1132,11 +1186,11 @@ export function Checker(options: ProjectOptions) {
                 }
             }
 
-            if (returnType === SyntheticType.never) {
+            if (returnType === BuiltinType.never) {
                 flowBecameUnreachable = true;
             }
         }
-        else if (sig.flags & TypeFlags.any) {
+        else if (sig === BuiltinType.any) {
             checkList(node.args); // check the arg expressions, but we don't check that they make sense or have the right arity or etc.
             return;
         }
@@ -1157,11 +1211,11 @@ export function Checker(options: ProjectOptions) {
         }
     }
 
-    function checkCallLikeArguments(sig: _Type, args: CallArgument[], nameRange: SourceRange, isNewExpr: boolean, requireNamedArgs = false) : void {
-        if (sig.flags & TypeFlags.any) {
+    function checkCallLikeArguments(sig: Type, args: CallArgument[], nameRange: SourceRange, isNewExpr: boolean, requireNamedArgs = false) : void {
+        if (sig === BuiltinType.any) {
             return;
         }
-        if (isFunctionSignature(sig)) {
+        if (sig.kind === TypeKind.functionSignature) {
             const namedArgCount = args.filter(arg => !!arg.equals).length;
             if (namedArgCount > 0 && namedArgCount !== args.length) {
                 issueDiagnosticAtRange(nameRange, "All arguments must be named, if any are named.");
@@ -1206,7 +1260,7 @@ export function Checker(options: ProjectOptions) {
                         }
                         else {
                             const argType = getCachedEvaluatedNodeType(arg);
-                            const paramType = paramPair.param.type;
+                            const paramType = paramPair.param.paramType;
                             if (!isAssignable(argType, paramType)) {
                                 issueDiagnosticAtNode(arg, `Argument of type '${stringifyType(argType)}' is not assignable to parameter of type '${stringifyType(paramType)}'.`);
                             }
@@ -1239,7 +1293,7 @@ export function Checker(options: ProjectOptions) {
                 const minToCheck = Math.min(args.length, sig.params.length + spreadAdjust);
                 for (let i = 0; i < minToCheck; i++) {
                     const argType = getCachedEvaluatedNodeType(args[i]);
-                    const paramType = sig.params[i].type;
+                    const paramType = sig.params[i].paramType;
                     if (!isAssignable(argType, paramType, isLiteralExpr(args[i].expr))) {
                         issueDiagnosticAtNode(args[i], `Argument of type '${stringifyType(argType)}' is not assignable to parameter of type '${stringifyType(paramType)}'.`);
                     }
@@ -1268,7 +1322,7 @@ export function Checker(options: ProjectOptions) {
             //     if (!isAssignable(/*assignThis*/ argType, /*to*/ paramType)) {
             //         // error
             //     }
-            //     if (isFunctionSignature(paramType) && (arg.expr.kind === NodeKind.functionDefinition || arg.expr.kind === NodeKind.arrowFunctionDefinition)) {
+            //     if (paramType.kind === TypeKind.functionSignature && (arg.expr.kind === NodeKind.functionDefinition || arg.expr.kind === NodeKind.arrowFunctionDefinition)) {
             //         //pushTypesIntoInlineFunctionDefinition(node, paramType, arg.expr);
             //         //checkNode(arg.expr.body as Node /*fixme: we know this is a script function definition but can't prove it here; anyway, all function defs should have Node as a body, not Node|Node[] ?*/);
             //     }
@@ -1286,12 +1340,12 @@ export function Checker(options: ProjectOptions) {
 
     function checkUnaryOperator(node: UnaryOperator) {
         checkNode(node.expr);
-        const type = getCachedEvaluatedNodeType(node.expr);
-        if (!(type.flags & TypeFlags.any) && !(type.flags & TypeFlags.numeric)) {
-            // true for ++/--
-            //typeErrorAtNode(node.expr, "Unary operator requires a numeric operand.");
-            // need "coercible to bool" for "!"
-        }
+        // const type = getCachedEvaluatedNodeType(node.expr);
+        // if (!(type.flags & TypeFlags.any) && !(type.flags & TypeFlags.numeric)) {
+        //     // true for ++/--
+        //     //typeErrorAtNode(node.expr, "Unary operator requires a numeric operand.");
+        //     // need "coercible to bool" for "!"
+        // }
     }
 
     function checkBinaryOperator(node: BinaryOperator) {
@@ -1389,21 +1443,34 @@ export function Checker(options: ProjectOptions) {
         }
     }
 
-    function setCachedEvaluatedFlowType(flow: Flow, name: string, type: _Type) : void {
+    function setCachedEvaluatedFlowType(flow: Flow, symbolId: SymbolId, type: Type) : void {
+        if (!flow || !flow.flowId) {
+            // this is definitely triggered like this:
+            // ```
+            // return;
+            // for (var x in y) {} // name = 'x'
+            // ```
+            const hasFlow = !!flow;
+            const hasFlowId = !!(flow?.flowId);
+            const name = sourceFile.symbolIdToSymbol.get(symbolId)!.uiName;
+            debug.out(`Expected a flow when setting flowtype for '${name}'; hasFlow=${hasFlow}, hasFlowID='${hasFlowId}'`)
+            return;
+        }
+
         if (CHECK_FLOW_TYPES) {
             if (!sourceFile.cachedFlowTypes.has(flow.flowId)) {
                 sourceFile.cachedFlowTypes.set(flow.flowId, new Map());
             }
-            sourceFile.cachedFlowTypes.get(flow.flowId)!.set(name, type);
+            sourceFile.cachedFlowTypes.get(flow.flowId)!.set(symbolId, type);
         }
     }
 
-    function getCachedEvaluatedFlowType(flow: Flow, name: string) : _Type | undefined {
+    function getCachedEvaluatedFlowType(flow: Flow, symbolId: SymbolId) : Type | undefined {
         if (CHECK_FLOW_TYPES) {
-            return sourceFile.cachedFlowTypes.get(flow.flowId)?.get(name);
+            return sourceFile.cachedFlowTypes.get(flow.flowId)?.get(symbolId);
         }
         else {
-            return SyntheticType.any;
+            return BuiltinType.any;
         }
     }
 
@@ -1416,22 +1483,17 @@ export function Checker(options: ProjectOptions) {
             return;
         }
 
-        const sig = getCachedEvaluatedNodeType(func);
-        if (!sig || !isFunctionSignature(sig)) {
-            //
-            // kludge -- we need an ast based way to see if we're inside a function expression (an arrow function expr is necessarily an expression)
-            //
-            const container = getContainingFunction(node);
-            if (container?.kind === NodeKind.arrowFunctionDefinition || container?.kind === NodeKind.functionDefinition && !container.fromTag && !container.canonicalName) {
-                const exprType = node.expr ? getCachedEvaluatedNodeType(node.expr) : SyntheticType.null;
-                returnTypes.push(exprType);
-                return;        
-            }
+        const exprType = node.expr ? getCachedEvaluatedNodeType(node.expr) : BuiltinType.null;
 
+        const sig = getCachedEvaluatedNodeType(func);
+        if (!sig || sig.kind !== TypeKind.functionSignature) {
+            // why is there possibly no signature or no function signature?
+            // we might not have marked the containing function as having a return type, yet...
+            // so, the inverse question -- when do we have a function signature here?
+            // we might be inferring the return type, rather than checking against an explicitly inidcated return type
+            returnTypes.push(exprType);
             return;
         }
-
-        const exprType = node.expr ? getCachedEvaluatedNodeType(node.expr) : SyntheticType.null;
 
         if (!isAssignable(exprType, sig.returns, /*sourceIsLiteralExpr*/ node.expr ? isLiteralExpr(node.expr) : false, /*forReturnType*/ true)) {
             // if we got an exprType, we got an expr or a just return token; if this is from tag, we definitely got a tag
@@ -1453,8 +1515,8 @@ export function Checker(options: ProjectOptions) {
     // we would like to extract `x` out of the above in both cases
     // note that `for (var x.y in z)` is valid code, and there was recently a complaint on the ACF bug tracker that `for (var x['y'] in z)` should also be valid
     // these would effectively declare `var x = {y: ?}` 
-    function getVariableDeclarationLValue(node: VariableDeclaration) : Identifier | IndexedAccess | undefined {
-        let workingNode : Node = node.expr;
+    function getVariableDeclarationLValue(node: VariableDeclaration | BinaryOperator) : Identifier | IndexedAccess | undefined {
+        let workingNode : Node = node.kind === NodeKind.variableDeclaration ? node.expr : node;
         if (workingNode.kind === NodeKind.binaryOperator) workingNode = workingNode.left;
         if (workingNode.kind === NodeKind.identifier || workingNode.kind === NodeKind.indexedAccess) return workingNode;
         else return undefined;
@@ -1487,7 +1549,7 @@ export function Checker(options: ProjectOptions) {
             }
         }
 
-        let rhsType : _Type | undefined = undefined;
+        let rhsType : Type | undefined = undefined;
         let rhsExpr : Node | undefined = undefined;
         let assignabilityErrorNode : Node;
 
@@ -1523,28 +1585,41 @@ export function Checker(options: ProjectOptions) {
 
         //if (node.finalModifier) rhsType.flags |= TypeFlags.final; // need to clone the type
 
-        let flowType : _Type = rhsType;
+        let flowType : Type = rhsType;
 
         if (symbol) {
-            if (symbol.declarations) {
+            if (CHECK_FLOW_TYPES && symbol.declarations) {
                 function declarationsReachingToFlow(targetDecls: Set<Node>, flow: Flow) {
                     const reachable = new Set<Flow>();
                     const flowsToRun = [flow];
+                    const seen = new Set([flow]);
                     while (flowsToRun.length > 0) {
                         const flow = flowsToRun.shift()!;
                         if (flow.node && targetDecls.has(flow.node)) {
                             reachable.add(flow);
                             targetDecls.delete(flow.node);
                         }
-                        flowsToRun.push(...flow.predecessors);
+                        for (const xflow of flow.predecessors) {
+                            if (seen.has(xflow)) {
+                                // megafixme: there shouldn't be flow circles when traversing backwards right? following only predecessors should never loop
+                                // actually this might be legit...two backwards paths can have the same predecessors...
+                                continue;
+                                //debugger;
+                            }
+                            else {
+                                flowsToRun.push(xflow);
+                                seen.add(xflow);
+                            }
+                        }
+                        
                     }
                     return reachable;
                 }
 
                 const declLValues = (() => {
                     const result = new Set<Node>();
-                    for (const decl of symbol.declarations as VariableDeclaration[]) {
-                        if (decl === node) continue;
+                    for (const decl of symbol.declarations) {
+                        if (decl === node || (decl.kind !== NodeKind.variableDeclaration && decl.kind !== NodeKind.binaryOperator)) continue;
                         const lval = getVariableDeclarationLValue(decl);
                         if (lval) result.add(lval);
                     }
@@ -1554,7 +1629,7 @@ export function Checker(options: ProjectOptions) {
                 const earlierDeclarationAssignmentFlows = declarationsReachingToFlow(new Set(declLValues), lValue.flow!)
 
                 for (const flow of earlierDeclarationAssignmentFlows) {
-                    const previousType = getCachedEvaluatedFlowType(flow, name.canonical);
+                    const previousType = getCachedEvaluatedFlowType(flow, symbol.symbolId);
                     if (previousType && !isAssignable(rhsType, previousType)) {
                         const l = stringifyType(rhsType);
                         const r = stringifyType(previousType);
@@ -1571,14 +1646,15 @@ export function Checker(options: ProjectOptions) {
                     issueDiagnosticAtNode(assignabilityErrorNode, `Type '${r}' is not assignable to type '${l}'`);
                 }
             }
+
+            setCachedEvaluatedFlowType(lValue.flow!, symbol.symbolId, flowType);
         }
 
-        setCachedEvaluatedFlowType(lValue.flow!, name.canonical, flowType);
     }
 
     function checkTag(tag: CfTag.Common) {
         const tagCallSignature = tryGetTagCallSignature(tag.canonicalName);
-        if (!tagCallSignature || !isFunctionSignature(tagCallSignature)) {
+        if (!tagCallSignature || tagCallSignature.kind !== TypeKind.functionSignature) {
             return;
         }
 
@@ -1600,9 +1676,9 @@ export function Checker(options: ProjectOptions) {
 
         function assignTypesToAttrsFromSignature(sig: cfFunctionSignature, attrs: TagAttribute[]) {
             const nameToType = (() => {
-                const result = new Map<string, _Type>();
+                const result = new Map<string, Type>();
                 for (const param of sig.params) {
-                    result.set(param.canonicalName, param.type);
+                    result.set(param.canonicalName, param.paramType);
                 }
                 return result;
             })();
@@ -1630,14 +1706,14 @@ export function Checker(options: ProjectOptions) {
 
     // fixme: SymTabEntry has a "container" property, which should be the context, so probably this should be just a single arg function
     // fixme: "instantiatedDeclaredType" -> "instantiatedAnnotatedType"
-    function getInstantiatedDeclaredType(contextNode: Node, symbol: SymTabEntry & {declaredType: _Type}) : _Type {
+    function getInstantiatedDeclaredType(contextNode: Node, symbol: SymTabEntry & {declaredType: Type}) : Type {
         return symbol.instantiatedDeclaredType || (symbol.instantiatedDeclaredType = evaluateType(contextNode, symbol.declaredType));
     }
 
     // fixme: needs to take a SourceFile arg or that defaults to our current or ...
-    function getCachedEvaluatedNodeTypeImpl(node: Node | null, workingSourceFile: SourceFile) : _Type {
+    function getCachedEvaluatedNodeTypeImpl(node: Node | null, workingSourceFile: SourceFile) : Type {
         if (!node) {
-            return SyntheticType.any;
+            return BuiltinType.any;
         }
 
         let targetId = node.nodeId;
@@ -1650,7 +1726,7 @@ export function Checker(options: ProjectOptions) {
             return workingSourceFile.cachedNodeTypes.get(targetId)!;
         }
         else {
-            return SyntheticType.any;
+            return BuiltinType.any;
         }
     }
 
@@ -1658,7 +1734,7 @@ export function Checker(options: ProjectOptions) {
         return getCachedEvaluatedNodeTypeImpl(node, sourceFile);
     }
 
-    function setCachedEvaluatedNodeType(node: Node, type: _Type) {
+    function setCachedEvaluatedNodeType(node: Node, type: Type) {
         sourceFile.cachedNodeTypes.set(node.nodeId, type);
         return type;
     }
@@ -1679,8 +1755,8 @@ export function Checker(options: ProjectOptions) {
     // take a SymbolTable and wrap it in a Struct, so we can bridge the gap between those worlds, mostly for the 
     // sake of completions; a "scope" in CF is essentially a struct, but not quite; and vice versa; so the abstraction is not perfect but it's close
     // we cache and reuse already-wrapped sybmol tables so that we can compare types by identity
-    function structViewOfScope(scopeContents: SymbolTable, interfaceExtension?: Interface) : Struct {
-        if (!interfaceExtension) interfaceExtension = SyntheticType.EmptyInterface;
+    function structViewOfScope(scopeContents: SymbolTable, interfaceExtension?: Interface) : SymbolTableTypeWrapper {
+        if (!interfaceExtension) interfaceExtension = BuiltinType.EmptyInterface;
         if (structViewCache.has([scopeContents, interfaceExtension])) {
             return structViewCache.get([scopeContents, interfaceExtension])!;
         }
@@ -1697,8 +1773,8 @@ export function Checker(options: ProjectOptions) {
         let working : Node | null = node;
         while (working) {
             if (working.containedScope) {
-                if (working.containedScope.typedefs.mergedInterfaces.has(name)) {
-                    return working.containedScope.typedefs.mergedInterfaces.get(name)!;
+                if (working.containedScope.typeinfo.mergedInterfaces.has(name)) {
+                    return working.containedScope.typeinfo.mergedInterfaces.get(name)!;
                 }
                 working = working.containedScope.parentContainer;
             }
@@ -1762,19 +1838,7 @@ export function Checker(options: ProjectOptions) {
             // but most builtin scopes support being "extended" via interface declarations;
             // so while they don't get symbols, they will have types
             const resolvedSymbol = walkupScopesToResolveSymbol(node, name); // really we want the flow type
-            const flowType = node.flow ? determineFlowType(node.flow, name) : undefined;
-
-            if (resolvedSymbol) {
-                const apparentType = flowType ??
-                    (
-                        hasDeclaredType(resolvedSymbol.symTabEntry)
-                            ? getInstantiatedDeclaredType(resolvedSymbol.container, resolvedSymbol.symTabEntry)
-                            : evaluateType(resolvedSymbol.container, resolvedSymbol.symTabEntry.type)
-                    );
-                setCachedEvaluatedNodeType(node, apparentType);
-                setResolvedSymbol(node, resolvedSymbol);
-            }
-            else {
+            if (!resolvedSymbol) {
                 // {x:y} -- don't warn on "x" being undefined, it's just a struct key
                 const isKeyofKVPairStructLiteral = node.parent?.kind === NodeKind.structLiteralInitializerMember
                     && node.parent.subType === StructLiteralInitializerMemberSubtype.keyed
@@ -1783,74 +1847,92 @@ export function Checker(options: ProjectOptions) {
                 if (warnOnUndefined && !isBuiltinScopeName && !isKeyofKVPairStructLiteral) {
                     issueDiagnosticAtNode(node, `Cannot find name '${name}'.`, DiagnosticKind.warning);
                 }
+                return;
             }
-            // let flowType : _Type | undefined = undefined; determineFlowType(node, name);
 
-            // // we know the symbol, but it has no flow type yet
-            // // it's possible we don't know the symbol (inherited from parent cfc or cfinclude'd), in which case we don't want to report this
-            // if (resolvedSymbol) {
-            //     if (flowType && (flowType.flags & TypeFlags.containsUndefined)) {
-            //         //typeErrorAtNode(node, `'${name}' is possibly undefined.`);
-            //     }
-            //     else if (flowType === undefined) {
-            //         //typeErrorAtNode(node, `'${name}' is used before its first definition.`)
-            //     }
-            // }
-            
-            // // if we got a flow type, use that
-            // if (flowType) {
-            //     const evaluatedType = evaluateType(node, flowType);
-            //     // is it necessary to cache the type on both the flow node (if it exists) *and* the node?
-            //     if (node.flow) setCachedEvaluatedFlowType(node.flow, name, evaluatedType);
-            //     setCachedEvaluatedNodeType(node, evaluatedType);
-            //     return;
-            // }
+            const FIXME_CURRENT_CONTAINER = findAncestor(node, (node) => !!node.containedScope); // should be a "currentContainer" member var
+            const isOuterVar = resolvedSymbol.container !== FIXME_CURRENT_CONTAINER;
+            const flowType = isOuterVar
+                ? undefined
+                : node.flow
+                ? determineFlowType(node.flow, resolvedSymbol.symTabEntry.symbolId)
+                : undefined;
 
-            // otherwise, fallback to the symbol type
-            // if (resolvedSymbol) {
-            //     if (useContainer === resolvedSymbol.container) {
-            //         // there is a symbol table entry, but we could not find a type on the flow graph
-            //         // if we're toplevel 
-            //         /*if (noUndefinedVars) {
-            //             typeErrorAtNode(node, `Identifier '${name}' is used before its declaration.`);
-            //         }*/
-            //         setCachedEvaluatedNodeType(node, SyntheticType.any);
-            //         return;
-            //     }
-            //     else {
-            //         // identifer is declared in some outer scope, we have to assume it is ok
-            //         setCachedEvaluatedNodeType(node, resolvedSymbol.symTabEntry.type);
-            //         return;
-            //     }
-            // }
+            const maybeMemberFunctionDefinition = tryGetCfcMemberFunctionDefinition(resolvedSymbol?.symTabEntry);
 
-            // if (noUndefinedVars) {
-            //     //typeErrorAtNode(node, `Cannot find name '${name}'.`);
-            // }
+            // it is declared in the same container, but there is no apparent flowtype yet;
+            // implying that it is used before assignment
+            // except in the case of member functions, which are always visible
+            // maybe we could hoist just member functions so they are always first in flow
+            if (!isOuterVar && !flowType && !maybeMemberFunctionDefinition) {
+                if (CHECK_FLOW_TYPES) {
+                    issueDiagnosticAtNode(node, `${node.uiName} is used before its first definite local assignment.`);
+                }
+                return;
+            }
+
+            if (maybeMemberFunctionDefinition) {
+                const decl = maybeMemberFunctionDefinition;
+                if (!(decl.flags & NodeFlags.checked)) {
+                    if (!functionDefinitionHasUserSpecifiedReturnType(decl)) {
+                        if (checkerStackContains(decl)) {
+                            const name = decl.name?.ui;
+                            const errorNode = getFunctionDefinitionNameTerminalErrorNode(decl);
+                            issueDiagnosticAtNode(errorNode, `Function '${name}' requires an explicit return type because it directly or indirectly references itself.`);
+                            forcedReturnTypes.set(decl, BuiltinType.any);
+                        }
+                    }
+
+                    if (!checkerStackContains(decl)) {
+                        checkFunctionDefinition(decl);
+                    }
+                }
+            }
+
+            //
+            // precedence:
+            // 1) flow-deduced type
+            // 2) annotation-declared type (@!type Foo)
+            // 3) cf-syntax-directed-declared type (like a typed function argument)
+            //
+            // "getInstantiatedDeclaredType" does work for #2
+            // "evaluateType" for #1
+            // probably the two methods could merge, and internally choose the right thing
+            //
+            const apparentType = flowType
+                ? evaluateType(node, flowType)
+                : hasDeclaredType(resolvedSymbol.symTabEntry)
+                ? getInstantiatedDeclaredType(resolvedSymbol.container, resolvedSymbol.symTabEntry)
+                : evaluateType(resolvedSymbol.container, resolvedSymbol.symTabEntry.type);
+
+            setCachedEvaluatedNodeType(node, apparentType);
+            setResolvedSymbol(node, resolvedSymbol);
+
+            // no flow mutation here, so we don't set a cached flow type
         }
     }
 
     function checkIndexedAccess(node: IndexedAccess) {
         checkNode(node.root);
 
-        let type : _Type | undefined = getCachedEvaluatedNodeType(node.root);
+        let type : Type | undefined = getCachedEvaluatedNodeType(node.root);
         let symbol : SymbolResolution | undefined;
 
-        if (!type || type.flags & TypeFlags.any) {
+        if (!type || type === BuiltinType.any) {
             return;
         }
 
         // we set cached types on 'root' elements,
         // that is, the indexed-access root node itself, and the subsequent elements
         // not on the component identifiers, dots, brackets, etc.
-        if (isStructLike(type)) {
+        if (isStructLikeOrArray(type)) {
             for (let i = 0; i < node.accessElements.length; i++) {
                 const element = node.accessElements[i];
-                if (element.accessType === IndexedAccessType.bracket && isInstantiatedArray(type)) {
+                if (element.accessType === IndexedAccessType.bracket && type.kind === TypeKind.array) {
                     symbol = undefined;
                     type = type.memberType;
                 }
-                else if ((element.accessType === IndexedAccessType.dot || element.accessType === IndexedAccessType.bracket) && isStructLike(type)) {
+                else if (element.accessType === IndexedAccessType.dot || element.accessType === IndexedAccessType.bracket) {
                     const propertyName = element.accessType === IndexedAccessType.dot
                         ? element.property.token.text.toLowerCase()
                         : getTriviallyComputableString(element.expr);
@@ -1886,8 +1968,8 @@ export function Checker(options: ProjectOptions) {
                         }
                     }
 
-                    if (!type || (type.flags & TypeFlags.any)) {
-                        type = SyntheticType.any; // subsequent access elements will also be any
+                    if (!type || type === BuiltinType.any) {
+                        type = BuiltinType.any; // subsequent access elements will also be any
                         if (warnOnUndefined && propertyName) {
                             const errNode = element.accessType === IndexedAccessType.dot
                                 ? element.property
@@ -1897,7 +1979,7 @@ export function Checker(options: ProjectOptions) {
                     }
                 }
                 else {
-                    type = SyntheticType.any;
+                    type = BuiltinType.any;
                 }
 
                 setCachedEvaluatedNodeType(element, type);
@@ -1909,9 +1991,9 @@ export function Checker(options: ProjectOptions) {
             }
         }
         else {
-            setCachedEvaluatedNodeType(node, SyntheticType.any);
+            setCachedEvaluatedNodeType(node, BuiltinType.any);
             for (const element of node.accessElements) {
-                setCachedEvaluatedNodeType(element, SyntheticType.any);
+                setCachedEvaluatedNodeType(element, BuiltinType.any);
             }
             // typeErrorAtNode(node.root, `Type '${stringifyType(type)}' is not indexable.`)
         }
@@ -1926,7 +2008,7 @@ export function Checker(options: ProjectOptions) {
         }
 
         const parentType = getCachedEvaluatedNodeType(node.parent);
-        if (parentType.flags & TypeFlags.any) {
+        if (parentType === BuiltinType.any) {
             return;
         }
 
@@ -1946,29 +2028,39 @@ export function Checker(options: ProjectOptions) {
         }
     }
 
-    
-
     function checkFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {
+        if (node.flags & NodeFlags.checked) {
+            return;
+        }
+
         // for cfc member functions, some work was already done in the binder to extract the signature, but we didn't have visibility into CFC resolution there;
         // so here we can try to resolve CFC return types / param types
 
         const isMemberFunction = isCfcMemberFunctionDefinition(node);
         let memberFunctionSignature : cfFunctionSignature | undefined;
         
+        let symbol = isNamedFunction(node)
+            ? walkupScopesToResolveSymbol(sourceFile, node.name.canonical)
+            : undefined;
+
+        let POP_CHECKER_STACK = false; // easy to forget, make sure to pop if necessary
+
         if (isMemberFunction) {
-            if (node.kind === NodeKind.functionDefinition && node.canonicalName) {
-                const symbol = walkupScopesToResolveSymbol(sourceFile, (node as any).canonicalName);
+            checkerStack.push(node);
+            POP_CHECKER_STACK = true;
+
+            if (node.kind === NodeKind.functionDefinition && node.name.canonical) {
                 if (symbol) setResolvedSymbol(node, symbol);
-                if (symbol?.symTabEntry.type && isFunctionSignature(symbol.symTabEntry.type)) {
+                if (symbol?.symTabEntry.type && symbol.symTabEntry.type.kind === TypeKind.functionSignature) {
                     const freshType = evaluateType(symbol.container, symbol.symTabEntry.type);
-                    if (isFunctionSignature(freshType) && !isFunctionOverloadSet(freshType)) { // fixme: why would this ever evaluate into an overload set
+                    if (freshType.kind === TypeKind.functionSignature) {
                         memberFunctionSignature = freshType;
-                        const variablesSymbol = sourceFile.containedScope.variables?.get(node.canonicalName);
+                        const variablesSymbol = sourceFile.containedScope.variables?.get(node.name.canonical);
                         // keep both `variables` and `this` in sync with member functions
                         if (variablesSymbol) {
                             variablesSymbol.type = freshType;
-                            sourceFile.containedScope.variables?.set(node.canonicalName, variablesSymbol);
-                            sourceFile.containedScope.this?.set(node.canonicalName, variablesSymbol);
+                            sourceFile.containedScope.variables?.set(node.name.canonical, variablesSymbol);
+                            sourceFile.containedScope.this?.set(node.name.canonical, variablesSymbol);
                         }
                     }
                 }
@@ -1976,11 +2068,11 @@ export function Checker(options: ProjectOptions) {
         }
 
         const cfSyntaxDirectedTypeSig = memberFunctionSignature ?? extractCfFunctionSignature(node);
-        let finalType = cfSyntaxDirectedTypeSig;
+        let finalType : cfFunctionSignature | cfFunctionOverloadSet = cfSyntaxDirectedTypeSig;
         
         // if (node.kind === NodeKind.functionDefinition && node.canonicalName) {
         //     const engineSymbol = engineSymbolResolver(node.canonicalName);
-        //     if (engineSymbol && isFunctionSignature(engineSymbol.type)) {
+        //     if (engineSymbol && engineSymbol.type.kind === TypeKind.functionSignature) {
         //         // we pull engine function information from cfdocs;
         //         // it includes things like "onSessionStart", which are methods meant to be overridden by users inside application.cfm
         //         // probably we need to "auto-implements" application.cfc and have an interface definition file for the expected shape;
@@ -1991,7 +2083,7 @@ export function Checker(options: ProjectOptions) {
 
         if (node.typeAnnotation) {
             const evaluatedSignature = evaluateType(node, node.typeAnnotation);
-            if (isFunctionSignature(evaluatedSignature)) {
+            if (evaluatedSignature.kind === TypeKind.functionSignature) {
                 if (!isAnnotatedSigCompatibleWithCfFunctionSig(evaluatedSignature, cfSyntaxDirectedTypeSig)) {
                     issueDiagnosticAtNode(node, `Type '${stringifyType(cfSyntaxDirectedTypeSig)}' is not assignable to the annotated type '${stringifyType(node.typeAnnotation)}'.`)
                 }
@@ -2001,17 +2093,30 @@ export function Checker(options: ProjectOptions) {
                     // like `(x: any, x: string, x: cfc<a.b.c>) => any`
                     // and then each param name has its name "filled in" by the actual cf code signature
                     for (let i = 0; i < cfSyntaxDirectedTypeSig.params.length; i++) {
-                        evaluatedSignature.params[i].canonicalName = cfSyntaxDirectedTypeSig.params[i].canonicalName;
-                        evaluatedSignature.params[i].uiName = cfSyntaxDirectedTypeSig.params[i].uiName;
+                        // fixme: these constcasts should should somehow be part of the constructor
+                        (evaluatedSignature.params[i] as Mutable<cfFunctionSignatureParam>).canonicalName = cfSyntaxDirectedTypeSig.params[i].canonicalName;
+                        (evaluatedSignature.params[i] as Mutable<cfFunctionSignatureParam>).uiName = cfSyntaxDirectedTypeSig.params[i].uiName;
                     }
                 }
 
                 finalType = evaluatedSignature;
-                if (isMemberFunction && node.canonicalName && sourceFile.containedScope.variables!.has(node.canonicalName)) {
-                    sourceFile.containedScope.variables!.get(node.canonicalName)!.type = finalType; // updates the 'this' copy of the symbol too, the refs are the same
+                if (isMemberFunction && sourceFile.containedScope.variables!.has(node.name.canonical)) {
+                    sourceFile.containedScope.variables!.get(node.name.canonical)!.type = finalType; // updates the 'this' copy of the symbol too, the refs are the same
                 }
             }
-            else if (!(evaluatedSignature.flags & TypeFlags.any)) {
+            else if (evaluatedSignature.kind === TypeKind.functionOverloadSet) {
+                for (const overload of evaluatedSignature.overloads) {
+                    if (!isAnnotatedOverloadCompatibleWithCfFunctionSig(overload.params, cfSyntaxDirectedTypeSig.params, overload.returns, cfSyntaxDirectedTypeSig.returns)) {
+                        issueDiagnosticAtNode(node, `Type '${stringifyType(cfSyntaxDirectedTypeSig)}' is not assignable to the annotated type '${stringifyType(node.typeAnnotation)}'.`)
+                        break;
+                    }
+                }
+                finalType = evaluatedSignature;
+                if (isMemberFunction && sourceFile.containedScope.variables!.has(node.name.canonical)) {
+                    sourceFile.containedScope.variables!.get(node.name.canonical)!.type = finalType; // updates the 'this' copy of the symbol too, the refs are the same
+                }
+            }
+            else if (evaluatedSignature !== BuiltinType.any) {
                 issueDiagnosticAtNode(node, `Expected a function signature as an annotated type, but got type '${stringifyType(evaluatedSignature)}'.`)
             }
         }
@@ -2019,7 +2124,7 @@ export function Checker(options: ProjectOptions) {
         // put access modifiers on the type signature for cfc member functions
         if (node.kind === NodeKind.functionDefinition && isMemberFunction) {
             const accessModifier = getFunctionDefinitionAccessLiteral(node);
-            let accessModifierFlag : TypeFlags = 0;
+            let accessModifierFlag : TypeFlags = TypeFlags.none;
             switch (accessModifier) {
                 case "remote":    accessModifierFlag = TypeFlags.remote;    break;
                 case "public":    accessModifierFlag = TypeFlags.public;    break;
@@ -2027,63 +2132,97 @@ export function Checker(options: ProjectOptions) {
                 case "private":   accessModifierFlag = TypeFlags.private;   break;
                 default: exhaustiveCaseGuard(accessModifier);
             }
-            (finalType as Mutable<_Type>).flags |= accessModifierFlag;
+            (finalType as Mutable<Type>).flags |= accessModifierFlag;
         }
       
-        const actualReturnType = checkFunctionBody(node);
+        setCachedEvaluatedNodeType(node, finalType);
 
-        if (CHECK_RETURN_TYPES && !isAssignable(actualReturnType, finalType.returns, /*sourceIsLiteralExpr*/ false, /*forReturnType*/ true)) {
-            if (node.kind === NodeKind.functionDefinition) {
-                let literalReturnType : CanonicalizedName | undefined = undefined;
-                if (node.fromTag) {
-                    const literal = getTriviallyComputableString(getAttributeValue(node.attrs, "returntype"));
-                    if (literal) {
-                        literalReturnType = {ui: literal, canonical: literal.toLowerCase()};
+        const inferredReturnType = finalType.kind === TypeKind.functionSignature ? (() => {
+            const inferredReturnType = checkFunctionBody(node, finalType.params);
+            return forcedReturnTypes.has(node)
+                ? forcedReturnTypes.get(node)!
+                : inferredReturnType;
+        })() : undefined;
+
+        if (finalType.kind === TypeKind.functionSignature && CHECK_RETURN_TYPES && inferredReturnType) {
+            if (!isAssignable(inferredReturnType, finalType.returns, /*sourceIsLiteralExpr*/ false, /*forReturnType*/ true)) {
+                if (node.kind === NodeKind.functionDefinition) {
+                    let literalReturnType : CanonicalizedName | undefined = undefined;
+                    if (node.fromTag) {
+                        const literal = getTriviallyComputableString(getAttributeValue(node.attrs, "returntype"));
+                        if (literal) {
+                            literalReturnType = {ui: literal, canonical: literal.toLowerCase()};
+                        }
+                    }
+                    else {
+                        if (node.returnType) {
+                            literalReturnType = stringifyDottedPath(node.returnType)
+                        }
+                    }
+                    
+                    if (node.finalFlow !== UnreachableFlow && literalReturnType && (literalReturnType.canonical !== "void" && literalReturnType.canonical !== "any")) {
+                        const range = node.fromTag ? getAttributeValue(node.attrs, "returntype")!.range : node.returnType!.range;
+                        issueDiagnosticAtRange(range, `Function does not have a final return statement, and may return 'null' which is not assignable to declared return type '${literalReturnType.ui}'.`);
+                    }
+                    else {
+                        const range = node.fromTag ? node.tagOrigin.startTag!.range : mergeRanges(node.accessModifier, node.returnType, node.functionToken, node.nameToken);
+                        issueDiagnosticAtRange(range, `Function declares return type '${stringifyType(finalType.returns)}' but actual return type is '${stringifyType(inferredReturnType)}'.}`);
                     }
                 }
-                else {
-                    if (node.returnType) {
-                        literalReturnType = stringifyDottedPath(node.returnType)
-                    }
-                }
-                
-                if (node.finalFlow !== UnreachableFlow && literalReturnType && (literalReturnType.canonical !== "void" && literalReturnType.canonical !== "any")) {
-                    const range = node.fromTag ? getAttributeValue(node.attrs, "returntype")!.range : node.returnType!.range;
-                    issueDiagnosticAtRange(range, `Function does not have a final return statement, and may return 'null' which is not assignable to declared return type '${literalReturnType.ui}'.`);
-                }
-                else {
-                    const range = node.fromTag ? node.tagOrigin.startTag!.range : mergeRanges(node.accessModifier, node.returnType, node.functionToken, node.nameToken);
-                    issueDiagnosticAtRange(range, `Function declares return type '${stringifyType(finalType.returns)}' but actual return type is '${stringifyType(actualReturnType)}'.}`);
+            }
+            else {
+                if (!node.typeAnnotation) {
+                    (finalType as Mutable<cfFunctionSignature>).returns = inferredReturnType;
                 }
             }
         }
-        else {
-            // we're not checking actual return type, or we did, and the actual return type is a subtype of the declared return type
-            // note that arrow function "declare return types" are always 'any'
-            (finalType as Mutable<cfFunctionSignature>).returns = actualReturnType;
+
+        node.flags |= NodeFlags.checked;
+
+        if (POP_CHECKER_STACK) {
+            checkerStack.pop();
         }
 
-        setCachedEvaluatedNodeType(node, finalType);
+        if (symbol && node.flow) {
+            // having a symbol implies that we intended to have set an assignment flow on this node,
+            // because the name is now of this type from this point in the flow on
+            // we have a symbol for `function foo() {}` but not for `var foo = function() {}`
+            setCachedEvaluatedFlowType(node.flow!, symbol.symTabEntry.symbolId, finalType);
+        }
     }
 
-    function checkFunctionBody(node: FunctionDefinition | ArrowFunctionDefinition) : _Type {
+    function checkFunctionBody(node: FunctionDefinition | ArrowFunctionDefinition, params: cfFunctionSignatureParam[]) : Type {
+        // "start flow" of a function has the argument types set to their declared types
+        function setStartFlowArgTypes(startFlow: Flow) {
+            for (const param of params) {
+                if (node.containedScope!.arguments!.has(param.canonicalName)) {
+                    const symbolId = node.containedScope!.arguments!.get(param.canonicalName)!.symbolId;
+                    setCachedEvaluatedFlowType(startFlow, symbolId, param.paramType);
+                }
+            }
+        }
+
         const savedFlowBecameUnreachable = flowBecameUnreachable;
         const savedReturnTypes = returnTypes;
         returnTypes = [];
 
         if (node.kind === NodeKind.functionDefinition && node.fromTag) {
+            if (node.body.length > 0) {
+                setStartFlowArgTypes(node.body[0].flow!);   
+            }
             checkList(node.body);
         }
         else {
+            setStartFlowArgTypes(node.body.flow!);
             checkNode(node.body);
         }
 
         const postFlow = sourceFile.endOfNodeFlowMap.get(node.nodeId);
         if (postFlow && isReachableFlow(postFlow)) {
-            returnTypes.push(SyntheticType.null);
+            returnTypes.push(BuiltinType.null);
         }
 
-        let actualReturnType : _Type;
+        let actualReturnType : Type;
         if (node.kind === NodeKind.arrowFunctionDefinition && node.body.kind !== NodeKind.block) {
             actualReturnType = getCachedEvaluatedNodeType(node.body);
         }
@@ -2167,9 +2306,9 @@ export function Checker(options: ProjectOptions) {
     //
     // type lookup
     //
-    function tryGetTagCallSignature(tagName: string) : _Type | undefined {
+    function tryGetTagCallSignature(tagName: string) : Type | undefined {
         const taglib = libTypeResolver("__cfTags")
-        if (taglib && isInterface(taglib)) {
+        if (taglib && taglib.kind === TypeKind.interface) {
             return taglib.members.get(tagName)?.type;
         }
         else {
@@ -2177,21 +2316,21 @@ export function Checker(options: ProjectOptions) {
         }
     }
 
-    function walkUpContainersToResolveType(context: Node, type: cfTypeId) : _Type | undefined {
+    function walkUpContainersToResolveType(context: Node, type: cfTypeId) : Type | undefined {
         let node : Node | null = context;
         const typeName = type.name;
 
         while (node) {
             if (node.containedScope) {
-                if (node.containedScope.typedefs) {
-                    if (node.containedScope.typedefs.aliases.has(typeName)) {
-                        return node.containedScope.typedefs.aliases.get(typeName)!;
+                if (node.containedScope.typeinfo) {
+                    if (node.containedScope.typeinfo.aliases.has(typeName)) {
+                        return node.containedScope.typeinfo.aliases.get(typeName)!;
                     }
                 }
                 if (node.kind === NodeKind.sourceFile) {
                     for (const lib of node.libRefs.values()) {
-                        if (lib.containedScope.typedefs.mergedInterfaces.has(type.name)) {
-                            return lib.containedScope.typedefs.mergedInterfaces.get(type.name)!;
+                        if (lib.containedScope.typeinfo.mergedInterfaces.has(type.name)) {
+                            return lib.containedScope.typeinfo.mergedInterfaces.get(type.name)!;
                         }
                     }
                     return libTypeResolver(type.name);
@@ -2249,7 +2388,7 @@ export function Checker(options: ProjectOptions) {
             switch (member.subType) {
                 case StructLiteralInitializerMemberSubtype.keyed: {
                     const memberType = getCachedEvaluatedNodeType(member);
-                    if (memberType === SyntheticType.never) continue; // spreads or shorthand in unsupported engines may produce this
+                    if (memberType === BuiltinType.never) continue; // spreads or shorthand in unsupported engines may produce this
                     const key = getTriviallyComputableString(member.key);
                     if (!key) continue;
                     const canonicalName = key.toLowerCase();
@@ -2257,7 +2396,8 @@ export function Checker(options: ProjectOptions) {
                         uiName: key,
                         canonicalName,
                         declarations: [member],
-                        type: memberType
+                        type: memberType,
+                        symbolId: -1 // do we need this here?
                     });
                     break;
                 }
@@ -2267,7 +2407,7 @@ export function Checker(options: ProjectOptions) {
                 default: exhaustiveCaseGuard(member);
             }
         }
-        setCachedEvaluatedNodeType(node, SyntheticType.struct(memberTypes));
+        setCachedEvaluatedNodeType(node, Struct(memberTypes));
     }
 
     function checkStructLiteralInitializerMember(node: StructLiteralInitializerMember) {
@@ -2276,12 +2416,12 @@ export function Checker(options: ProjectOptions) {
                 if (node.shorthand) {
                     if (!supports.structLiteralShorthand(engineVersion)) {
                         issueDiagnosticAtNode(node, `CF engine ${engineVersion.uiString} does not support struct literal shorthand notation.`);
-                        setCachedEvaluatedNodeType(node, SyntheticType.never);
+                        setCachedEvaluatedNodeType(node, BuiltinType.never);
                         break;
                     }
                     if (node.key.kind !== NodeKind.identifier || !node.key.canonicalName) { // fixme: when is this undefined or empty?
                         issueDiagnosticAtNode(node, "Shorthand struct literal initializers must be identifiers.");
-                        setCachedEvaluatedNodeType(node, SyntheticType.never);
+                        setCachedEvaluatedNodeType(node, BuiltinType.never);
                         break;
                     }
 
@@ -2299,7 +2439,7 @@ export function Checker(options: ProjectOptions) {
             case StructLiteralInitializerMemberSubtype.spread: {
                 if (!supports.structLiteralSpread(engineVersion)) {
                     issueDiagnosticAtNode(node, `CF engine ${engineVersion} does not support struct literal spread syntax.`)
-                    setCachedEvaluatedNodeType(node, SyntheticType.never);
+                    setCachedEvaluatedNodeType(node, BuiltinType.never);
                 }
                 checkNode(node.expr);
                 break;
@@ -2347,33 +2487,33 @@ export function Checker(options: ProjectOptions) {
         const cfcName = stringifyDottedPath(node.callExpr.left).ui;
         const cfc = cfcResolver({resolveFrom: sourceFile.absPath, cfcName: cfcName});
         if (!cfc) return;
-        const cfcThis = CfcTypeWrapper(cfc.sourceFile);
+        const cfcThis = Cfc(cfc.sourceFile);
         setCachedEvaluatedNodeType(node, cfcThis);
         
         const initSig = cfcThis.members.get("init");
-        if (initSig && isFunctionSignature(initSig.type)) {
+        if (initSig && initSig.type.kind === TypeKind.functionSignature) {
             setCachedEvaluatedNodeType(node.callExpr.left, initSig.type);
             checkCallLikeArguments(initSig.type, node.callExpr.args, node.callExpr.left.range, /*isNewExpr*/ true);
         }
     }
 
-    function getStructMember(element: Node, type: _Type, canonicalName: string) : SymbolResolution | undefined {
-        if (!isStructLike(type)) {
+    function getStructMember(element: Node, type: Type, canonicalName: string) : SymbolResolution | undefined {
+        if (!isStructLikeOrArray(type)) {
             return undefined;
         }
 
         let member = type.members.get(canonicalName);
 
-        if (!member && type.structKind === StructKind.symbolTableTypeWrapper && type.interfaceExtension) {
+        if (!member && type.kind === TypeKind.symbolTableTypeWrapper && type.interfaceExtension) {
             member = type.interfaceExtension.members.get(canonicalName);
         }
-        else if (type.structKind === StructKind.cfcTypeWrapper) {
+        else if (type.kind === TypeKind.cfc) {
             member = type.interfaceExtension?.members.get(canonicalName);
             if (!member) {
                 let workingNode : SourceFile | null = type.cfc;
                 while (workingNode) {
                     member = workingNode.containedScope.this!.get(canonicalName)
-                        ?? workingNode.containedScope.typedefs.mergedInterfaces.get("this")?.members.get(canonicalName);
+                        ?? workingNode.containedScope.typeinfo.mergedInterfaces.get("this")?.members.get(canonicalName);
                     if (member) break;
                     workingNode = workingNode.cfc?.extends ?? null;
                 }
@@ -2425,21 +2565,21 @@ export function Checker(options: ProjectOptions) {
     // type evaluation
     //
     const evaluateType = (function() {
-        type NodeTrie = Map<_Type, NodeTrie> & Map<null, _Type | "PENDING"> ;
+        type NodeTrie = Map<Type, NodeTrie> & Map<null, Type | "PENDING"> ;
         const typeConstructorInvocationCacheTrie : NodeTrie = new Map();
         
         const enum TypeCache_Status { resolved, resolving, noCache };
         type TypeCache_Resolution = TypeCache_Cached | TypeCache_NoCache;
         interface TypeCache_Cached {
             status: TypeCache_Status.resolved,
-            value: _Type
+            value: Type
         }
         interface TypeCache_NoCache {
             status: TypeCache_Status.resolving | TypeCache_Status.noCache
         }
         
-        function setCachedTypeConstructorInvocation(typeFunction: _Type, args: readonly _Type[], val: "PENDING" | _Type) : void {
-            function getChildTrieMapOrNull(thisLevel: NodeTrie, type: _Type) : NodeTrie | null {
+        function setCachedTypeConstructorInvocation(typeFunction: Type, args: readonly Type[], val: "PENDING" | Type) : void {
+            function getChildTrieMapOrNull(thisLevel: NodeTrie, type: Type) : NodeTrie | null {
                 const result = thisLevel.get(type);
                 if (result && typeof result === "object") {
                     return result;
@@ -2492,7 +2632,7 @@ export function Checker(options: ProjectOptions) {
             }
         }
 
-        function getCachedTypeConstructorInvocation(typeConstructor: _Type, args: readonly _Type[]) : TypeCache_Resolution {
+        function getCachedTypeConstructorInvocation(typeConstructor: Type, args: readonly Type[]) : TypeCache_Resolution {
             let trieDescender = typeConstructorInvocationCacheTrie.get(typeConstructor);
             for (let i = 0; i < args.length; i++) {
                 if (!trieDescender) {
@@ -2519,7 +2659,7 @@ export function Checker(options: ProjectOptions) {
             }
         }
 
-        function evaluateType(context: Node, type: _Type | null, typeParamMap: ReadonlyMap<string, _Type> = type?.capturedContext ?? new Map(), partiallyApplyGenericFunctionSigs = false) : _Type {
+        function evaluateType(context: Node, type: Type | null, typeParamMap: ReadonlyMap<string, Type> = type?.capturedContext ?? new Map(), partiallyApplyGenericFunctionSigs = false) : Type {
             let depth = 0;
 
             return typeWorker(type, typeParamMap, partiallyApplyGenericFunctionSigs);
@@ -2621,57 +2761,64 @@ export function Checker(options: ProjectOptions) {
             //     }
             // }
 
-            function typeWorker(type: Readonly<_Type> | null,
-                                typeParamMap: ReadonlyMap<string, _Type> | undefined = type?.capturedContext,
+            function typeWorker(type: Readonly<Type> | null,
+                                typeParamMap: ReadonlyMap<string, Type> | undefined = type?.capturedContext,
                                 partiallyApplyGenericFunctionSigs = false,
-                                lookupDeferrals?: ReadonlySet<string>) : _Type {
+                                lookupDeferrals?: ReadonlySet<string>) : Type {
                 if (depth > 64) {
-                    return SyntheticType.never;
+                    return BuiltinType.never;
                 }
                 try {
                     depth++;
                 
-                    if (!type) return SyntheticType.any;
+                    if (!type) return BuiltinType.any;
                     
-                    if (isInstantiatedArray(type)) {
+                    if (type.kind === TypeKind.array) {
                         return type;
                     }
-                    if (isIntersection(type)) {
+                    if (type.kind === TypeKind.intersection) {
                         return type;
                         //return evaluateIntersection(type.types);
                     }
-                    if (isUnion(type)) {
+                    if (type.kind === TypeKind.union) {
                         // need to dedupe and etc.
                         // it is currently possible to end up with many adhoc unique instances of the same union
                         // which should structurally compare equal, but we want object identity when we can
-                        const types = new Set(type.types.map(type => typeWorker(type)))
-                        return cfUnion([...types]); 
+                        const evaluatedTypes = new Set(type.types.map(memberType => typeWorker(memberType, typeParamMap)))
+                        const freshUnion = unionify([...evaluatedTypes]); 
+                        if (structurallyCompareTypes(type, freshUnion) === 0) {
+                            return type;
+                        }
+                        else {
+                            return freshUnion;
+                        }
                     }
-                    if (isStructLike(type) && type.structKind == StructKind.struct) {
+                    if (type.kind === TypeKind.struct) {
                         const evaluatedStructContents = new Map<string, SymTabEntry>();
                         let concrete = true;
-                        for (const key of type.members.keys()) {
-                            const evaluatedType = typeWorker(type.members.get(key)!.type);
-                            if (type !== evaluatedType) { // fixme: merely expanding a non-generic alias will trigger this, since (alias !== *alias)
+                        for (const [canonicalName, symTabEntry] of type.members.entries()) {
+                            const evaluatedType = typeWorker(symTabEntry.type);
+                            if (symTabEntry.type !== evaluatedType) { // fixme: merely expanding a non-generic alias will trigger this, since (alias !== *alias)
                                 concrete = false;
                             }
-                            evaluatedStructContents.set(key, {
-                                uiName: type.members.get(key)!.uiName,
+                            evaluatedStructContents.set(canonicalName, {
+                                uiName: symTabEntry.uiName,
                                 declarations: null,
-                                canonicalName: key,
-                                type: evaluatedType
+                                canonicalName,
+                                type: evaluatedType,
+                                symbolId: -1,
                             });
                         }
                         if (concrete) {
                             return type;
                         }
-                        return SyntheticType.struct(evaluatedStructContents);
+                        return Struct(evaluatedStructContents);
                     }
-                    if ((isGenericFunctionSignature(type) && partiallyApplyGenericFunctionSigs) || isFunctionSignature(type) && !isFunctionOverloadSet(type)) {
-                        const sig = isGenericFunctionSignature(type) ? type.body : type;
-                        const updatedLookupDeferrals = isGenericFunctionSignature(type)
+                    if (type.kind === TypeKind.functionSignature || (type.kind === TypeKind.genericFunctionSignature && partiallyApplyGenericFunctionSigs)) {
+                        const sig = type;
+                        const updatedLookupDeferrals = type.kind === TypeKind.genericFunctionSignature
                             ? new Set(
-                                ...type.params.map(param => param.name),
+                                ...type.typeParams.map(param => param.name),
                                 ...(lookupDeferrals ?? [])
                             )
                             : lookupDeferrals;
@@ -2680,9 +2827,9 @@ export function Checker(options: ProjectOptions) {
                         let originalTypeWasConcrete = true;
 
                         for (let i = 0; i < sig.params.length; i++) {
-                            const freshType = typeWorker(sig.params[i].type,
+                            const freshType = typeWorker(sig.params[i].paramType,
                                 typeParamMap, partiallyApplyGenericFunctionSigs, updatedLookupDeferrals);
-                            originalTypeWasConcrete = originalTypeWasConcrete && (freshType === sig.params[i].type);
+                            originalTypeWasConcrete = originalTypeWasConcrete && (freshType === sig.params[i].paramType);
                             params.push(
                                 cfFunctionSignatureParam(
                                     !(sig.params[i].flags & TypeFlags.optional),
@@ -2695,18 +2842,32 @@ export function Checker(options: ProjectOptions) {
 
                         originalTypeWasConcrete = originalTypeWasConcrete && (returns === sig.returns);
                         
-                        if (isGenericFunctionSignature(type) || !originalTypeWasConcrete) {
+                        if (type.kind === TypeKind.genericFunctionSignature || !originalTypeWasConcrete) {
                             const freshSignature = cfFunctionSignature(sig.uiName, params, returns, sig.attrs);
-                            return isGenericFunctionSignature(type) ? TypeConstructor(type.params, freshSignature) : freshSignature;
+                            return type.kind === TypeKind.genericFunctionSignature ? TypeConstructor(type.typeParams, freshSignature) : freshSignature;
                         }
                         else {
                             return type;
                         }
                     }
-                    if (isTypeConstructorInvocation(type)) {
+
+                    if (type.kind === TypeKind.cfcLookup) {
+                        const cfcName = type.cfcName.literalValue.toString();
+                        
+                        const resolvedCfc = cfcResolver({resolveFrom: sourceFile.absPath, cfcName: cfcName})
+                        if (resolvedCfc) {
+                            const freshType = Cfc(resolvedCfc.sourceFile);
+                            (freshType as Mutable<Type>).underlyingType = type;
+                            return freshType;
+                        }
+
+                        return BuiltinType.any;  // fixme: issue something like "warning: CFC 'x.y.z' has type 'any' because its .cfc file could not be resolved. We tried looking in the following paths..."
+                    }
+
+                    if (type.kind === TypeKind.typeConstructorInvocation) {
                         
 
-                        if (isInterface(type.left)) { // not generic since it is not a constructor invocation...
+                        if (type.left.kind === TypeKind.interface) { // not generic since it is not a constructor invocation...
                             const result = instantiateInterfaceWithPreinstantiatedArgs(type.left, new Map());
                             if (result.status === TypeCache_Status.resolving) {
                                 if (typeParamMap) {
@@ -2717,35 +2878,23 @@ export function Checker(options: ProjectOptions) {
                             else return result.value;
                         }
 
-                        if (isCfcLookupType(type)) {
-                            const literalType = type.args[0];
-                            if (literalType && isLiteralType(literalType) && literalType.flags & TypeFlags.string) {
-                                const resolvedCfc = cfcResolver({resolveFrom: sourceFile.absPath, cfcName: literalType.literalValue as string})
-                                if (resolvedCfc) {
-                                    const freshType = CfcTypeWrapper(resolvedCfc.sourceFile);
-                                    (freshType as Mutable<_Type>).underlyingType = type;
-                                    return freshType;
-                                }
-                            }
 
-                            return SyntheticType.any;  // fixme: "warning: CFC 'x.y.z' has type 'any' because its .cfc file could not be resolved. We tried looking in the following paths..."
-                        }
 
-                        if (isTypeId(type.left)) {
+                        if (type.left.kind === TypeKind.typeId) {
                             const constructor = typeParamMap?.get(type.left.name) || walkUpContainersToResolveType(context, type.left) || null;
-                            if (constructor && isInterface(constructor)) {
+                            if (constructor && constructor.kind === TypeKind.interface) {
                                 for (const arg of type.args) {
-                                    if (isTypeId(arg) && lookupDeferrals?.has(arg.name)) {
+                                    if (arg.kind === TypeKind.typeId && lookupDeferrals?.has(arg.name)) {
                                         return type;
                                     }
                                 }
 
-                                let instantiableParamMap : ReadonlyMap<string, _Type>;
+                                let instantiableParamMap : ReadonlyMap<string, Type>;
                                 if (type.capturedContext) {
                                     instantiableParamMap = type.capturedContext;
                                 }
                                 else {
-                                    const mapBuilder = new Map<string, _Type>();
+                                    const mapBuilder = new Map<string, Type>();
                                     if (constructor.typeParams) {
                                         for (let i = 0; i < constructor.typeParams?.length ?? 0; i++) {
                                             const name = constructor.typeParams[i].name;
@@ -2765,7 +2914,7 @@ export function Checker(options: ProjectOptions) {
                             }
                         }
 
-                        return SyntheticType.any;
+                        return BuiltinType.any;
 
                         // const typeConstructor = typeWorker(type.left);
                         // if (typeConstructor.flags & TypeFlags.never) {
@@ -2804,28 +2953,31 @@ export function Checker(options: ProjectOptions) {
                         //     return SyntheticType.never;//invokeTypeConstructor(typeConstructor as TypeConstructor, args);
                         // }
                     }
-                    if (isCachedTypeConstructorInvocation(type)) {
-                        const cachedTypeCall = getCachedTypeConstructorInvocation(type.left, type.args);
-                        if (cachedTypeCall.status === TypeCache_Status.resolved) {
-                            return cachedTypeCall.value;
-                        }
-                        else if (cachedTypeCall.status === TypeCache_Status.resolving) {
-                            if (typeParamMap) {
-                                return createType({...type, capturedContext: typeParamMap});
-                            }
-                            return type;
-                        }
-                        else {
-                            throw "expected resolved or resolving cache result but got none";
-                        }
-                    }
-                    if (isTypeId(type) && !lookupDeferrals?.has(type.name)) {
+                    //
+                    // a mechanism such as a "concrete" property or similar should be used instead of this
+                    // if (isCachedTypeConstructorInvocation(type)) {
+                    //     const cachedTypeCall = getCachedTypeConstructorInvocation(type.left, type.args);
+                    //     if (cachedTypeCall.status === TypeCache_Status.resolved) {
+                    //         return cachedTypeCall.value;
+                    //     }
+                    //     else if (cachedTypeCall.status === TypeCache_Status.resolving) {
+                    //         if (typeParamMap) {
+                    //             return createType({...type, capturedContext: typeParamMap});
+                    //         }
+                    //         return type;
+                    //     }
+                    //     else {
+                    //         throw "expected resolved or resolving cache result but got none";
+                    //     }
+                    // }
+                    //
+                    if (type.kind === TypeKind.typeId && !lookupDeferrals?.has(type.name)) {
                         // @fixme: should error if we can't find it; and return never ?
                         let result = typeParamMap?.get(type.name) || walkUpContainersToResolveType(context, type) || null;
-                        if (!result) return SyntheticType.any;
+                        if (!result) return BuiltinType.any;
                         if (type.indexChain) {
                             for (const name of type.indexChain) {
-                                if (!isStructLike(result)) return SyntheticType.any; // should error with "not indexable" or etc.
+                                if (!isStructLike(result)) return BuiltinType.any; // should error with "not indexable" or etc.
                                 const nextType = result.members.get(name)?.type;
                                 if (nextType) result = typeWorker(nextType);
                             }
@@ -2841,15 +2993,15 @@ export function Checker(options: ProjectOptions) {
                 }
 
                 type InterfaceInstantiationResult =
-                    | {status: TypeCache_Status.resolved, value: _Type}
+                    | {status: TypeCache_Status.resolved, value: Type}
                     | {status: TypeCache_Status.resolving} // for something like interface X<T> { v: X<T> }, X<T> is already resolving when we instantiate v
 
-                function instantiateInterfaceWithPreinstantiatedArgs(iface: Interface, preInstantiatedArgMap: ReadonlyMap<string, _Type>) : InterfaceInstantiationResult {
-                    const argsArray : _Type[] = [];
+                function instantiateInterfaceWithPreinstantiatedArgs(iface: Interface, preInstantiatedArgMap: ReadonlyMap<string, Type>) : InterfaceInstantiationResult {
+                    const argsArray : Type[] = [];
                     if (iface.typeParams) {
                         for (const typeParam of iface.typeParams) {
                             if (!preInstantiatedArgMap.has(typeParam.name)) { // bad invocation
-                                return {status: TypeCache_Status.resolved, value: SyntheticType.any};
+                                return {status: TypeCache_Status.resolved, value: BuiltinType.any};
                             }
                             argsArray.push(preInstantiatedArgMap.get(typeParam.name)!);
                         }
@@ -2873,15 +3025,18 @@ export function Checker(options: ProjectOptions) {
                         instantiatedMembers.set(name, {...symTabEntry, type: freshType});
                     }
 
-                    const result = Struct(instantiatedMembers, iface.indexSignature);
-                    (result as Mutable<_Type>).underlyingType = iface;
+                    let result : Type;
+
                     if (iface.name === "Array") {
                         // should always have a "T", although we need to enforce user defined interfaces to have always be Array<T>
-                        (result as Mutable<_Type>).memberType = preInstantiatedArgMap.get("T") ?? SyntheticType.any;
+                        result = cfArray(preInstantiatedArgMap.get("T") ?? BuiltinType.any, instantiatedMembers);
+                    }
+                    else {
+                        result = Struct(instantiatedMembers, iface.indexSignature);
+                        (result as Mutable<Type>).underlyingType = iface;
                     }
 
                     setCachedTypeConstructorInvocation(iface, argsArray, result);
-
                     return {status: TypeCache_Status.resolved, value: result};
                 }
             }
@@ -2907,57 +3062,60 @@ export interface CheckerInstallable {
 
 export type Checker = ReturnType<typeof Checker>;
 
-function QuickInstance(sourceFile: SourceFile) : void {
-    if (sourceFile.cfFileType !== CfFileType.cfc) return;
+//
+// this is the "QuickInstance" decorator; we're not supporting this at the moment
+//
+// function QuickInstance(sourceFile: SourceFile) : void {
+//     if (sourceFile.cfFileType !== CfFileType.cfc) return;
 
-    const methodsToAdd : SymTabEntry[] = [];
+//     const methodsToAdd : SymTabEntry[] = [];
 
-    // method names matching /^scope(.*)/ get replaced with methods named /$1/
-    // also has its first param removed
-    for (const symTabEntry of sourceFile.containedScope.this!.values()) {
-        if (isFunctionSignature(symTabEntry.type) && !isFunctionOverloadSet(symTabEntry.type)) {
-            if (/^scope/i.test(symTabEntry.uiName)) {
-                (symTabEntry.type as Mutable<_Type>).flags &= ~(TypeFlags.private | TypeFlags.public | TypeFlags.protected | TypeFlags.remote);
+//     // method names matching /^scope(.*)/ get replaced with methods named /$1/
+//     // also has its first param removed
+//     for (const symTabEntry of sourceFile.containedScope.this!.values()) {
+//         if (symTabEntry.type.kind === TypeKind.functionSignature) {
+//             if (/^scope/i.test(symTabEntry.uiName)) {
+//                 (symTabEntry.type as Mutable<Type>).flags &= ~(TypeFlags.private | TypeFlags.public | TypeFlags.protected | TypeFlags.remote);
                 
-                let freshUiName = symTabEntry.uiName.replace(/^scope/i, "");
-                freshUiName = freshUiName[0].toLowerCase() + freshUiName.slice(1);
+//                 let freshUiName = symTabEntry.uiName.replace(/^scope/i, "");
+//                 freshUiName = freshUiName[0].toLowerCase() + freshUiName.slice(1);
                 
-                // fixme: can't set access flags with function sig constructor?
+//                 // fixme: can't set access flags with function sig constructor?
                 
-                const freshType = cfFunctionSignature(freshUiName, symTabEntry.type.params.slice(1), CfcTypeWrapper(sourceFile), symTabEntry.type.attrs);
-                (symTabEntry.type as Mutable<_Type>).flags |= TypeFlags.private;
-                (freshType as Mutable<_Type>).flags |= TypeFlags.public;
+//                 const freshType = cfFunctionSignature(freshUiName, symTabEntry.type.params.slice(1), Cfc(sourceFile), symTabEntry.type.attrs);
+//                 (symTabEntry.type as Mutable<Type>).flags |= TypeFlags.private;
+//                 (freshType as Mutable<Type>).flags |= TypeFlags.public;
 
-                methodsToAdd.push({
-                    uiName: freshUiName,
-                    canonicalName: freshUiName.toLowerCase(),
-                    type: freshType,
-                    declarations: symTabEntry.declarations
-                });
-            }
-        }
-    }
+//                 methodsToAdd.push({
+//                     uiName: freshUiName,
+//                     canonicalName: freshUiName.toLowerCase(),
+//                     type: freshType,
+//                     declarations: symTabEntry.declarations
+//                 });
+//             }
+//         }
+//     }
 
-    // properties get "where getters",
-    // i.e. property named "column" gets a public "getter" named "whereColumn"
-    for (const symTabEntry of sourceFile.containedScope.variables!.values()) {
-        const propertyDecl = symTabEntry.declarations?.find((node) : node is Property => node.kind === NodeKind.property);
-        if (propertyDecl) {
-            let propertyName = getTriviallyComputableString(getAttributeValue(propertyDecl.attrs, "name"));
-            if (propertyName) {
-                propertyName = propertyName[0].toUpperCase() + propertyName.slice(1);
-                const param = cfFunctionSignatureParam(true, SyntheticType.string, "");
-                methodsToAdd.push({
-                    uiName: "where" + propertyName,
-                    canonicalName: "where" + propertyName.toLowerCase(),
-                    type: cfFunctionSignature("where" + propertyName, [param], CfcTypeWrapper(sourceFile), []),
-                    declarations: [propertyDecl]
-                })
-            }
-        }
-    }
+//     // properties get "where getters",
+//     // i.e. property named "column" gets a public "getter" named "whereColumn"
+//     for (const symTabEntry of sourceFile.containedScope.variables!.values()) {
+//         const propertyDecl = symTabEntry.declarations?.find((node) : node is Property => node.kind === NodeKind.property);
+//         if (propertyDecl) {
+//             let propertyName = getTriviallyComputableString(getAttributeValue(propertyDecl.attrs, "name"));
+//             if (propertyName) {
+//                 propertyName = propertyName[0].toUpperCase() + propertyName.slice(1);
+//                 const param = cfFunctionSignatureParam(true, BuiltinType.string, "");
+//                 methodsToAdd.push({
+//                     uiName: "where" + propertyName,
+//                     canonicalName: "where" + propertyName.toLowerCase(),
+//                     type: cfFunctionSignature("where" + propertyName, [param], Cfc(sourceFile), []),
+//                     declarations: [propertyDecl]
+//                 })
+//             }
+//         }
+//     }
 
-    for (const method of methodsToAdd) {
-        sourceFile.containedScope.this!.set(method.canonicalName, method);
-    }
-}
+//     for (const method of methodsToAdd) {
+//         sourceFile.containedScope.this!.set(method.canonicalName, method);
+//     }
+// }

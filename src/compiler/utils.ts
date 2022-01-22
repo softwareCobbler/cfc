@@ -1,6 +1,6 @@
 import * as path from "path";
 import * as fs from "fs";
-import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CfTag, DottedPath, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, isStaticallyKnownScopeName, Node, NodeFlags, NodeId, ParamStatementSubType, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymbolResolution, SymbolTable, SymTabResolution, TagAttribute, UnaryOperatorPos } from "./node";
+import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CfTag, DottedPath, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, isStaticallyKnownScopeName, NamedFunctionDefinition, Node, NodeFlags, NodeId, ParamStatementSubType, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymbolResolution, SymbolTable, SymTabEntry, SymTabResolution, TagAttribute, UnaryOperatorPos } from "./node";
 import { NodeKind } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, isStructLike, TypeFlags } from "./types";
@@ -661,7 +661,7 @@ export interface NodeSourceMap {
     range: SourceRange
 }
 
-export function exhaustiveCaseGuard(_:never) : never { throw "Non-exhaustive case or unintentional fallthrough."; }
+export function exhaustiveCaseGuard(_: never) : never { throw "Non-exhaustive case or unintentional fallthrough."; }
 
 export function flattenTree(tree: Node | Node[]) : NodeSourceMap[] {
     const result : NodeSourceMap[] = [];
@@ -940,10 +940,21 @@ export function getContainingFunction(node: Node) : FunctionDefinition | ArrowFu
     return findAncestor(node, (node) => node.kind === NodeKind.functionDefinition || node.kind === NodeKind.arrowFunctionDefinition) as FunctionDefinition | ArrowFunctionDefinition;
 }
 
-export function isCfcMemberFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) : node is FunctionDefinition {
-    if (node.kind === NodeKind.arrowFunctionDefinition) return false;
-    return !getContainingFunction(node) // there is no outer function
+export function isCfcMemberFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) : node is NamedFunctionDefinition {
+    return isNamedFunction(node)
+        && !getContainingFunction(node) // there is no outer function
         && getSourceFile(node)?.cfFileType === CfFileType.cfc; // and the file type is a cfc
+}
+
+export function tryGetCfcMemberFunctionDefinition(symbol: SymTabEntry | undefined) : NamedFunctionDefinition | undefined {
+    if (!symbol) return undefined;
+    if (symbol.declarations?.length === 1) {
+        const decl = symbol.declarations[0];
+        return decl.kind === NodeKind.functionDefinition && isCfcMemberFunctionDefinition(decl)
+            ? decl
+            : undefined;
+    }
+    return undefined;
 }
 
 export function getNodeLinks(node: Node) {
@@ -1000,9 +1011,10 @@ export function getFunctionSignatureParamNames(sig: cfFunctionSignature, ...omit
     return result;
 }
 
-export function isHoistableFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) : node is FunctionDefinition {
-    // fixme: need a more explicit way to say "this function is anonymous", right now we imply it by saying a function has a name
-    return node.kind === NodeKind.functionDefinition && (typeof node.canonicalName === "string");
+export function isNamedFunction(node: Node)
+    : node is NamedFunctionDefinition {
+    // fixme: need a more explicit way to say "this function is or is not named", right now we imply it by saying a function has a name
+    return node.kind === NodeKind.functionDefinition && !!node.name;
 }
 
 export interface CanonicalizedName {
@@ -1265,8 +1277,8 @@ export function walkupScopesToResolveSymbol(base: Node,
                 // lookup symbols from visible interface definitions
                 const scopeLookup : readonly StaticallyKnownScopeName[] = node.kind === NodeKind.sourceFile ? orderedScopes : ["variables"];
                 for (const scopeName of scopeLookup) {
-                    if (node.containedScope.typedefs.mergedInterfaces.has(scopeName)) {
-                        const interfaceDef = node.containedScope.typedefs.mergedInterfaces.get(scopeName)!;
+                    if (node.containedScope.typeinfo.mergedInterfaces.has(scopeName)) {
+                        const interfaceDef = node.containedScope.typeinfo.mergedInterfaces.get(scopeName)!;
                         if (interfaceDef.members.has(canonicalName)) {
                             const symTabEntry = interfaceDef.members.get(canonicalName)!;
                             if (symTabEntry) {
@@ -1310,7 +1322,7 @@ export function walkupScopesToResolveSymbol(base: Node,
 
 export function getFunctionDefinitionReturnsLiteral(node: FunctionDefinition) : CanonicalizedName | undefined {
     if (node.fromTag) {
-        const attrVal = getAttributeValue(node.attrs, "returns");
+        const attrVal = getAttributeValue(node.attrs, "returntype");
         const v = getTriviallyComputableString(attrVal);
         if (!v) return undefined;
         else return {ui: v, canonical: v.toLowerCase()}
@@ -1318,6 +1330,22 @@ export function getFunctionDefinitionReturnsLiteral(node: FunctionDefinition) : 
     else {
         return node.returnType ? stringifyDottedPath(node.returnType) : undefined;
     }
+}
+
+export function functionDefinitionHasUserSpecifiedReturnType(node: FunctionDefinition) : boolean {
+    if (node.typeAnnotation) {
+        // the annotation could be invalid, but it exists;
+        // if its invalid, the checker will treat it as though the user said "any"
+        return true;
+    }
+
+    if (node.fromTag) {
+        return !!getAttributeValue(node.attrs, "returntype");
+    }
+    else {
+        return !!node.returnType;
+    }
+
 }
 
 export function getFunctionDefinitionAccessLiteral(node: FunctionDefinition) {
@@ -1339,6 +1367,16 @@ export function getFunctionDefinitionAccessLiteral(node: FunctionDefinition) {
             return val;
         default:
             return "public";
+    }
+}
+
+export function getFunctionDefinitionNameTerminalErrorNode(node: FunctionDefinition) : Node {
+    if (node.fromTag) {
+        const attrVal = getAttributeValue(node.attrs, "name");
+        return attrVal ?? node.tagOrigin.startTag!;
+    }
+    else {
+        return node.nameToken ?? node; // see fixme on nullish nameToken def
     }
 }
 
@@ -1377,7 +1415,7 @@ class _TupleKeyedMap<Ks extends any[], V> {
                 : new Map();
         }
 
-        function get(ks: Ks) {
+        function get(ks: Ks) : V | undefined {
             let workingMap = map.get(ks[0]);
             for (let i = 1; i < ks.length - 1; i++) {
                 if (workingMap) {
@@ -1387,10 +1425,10 @@ class _TupleKeyedMap<Ks extends any[], V> {
                     return undefined;
                 }
             }
-            return workingMap.get(ks[ks.length-1]);
+            return workingMap?.get(ks[ks.length-1]);
         }
 
-        function has(ks: Ks) {
+        function has(ks: Ks) : boolean {
             let workingMap = map.get(ks[0]);
             for (let i = 1; i < ks.length - 1; i++) {
                 if (workingMap) {
@@ -1400,10 +1438,10 @@ class _TupleKeyedMap<Ks extends any[], V> {
                     return false;
                 }
             }
-            return workingMap.has(ks[ks.length-1]);
+            return workingMap?.has(ks[ks.length-1]) ?? false;
         }
 
-        function set(ks: Ks, v: V) {
+        function set(ks: Ks, v: V) : void {
             let workingMap = map;
             for (let i = 0; i < ks.length - 1; i++) {
                 if (!workingMap.has(ks[i])) {
@@ -1418,7 +1456,7 @@ class _TupleKeyedMap<Ks extends any[], V> {
             workingMap.set(ks[ks.length-1], v);
         }
 
-        function _delete(ks: Ks) {
+        function _delete(ks: Ks) : void {
             let workingMap = map.get(ks[0]);
             for (let i = 1; i < ks.length - 1; i++) {
                 if (workingMap) {
@@ -1428,7 +1466,7 @@ class _TupleKeyedMap<Ks extends any[], V> {
                     return;
                 }
             }
-            workingMap.delete(ks[ks.length-1]);
+            workingMap?.delete(ks[ks.length-1]);
         }
 
         return {

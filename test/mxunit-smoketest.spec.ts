@@ -258,6 +258,7 @@ describe("MX-Unit smoke test", () => {
         engineVersion: EngineVersions["acf.2018"],
         genericFunctionInference: false,
         checkReturnTypes: false,
+        checkFlowTypes: false,
         cancellationToken: {
             cancellationRequested: () => false,
             throwIfCancellationRequested: () => void 0,

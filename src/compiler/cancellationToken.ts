@@ -30,7 +30,12 @@ export function CancellationToken() {
 }
 export type CancellationToken = ReturnType<typeof CancellationToken>;
 
-export class CancellationException {}
+export class CancellationException {
+    name : string;
+    constructor() {
+        this.name = "CancellationException"; // for debugability, generally want to NOT break on these
+    };
+}
 
 export function CancellationTokenConsumer(cancellationTokenId: string) {
     function cancellationRequested() {

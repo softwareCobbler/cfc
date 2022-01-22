@@ -40,7 +40,7 @@ export function LanguageService<T extends ClientAdapter>(serverFilePath: AbsPath
 
     function fork(freshConfig: InitArgs["config"], workspaceRoots: AbsPath[]) {
         config = freshConfig;
-        server = child_process.fork(serverFilePath);
+        server = child_process.fork(serverFilePath, {execArgv: ["--nolazy", "--inspect=6012", /*"--inspect-brk"*/]});
 
         server.on("message", (msg: CflsResponse) => {
             if (messageId.current() === msg.id) {

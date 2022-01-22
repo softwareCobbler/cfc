@@ -7,9 +7,9 @@ import { CflsRequest, CflsRequestType, CflsResponse, CflsResponseType, CflsConfi
 import * as Completions from "./completions";
 import { exhaustiveCaseGuard, getAttribute, getSourceFile } from "../compiler/utils";
 import { BinaryOperator, BinaryOpType, BlockType, FunctionDefinition, NodeKind, Property, SourceFile } from "../compiler/node";
-import { isCfcTypeWrapper, isFunctionSignature } from "../compiler/types";
 import { SourceRange } from "../compiler/scanner";
 import { EngineVersions } from "../compiler/engines";
+import { TypeKind } from "../compiler/types";
 
 function send(msg: CflsResponse) {
     process.send!(msg);
@@ -172,7 +172,7 @@ function LanguageService() {
             // ^^^^^^^^
             if (targetNode.parent?.kind === NodeKind.functionDefinition && !targetNode.parent.fromTag && targetNode.parent.returnType === targetNode) {
                 const symbol = checker.getSymbol(targetNode.parent, sourceFile)
-                if (symbol && isFunctionSignature(symbol.symTabEntry.type) && isCfcTypeWrapper(symbol.symTabEntry.type.returns)) {
+                if (symbol && symbol.symTabEntry.type.kind === TypeKind.functionSignature && symbol.symTabEntry.type.returns.kind === TypeKind.cfc) {
                     return [{
                         sourceFile: symbol.symTabEntry.type.returns.cfc,
                         range: exactlyFirstCharRange,
@@ -213,7 +213,7 @@ function LanguageService() {
 
             if (newExpr) {
                 const type = checker.getCachedEvaluatedNodeType(newExpr, sourceFile);
-                if (type && isCfcTypeWrapper(type)) {
+                if (type && type.kind === TypeKind.cfc) {
                     return [{
                         sourceFile: type.cfc,
                         range: exactlyFirstCharRange
@@ -317,6 +317,7 @@ function LanguageService() {
                     withWireboxResolution: config.wireboxResolution,
                     wireboxConfigFileCanonicalAbsPath: wireboxConfigFileAbsPath,
                     checkReturnTypes: config.x_checkReturnTypes,
+                    checkFlowTypes: config.x_checkFlowTypes,
                     genericFunctionInference: config.x_genericFunctionInference,
                     cancellationToken
                 },
