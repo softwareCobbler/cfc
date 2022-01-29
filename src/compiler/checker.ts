@@ -1863,10 +1863,9 @@ export function Checker(options: ProjectOptions) {
 
             const FIXME_CURRENT_CONTAINER = findAncestor(node, (node) => !!node.containedScope); // should be a "currentContainer" member var
             const isOuterVar = resolvedSymbol.container !== FIXME_CURRENT_CONTAINER;
-            const flowType = isOuterVar
-                ? undefined
-                : node.flow
-                ? determineFlowType(node.flow, resolvedSymbol.symTabEntry.symbolId)
+            const flowType = !CHECK_FLOW_TYPES ? undefined
+                : isOuterVar ? undefined
+                : node.flow ? determineFlowType(node.flow, resolvedSymbol.symTabEntry.symbolId)
                 : undefined;
 
             const maybeMemberFunctionDefinition = tryGetCfcMemberFunctionDefinition(resolvedSymbol?.symTabEntry);
@@ -1875,7 +1874,7 @@ export function Checker(options: ProjectOptions) {
             // implying that it is used before assignment
             // except in the case of member functions, which are always visible
             // maybe we could hoist just member functions so they are always first in flow
-            if (!isOuterVar && !flowType && !maybeMemberFunctionDefinition) {
+            if (!isOuterVar && (CHECK_FLOW_TYPES && !flowType) && !maybeMemberFunctionDefinition) {
                 if (CHECK_FLOW_TYPES) {
                     issueDiagnosticAtNode(node, `${node.uiName} is used before its first definite local assignment.`);
                 }
@@ -1914,12 +1913,9 @@ export function Checker(options: ProjectOptions) {
             // "getInstantiatedDeclaredType" does for #3
             // probably the two methods could merge, and internally choose the right thing
             //
-            const apparentType = forcedType
-                ? forcedType
-                : flowType
-                ? evaluateType(node, flowType)
-                : hasDeclaredType(resolvedSymbol.symTabEntry)
-                ? getInstantiatedDeclaredType(resolvedSymbol.container, resolvedSymbol.symTabEntry)
+            const apparentType = forcedType ? forcedType
+                : flowType ? evaluateType(node, flowType)
+                : hasDeclaredType(resolvedSymbol.symTabEntry) ? getInstantiatedDeclaredType(resolvedSymbol.container, resolvedSymbol.symTabEntry)
                 : evaluateType(resolvedSymbol.container, resolvedSymbol.symTabEntry.type);
 
             setCachedEvaluatedNodeType(node, apparentType);
