@@ -5,8 +5,15 @@ import * as path from "path"; // !! for stringifying CFC types...do we really wa
 import { ComponentSpecifier } from "./project";
 
 let debugTypeModule = false;
-export function setDebug(b: boolean) {
-    debugTypeModule = b;
+
+export function setDebug() : void { // can't unset after setting it per program run
+    if (debugTypeModule) {
+        return;
+    }
+    debugTypeModule = true;
+    for (const key of Object.keys(BuiltinType) as (keyof typeof BuiltinType)[]) {
+        addDebugTypeInfo(BuiltinType[key])
+    }
 }
 
 export type Type =
@@ -16,6 +23,7 @@ export type Type =
     | cfNumeric
     | cfBoolean
     | cfNull
+    | cfUndefined
     | cfNever
     | cfArray
     | cfStructLike
@@ -43,6 +51,7 @@ export const enum TypeKind {
     numeric,
     boolean,
     null,
+    undefined,
     never,
     struct,
     interface,
@@ -67,14 +76,15 @@ export const enum TypeKind {
 }
 
 export const enum TypeFlags {
-    none         = 0,
-    spread       = 1 << 1,
-    optional     = 1 << 2,
-    final        = 1 << 3,
-    remote       = 1 << 4,
-    public       = 1 << 5,
-    protected    = 1 << 6,
-    private      = 1 << 7,
+    none              = 0,
+    spread            = 1 << 1,
+    optional          = 1 << 2,
+    final             = 1 << 3,
+    remote            = 1 << 4,
+    public            = 1 << 5,
+    protected         = 1 << 6,
+    private           = 1 << 7,
+    containsUndefined = 1 << 8,
     end
 }
 
@@ -85,6 +95,7 @@ const TypeKindUiString : Record<TypeKind, string> = {
     [TypeKind.numeric]:                   "numeric",
     [TypeKind.boolean]:                   "boolean",
     [TypeKind.null]:                      "null",
+    [TypeKind.undefined]:                 "undefined",
     [TypeKind.never]:                     "never",
     [TypeKind.struct]:                    "struct",
     [TypeKind.interface]:                 "interface",                                  
@@ -119,21 +130,23 @@ const TypeFlagsUiString : Record<TypeFlags, string> = {
     [TypeFlags.public]:                          "public",
     [TypeFlags.protected]:                       "protected",
     [TypeFlags.private]:                         "private",
+    [TypeFlags.containsUndefined]:                   "uninitialized",
     [TypeFlags.end]:                             "",
 };
 
 function addDebugTypeInfo(type: Type) {
     Object.defineProperty(type, "__debugTypeInfo", {
         get() {
-            const result : string[] = [TypeKindUiString[type.kind]];
-
-            for (let i = 1; i < TypeFlags.end; i++) {
+            const typeAsString = TypeKindUiString[type.kind];
+            const flags : string[] = [];
+            for (let i = 1; (1 << i) < TypeFlags.end; i++) {
                 if (type.flags & (1 << i)) {
-                    result.push(TypeFlagsUiString[1 << i]);
+                    flags.push(TypeFlagsUiString[1 << i]);
                 }
             }
 
-            return result.join(",");
+            const flagsString = flags.length === 0 ? "(none)" : flags.join(",");
+            return typeAsString + " // flags: " + flagsString;
         }
     })
 }
@@ -627,6 +640,10 @@ export interface cfNull extends TypeBase {
     readonly kind: TypeKind.null
 }
 
+export interface cfUndefined extends TypeBase {
+    readonly kind: TypeKind.undefined
+}
+
 export interface cfString extends TypeBase {
     readonly kind: TypeKind.string
 }
@@ -658,6 +675,11 @@ export const BuiltinType = (function() {
         kind: TypeKind.null,
         flags: TypeFlags.none,
     };
+
+    const undefined_ : cfUndefined = {
+        kind: TypeKind.undefined,
+        flags: TypeFlags.containsUndefined,
+    }
 
     const string : cfString = {
         kind: TypeKind.string,
@@ -717,6 +739,7 @@ export const BuiltinType = (function() {
         any: createType(any),
         void: createType(void_),
         null: createType(null_),
+        undefined: createType(undefined_),
         string: createType(string),
         numeric: createType(numeric),
         boolean: createType(boolean),
@@ -962,6 +985,9 @@ export function stringifyType(type: Type) : string {
                 return result.join(" | ");
             }
             case TypeKind.void: return "void";
+            case TypeKind.undefined: {
+                return "undefined";
+            }
             default: exhaustiveCaseGuard(type);
         }
     }
@@ -1111,6 +1137,16 @@ export function structurallyCompareTypes(l: Type, r: Type) : -1 | 0 | 1 {
     if (l.kind === TypeKind.functionSignatureParam && r.kind !== TypeKind.functionSignatureParam) return -1;
     if (l.kind !== TypeKind.functionSignatureParam && r.kind === TypeKind.functionSignatureParam) return 1;
 
-    debugger;
+    if (l.kind === TypeKind.undefined && r.kind !== TypeKind.undefined) return -1;
+    if (l.kind !== TypeKind.undefined && r.kind === TypeKind.undefined) return 1;
+
+    if (l.kind === TypeKind.array && r.kind === TypeKind.array) return structurallyCompareTypes(l.memberType, r.memberType);
+    if (l.kind === TypeKind.array && r.kind !== TypeKind.array) return -1;
+    if (l.kind !== TypeKind.array && r.kind == TypeKind.array) return 1;
+
+    if (debugTypeModule) {
+        debugger;
+    }
+
     throw "unreachable";
 }

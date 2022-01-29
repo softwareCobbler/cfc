@@ -14,7 +14,7 @@ import { isNamedFunction, cfmOrCfc, findNodeInFlatSourceMap, flattenTree, getAtt
 import { CancellationException, CancellationTokenConsumer } from "./cancellationToken";
 
 import { setDebug as setNodeModuleDebug } from "./node";
-import { setDebug as setTypeModuleDebug } from "./node";
+import { setDebug as setTypeModuleDebug } from "./types";
 
 interface CachedFile {
     parsedSourceFile: SourceFile,
@@ -210,8 +210,8 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     const heritageCircularityDetector = new Set<string>();
 
     if (options.debug) {
-        setNodeModuleDebug(true);
-        setTypeModuleDebug(true);
+        setNodeModuleDebug();
+        setTypeModuleDebug();
     }
 
     checker.install({CfcResolver, EngineSymbolResolver, LibTypeResolver});

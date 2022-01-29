@@ -1,4 +1,4 @@
-import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, hasDeclaredType, UnreachableFlow, DiagnosticKind, TagAttribute, SymbolId } from "./node";
+import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, UnreachableFlow, DiagnosticKind, TagAttribute, SymbolId } from "./node";
 import { CfcResolution, CfcResolver, ComponentResolutionArgs, EngineSymbolResolver, LibTypeResolver, ProjectOptions } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, Struct, cfUnion, BuiltinType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, Type, stringifyType, cfFunctionSignatureParam, cfFunctionOverloadSet, cfTypeId, SymbolTableTypeWrapper, Cfc, Interface, createType, createLiteralType, typeFromJavaLikeTypename, structurallyCompareTypes, TypeKind, isStructLike, cfArray, cfStructLike, isStructLikeOrArray, cfGenericFunctionSignature } from "./types";
@@ -377,7 +377,7 @@ export function Checker(options: ProjectOptions) {
                     const cfc = mappings.type.members.get(injectStringVal);
                     if (!cfc) return;
 
-                    targetSymbol.declaredType = cfc.type;
+                    sourceFile.effectivelyDeclaredTypes.set(targetSymbol.symbolId, cfc.type);
                 }
                 return;
             }
@@ -509,7 +509,6 @@ export function Checker(options: ProjectOptions) {
 
             seen.add(flow);
 
-            let containsUndefined = false;
             const flowTypes : Type[] = [];
 
             for (let i = 0; i < flow.predecessors.length; i++) {
@@ -518,11 +517,8 @@ export function Checker(options: ProjectOptions) {
                 }
                 const type = work(flow.predecessors[i]);
                 if (type) flowTypes.push(type);
-                else containsUndefined = true;
-            }
+                else flowTypes.push(BuiltinType.undefined);
 
-            if (containsUndefined) {
-                flowTypes.push(BuiltinType.null);
             }
 
             return flowTypes.length === 0
@@ -582,6 +578,9 @@ export function Checker(options: ProjectOptions) {
             if (type === BuiltinType.any || type === BuiltinType.never) {
                 return type;
             }
+            if (type.flags & TypeFlags.containsUndefined) {
+                flags |= TypeFlags.containsUndefined;
+            }
 
             // merge types that are subtypes of each others
             // the check is bivariant
@@ -607,7 +606,7 @@ export function Checker(options: ProjectOptions) {
             }
         }
 
-        if (membersBuilder.size === 0) return BuiltinType.any;
+        if (membersBuilder.size === 0) return BuiltinType.any; // maybe never?
 
         return cfUnion(membersBuilder, flags);
     }
@@ -1371,33 +1370,21 @@ export function Checker(options: ProjectOptions) {
                     const lValIdent = stringifyLValue(node.left);
                     if (!lValIdent) return;
 
-                    const lhsType = walkupScopesToResolveSymbol(node, lValIdent.canonical)?.symTabEntry.declaredType; //determineFlowType(node.left, lValIdent.canonical);
+                    const lhsSymbol = walkupScopesToResolveSymbol(node, lValIdent.canonical);
                     const rhsType = getCachedEvaluatedNodeType(node.right);
-                    if (!lhsType) {
-                        /*
-                        // there is no type in the current flow; so, this is the first assignment for this var in this scope
-                        if (node.typeAnnotation) {
-                            const evaluatedTypeAnnotation = evaluateType(node, node.typeAnnotation);
-                            if (!isAssignable(rhsType, node.typeAnnotation)) {
-                                //typeErrorAtNode(node.right, "RHS is not assignable to LHS.");
+
+                    if (CHECK_FLOW_TYPES && lhsSymbol) {
+                        const effectivelyDeclaredType = sourceFile.effectivelyDeclaredTypes.get(lhsSymbol.symTabEntry.symbolId);
+                        if (effectivelyDeclaredType) {
+                            if (node.left.kind === NodeKind.identifier && isAssignable(rhsType, effectivelyDeclaredType)) {
+                                setCachedEvaluatedFlowType(node.left.flow!, lhsSymbol.symTabEntry.symbolId, rhsType);
                             }
-                            setCachedEvaluatedFlowType(node.left.flow!, lValIdent.canonical, evaluatedTypeAnnotation);
-                        }
-                        else {
-                            setCachedEvaluatedFlowType(node.left.flow!, lValIdent.canonical, rhsType);
-                        }*/
-                    }
-                    else {
-                        if (node.typeAnnotation) {
-                            issueDiagnosticAtNode(node, "_Type annotations can only be bound to an identifier's first assignment.");
-                        }
-                        if (isAssignable(/*assignThis*/rhsType, /*to*/lhsType)) {
-                            // setCachedEvaluatedFlowType(node.left.flow!, lValIdent.canonical, rhsType);
-                        }
-                        else {
-                            const l = stringifyType(lhsType);
-                            const r = stringifyType(rhsType);
-                            issueDiagnosticAtNode(node.right, `Type '${r}' is not assignable to type '${l}'`);
+                            else {
+                                setCachedEvaluatedFlowType(node.left.flow!, lhsSymbol.symTabEntry.symbolId, effectivelyDeclaredType);
+                                const r = stringifyType(rhsType);
+                                const l = stringifyType(effectivelyDeclaredType);
+                                issueDiagnosticAtNode(node.right, `Type '${r}' is not assignable to type '${l}'`, DiagnosticKind.error);
+                            }
                         }
                     }
                 }
@@ -1426,18 +1413,16 @@ export function Checker(options: ProjectOptions) {
             case BinaryOpType.implies: {
                 break;
             }
-            default: { // all other operators are (number op number)
-                /*
-                const leftType = getCachedEvaluatedNodeType(node.left);
-                const rightType = getCachedEvaluatedNodeType(node.right);
-                // acf allows (bool) + (bool), but maybe we don't want to support that
-                if (leftType.typeKind !== TypeKind.any && leftType.typeKind !== TypeKind.number) {
-                    //typeErrorAtNode(node.left, `Left operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a number.`);
-                }
-                if (rightType.typeKind !== TypeKind.any && rightType.typeKind !== TypeKind.number) {
-                    //typeErrorAtNode(node.right, `Right operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a number.`);
-                }
-                */
+            case BinaryOpType.assign_add:
+            case BinaryOpType.assign_sub:
+            case BinaryOpType.assign_mul:
+            case BinaryOpType.assign_div:
+            case BinaryOpType.assign_mod:
+            case BinaryOpType.exp: {
+                break;
+            }
+            default: {
+                // exhaustiveCaseGuard(node);
             }
         }
     }
@@ -1575,8 +1560,13 @@ export function Checker(options: ProjectOptions) {
             rhsExpr = node.parent.expr;
             assignabilityErrorNode = node;
         }
+        else if (node.expr.kind === NodeKind.identifier) {
+            // this is a variable declaration, like `var foo;`
+            // check that it hasn't already been declared?...
+            return;
+        }
         else {
-            return; // should be unreachable; a variable delcaration is either initialized (var x = y) or a for-in expr (for x in y)
+            return; // unreachable?
         }
 
         // check for rebinding of final vars
@@ -1596,66 +1586,87 @@ export function Checker(options: ProjectOptions) {
 
         //if (node.finalModifier) rhsType.flags |= TypeFlags.final; // need to clone the type
 
-        let flowType : Type = rhsType;
-
         if (symbol) {
             if (CHECK_FLOW_TYPES && symbol.declarations) {
-                function declarationsReachingToFlow(targetDecls: Set<Node>, flow: Flow) {
-                    const reachable = new Set<Flow>();
-                    const flowsToRun = [flow];
-                    const seen = new Set([flow]);
-                    while (flowsToRun.length > 0) {
-                        const flow = flowsToRun.shift()!;
-                        if (flow.node && targetDecls.has(flow.node)) {
-                            reachable.add(flow);
-                            targetDecls.delete(flow.node);
-                        }
-                        for (const xflow of flow.predecessors) {
-                            if (seen.has(xflow)) {
-                                // megafixme: there shouldn't be flow circles when traversing backwards right? following only predecessors should never loop
-                                // actually this might be legit...two backwards paths can have the same predecessors...
-                                continue;
-                                //debugger;
-                            }
-                            else {
-                                flowsToRun.push(xflow);
-                                seen.add(xflow);
-                            }
-                        }
+                // function declarationsReachingToFlow(targetDecls: Set<Node>, flow: Flow) {
+                //     const reachable = new Set<Flow>();
+                //     const flowsToRun = [flow];
+                //     const seen = new Set([flow]);
+                //     while (flowsToRun.length > 0) {
+                //         const flow = flowsToRun.shift()!;
+                //         if (flow.node && targetDecls.has(flow.node)) {
+                //             reachable.add(flow);
+                //             targetDecls.delete(flow.node);
+                //         }
+                //         for (const xflow of flow.predecessors) {
+                //             if (seen.has(xflow)) {
+                //                 // megafixme: there shouldn't be flow circles when traversing backwards right? following only predecessors should never loop
+                //                 // actually this might be legit...two backwards paths can have the same predecessors...
+                //                 continue;
+                //                 //debugger;
+                //             }
+                //             else {
+                //                 flowsToRun.push(xflow);
+                //                 seen.add(xflow);
+                //             }
+                //         }
                         
-                    }
-                    return reachable;
-                }
+                //     }
+                //     return reachable;
+                // }
 
-                const declLValues = (() => {
-                    const result = new Set<Node>();
-                    for (const decl of symbol.declarations) {
-                        if (decl === node || (decl.kind !== NodeKind.variableDeclaration && decl.kind !== NodeKind.binaryOperator)) continue;
-                        const lval = getVariableDeclarationLValue(decl);
-                        if (lval) result.add(lval);
-                    }
-                    return result;
-                })();
+                // const declLValues = (() => {
+                //     const result = new Set<Node>();
+                //     for (const decl of symbol.declarations) {
+                //         if (decl === node || (decl.kind !== NodeKind.variableDeclaration && decl.kind !== NodeKind.binaryOperator)) continue;
+                //         const lval = getVariableDeclarationLValue(decl);
+                //         if (lval) result.add(lval);
+                //     }
+                //     return result;
+                // })();
 
-                const earlierDeclarationAssignmentFlows = declarationsReachingToFlow(new Set(declLValues), lValue.flow!)
+                // const earlierDeclarationAssignmentFlows = declarationsReachingToFlow(new Set(declLValues), lValue.flow!)
 
-                for (const flow of earlierDeclarationAssignmentFlows) {
-                    const previousType = getCachedEvaluatedFlowType(flow, symbol.symbolId);
-                    if (previousType && !isAssignable(rhsType, previousType)) {
-                        const l = stringifyType(rhsType);
-                        const r = stringifyType(previousType);
-                        issueDiagnosticAtNode(node, `Mismatched types on reassignment; type '${l}' is not assignable to previously assigned type '${r}'.`);
-                        break;
-                    }
-                }
+                // for (const flow of earlierDeclarationAssignmentFlows) {
+                //     const previousType = getCachedEvaluatedFlowType(flow, symbol.symbolId);
+                //     if (previousType && !isAssignable(rhsType, previousType)) {
+                //         const l = stringifyType(rhsType);
+                //         const r = stringifyType(previousType);
+                //         issueDiagnosticAtNode(node, `Mismatched types on redeclaration; type '${l}' is not assignable to initially declared type '${r}'.`);
+                //         break;
+                //     }
+                // }
             }
-            if (hasDeclaredType(symbol)) {
-                flowType = getInstantiatedDeclaredType(node, symbol);
-                if (!isAssignable(rhsType, flowType, isLiteralExpr(rhsExpr))) {
-                    const l = stringifyType(symbol.declaredType);
-                    const r = stringifyType(rhsType);
-                    issueDiagnosticAtNode(assignabilityErrorNode, `Type '${r}' is not assignable to type '${l}'`);
+            
+            let effectivelyDeclaredType = sourceFile.effectivelyDeclaredTypes.get(symbol.symbolId);
+            let firstDeclaration = false;
+
+            // first declaration
+            if (!effectivelyDeclaredType) {
+                firstDeclaration = true;
+                if (node.typeAnnotation) {
+                    effectivelyDeclaredType = evaluateType(node, node.typeAnnotation);
                 }
+                else {
+                    effectivelyDeclaredType = rhsType;
+                }
+
+                sourceFile.effectivelyDeclaredTypes.set(symbol.symbolId, effectivelyDeclaredType);
+            }
+
+            let flowType : Type;
+
+            if (!firstDeclaration && !isAssignable(rhsType, effectivelyDeclaredType, isLiteralExpr(rhsExpr))) {
+                if (CHECK_FLOW_TYPES) {
+                    const l = stringifyType(effectivelyDeclaredType);
+                    const r = stringifyType(rhsType);
+                    issueDiagnosticAtNode(assignabilityErrorNode, `Mismatched types on local redeclaration; type '${r}' is not assignable to initially declared or inferred type '${l}'`);
+                }
+
+                flowType = effectivelyDeclaredType;
+            }
+            else {
+                flowType = rhsType;
             }
 
             setCachedEvaluatedFlowType(lValue.flow!, symbol.symbolId, flowType);
@@ -1713,12 +1724,6 @@ export function Checker(options: ProjectOptions) {
                 : new SourceRange(r.fromInclusive+1, r.toExclusive) // otherwise, it's the "<cftagname" but starting on the char after the "<"
         })();
         checkCallLikeArguments(tagCallSignature, args, nameRange, /*isNewExpr*/ false, /*requireNamedArgs*/ true);
-    }
-
-    // fixme: SymTabEntry has a "container" property, which should be the context, so probably this should be just a single arg function
-    // fixme: "instantiatedDeclaredType" -> "instantiatedAnnotatedType"
-    function getInstantiatedDeclaredType(contextNode: Node, symbol: SymTabEntry & {declaredType: Type}) : Type {
-        return symbol.instantiatedDeclaredType || (symbol.instantiatedDeclaredType = evaluateType(contextNode, symbol.declaredType));
     }
 
     // fixme: needs to take a SourceFile arg or that defaults to our current or ...
@@ -1850,12 +1855,14 @@ export function Checker(options: ProjectOptions) {
             // so while they don't get symbols, they will have types
             const resolvedSymbol = walkupScopesToResolveSymbol(node, name); // really we want the flow type
             if (!resolvedSymbol) {
+                // 1/29/22 -- fixed in checkStructLiteralInitializerMember, we shouldn't end up here if the key is an identifier
                 // {x:y} -- don't warn on "x" being undefined, it's just a struct key
-                const isKeyofKVPairStructLiteral = node.parent?.kind === NodeKind.structLiteralInitializerMember
-                    && node.parent.subType === StructLiteralInitializerMemberSubtype.keyed
-                    && node.parent.key === node
-                    && !node.parent.shorthand;
-                if (warnOnUndefined && !isBuiltinScopeName && !isKeyofKVPairStructLiteral) {
+                //
+                // const isKeyofKVPairStructLiteral = node.parent?.kind === NodeKind.structLiteralInitializerMember
+                //     && node.parent.subType === StructLiteralInitializerMemberSubtype.keyed
+                //     && node.parent.key === node
+                //     && !node.parent.shorthand;
+                if (warnOnUndefined && !isBuiltinScopeName /*&& !isKeyofKVPairStructLiteral*/) {
                     issueDiagnosticAtNode(node, `Cannot find name '${name}'.`, DiagnosticKind.warning);
                 }
                 return;
@@ -1876,9 +1883,13 @@ export function Checker(options: ProjectOptions) {
             // maybe we could hoist just member functions so they are always first in flow
             if (!isOuterVar && (CHECK_FLOW_TYPES && !flowType) && !maybeMemberFunctionDefinition) {
                 if (CHECK_FLOW_TYPES) {
-                    issueDiagnosticAtNode(node, `${node.uiName} is used before its first definite local assignment.`);
+                    issueDiagnosticAtNode(node, `${node.uiName} is used before its first local declaration.`);
                 }
                 return;
+            }
+
+            if (CHECK_FLOW_TYPES && flowType && (flowType.flags & TypeFlags.containsUndefined)) {
+                issueDiagnosticAtNode(node, `${node.uiName} is used before being assigned.`);
             }
 
             let forcedType : Type | undefined = undefined;
@@ -1915,13 +1926,14 @@ export function Checker(options: ProjectOptions) {
             //
             const apparentType = forcedType ? forcedType
                 : flowType ? evaluateType(node, flowType)
-                : hasDeclaredType(resolvedSymbol.symTabEntry) ? getInstantiatedDeclaredType(resolvedSymbol.container, resolvedSymbol.symTabEntry)
-                : evaluateType(resolvedSymbol.container, resolvedSymbol.symTabEntry.type);
+                : sourceFile.effectivelyDeclaredTypes.get(resolvedSymbol.symTabEntry.symbolId) || BuiltinType.any;
+                //: evaluateType(resolvedSymbol.container, resolvedSymbol.symTabEntry.type);
 
             setCachedEvaluatedNodeType(node, apparentType);
             setResolvedSymbol(node, resolvedSymbol);
 
-            // no flow mutation here, so we don't set a cached flow type
+            // no flow mutation here, so we don't set a cached flow type, though maybe there would be perf gains if
+            // we "cached" it's current type as the "its type at whatever flownode this is"
         }
     }
 
@@ -2080,7 +2092,7 @@ export function Checker(options: ProjectOptions) {
             }
         }
 
-        const cfSyntaxDirectedTypeSig = memberFunctionSignature ?? extractCfFunctionSignature(node);
+        const cfSyntaxDirectedTypeSig = memberFunctionSignature ?? (evaluateType(node, extractCfFunctionSignature(node)) as cfFunctionSignature);
         let finalType : cfFunctionSignature | cfFunctionOverloadSet = cfSyntaxDirectedTypeSig;
         
         // if (node.kind === NodeKind.functionDefinition && node.canonicalName) {
@@ -2150,7 +2162,23 @@ export function Checker(options: ProjectOptions) {
       
         setCachedEvaluatedNodeType(node, finalType);
 
+        if (symbol && !sourceFile.effectivelyDeclaredTypes.has(symbol.symTabEntry.symbolId)) {
+            // this may not be always true
+            // we might need to infer the return type
+            // we can set it again after inference, but maybe would get wrong return type results while checking a recursive call?
+            sourceFile.effectivelyDeclaredTypes.set(symbol.symTabEntry.symbolId, finalType);
+        }
+
+        // fixme: why do we only do this for TypeKind.functionSignature?
         const inferredReturnType = finalType.kind === TypeKind.functionSignature ? (() => {
+            for (const param of finalType.params) {
+                const argSymbol = node.containedScope!.arguments!.get(param.canonicalName);
+                if (!argSymbol) { // weird error case?:  we have a param but did not set it in arguments scope?
+                    continue;
+                }
+                sourceFile.effectivelyDeclaredTypes.set(argSymbol.symbolId, param.paramType);
+            }
+
             const inferredReturnType = checkFunctionBody(node, finalType.params);
             return forcedReturnTypes.has(node)
                 ? forcedReturnTypes.get(node)!
@@ -2204,6 +2232,8 @@ export function Checker(options: ProjectOptions) {
         }
     }
 
+    // fixme: we probably have enough info from "effectivelyDeclaredTypes" to set flowstart type information,
+    // without having to pass in `params[]`
     function checkFunctionBody(node: FunctionDefinition | ArrowFunctionDefinition, params: cfFunctionSignatureParam[]) : Type {
         // "start flow" of a function has the argument types set to their declared types
         function setStartFlowArgTypes(startFlow: Flow) {
@@ -2393,17 +2423,31 @@ export function Checker(options: ProjectOptions) {
     function checkStructLiteral(node: StructLiteral) {
         // got `[:]`, there is nothing to check
         if (node.emptyOrderedStructColon) {
+            setCachedEvaluatedNodeType(node, BuiltinType.EmptyInterface);
             return;
         }
+
         checkList(node.members);
+
         const memberTypes = new Map<string, SymTabEntry>();
+        let keysAreStaticallyKnowable = true;
+
+        outer:
         for (const member of node.members) {
             switch (member.subType) {
                 case StructLiteralInitializerMemberSubtype.keyed: {
                     const memberType = getCachedEvaluatedNodeType(member);
-                    if (memberType === BuiltinType.never) continue; // spreads or shorthand in unsupported engines may produce this
+                    if (memberType === BuiltinType.never) continue; // spreads or shorthand in unsupported engines may produce this?
+
                     const key = getTriviallyComputableString(member.key);
-                    if (!key) continue;
+
+                    // if the key is an expression, we can't statically know the key
+                    // and we're forced to say the whole record is just `{}`
+                    if (!key || member.key.kind !== NodeKind.identifier && member.key.kind !== NodeKind.simpleStringLiteral) {
+                        keysAreStaticallyKnowable = false;
+                        break outer;
+                    }
+
                     const canonicalName = key.toLowerCase();
                     memberTypes.set(canonicalName, {
                         uiName: key,
@@ -2412,15 +2456,23 @@ export function Checker(options: ProjectOptions) {
                         type: memberType,
                         symbolId: -1 // do we need this here?
                     });
+
                     break;
                 }
                 case StructLiteralInitializerMemberSubtype.spread: {
+                    // ? no-op ?
                     break;
                 }
                 default: exhaustiveCaseGuard(member);
             }
         }
-        setCachedEvaluatedNodeType(node, Struct(memberTypes));
+
+        if (keysAreStaticallyKnowable) {
+            setCachedEvaluatedNodeType(node, Struct(memberTypes));
+        }
+        else {
+            setCachedEvaluatedNodeType(node, BuiltinType.EmptyInterface);
+        }
     }
 
     function checkStructLiteralInitializerMember(node: StructLiteralInitializerMember) {
@@ -2443,7 +2495,35 @@ export function Checker(options: ProjectOptions) {
                     if (symbol) setCachedEvaluatedNodeType(node, symbol.symTabEntry.type);
                 }
                 else {
-                    checkNode(node.key); // fixme/perf: if parsed as an identifier, we check this as though it were an expression, but its really an implied string literal
+                    //
+                    // simple string literal key is a literal key
+                    //   - {"x": 1} : {x: number}
+                    // identifier key is a literal key
+                    //   - {x: 1} : {x: number}
+                    // indexed-access key implies nested properties
+                    //   - {x.y: 1}    : {x: {y: number}} (dot access)
+                    //   - {x["y"]: 1} : {x: {y: number}} (bracket access) (on lucee ok, on adobe an error)
+                    // arbitrary expressions as dynamic keys:
+                    //   - {arbitrary + expression: 1} : {? : number} (on lucee ok, on adobe an error)
+                    // saner use of interpolated string for dynamic keys
+                    //   - {"#expr#": key}
+                    //
+
+                    if (node.key.kind !== NodeKind.simpleStringLiteral
+                        && node.key.kind !== NodeKind.indexedAccess
+                        && node.key.kind !== NodeKind.identifier
+                    ) {
+                        checkNode(node.key);
+                    }
+                    else {
+                        //
+                        // no-op - it's ok to not check string / identifier / indexed-access keys
+                        // because we can't statically analyze them, and they have no sub expressions to check
+                        // (indexed-access might appear to, in the bracket-access case, but really its treated as a series of strings by the engine, see notes above)
+                        // (e.g. {x[y]: v} isn't valid, it must be {x["y"]: v})
+                        // (this might warrant a separate node type for such cases)
+                        // 
+                    }
                     checkNode(node.expr);
                     setCachedEvaluatedNodeType(node, getCachedEvaluatedNodeType(node.expr));
                 }

@@ -3,8 +3,10 @@ import { exhaustiveCaseGuard, getAttributeValue, getTriviallyComputableBoolean, 
 import { Interface, Type } from "./types";
 
 let debugNodeModule = false;
-export function setDebug(b: boolean) {
-    debugNodeModule = b;
+export function setDebug() { // can't unset after setting it, per program run
+    if (debugNodeModule) {
+        return;
+    }
 }
 
 let nextNodeId : NodeId = 0;
@@ -143,20 +145,20 @@ export type Node =
     | Property
     | ParamStatement
 
+//
+// wip:
+// cf-declared-initial-type (really only relevant for function args)
+// declaredInitialType is always any?
+// inferredInitialType would be typeof assignment at declartion, if any 
+// annotatedType is for first declaration
+//
 export interface SymTabEntry {
     uiName: string,
     canonicalName: string,
     declarations: Node[] | null,
     type: Type,
     symbolId: SymbolId,
-    declaredType?: Type, // fixme: "annotated type" ? this comes from a lexically preceding `@!type` annotation, right?
-    instantiatedDeclaredType?: Type,
     optional?: boolean,
-}
-
-// fixme: "hasAnnotatedType"
-export function hasDeclaredType(symbol: SymTabEntry) : symbol is SymTabEntry & {declaredType: Type} {
-    return !!symbol.declaredType;
 }
 
 export type SymbolTable = Map<string, SymTabEntry>;
@@ -352,6 +354,7 @@ export interface SourceFile extends NodeBase {
     cachedFlowTypes: Map<FlowId, Map<SymbolId, Type>>, // types for symbols as determined at particular flow nodes, zero or more per flow node
     nodeToSymbol: Map<NodeId, SymbolResolution>,
     symbolIdToSymbol: Map<SymbolId, SymTabEntry>,
+    effectivelyDeclaredTypes: Map<SymbolId, Type>,
     endOfNodeFlowMap: Map<NodeId, Flow>,
     cfc: {
         extends: SourceFile | null,
@@ -370,6 +373,7 @@ export function resetSourceFileInPlace(target: SourceFile, newSource: string | B
     target.cachedFlowTypes = new Map();
     target.nodeToSymbol = new Map();
     target.symbolIdToSymbol = new Map();
+    target.effectivelyDeclaredTypes = new Map();
     target.endOfNodeFlowMap = new Map<NodeId, Flow>();
     target.cfc = undefined;
 }
@@ -391,9 +395,11 @@ export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: 
     sourceFile.cachedFlowTypes = new Map<FlowId, Map<SymbolId, Type>>();
     sourceFile.nodeToSymbol = new Map<NodeId, SymbolResolution>();
     sourceFile.symbolIdToSymbol = new Map();
+    sourceFile.effectivelyDeclaredTypes = new Map();
     sourceFile.endOfNodeFlowMap = new Map<NodeId, Flow>();
     return sourceFile;
 }
+export const DUMMY_CONTAINER = SourceFile("", CfFileType.cfc, "");
 
 export const NilCfm = (text: string) => SourceFile("nil!", CfFileType.cfm, text);
 export const NilCfc = (text: string) => SourceFile("nil!", CfFileType.cfc, text);

@@ -275,7 +275,7 @@ export function Binder(options: ProjectOptions) {
         }
     }
 
-    const scopeInterfaceNames : StaticallyKnownScopeName[] = ["variables", "__cfEngine"];
+    const scopeInterfaceNames : StaticallyKnownScopeName[] = ["variables", "application"];
 
     function bindTypeAndInterfacedefsForContainer(node: Node) {
         if (!node.containedScope) {
@@ -441,7 +441,7 @@ export function Binder(options: ProjectOptions) {
         else symbol.declarations = [decl];
     }
 
-    function addFreshSymbolToTable(symTab: SymbolTable, uiName: string, declaringNode: Node, type: Type | null = null, declaredType?: Type | null) : SymTabEntry {
+    function addFreshSymbolToTable(symTab: SymbolTable, uiName: string, declaringNode: Node, type: Type | null = null) : SymTabEntry {
         const canonicalName = uiName.toLowerCase();
         let symTabEntry : SymTabEntry;
 
@@ -470,10 +470,6 @@ export function Binder(options: ProjectOptions) {
                 declarations: [declaringNode],
                 type: type ?? BuiltinType.any,
                 symbolId: symbolId++,
-            }
-
-            if (declaredType) {
-                symTabEntry.declaredType = declaredType;
             }
 
             symTab.set(canonicalName, symTabEntry);
@@ -518,12 +514,21 @@ export function Binder(options: ProjectOptions) {
             currentFlow = freshFlow(currentFlow, FlowType.assignment, node.expr.left);
             bindNode(node.expr.left, node);
         }
+        else if (node.expr.kind === NodeKind.identifier) {
+            bindNode(node.expr, node);
+        }
+        else {
+            // unreachable? 
+        }
 
         let identifierBaseName : ReturnType<typeof stringifyLValue> | undefined = undefined;
         
         if (node.expr.kind === NodeKind.binaryOperator && node.expr.optype === BinaryOpType.assign &&
             (node.expr.left.kind === NodeKind.indexedAccess || node.expr.left.kind === NodeKind.identifier)) {
             identifierBaseName = stringifyLValue(node.expr.left);
+        }
+        else if (node.expr.kind === NodeKind.identifier) {
+            identifierBaseName = stringifyLValue(node.expr);
         }
 
         // make sure we got a useable name
@@ -543,7 +548,7 @@ export function Binder(options: ProjectOptions) {
             }
 
             if (targetScope) {
-                addFreshSymbolToTable(targetScope, uiPath[1], node, null, node.typeAnnotation);
+                addFreshSymbolToTable(targetScope, uiPath[1], node, null);
             }
 
             return;
@@ -554,7 +559,7 @@ export function Binder(options: ProjectOptions) {
             resolvePendingSymbolResolutions(canonicalName);
 
             if (getContainingFunction(node)) {
-                addFreshSymbolToTable(currentContainer.containedScope.local!, uiPath[0], node, null, node.typeAnnotation);
+                addFreshSymbolToTable(currentContainer.containedScope.local!, uiPath[0], node, null);
             }
             else {
                 // we're not in a function, so we must be at top-level scope
@@ -805,7 +810,6 @@ export function Binder(options: ProjectOptions) {
             targetScope,
             targetName,
             tag,
-            tag.typeAnnotation,
             engineInterfaceTypeIdName
                 ? cfTypeId(engineInterfaceTypeIdName)
                 : null);
@@ -967,7 +971,7 @@ export function Binder(options: ProjectOptions) {
                 //weakBindIdentifierToScope(targetBaseName, sourceFile.containedScope.variables!);
             }
         }
-        else {
+        else if (target.kind === NodeKind.identifier) {
             const targetBaseName = getTriviallyComputableString(target);
             if (targetBaseName) {
                 const targetBaseCanonicalName = targetBaseName.toLowerCase();
@@ -975,6 +979,8 @@ export function Binder(options: ProjectOptions) {
                 const existingSymbol = walkupScopesToResolveSymbol(node, targetBaseName);
 
                 if (existingSymbol && existingSymbol.scopeName !== "__transient") {
+                    currentFlow = freshFlow(currentFlow, FlowType.assignment, target);
+                    target.flow = currentFlow;
                     return;
                 }
 
@@ -1112,8 +1118,7 @@ export function Binder(options: ProjectOptions) {
                     scopeTarget,
                     node.name.ui,
                     node,
-                    signature,
-                    node.typeAnnotation);
+                    signature);
             }
         }
 
@@ -1132,19 +1137,13 @@ export function Binder(options: ProjectOptions) {
 
         pushPendingSymbolResolutionFrame();
 
-        // fixme: handle the following gracefully -
-        // there is no guarantee that the annotation has the same param count as the cf signature;
-        const typeAnnotatedParams = node.typeAnnotation && node.typeAnnotation.kind === TypeKind.functionSignature
-            ? node.typeAnnotation.params
-            : null;
-
         // fixme: we also do this in bindFunctionParameter, so we get duplicate nodes in each param's symbol decl list
         for (let i = 0; i < node.params.length; i++) {
             const param = node.params[i];
             const type = signature.params[i]?.paramType || null;
-            const annotatedType = typeAnnotatedParams ? typeAnnotatedParams[i]?.paramType : null;
+            //const annotatedType = typeAnnotatedParams ? typeAnnotatedParams[i]?.paramType : null;
             // we also need the annotation-provided type if it exists; for now it is implicitly null
-            addFreshSymbolToTable(node.containedScope.arguments!, param.uiName, param, type, annotatedType);
+            addFreshSymbolToTable(node.containedScope.arguments!, param.uiName, param, type);
         }
 
         if (!node.fromTag && node.kind === NodeKind.functionDefinition) {

@@ -1906,6 +1906,14 @@ export function Parser(config: ProjectOptions) {
                 }
             }
 
+            if (!isInSomeContext(ParseContext.for) && varModifier && root.kind === NodeKind.identifier) {
+                // we have something like `var foo;`
+                // if there is a final modifier we should mark it as an error
+                // although, lucee does not support final but supports declarations
+                // whereas ACF supports final but does not support declarations
+                return VariableDeclaration(finalModifier, varModifier, root);
+            }
+
             return root;
         }
 
