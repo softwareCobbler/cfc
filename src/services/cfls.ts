@@ -1,5 +1,6 @@
 import * as path from "path";
 
+import type { IREPLACED_AT_BUILD } from "./buildShim";
 import { Project, FileSystem } from "../compiler/project"
 import { ClientAdapter } from "../services/clientAdapter";
 import { CancellationTokenConsumer } from "../compiler/cancellationToken";
@@ -10,6 +11,8 @@ import { BinaryOperator, BinaryOpType, BlockType, FunctionDefinition, NodeKind, 
 import { SourceRange } from "../compiler/scanner";
 import { EngineVersions } from "../compiler/engines";
 import { TypeKind } from "../compiler/types";
+
+declare const REPLACED_AT_BUILD : IREPLACED_AT_BUILD;
 
 function send(msg: CflsResponse) {
     process.send!(msg);
@@ -85,11 +88,9 @@ process.on("message", (msg: CflsRequest) => {
 
 type AbsPath = string;
 
-declare const REPLACED_AT_BUILD : {ClientAdapterModule: string};
-
 function getClientAdapter() : ClientAdapter {
     // adapter module is expected to `export const adapter : ClientAdapter = ...`
-    return require(REPLACED_AT_BUILD.ClientAdapterModule).adapter;
+    return require(REPLACED_AT_BUILD.ClientAdapterModule_StaticRequirePath).adapter;
 }
 
 function LanguageService() {
@@ -318,7 +319,7 @@ function LanguageService() {
                 fileSystem,
                 {
                     parseTypes: config.x_parseTypes,
-                    debug: true,
+                    debug: REPLACED_AT_BUILD.debug,
                     engineVersion: config.engineVersion,
                     withWireboxResolution: config.wireboxResolution,
                     wireboxConfigFileCanonicalAbsPath: wireboxConfigFileAbsPath,

@@ -27,7 +27,7 @@ import {
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard, Mutable } from "./utils";
-import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam } from "./types";
+import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature } from "./types";
 import { Type, UninstantiatedArray, Struct, cfFunctionSignature, cfTypeId, cfUnion, BuiltinType, cfFunctionSignatureParam } from "./types";
 import { Engine } from "./engines";
 import { ProjectOptions } from "./project";
@@ -110,22 +110,20 @@ interface ScannerState {
     artificialEndLimit: number | undefined;
 }
 
-export function Parser(config: ProjectOptions) {
-    function setSourceFile(sourceFile_: SourceFile) {
-        sourceFile = sourceFile_;
-        scanner = sourceFile.scanner;
-        parseContext = ParseContext.none;
-        diagnostics = sourceFile.diagnostics = [];
-        return self_;
-    }
+export function Parser(config: ProjectOptions) {  
+    const parseTypes = config.parseTypes;
+    const debug = config.debug;
+    const engineVersion = config.engineVersion;
 
-    function primeLookahead() {
-        lookahead_ = peek().type;
+    function primePeekCacheAndLookahead() : void {
+        peek0Cache_ = null;
+        const r = peek();
+        lookahead_ = r.type;
     }
 
     function setScannerMode(mode_: ScannerMode) {
         mode = mode_;
-        primeLookahead();
+        primePeekCacheAndLookahead();
         return self_;
     }
 
@@ -135,16 +133,11 @@ export function Parser(config: ProjectOptions) {
     let parseContext : ParseContext;
     let lookahead_ : TokenType;
     let token_ : Token;
+    let peek0Cache_ : {mode: ScannerMode, value: Token} | null = null;
     let lastNonTriviaToken : Token;
     let diagnostics : Diagnostic[] = [];
     let typedefContainer! : Node;
-
-    const parseTypes = config.parseTypes;
-    const debug = config.debug;
-    const engineVersion = config.engineVersion;
-
     let lastDocBlock : {type: Type | null, typedefs: (Typedef | Interfacedef)[], docBlockAttrs: TagAttribute[] } | null = null;
-    
     let parseErrorMsg : string | null = null;
 
     const SpeculationHelper = (function() {
@@ -199,8 +192,6 @@ export function Parser(config: ProjectOptions) {
     })();
 
     const self_ = {
-        setScannerMode,
-        setSourceFile,
         parseTags,
         parseScript,
         parse,
@@ -212,7 +203,17 @@ export function Parser(config: ProjectOptions) {
     /* impl
     /********************************/
     function peek(jump: number = 0) : Token {
-        return scanner.peek(jump, mode);
+        if (jump === 0 && peek0Cache_ !== null && peek0Cache_.mode === mode) {
+            return peek0Cache_.value;
+        }
+
+        const r = scanner.peek(jump, mode);
+
+        if (jump === 0) {
+            peek0Cache_ = {mode: mode, value: r};
+        }
+
+        return r;
     }
 
     function peekChar(jump: number = 0): string {
@@ -232,9 +233,16 @@ export function Parser(config: ProjectOptions) {
      * @returns 
      */
     function next() : Token {
-        const result = scanner.next(mode);
+        let result : Token;
+        if (peek0Cache_ !== null && peek0Cache_.mode === mode) {
+            scanner.advance(peek0Cache_.value.range.size())
+            result = peek0Cache_.value;
+        }
+        else {
+            result = scanner.nextToken(mode);
+        }
         token_ = result;
-        lookahead_ = peek().type;
+        primePeekCacheAndLookahead();
         if (!isInSomeContext(ParseContext.trivia)) {
             lastNonTriviaToken = result;
         }
@@ -244,9 +252,9 @@ export function Parser(config: ProjectOptions) {
     function scanToNextToken(token: TokenType[], endOnOrAfter: "on" | "after" = "on") : void {
         scanner.scanToNext(token, mode);
         if (endOnOrAfter === "after") {
-            scanner.next(mode);
+            scanner.nextToken(mode);
         }
-        primeLookahead();
+        primePeekCacheAndLookahead();
     }
 
     function scanToNextChar(char: string, endOnOrAfter: "on" | "after" = "on") : void {
@@ -254,32 +262,32 @@ export function Parser(config: ProjectOptions) {
         if (endOnOrAfter === "after") {
             scanner.advance();
         }
-        primeLookahead();
+        primePeekCacheAndLookahead();
     }
 
     function scanTagName() : Token | null {
         const result = scanner.scanTagName();
         if (result && !isInSomeContext(ParseContext.trivia)) lastNonTriviaToken = result;
-        primeLookahead();
+        primePeekCacheAndLookahead();
         return result;
     }
 
     function scanTagAttributeName(allowDot = false) {
         const result = scanner.scanTagAttributeName(allowDot);
         if (result && !isInSomeContext(ParseContext.trivia)) lastNonTriviaToken = result;
-        primeLookahead();
+        primePeekCacheAndLookahead();
         return result;
     }
 
     function scanToNextTagCommentToken() {
         scanner.scanToNextTagCommentToken();
-        primeLookahead();
+        primePeekCacheAndLookahead();
     }
 
     function scanLexemeLikeStructKey() : Token | null {
         const result = scanner.scanLexemeLikeStructKey();
         if (result && !isInSomeContext(ParseContext.trivia)) lastNonTriviaToken = result;
-        primeLookahead();
+        primePeekCacheAndLookahead();
         return result;
     }
 
@@ -290,19 +298,19 @@ export function Parser(config: ProjectOptions) {
     function scanIdentifier() : Token | null {
         const result = scanner.scanIdentifier();
         if (result && !isInSomeContext(ParseContext.trivia)) lastNonTriviaToken = result;
-        primeLookahead();
+        primePeekCacheAndLookahead();
         return result;
     }
 
     function scanDocBlockAttrName() : string | null {
         const result = scanner.scanDocBlockAttrName();
-        primeLookahead();
+        primePeekCacheAndLookahead();
         return result;
     }
 
     function scanDocBlockAttrText() : string {
         const result = scanner.scanDocBlockAttrText();
-        primeLookahead();
+        primePeekCacheAndLookahead();
         return result;
     }
 
@@ -331,7 +339,7 @@ export function Parser(config: ProjectOptions) {
         else {
             scanner.clearArtificalEndLimit();
         }
-        primeLookahead();
+        primePeekCacheAndLookahead();
     }
 
     function tagMode() : boolean {
@@ -915,10 +923,34 @@ export function Parser(config: ProjectOptions) {
         else return null;
     }
 
-    // fixme: we can supply a filetype, but have to set the sourceFile with an earlier call?
-    function parse(cfFileType: CfFileType = sourceFile?.cfFileType || CfFileType.cfm) : Node[] {
-        const savedContext = parseContext;
+    function acquire(sourceFile_: SourceFile) {
+        sourceFile = sourceFile_;
         typedefContainer = sourceFile;
+        scanner = sourceFile.scanner;
+        parseContext = ParseContext.none;
+        diagnostics = sourceFile.diagnostics = [];
+    }
+
+    function release() : void {
+        (scanner as any) = undefined;
+        (sourceFile as any) = undefined;
+        (mode as any) = undefined;
+        parseContext = ParseContext.none;
+        (lookahead_ as any)  = undefined;
+        (token_ as any) = undefined;
+        peek0Cache_ = null;
+        (lastNonTriviaToken as any) = undefined;
+        diagnostics = [];
+        (typedefContainer as any) = undefined;
+        lastDocBlock = null;
+        parseErrorMsg = null;
+    }
+
+    // fixme: we can supply a filetype, but have to set the sourceFile with an earlier call?
+    function parse(sourceFile_: SourceFile) : void {
+        acquire(sourceFile_);
+
+        const cfFileType = sourceFile.cfFileType || CfFileType.cfm
 
         switch (cfFileType) {
             case CfFileType.cfm:
@@ -935,7 +967,7 @@ export function Parser(config: ProjectOptions) {
                     // fixme:
                     // we don't parse interface files yet, mostly because we don't parse function declarations
                     // we also don't later check that a cfc correctly implements the interfaces it says it implements, either
-                    return [];
+                    return;
                     //updateParseContext(ParseContext.interface);
                 }
                 else {
@@ -999,8 +1031,7 @@ export function Parser(config: ProjectOptions) {
             }
         }
 
-        parseContext = savedContext;
-        return sourceFile.content;
+        release();
     }
 
     function parseScript() : Node[] {
@@ -4434,7 +4465,7 @@ export function Parser(config: ProjectOptions) {
                         break;
                     }
                     else {
-                        result = fixme__parseArrowFunctionTypeAssumingFirstParenIsAlreadyParsed();
+                        result = fixme__parseArrowFunctionTypeAssumingFirstParenIsAlreadyParsed(/*asGenericFunction*/ false);
                         break;
                     }
                 }
@@ -4515,8 +4546,7 @@ export function Parser(config: ProjectOptions) {
                     const typeParams = parseList(ParseContext.typeParamList, parseTypeParamListElement);
                     parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);
                     parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
-                    const functionType = fixme__parseArrowFunctionTypeAssumingFirstParenIsAlreadyParsed();
-                    return TypeConstructor(typeParams, functionType); // don't do intersections or unions with type functions
+                    return fixme__parseArrowFunctionTypeAssumingFirstParenIsAlreadyParsed(/*asGenericFunction*/true, typeParams);
                 }
                 case TokenType.QUOTE_SINGLE:
                 case TokenType.QUOTE_DOUBLE: {
@@ -4546,12 +4576,19 @@ export function Parser(config: ProjectOptions) {
             return result;
         }
 
-        function fixme__parseArrowFunctionTypeAssumingFirstParenIsAlreadyParsed() {
+        function fixme__parseArrowFunctionTypeAssumingFirstParenIsAlreadyParsed(asGenericFunction: true, typeParams: cfTypeConstructorParam[]) : cfGenericFunctionSignature;
+        function fixme__parseArrowFunctionTypeAssumingFirstParenIsAlreadyParsed(asGenericFunction: false) : cfFunctionSignature;
+        function fixme__parseArrowFunctionTypeAssumingFirstParenIsAlreadyParsed(asGenericFunction: boolean, typeParams?: cfTypeConstructorParam[]) {
             const params = parseFunctionTypeParametersArrowLike();
             parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
             parseExpectedTerminal(TokenType.EQUAL_RIGHT_ANGLE, ParseOptions.withTrivia);
             const returnType = parseType();
-            return cfFunctionSignature("", params, returnType, []);
+            if (asGenericFunction) {
+                return cfGenericFunctionSignature("", typeParams!, params, returnType, []);
+            }
+            else {
+                return cfFunctionSignature("", params, returnType, []);
+            }
         }
 
         // in `type T = | A` --- we have a union of one element, which gets collapsed to A anyway (and we'll actually just parse exactly A), so this seems legit

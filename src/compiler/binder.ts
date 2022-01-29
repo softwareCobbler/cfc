@@ -15,14 +15,11 @@ export function Binder(options: ProjectOptions) {
     let currentContainer : NodeWithScope;
     let scanner : Scanner;
     let diagnostics: Diagnostic[];
+    let nodeMap : Map<NodeId, Node>;
     let diagnosticIssuanceMap! : TupleKeyedMap<[number, number, string], Diagnostic>;
-    
-    let currentFlow! : Flow;
-    let currentJumpTargetPredecessors : Flow[] = [];
-    
-    let nodeMap = new Map<NodeId, Node>();
+    let currentFlow : Flow;
+    let currentJumpTargetPredecessors : Flow[];
     let withPropertyAccessors = false;
-
     let pendingSymbolResolutionStack : Map<string, Set<SymbolTable>>[] = [];
 
     function bind(sourceFile_: SourceFile) {
@@ -30,18 +27,18 @@ export function Binder(options: ProjectOptions) {
             bindDeclarationFile(sourceFile_);
             return;
         }
-
+        
+        sourceFile = sourceFile_ as NodeWithScope<SourceFile>;
+        currentContainer = sourceFile_;
         scanner = sourceFile_.scanner;
-
-        diagnostics = sourceFile_.diagnostics; // can probably remove this assignment, and assign from issuanceMap into sourceFile at end of this function
+        diagnostics = sourceFile_.diagnostics;
+        nodeMap = sourceFile_.nodeMap;
         diagnosticIssuanceMap = TupleKeyedMap();
-
-        nodeMap = new Map<NodeId, Node>();
+        currentFlow = freshFlow([], FlowType.start);
+        currentJumpTargetPredecessors = [];
         withPropertyAccessors = false;
         pendingSymbolResolutionStack = [new Map()];
-
-        sourceFile = sourceFile_ as NodeWithScope<SourceFile>;
-
+        
         sourceFile.containedScope = {
             parentContainer: null,
             typeinfo: sourceFile.containedScope.typeinfo, // parse phase will have provided typedefs
@@ -52,7 +49,7 @@ export function Binder(options: ProjectOptions) {
             cgi: new Map<string, SymTabEntry>(),
         };
 
-        if (sourceFile_.cfFileType === CfFileType.cfc) {
+        if (sourceFile.cfFileType === CfFileType.cfc) {
             sourceFile.containedScope.this = new Map<string, SymTabEntry>();
             sourceFile.containedScope.super = new Map<string, SymTabEntry>();
             const componentAttrs = getComponentAttrs(sourceFile);
@@ -70,15 +67,23 @@ export function Binder(options: ProjectOptions) {
             }
         }
 
-        currentFlow = freshFlow([], FlowType.default);
-
-        if (sourceFile_.cfFileType === CfFileType.cfc) {
+        if (sourceFile.cfFileType === CfFileType.cfc) {
             sourceFile.containedScope.this = new Map<string, SymTabEntry>();
         }
 
-        currentContainer = sourceFile;
-        bindTypeAndInterfacedefsForContainer(sourceFile_);
-        bindList(sourceFile_.content, sourceFile_);
+        bindTypeAndInterfacedefsForContainer(sourceFile);
+        bindList(sourceFile.content, sourceFile);
+
+        (sourceFile as any) = undefined;
+        (currentContainer as any) = undefined;
+        (scanner as any) = undefined;
+        (diagnostics as any) = undefined;
+        (diagnosticIssuanceMap as any) = undefined;
+        (currentFlow as any) = undefined;
+        (currentJumpTargetPredecessors as any) = undefined;
+        (nodeMap as any) = undefined;
+        (withPropertyAccessors as any) = undefined;
+        (pendingSymbolResolutionStack as any) = undefined;
     }
 
     function mergeFlowsToJumpTarget(...flows: (Flow|undefined)[]) {
@@ -1048,9 +1053,7 @@ export function Binder(options: ProjectOptions) {
     }
 
     // fixme: make more explicit that we grab signatures here for cfc member functions
-    function bindFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {
-        bindTypeAndInterfacedefsForContainer(node);
-        
+    function bindFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {      
         if (node.kind === NodeKind.arrowFunctionDefinition
             && node.params.length === 1 && !node.parens
             && !supports.noParenSingleArgArrowFunction(engineVersion)
@@ -1124,6 +1127,8 @@ export function Binder(options: ProjectOptions) {
             arguments: new Map<string, SymTabEntry>(),
             __transient: new Map<string, SymTabEntry>(),
         };
+
+        bindTypeAndInterfacedefsForContainer(node);
 
         pushPendingSymbolResolutionFrame();
 
@@ -1537,12 +1542,7 @@ export function Binder(options: ProjectOptions) {
         issueDiagnosticAtSpan(range.fromInclusive, range.toExclusive, msg, kind);
     }
 
-    const self = {
-        bind,
-        getNodeMap: () => <ReadonlyMap<NodeId, Node>>nodeMap,
-    }
-
-    return self;
+    return { bind };
 }
 
 export type Binder = ReturnType<typeof Binder>;

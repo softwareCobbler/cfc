@@ -1,6 +1,8 @@
-tsc --build src/compiler &&    \
-tsc --build src/services &&    \
-tsc --build src/lang-server && \
+#!/usr/bin/env bash
+
+tsc --build src/compiler
+tsc --build src/services
+tsc --build src/lang-server
 
 # actual language tool
 # should run in its own process because it will block on long parses or etc.
@@ -10,9 +12,10 @@ tsc --build src/lang-server && \
     --format=cjs \
     --external:vscode \
     --outfile=./cflsp-vscode/out/cfls-service.js \
-    --define:REPLACED_AT_BUILD.ClientAdapterModule=\"../lang-server/server/src/vscode-adapter\" \
-    --sourcemap \
-&& \
+    --define:REPLACED_AT_BUILD.ClientAdapterModule_StaticRequirePath=\"../lang-server/server/src/vscode-adapter\" \
+    --define:REPLACED_AT_BUILD.debug=$DEBUG \
+    --sourcemap
+
 
 # "server frontend", handles LSP and asks language tool for diagnostics and etc.
 ./node_modules/esbuild/bin/esbuild \
@@ -21,8 +24,8 @@ tsc --build src/lang-server && \
     --format=cjs \
     --external:vscode \
     --outfile=./cflsp-vscode/out/server.js \
-    --sourcemap \
-&& \
+    --define:REPLACED_AT_BUILD.debug=$DEBUG \
+    --sourcemap
 
 # vscode extension entry point, kicks off the "server frontend" in its own process
 # vscode manages the LSP here, crafting requests as a result of user interactions with the editor
@@ -33,7 +36,8 @@ tsc --build src/lang-server && \
     --platform=node \
     --external:vscode \
     --outfile=./cflsp-vscode/out/cflsp.js \
-    --sourcemap \
-&& \
+    --sourcemap
 
 cp src/lang-server/server/src/runtimelib/lib.cf2018.d.cfm ./cflsp-vscode/out/lib.cf2018.d.cfm
+cp src/grammar.json cflsp-vscode/out/grammar.json
+

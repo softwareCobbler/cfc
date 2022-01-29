@@ -1,7 +1,7 @@
 import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, hasDeclaredType, UnreachableFlow, DiagnosticKind, TagAttribute, SymbolId } from "./node";
 import { CfcResolution, CfcResolver, ComponentResolutionArgs, EngineSymbolResolver, LibTypeResolver, ProjectOptions } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
-import { cfFunctionSignature, Struct, cfUnion, BuiltinType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, Type, stringifyType, cfFunctionSignatureParam, cfFunctionOverloadSet, cfTypeId, SymbolTableTypeWrapper, Cfc, Interface, createType, createLiteralType, TypeConstructor, typeFromJavaLikeTypename, structurallyCompareTypes, TypeKind, isStructLike, cfArray, cfStructLike, isStructLikeOrArray } from "./types";
+import { cfFunctionSignature, Struct, cfUnion, BuiltinType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, Type, stringifyType, cfFunctionSignatureParam, cfFunctionOverloadSet, cfTypeId, SymbolTableTypeWrapper, Cfc, Interface, createType, createLiteralType, typeFromJavaLikeTypename, structurallyCompareTypes, TypeKind, isStructLike, cfArray, cfStructLike, isStructLikeOrArray, cfGenericFunctionSignature } from "./types";
 import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, functionDefinitionHasUserSpecifiedReturnType, getAttributeValue, getComponentAttrs, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionNameTerminalErrorNode, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isLiteralExpr, isNamedFunction, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue, tryGetCfcMemberFunctionDefinition } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol, TupleKeyedWeakMap } from "./utils";
 import { Engine, supports } from "./engines";
@@ -30,27 +30,40 @@ export function Checker(options: ProjectOptions) {
     const CHECK_FLOW_TYPES = options.checkFlowTypes;
     const debug = Debug();
 
-    let sourceFile!: SourceFile;
-    let scanner!: Scanner;
-    let diagnostics!: Diagnostic[];
-    let noUndefinedVars = false;
+    let sourceFile: SourceFile;
+    let scanner: Scanner;
+    let diagnostics: Diagnostic[];
     let returnTypes: Type[] = [];
     let flowBecameUnreachable = false;
-    let warnOnUndefined!: boolean;
-    let checkerStack! : Node[];
+    let warnOnUndefined: boolean;
+    let checkerStack : Node[];
     let forcedReturnTypes : WeakMap<Node, Type>;
 
     function check(sourceFile_: SourceFile) {
         // we're using the Checker as a singleton, and checking one source file might trigger checking another
         // so, we have to save state before descending into the next check
         const savedSourceFile = sourceFile;
+        const savedScanner = scanner;
+        const savedDiagnostics = diagnostics;
+        const savedReturnTypes = returnTypes;
+        const savedFlowBecameUnreachable = flowBecameUnreachable;
         const savedWarnOnUndefined = warnOnUndefined;
         const savedCheckerStack = checkerStack;
         const savedForcedReturnTypes = forcedReturnTypes;
-        
+
+        sourceFile = sourceFile_;
+        scanner = sourceFile_.scanner;
+        diagnostics = sourceFile_.diagnostics;
+        returnTypes = savedReturnTypes;
+        flowBecameUnreachable = savedFlowBecameUnreachable;
+        warnOnUndefined = savedWarnOnUndefined;
+        checkerStack = savedCheckerStack;
+        forcedReturnTypes = savedForcedReturnTypes;
+
         sourceFile = sourceFile_;
         scanner = sourceFile.scanner;
         diagnostics = sourceFile.diagnostics;
+        flowBecameUnreachable = false;
         warnOnUndefined = false;
         checkerStack = [];
         forcedReturnTypes = new WeakMap();
@@ -74,8 +87,10 @@ export function Checker(options: ProjectOptions) {
         // }
 
         sourceFile = savedSourceFile;
-        scanner = savedSourceFile?.scanner;
-        diagnostics = savedSourceFile?.diagnostics;
+        scanner = savedScanner;
+        diagnostics = savedDiagnostics;
+        returnTypes = savedReturnTypes;
+        flowBecameUnreachable = savedFlowBecameUnreachable;
         warnOnUndefined = savedWarnOnUndefined;
         checkerStack = savedCheckerStack;
         forcedReturnTypes = savedForcedReturnTypes;
@@ -141,10 +156,6 @@ export function Checker(options: ProjectOptions) {
         }
     }
     */
-
-    function setNoUndefinedVars(newVal: boolean) : void {
-        noUndefinedVars = newVal;
-    }
 
     function issueDiagnosticAtRange(range: SourceRange, msg: string, kind = DiagnosticKind.error) : void {
         const freshDiagnostic : Diagnostic = {
@@ -361,7 +372,7 @@ export function Checker(options: ProjectOptions) {
 
                     const mappings = sourceFile.libRefs.get("<<magic/wirebox>>")!.containedScope.typeinfo.mergedInterfaces.get("Wirebox")?.members.get("mappings");
                     const targetSymbol = sourceFile.containedScope.variables!.get(nameStringVal);
-                    if (!mappings || !targetSymbol || mappings.type.kind !== TypeKind.interface) return;
+                    if (!mappings || !targetSymbol || mappings.type.kind !== TypeKind.struct) return;
 
                     const cfc = mappings.type.members.get(injectStringVal);
                     if (!cfc) return;
@@ -2022,7 +2033,7 @@ export function Checker(options: ProjectOptions) {
             if (isStructLike(parentType)) {
                 const name = node.property.token.text;
                 if (isStructLike(parentType)) {
-                    if (!parentType.members.has(name) && noUndefinedVars) {
+                    if (!parentType.members.has(name) && warnOnUndefined) {
                         //typeErrorAtNode(node.property, `Property '${name}' does not exist on parent type.`);
                     }
                     node.flags |= NodeFlags.checkerError;
@@ -2572,7 +2583,7 @@ export function Checker(options: ProjectOptions) {
     //
     const evaluateType = (function() {
         type NodeTrie = Map<Type, NodeTrie> & Map<null, Type | "PENDING"> ;
-        const typeConstructorInvocationCacheTrie : NodeTrie = new Map();
+        let typeConstructorInvocationCacheTrie : NodeTrie = new Map();
         
         const enum TypeCache_Status { resolved, resolving, noCache };
         type TypeCache_Resolution = TypeCache_Cached | TypeCache_NoCache;
@@ -2668,104 +2679,11 @@ export function Checker(options: ProjectOptions) {
         function evaluateType(context: Node, type: Type | null, typeParamMap: ReadonlyMap<string, Type> = type?.capturedContext ?? new Map(), partiallyApplyGenericFunctionSigs = false) : Type {
             let depth = 0;
 
-            return typeWorker(type, typeParamMap, partiallyApplyGenericFunctionSigs);
+            const result = typeWorker(type, typeParamMap, partiallyApplyGenericFunctionSigs);
 
-            // // here args[n] should already have been evaluated
-            // function invokeTypeConstructor(typeFunction: TypeConstructor, args: readonly _Type[]) : _Type {
-            //     if (args.includes(SyntheticType.never)) {
-            //         return SyntheticType.never;
-            //     }
+            typeConstructorInvocationCacheTrie = new Map();
 
-            //     try {
-            //         depth++;
-
-            //         if (typeFunction.params.length !== args.length) {
-            //             // hit this once by writing @type U<T>
-            //             // when only @type T<U> was valid;
-            //             // need some type checking of the type system
-            //             throw "args.length !== typeFunction.params.length"
-            //         }
-                
-            //         const cached = getCachedTypeConstructorInvocation(typeFunction, args);
-            //         if (cached.status === TypeCache_Status.resolved) {
-            //             return cached.value;
-            //         }
-                
-            //         const typeParamMap = new Map(typeFunction.capturedParams.entries());
-            //         // extend constructor's captured environment with the argument list
-            //         for (let i = 0; i < typeFunction.params.length; i++) {
-            //             typeParamMap.set(typeFunction.params[i].name, args[i]);
-            //         }
-                
-            //         // say our current evaluation is for `T<U>`
-            //         // set `T<U>` to "PENDING" so that we have something to check for to not recurse infinitely on something like `T<U> = {foo: T<U>}`
-            //         setCachedTypeConstructorInvocation(typeFunction, args, "PENDING");
-            //         const result = evaluateType(context, typeFunction.body, typeParamMap, depth+1);
-            //         setCachedTypeConstructorInvocation(typeFunction, args, result);
-            
-            //         if (isTypeConstructor(result)) {
-            //             // if a type constructor returned a type constructor, extend the new type constructor's environment
-            //             // with the parent's environment + the args to the parent's invocation
-            //             // inner most names shadows outer names if there are name conflicts
-            //             // result.capturedParams = typeParamMap;
-            //         }
-            //         return result;
-            //     }
-            //     finally {
-            //         depth--;
-            //     }
-            // }
-            
-            // function evaluateIntersection(types: _Type[]) : _Type {
-            //     if (types.includes(SyntheticType.never)) {
-            //         return SyntheticType.never;
-            //     }
-
-            //     try {
-            //         depth++;
-
-            //         /*
-            //         if (left.typeKind === TypeKind.struct && right.typeKind === TypeKind.struct) {
-            //             let longest = left.membersMap.size > right.membersMap.size ? left.membersMap : right.membersMap;
-            //             let shortest = longest === left.membersMap ? right.membersMap : left.membersMap;
-                
-            //             const remainingLongestKeys = new Set([...longest.keys()]);
-            //             const result = new Map<string, SymTabEntry>();
-            //             for (const key of shortest.keys()) {
-            //                 remainingLongestKeys.delete(key);
-            //                 const evaluatedShortest = typeWorker(shortest.get(key)!.type);
-            //                 const evaluatedLongest = longest.has(key) ? typeWorker(longest.get(key)!.type) : null;
-            //                 if (!evaluatedLongest) {
-            //                     result.set(key, {uiName: shortest.get(key)!.uiName, canonicalName: key, declarations: null, userType: null, inferredType: null, type: evaluatedShortest});
-            //                     continue;
-            //                 }
-            //                 const intersect = evaluateIntersection(evaluatedShortest, evaluatedLongest);
-            //                 if (intersect.typeKind === TypeKind.never) {
-            //                     return cfNever();
-            //                 }
-            //                 else {
-            //                     result.set(key, {uiName: longest.get(key)!.uiName, canonicalName: key, declarations: null, userType: null, inferredType: null, type: evaluatedLongest});
-            //                 }
-            //             }
-                
-            //             for (const key of remainingLongestKeys) {
-            //                 result.set(key, longest.get(key)!);
-            //             }
-                
-            //             return SyntheticType.struct(result);
-
-            //         }
-            //         else {
-            //             // only valid type operands to the "&" type operator are {}
-            //             // which is not the "empty interface" but just a shorthand for "struct"
-            //             return SyntheticType.never;
-            //         }*/
-            //         return cfIntersection(...types);
-            //     }
-            //     finally {
-            //         depth--;
-            //     }
-            // }
+            return result;
 
             function typeWorker(type: Readonly<Type> | null,
                                 typeParamMap: ReadonlyMap<string, Type> | undefined = type?.capturedContext,
@@ -2849,8 +2767,9 @@ export function Checker(options: ProjectOptions) {
                         originalTypeWasConcrete = originalTypeWasConcrete && (returns === sig.returns);
                         
                         if (type.kind === TypeKind.genericFunctionSignature || !originalTypeWasConcrete) {
-                            const freshSignature = cfFunctionSignature(sig.uiName, params, returns, sig.attrs);
-                            return type.kind === TypeKind.genericFunctionSignature ? TypeConstructor(type.typeParams, freshSignature) : freshSignature;
+                            return type.kind === TypeKind.genericFunctionSignature
+                                ? cfGenericFunctionSignature(sig.uiName, type.typeParams, params, returns, sig.attrs)
+                                : cfFunctionSignature(sig.uiName, params, returns, sig.attrs);
                         }
                         else {
                             return type;
@@ -2911,7 +2830,7 @@ export function Checker(options: ProjectOptions) {
                                     if (constructor.typeParams) {
                                         for (let i = 0; i < constructor.typeParams?.length ?? 0; i++) {
                                             const name = constructor.typeParams[i].name;
-                                            const argType = evaluateType(context, type.args[i], typeParamMap);
+                                            const argType = typeWorker(type.args[i], typeParamMap);
                                             mapBuilder.set(name, argType);
                                         }
                                     }
@@ -3062,7 +2981,6 @@ export function Checker(options: ProjectOptions) {
         check,
         getCachedEvaluatedNodeType: getCachedEvaluatedNodeTypeImpl,
         getSymbol: getSymbolImpl,
-        setNoUndefinedVars,
         install,
     }
 }

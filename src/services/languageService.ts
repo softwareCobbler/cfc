@@ -3,6 +3,9 @@ import { CancellationToken } from "../compiler/cancellationToken";
 import { CflsResponse, CflsResponseType, CflsRequest, CflsRequestType, CflsConfig, InitArgs } from "./cflsTypes";
 import { ClientAdapter } from "./clientAdapter";
 import type { AbsPath } from "../compiler/utils";
+import type { IREPLACED_AT_BUILD } from "./buildShim";
+
+declare const REPLACED_AT_BUILD : IREPLACED_AT_BUILD;
 
 interface EventHandlers {
     diagnostics: (fsPath: string, diagnostics: unknown[]) => void
@@ -41,7 +44,10 @@ export function LanguageService<T extends ClientAdapter>(serverFilePath: AbsPath
 
     function fork(freshConfig: InitArgs["config"], workspaceRoots: AbsPath[]) : Promise<void> {
         config = freshConfig;
-        server = child_process.fork(serverFilePath, {execArgv: ["--nolazy", "--inspect=6012", /*"--inspect-brk"*/]});
+        const forkArgs = REPLACED_AT_BUILD.debug
+            ? {execArgv: ["--nolazy", "--inspect=6012", /*"--inspect-brk"*/]}
+            : {};
+        server = child_process.fork(serverFilePath, forkArgs);
 
         server.on("message", (msg: CflsResponse) => {
             if (messageId.current() === msg.id) {
@@ -96,6 +102,9 @@ export function LanguageService<T extends ClientAdapter>(serverFilePath: AbsPath
         clearRequestTimeout();
         const task = taskQueue.shift();
         if (task) {
+            if (task.type === CflsRequestType.diagnostics) {
+                taskQueue = taskQueue.filter(task => task.type !== CflsRequestType.diagnostics)
+            }
             currentTask = task;
             requestTimeoutId = setTimeout(noResponseAndRunNext, task.timeout_ms ?? 5000);
             task.task();
@@ -145,7 +154,7 @@ export function LanguageService<T extends ClientAdapter>(serverFilePath: AbsPath
                         cancellationToken.reset();
                         taskDef.task()
                     }
-                }];
+                }, ...taskQueue.filter((task) => task.type !== CflsRequestType.diagnostics)]; // do we need to tell the language server that we possibly dropped some requests?
 
                 cancellationToken.requestCancellation();
             }

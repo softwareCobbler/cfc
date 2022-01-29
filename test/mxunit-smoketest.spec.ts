@@ -270,7 +270,7 @@ describe("MX-Unit smoke test", () => {
 
     const libPath = path.resolve("./src/lang-server/server/src/runtimelib/lib.cf2018.d.cfm");
     const stdLib = SourceFile(libPath , CfFileType.dCfm, fs.readFileSync(libPath));
-    parser.setSourceFile(stdLib).parse();
+    parser.parse(stdLib);
     binder.bind(stdLib);
     
     for (const fileBaseName of Object.keys(expectedDiagnosticCountByFile)) {
@@ -280,7 +280,7 @@ describe("MX-Unit smoke test", () => {
             const absPath = path.resolve(__dirname, fileBaseName);
             const textBuffer = fs.readFileSync(absPath);
             const sourceFile = SourceFile(absPath, cfmOrCfc(absPath)!, textBuffer);
-            parser.setSourceFile(sourceFile).parse();
+            parser.parse(sourceFile);
 
             flattenTree(sourceFile); // just make sure it doesn't throw
             binder.bind(sourceFile);

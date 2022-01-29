@@ -4,8 +4,10 @@ import { exhaustiveCaseGuard, getAttributeValue, getTriviallyComputableString, M
 import * as path from "path"; // !! for stringifying CFC types...do we really want this dependency here?
 import { ComponentSpecifier } from "./project";
 
-let debugTypeModule = true;
-debugTypeModule;
+let debugTypeModule = false;
+export function setDebug(b: boolean) {
+    debugTypeModule = b;
+}
 
 export type Type =
     | cfAny

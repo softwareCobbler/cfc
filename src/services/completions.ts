@@ -225,16 +225,16 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
     if (callExpr) {
         const sig = checker.getCachedEvaluatedNodeType(callExpr.left, parsedSourceFile);
         if (sig.kind === TypeKind.functionOverloadSet) return [];
-        if (!sig || sig.kind !== TypeKind.functionSignature) return [];
+        if (sig.kind === TypeKind.functionSignature) {
+            const yetToBeUsedParams = new Set<string>(sig.params.map(param => param.canonicalName));
+            for (const arg of callExpr.args) {
+                const argName = stringifyCallExprArgName(arg);
+                if (argName) yetToBeUsedParams.delete(argName.canonical);
+            }
 
-        const yetToBeUsedParams = new Set<string>(sig.params.map(param => param.canonicalName));
-        for (const arg of callExpr.args) {
-            const argName = stringifyCallExprArgName(arg);
-            if (argName) yetToBeUsedParams.delete(argName.canonical);
+            const detail = callExpr.parent?.kind === NodeKind.new ? "named constructor argument" : "named function argument";
+            result.push(...namedCallArgumentCompletions(sig.params, yetToBeUsedParams, detail));
         }
-
-        const detail = callExpr.parent?.kind === NodeKind.new ? "named constructor argument" : "named function argument";
-        return namedCallArgumentCompletions(sig.params, yetToBeUsedParams, detail);
     }
 
     if (node.parent?.kind === NodeKind.indexedAccessChainElement) {

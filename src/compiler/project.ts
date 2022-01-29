@@ -4,7 +4,7 @@ import * as path from "path";
 import { Binder } from "./binder";
 import { Checker } from "./checker";
 import { EngineVersion } from "./engines";
-import { BlockType, CallExpression, mergeRanges, Node, NodeId, NodeKind, SourceFile, StatementType, SymTabEntry, setDebug as setNodeFactoryDebug, DiagnosticKind } from "./node";
+import { BlockType, CallExpression, mergeRanges, Node, NodeId, NodeKind, SourceFile, StatementType, SymTabEntry, DiagnosticKind, resetSourceFileInPlace } from "./node";
 import { Parser } from "./parser";
 import { CfFileType, SourceRange } from "./scanner";
 import { cfFunctionOverloadSet, cfFunctionSignatureParam, Interface, createLiteralType, Type, Struct, CfcLookup } from "./types";
@@ -12,6 +12,9 @@ import { cfFunctionOverloadSet, cfFunctionSignatureParam, Interface, createLiter
 import { isNamedFunction, cfmOrCfc, findNodeInFlatSourceMap, flattenTree, getAttributeValue, getComponentAttrs, getComponentBlock, getTriviallyComputableString, NodeSourceMap, visit } from "./utils";
 
 import { CancellationException, CancellationTokenConsumer } from "./cancellationToken";
+
+import { setDebug as setNodeModuleDebug } from "./node";
+import { setDebug as setTypeModuleDebug } from "./node";
 
 interface CachedFile {
     parsedSourceFile: SourceFile,
@@ -207,8 +210,8 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     const heritageCircularityDetector = new Set<string>();
 
     if (options.debug) {
-        setNodeFactoryDebug(true);
-        // checker.setDebug(true);
+        setNodeModuleDebug(true);
+        setTypeModuleDebug(true);
     }
 
     checker.install({CfcResolver, EngineSymbolResolver, LibTypeResolver});
@@ -226,9 +229,8 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
 
     function parseBindCheckWorker(sourceFile: SourceFile) : DevTimingInfo {
         try {
-            parser.setSourceFile(sourceFile);
             const parseStart = new Date().getTime();
-            parser.parse();
+            parser.parse(sourceFile);
             const parseElapsed = new Date().getTime() - parseStart;
 
             if (engineLib && engineLib.parsedSourceFile !== sourceFile) {
@@ -239,12 +241,6 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             binder.bind(sourceFile);
             const bindElapsed = new Date().getTime() - bindStart;
 
-            // (nodeMap is mapping from nodeId to node, helpful for flat list of terminal nodes back to their tree position)
-            // note that if we ascend into a parent cfc, we'll run another bind, which would destroy
-            // the node map as it is now unless we get a ref to it now
-            // fix this api
-            const nodeMap = binder.getNodeMap();
-            
             maybeFollowParentComponents(sourceFile);
 
             // do before checking so resolving a self-referential cfc in the checker works
@@ -252,7 +248,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             files.set(canonicalizePath(sourceFile.absPath), {
                 parsedSourceFile: sourceFile,
                 flatTree: flattenTree(sourceFile),
-                nodeMap
+                nodeMap: sourceFile.nodeMap
             });
 
             const checkStart = new Date().getTime();
@@ -416,7 +412,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
      * on case-sensitive systems, and all lower case on case-sensitive
      */
     function canonicalizePath<T extends string | null | undefined>(path: T) : T extends string ? string : undefined {
-        if (!path) return undefined as any;
+        if (typeof path !== "string") return undefined as any;
         return fileSystem.caseSensitive ? path : path.toLowerCase() as any;
     }
 
@@ -485,7 +481,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         }
 
         const sourceFile = cache.parsedSourceFile;
-        sourceFile.resetInPlaceWithNewSource(newSource);
+        resetSourceFileInPlace(sourceFile, newSource);
 
         return parseBindCheckWorker(sourceFile);
     }

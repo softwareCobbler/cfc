@@ -28,7 +28,7 @@ const binder = Binder(options);
 
 function assertDiagnosticsCount(text: string, cfFileType: CfFileType, count: number) {
     const sourceFile = SourceFile("", cfFileType, text);
-    parser.setSourceFile(sourceFile).parse(cfFileType);
+    parser.parse(sourceFile);
     binder.bind(sourceFile);
     flattenTree(sourceFile); // just checking that it doesn't throw
     assert.strictEqual(sourceFile.diagnostics.length, count, `${count} diagnostics emitted`);
@@ -98,8 +98,7 @@ describe("general smoke test for particular constructs", () => {
                 }
             </cfscript>`;
         const sourceFile = NilCfm(string);
-        parser.setSourceFile(sourceFile);
-        parser.parse();
+        parser.parse(sourceFile);
         flattenTree(sourceFile);
     });
     it("should accept 8 of 9 possible indexed access expression (dot|trivia) configurations", () => {
@@ -121,10 +120,10 @@ describe("general smoke test for particular constructs", () => {
         const completionsTestCase = TestLoader.loadCompletionAtTest("./test/sourcefiles/arguments_lookup.cfc");
 
         const sourceFile = NilCfc(completionsTestCase.sourceText);
-        parser.setSourceFile(sourceFile).parse();
+        parser.parse(sourceFile);
         binder.bind(sourceFile);
         const flatSourceMap = flattenTree(sourceFile);
-        const nodeMap = binder.getNodeMap();
+        const nodeMap = sourceFile.nodeMap;
 
         const node = findNodeInFlatSourceMap(flatSourceMap, nodeMap, completionsTestCase.index);
         assert.strictEqual(node?.kind, NodeKind.terminal, "found node is a terminal");
@@ -135,7 +134,7 @@ describe("general smoke test for particular constructs", () => {
     });
     it("Should not throw error on tree-flatten of arrow function with missing expression after fat arrow", () => {
         const sourceFile = NilCfm("<cfscript>foo = bar((row) => )</cfscript>");
-        parser.setSourceFile(sourceFile).parse();
+        parser.parse(sourceFile);
         binder.bind(sourceFile);
         flattenTree(sourceFile);
     });
@@ -231,10 +230,10 @@ describe("general smoke test for particular constructs", () => {
         const completionsTestCase = TestLoader.loadCompletionAtTest("./test/sourcefiles/tree-flatten-1.cfm");
 
         const sourceFile = NilCfm(completionsTestCase.sourceText);
-        parser.setSourceFile(sourceFile).parse();
+        parser.parse(sourceFile);
         binder.bind(sourceFile);
         const flatSourceMap = flattenTree(sourceFile);
-        const nodeMap = binder.getNodeMap();
+        const nodeMap = sourceFile.nodeMap;
 
         const node = findNodeInFlatSourceMap(flatSourceMap, nodeMap, completionsTestCase.index);
         assert.strictEqual(node?.parent?.kind, NodeKind.dottedPath);

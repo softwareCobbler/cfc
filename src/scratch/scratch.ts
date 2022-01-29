@@ -24,7 +24,9 @@ function projectFiddle() {
                         }
                     }`,
                 "lib.d.cfm": `
-                    @!interface Array<T> { MARKER: {}[] }
+                    @!interface Array<T> {
+                        map: <U>(callback: (e: T, i?: numeric, a?: T[]) => U, parallel?: boolean, maxThreads?: boolean) => U[]
+                    }
                 `,
                 //"realLib.d.cfm": fs.readFileSync("C:\\Users\\anon\\dev\\cfc\\src\\lang-server\\server\\src\\runtimelib\\lib.cf2018.d.cfm").toString(),
                 "someFile.cfm": `
@@ -33,26 +35,9 @@ function projectFiddle() {
                 "a": {
                     "b": {
                         "x.cfc": `
-                        /**
-                         * @!typedef X_t = {A: X_t, B: 1, C: 2}
-                         */
                         component accessors="true" {
-                            /**
-                             * @!type () => string
-                             */
-                            function v() {
-                                return doit().ok
-                            }
-
-                            /**
-                             * @!type () => {ok: string}
-                             */
-                            function doit() {
-                                return bleggleston();
-                            }
-
-                            function bleggleston() {
-                                return {ok: v()}
+                            function foo(array x) {
+                                x.map(
                             }
                         }
                         `,
@@ -99,6 +84,75 @@ function projectFiddle() {
     }
 }
 
+function bench() {
+    function recursiveGetFiles(root: string, pattern: RegExp) : string [] {
+        const result : string[] = [];
+        const fds = fs.readdirSync(root, {withFileTypes: true});
+        for (const fd of fds) {
+            if (fd.isDirectory()) result.push(...recursiveGetFiles(path.resolve(root, fd.name), pattern));
+            else if (pattern.test(fd.name)) {
+                const fspath = path.resolve(root, fd.name);
+                result.push(fspath);
+            }
+        }
+        return result;
+    }
+
+    const files = recursiveGetFiles(process.env.XPATH as string, /\.(cfm|cfc)$/i);
+
+    const parser = Parser({
+        debug: false,
+        parseTypes: true,
+        engineVersion: EngineVersions["lucee.5"],
+        withWireboxResolution: true,
+        wireboxConfigFileCanonicalAbsPath: "/Wirebox.cfc",
+        checkReturnTypes: true,
+        checkFlowTypes: true,
+        genericFunctionInference: true,
+        cancellationToken: {
+            cancellationRequested: () => false,
+            throwIfCancellationRequested: () => void 0
+        }
+    });
+
+    const times : bigint[] = []
+    let lines = 0;
+
+    for (const file of files) {
+        const sourceBuffer = fs.readFileSync(file)
+
+        const re = /\r|\n|\r\n/g;
+        let linesThis = 0;
+        const asString = sourceBuffer.toString();
+        while (re.exec(asString)) linesThis++;
+        
+
+        const sourceFile = SourceFile(file, cfmOrCfc(file)!, sourceBuffer);
+        const start = process.hrtime.bigint();
+        parser.parse(sourceFile);
+        const end = process.hrtime.bigint();
+
+        if (linesThis > 1000) {
+            times.push(end - start);
+            lines += linesThis;
+            console.log(file, linesThis + " lines in ", ((end-start) / BigInt(1e6)) + "ms")
+        }
+
+
+    }
+
+    let timeSum_ns = BigInt(0);
+    for (const time of times) timeSum_ns += time;
+    const avgTime_ns = timeSum_ns / BigInt(times.length);
+    const avgTime_ms = avgTime_ns / BigInt(1e6)
+
+    console.log("Total time: " + (timeSum_ns / BigInt(1e6)) + "ms")
+    console.log("Avg parsetime: " + avgTime_ms + "ms");
+    console.log("Total lines: " + lines);
+    console.log("Lines/sec: " + (BigInt(lines) / (timeSum_ns / BigInt(1e6))) * BigInt(1000));
+}
+
+//bench()
 projectFiddle();
 
 

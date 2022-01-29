@@ -2,12 +2,12 @@ import { Scanner, SourceRange, TokenType, Token, NilToken, TokenTypeUiString, Cf
 import { exhaustiveCaseGuard, getAttributeValue, getTriviallyComputableBoolean, getTriviallyComputableString, Mutable } from "./utils";
 import { Interface, Type } from "./types";
 
-let debug = false;
-let nextNodeId : NodeId = 0;
-
-export function setDebug(isDebug: boolean) {
-    debug = isDebug;
+let debugNodeModule = false;
+export function setDebug(b: boolean) {
+    debugNodeModule = b;
 }
+
+let nextNodeId : NodeId = 0;
 
 export const enum NodeFlags {
     none         = 0,
@@ -272,7 +272,7 @@ export function NodeBase<T extends NodeBase>(type: T["kind"], range: SourceRange
     result.flags = NodeFlags.none;
     result.flow = null;
 
-    if (debug) {
+    if (debugNodeModule) {
         result.__debug_type = NodeTypeUiString[type];
     }
 
@@ -347,6 +347,7 @@ export interface SourceFile extends NodeBase {
     libRefs: Map<string, SourceFile>,
     diagnostics: Diagnostic[],
     scanner: Scanner,
+    nodeMap: Map<NodeId, Node>,
     cachedNodeTypes: Map<NodeId, Type>, // type of a particular node, exactly zero or one per node
     cachedFlowTypes: Map<FlowId, Map<SymbolId, Type>>, // types for symbols as determined at particular flow nodes, zero or more per flow node
     nodeToSymbol: Map<NodeId, SymbolResolution>,
@@ -356,15 +357,15 @@ export interface SourceFile extends NodeBase {
         extends: SourceFile | null,
         implements: SourceFile[]
     } | undefined,
-    resetInPlaceWithNewSource: (newSource: string | Buffer) => void
 }
 
-function resetSourceFileInPlace(target: SourceFile, newSource: string | Buffer) : void {
+export function resetSourceFileInPlace(target: SourceFile, newSource: string | Buffer) : void {
     target.containedScope = {parentContainer: null, typeinfo: typeinfo()};
     target.content = [];
     // target.libRefs untouched
     target.diagnostics = [];
     target.scanner = Scanner(newSource);
+    target.nodeMap = new Map();
     target.cachedNodeTypes = new Map();
     target.cachedFlowTypes = new Map();
     target.nodeToSymbol = new Map();
@@ -385,12 +386,12 @@ export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: 
     sourceFile.libRefs = new Map();
     sourceFile.diagnostics = [];
     sourceFile.scanner = Scanner(sourceText);
+    sourceFile.nodeMap = new Map<NodeId, Node>();
     sourceFile.cachedNodeTypes = new Map<NodeId, Type>();
     sourceFile.cachedFlowTypes = new Map<FlowId, Map<SymbolId, Type>>();
     sourceFile.nodeToSymbol = new Map<NodeId, SymbolResolution>();
     sourceFile.symbolIdToSymbol = new Map();
     sourceFile.endOfNodeFlowMap = new Map<NodeId, Flow>();
-    sourceFile.resetInPlaceWithNewSource = (newSource: string | Buffer) => resetSourceFileInPlace(sourceFile, newSource);
     return sourceFile;
 }
 
@@ -412,7 +413,7 @@ export function Terminal(token: Token, trivia: Node[] = []) : Terminal {
     v.token = token;
     v.trivia = trivia;
 
-    if (debug) {
+    if (debugNodeModule) {
         v.__debug_tokenType = TokenTypeUiString[token.type];
     }
 
@@ -431,7 +432,7 @@ export const freshFlow = (function() {
             becameUnreachable: false,
             node
         }
-        if (debug) {
+        if (debugNodeModule) {
             Object.defineProperty(result, "__debugFlowInfo", {
                 get() : string {
                     switch (flowType) {
@@ -806,7 +807,7 @@ export function BinaryOperator(left: Node, operator: Terminal, right: Node) : Bi
     v.right = right;
     v.optype = tokenTypeToBinaryOpType(operator.token.type);
 
-    if (debug) {
+    if (debugNodeModule) {
         v.__debug_opType = BinaryOpTypeUiString[v.optype];
     }
     
@@ -1038,7 +1039,7 @@ export function ScriptSugaredTagCallStatement(name: Terminal, attrs: TagAttribut
     v.callStatement = null;
     v.semicolon = semicolon;
 
-    if (debug) {
+    if (debugNodeModule) {
         v.__debug_subtype = StatementTypeUiString[StatementType.scriptSugaredTagCallStatement];
     }
 
@@ -1054,7 +1055,7 @@ export function ScriptTagCallStatement(name: Terminal, leftParen: Terminal, args
     v.callStatement = {leftParen, args, rightParen};
     v.semicolon = semicolon;
 
-    if (debug) {
+    if (debugNodeModule) {
         v.__debug_subtype = StatementTypeUiString[StatementType.scriptTagCallStatement];
     }
 
@@ -1069,7 +1070,7 @@ export function Statement(node: Node | null, semicolon: Terminal | null) : State
     v.callStatement = null;
     v.semicolon = semicolon;
 
-    if (debug) {
+    if (debugNodeModule) {
         v.__debug_subtype = StatementTypeUiString[StatementType.expressionWrapper];
     }
 
@@ -1085,7 +1086,7 @@ export namespace FromTag {
         stmt.tagOrigin.startTag = tag;
         stmt.semicolon = null;
 
-        if (debug) {
+        if (debugNodeModule) {
             stmt.__debug_subtype = StatementTypeUiString[StatementType.expressionWrapper]
         }
 
@@ -1099,7 +1100,7 @@ export namespace FromTag {
         stmt.tagOrigin.startTag = tag;
         stmt.semicolon = null;
 
-        if (debug) {
+        if (debugNodeModule) {
             stmt.__debug_subtype = StatementTypeUiString[StatementType.fromTag]
         }
 
@@ -1452,7 +1453,7 @@ export function DotAccess(dot: Terminal, property: Terminal) : DotAccess {
     node.accessType = IndexedAccessType.dot;
     node.dot = dot;
     node.property = property;
-    if (debug) (<IndexedAccessChainElement>node).__debug_access_type = "dot";
+    if (debugNodeModule) (<IndexedAccessChainElement>node).__debug_access_type = "dot";
     return node;
 }
 
@@ -1462,7 +1463,7 @@ export function BracketAccess(leftBracket: Terminal, expr: Node, rightBracket: T
     node.leftBracket = leftBracket;
     node.expr = expr;
     node.rightBracket = rightBracket;
-    if (debug) (<IndexedAccessChainElement>node).__debug_access_type = "bracket";
+    if (debugNodeModule) (<IndexedAccessChainElement>node).__debug_access_type = "bracket";
     return node;
 }
 
@@ -1472,7 +1473,7 @@ export function OptionalDotAccess(questionMark: Terminal, dot: Terminal, propert
     node.questionMark = questionMark;
     node.dot = dot;
     node.property = property;
-    if (debug) (<IndexedAccessChainElement>node).__debug_access_type = "optional-dot";
+    if (debugNodeModule) (<IndexedAccessChainElement>node).__debug_access_type = "optional-dot";
     return node;
 }
 
@@ -1484,7 +1485,7 @@ export function OptionalBracketAccess(questionMark: Terminal, dot: Terminal, lef
     node.leftBracket = leftBracket;
     node.expr = expr;
     node.rightBracket = rightBracket;
-    if (debug) (<IndexedAccessChainElement>node).__debug_access_type = "optional-bracket";
+    if (debugNodeModule) (<IndexedAccessChainElement>node).__debug_access_type = "optional-bracket";
     return node;
 }
 
@@ -1493,7 +1494,7 @@ export function OptionalCall(questionMark: Terminal, dot: Terminal) : OptionalCa
     node.accessType = IndexedAccessType.optionalCall;
     node.questionMark = questionMark;
     node.dot = dot;
-    if (debug) (<IndexedAccessChainElement>node).__debug_access_type = "optional-call";
+    if (debugNodeModule) (<IndexedAccessChainElement>node).__debug_access_type = "optional-call";
     return node;
 }
 
