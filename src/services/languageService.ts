@@ -1,4 +1,14 @@
+/**
+ * the languageService is the interop between something that can speak LSP and our own language tooling
+ * we don't understand LSP here, but we provide an interface for something that does to reach out to us for diagnostics or completions or etc.
+ * we fork the actual language tool such that long-running requests don't block the entire server, and so that such long-requests can be cancelled
+ * 
+ * cancellation is acheived with a cancellation token, which is at its core just a particular file on disk (a named pipe) whose existence
+ * can be tested for and, when it exists, means "do cancel"
+ */
+
 import * as child_process from "child_process";
+import * as path from "path";
 import { CancellationToken } from "../compiler/cancellationToken";
 import { CflsResponse, CflsResponseType, CflsRequest, CflsRequestType, CflsConfig, InitArgs } from "./cflsTypes";
 import { ClientAdapter } from "./clientAdapter";
@@ -11,7 +21,14 @@ interface EventHandlers {
     diagnostics: (fsPath: string, diagnostics: unknown[]) => void
 }
 
-export function LanguageService<T extends ClientAdapter>(serverFilePath: AbsPath, clientAdaptersFilePath: AbsPath) {
+export function LanguageService<T extends ClientAdapter>() {
+    const forkInfo = {
+        languageToolFilePath: path.join(__dirname, REPLACED_AT_BUILD.runtimeLanguageToolPath),
+        forkArgs: REPLACED_AT_BUILD.debug
+            ? {execArgv: ["--nolazy", "--inspect=6012", /*"--inspect-brk"*/]}
+            : {}
+    } as const;
+
     let server! : child_process.ChildProcess;
     let config! : InitArgs["config"]; // we keep a copy to diff reset requests against; this is probably unnecessary, a holdover from when we were accidentally registering to receive all client configuration changes
     const cancellationToken = CancellationToken();
@@ -44,10 +61,7 @@ export function LanguageService<T extends ClientAdapter>(serverFilePath: AbsPath
 
     function fork(freshConfig: InitArgs["config"], workspaceRoots: AbsPath[]) : Promise<void> {
         config = freshConfig;
-        const forkArgs = REPLACED_AT_BUILD.debug
-            ? {execArgv: ["--nolazy", "--inspect=6012", /*"--inspect-brk"*/]}
-            : {};
-        server = child_process.fork(serverFilePath, forkArgs);
+        server = child_process.fork(forkInfo.languageToolFilePath, forkInfo.forkArgs);
 
         server.on("message", (msg: CflsResponse) => {
             if (messageId.current() === msg.id) {
@@ -84,7 +98,6 @@ export function LanguageService<T extends ClientAdapter>(serverFilePath: AbsPath
                     config,
                     workspaceRoots,
                     cancellationTokenId: cancellationToken.getId(),
-                    clientAdaptersFilePath,
                 },
             }),
             timeout_ms: 1000 * 60 * 2, // long timeout for init request, to allow for setting up path mappings and etc.
@@ -249,7 +262,7 @@ export function LanguageService<T extends ClientAdapter>(serverFilePath: AbsPath
 }
 
 class _LanguageService<T extends ClientAdapter> {
-    _LanguageService() { return LanguageService<T>("", ""); }
+    _LanguageService() { return LanguageService<T>(); }
 }
 
 export type LanguageService<T extends ClientAdapter> = ReturnType<_LanguageService<T>["_LanguageService"]>;

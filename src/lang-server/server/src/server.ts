@@ -115,7 +115,7 @@ connection.onInitialize((params: InitializeParams) => {
 		initArgs.unwrap().engineLibAbsPath = params.initializationOptions?.libAbsPath;
 	}
 	
-	languageService = LanguageService<typeof VsClientAdapter>(path.join(__dirname, "/cfls-service.js"), path.join(__dirname, "/vscode-adapter.js"));
+	languageService = LanguageService<typeof VsClientAdapter>();
 	languageService.on("diagnostics", (fsPath: AbsPath, diagnostics: unknown[]) => {
 		connection.sendDiagnostics({
 			uri: URI.file(fsPath).toString(),

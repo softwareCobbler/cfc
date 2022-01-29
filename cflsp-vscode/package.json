@@ -19,9 +19,10 @@
 	"activationEvents": [
 		"onLanguage:cfml"
 	],
-	"main": "./out/cflsp.js",
+	"main": "./out/extension.js",
 	"files": [
-		"out/cfls-service.js",
+		"out/server.js",
+		"out/languageTool.js",
 		"out/lib.cf2018.d.cfm"
 	],
 	"contributes": {

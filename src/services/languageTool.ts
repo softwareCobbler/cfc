@@ -1,3 +1,7 @@
+/**
+ * The languageTool accepts requests (our own, limited set of request types, not the LSP request types) and processes
+ * them, adding/dropping files from a project, checking files, finding completions, etc.
+ */
 import * as path from "path";
 
 import type { IREPLACED_AT_BUILD } from "./buildShim";
@@ -18,7 +22,7 @@ function send(msg: CflsResponse) {
     process.send!(msg);
 }
 
-const service = LanguageService();
+const languageTool = LanguageTool();
 
 const NO_DATA = undefined;
 const CANCELLED = null;
@@ -29,12 +33,12 @@ process.on("message", (msg: CflsRequest) => {
     let response : CflsResponse | undefined = undefined;
     switch (msg.type) {
         case CflsRequestType.init: {
-            service.init(msg.initArgs);
+            languageTool.init(msg.initArgs);
             response = {type: CflsResponseType.initialized, id: msg.id};
             break;
         }
         case CflsRequestType.diagnostics: {
-            const diagnostics = service.naiveGetDiagnostics(msg.fsPath, msg.freshText);
+            const diagnostics = languageTool.naiveGetDiagnostics(msg.fsPath, msg.freshText);
             if (diagnostics === NO_DATA) {
                 break;
             }
@@ -47,7 +51,7 @@ process.on("message", (msg: CflsRequest) => {
             break;
         }
         case CflsRequestType.completions: {
-            const completions = service.getCompletions(msg.fsPath, msg.targetIndex, msg.triggerCharacter);
+            const completions = languageTool.getCompletions(msg.fsPath, msg.targetIndex, msg.triggerCharacter);
             if (completions === NO_DATA) {
                 break;
             }
@@ -61,11 +65,11 @@ process.on("message", (msg: CflsRequest) => {
             }
         }
         case CflsRequestType.reset: {
-            service.reset(msg.config);
+            languageTool.reset(msg.config);
             break;
         }
         case CflsRequestType.definitionLocations: {
-            const locations = service.getDefinitionLocations(msg.fsPath, msg.targetIndex);
+            const locations = languageTool.getDefinitionLocations(msg.fsPath, msg.targetIndex);
             if (locations === NO_DATA) {
                 break;
             }
@@ -93,7 +97,7 @@ function getClientAdapter() : ClientAdapter {
     return require(REPLACED_AT_BUILD.ClientAdapterModule_StaticRequirePath).adapter;
 }
 
-function LanguageService() {
+function LanguageTool() {
     let config! : CflsConfig;
     let workspaceProjects! : Map<AbsPath, Project>;
     let workspaceRoots! : AbsPath[];

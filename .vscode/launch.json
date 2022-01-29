@@ -57,6 +57,21 @@
 			"runtimeExecutable": null,
 			"sourceMaps": true,
 			"env": { "NODE_ENV": "testing"}
+		},
+		{
+			"name": "Debug build system",
+			"autoAttachChildProcesses": false,
+			"type": "node",
+			"request": "launch",
+			"program": "${workspaceFolder}/out/build/build.js",
+			"cwd": "${workspaceFolder}",
+			"sourceMaps": true,
+			"skipFiles": [
+				"<node_internals>/**",
+			],
+			"outFiles": [
+				"${workspaceFolder}/out/**/*.js",
+			]
 		}
     ],
     "compounds": [

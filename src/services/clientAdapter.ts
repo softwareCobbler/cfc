@@ -1,7 +1,11 @@
 /**
- * unenforceable but required (need a 'module interface' or something):
- * an "implementing module" export the single constant value `adapter : ClientAdapter`
- * it is then `require("path-to-impl").adapter`'d where it is needed
+ * Maps our internal representation of text and diagnostic ranges and etc. to some client's expecations about
+ * how those things should be represented
+ * 
+ * this is a "module interface"
+ *   - unenforceable but required:
+ *     an "implementing module" must export the single constant value `adapter : ClientAdapter`
+ *     it is then `require("path-to-impl").adapter`'d where it is needed
  */
 
 import { AnnotatedChar, SourceRange } from "../compiler/scanner"

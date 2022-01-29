@@ -7,8 +7,9 @@
     "install-all": "npm install && cd src/lang-server/client && npm install && cd ../server && npm install && cd ../../../",
     "test-all": "tsc --build src/compiler && mocha --extension=ts --require=ts-node/register --spec=test/**/*.ts",
     "test-one": "tsc --build src/compiler && echo && mocha --extension=ts --require=ts-node/register --spec=",
-    "build-cflsp": "./esb",
-    "build-cflsp-prod": "echo fixme -- not impl\\'d"
+    "clean": "rm -rf out && rm -rf cflsp-vscode/out",
+    "build-cflsp": "tsc --build src/build && node out/build/build --debug",
+    "build-cflsp-prod": "tsc --build src/build && node out/build/build"
   },
   "author": "",
   "license": "ISC",

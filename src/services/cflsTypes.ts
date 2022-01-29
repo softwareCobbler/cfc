@@ -27,7 +27,6 @@ export interface InitArgs {
     config: SerializableCflsConfig,
     workspaceRoots: AbsPath[],
     cancellationTokenId: string,
-    clientAdaptersFilePath: AbsPath,
 }
 
 export interface InitRequest extends CflsRequestBase {
