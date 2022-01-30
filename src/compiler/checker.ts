@@ -1,4 +1,4 @@
-import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, UnreachableFlow, DiagnosticKind, TagAttribute, SymbolId, TypeShimKind } from "./node";
+import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, UnreachableFlow, DiagnosticKind, TagAttribute, SymbolId, TypeShimKind, NonCompositeFunctionTypeAnnotation } from "./node";
 import { CfcResolution, CfcResolver, ComponentResolutionArgs, EngineSymbolResolver, LibTypeResolver, ProjectOptions } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, Struct, cfUnion, BuiltinType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, Type, stringifyType, cfFunctionSignatureParam, cfFunctionOverloadSet, cfTypeId, SymbolTableTypeWrapper, Cfc, Interface, createType, createLiteralType, typeFromJavaLikeTypename, structurallyCompareTypes, TypeKind, isStructLike, cfArray, cfStructLike, isStructLikeOrArray, cfGenericFunctionSignature } from "./types";
@@ -730,12 +730,12 @@ export function Checker(options: ProjectOptions) {
         let depth = 0;
         let tooDeep = false;
         tooDeep ? 0 : 1; // yes compiler this is used
-        const runningComparisonMap = new Map<Type, Type>();
+        const runningComparisonMap = new Map<Type, Set<Type>>();
 
         return worker(l, r);
 
         function worker(l: Type, r: Type) : boolean {
-            if (runningComparisonMap.get(l) === r) {
+            if (runningComparisonMap.get(l)?.has(r)) {
                 // we're already comparing these types
                 return true;
             }
@@ -745,7 +745,14 @@ export function Checker(options: ProjectOptions) {
                 return false;
             }
             try {
-                runningComparisonMap.set(l,r);
+                const existingKeyedComparison = runningComparisonMap.get(l);
+                if (existingKeyedComparison) {
+                    existingKeyedComparison.add(r);
+                }
+                else {
+                    runningComparisonMap.set(l, new Set([r]));
+                }
+
                 depth++;
 
                 // a type is a subtype of itself
@@ -759,7 +766,10 @@ export function Checker(options: ProjectOptions) {
                 if (forReturnType && l === BuiltinType.null && r === BuiltinType.void) return true;
 
                 // except for the above return type case, void is not a subtype of anything except itself and any
-                if (l === BuiltinType.void || r === BuiltinType.void) return false;
+                if (l === BuiltinType.void || r === BuiltinType.void) {
+                    runningComparisonMap.get(l)!.delete(r);
+                    return false;
+                }
 
                 // it would be nice to error on this, but plenty of legacy code relies on
                 // number being assignable to boolean
@@ -779,9 +789,22 @@ export function Checker(options: ProjectOptions) {
                     }
                 }
                 else {
-                    if (l.kind == TypeKind.literal && r.kind === TypeKind.literal) return l.literalValue === r.literalValue;
-                    if (l.kind !== TypeKind.literal && r.kind === TypeKind.literal) return false; // number is not a subtype of `0`
-                    if (l.kind === TypeKind.literal && r.kind !== TypeKind.literal && worker(l.underlyingType, r)) return true; // `0` is a subtype of number
+                    if (l.kind == TypeKind.literal && r.kind === TypeKind.literal) {
+                        if (l.literalValue === r.literalValue) {
+                            return true;
+                        }
+                        else {
+                            runningComparisonMap.get(l)!.delete(r);
+                            return false;
+                        }
+                    }
+                    if (l.kind !== TypeKind.literal && r.kind === TypeKind.literal) {
+                        runningComparisonMap.get(l)!.delete(r);
+                        return false; // number is not a subtype of `0`
+                    }
+                    if (l.kind === TypeKind.literal && r.kind !== TypeKind.literal && worker(l.underlyingType, r)) {
+                        return true; // `0` is a subtype of number
+                    }
 
                     // numeric is a subtype of string
                     // however, string is not a subtype of numeric
@@ -842,19 +865,31 @@ export function Checker(options: ProjectOptions) {
                     //if (sourceIsLiteralExpr && l.members.size !== r.members.size) return false; // barring optional properties...
                     const countsR = propertyCounts(r);
                     const countsL = propertyCounts(l);
-                    if (countsL.required < countsR.required) return false;
-                    if (sourceIsLiteralExpr && countsL.total > countsR.total) return false;
+                    if (countsL.required < countsR.required) {
+                        runningComparisonMap.get(l)!.delete(r);
+                        return false;
+                    }
+                    if (sourceIsLiteralExpr && countsL.total > countsR.total) {
+                        runningComparisonMap.get(l)!.delete(r);
+                        return false;
+                    }
 
                     for (const [propName, rightVal] of r.members) {
                         const leftVal = l.members.get(propName);
                         // check for optional property of R -- if left doesn't exist, OK; if left does exist, check for subtype-ness
                         if (rightVal.optional) {
                             if (!leftVal) continue;
-                            if (!worker(leftVal.type, rightVal.type)) return false;
+                            if (!worker(leftVal.type, rightVal.type)) {
+                                runningComparisonMap.get(l)!.delete(r);
+                                return false;
+                            }
                         }
                         // check for required properties of R -- left must exist, not be optional, and be a subtype
                         else {
-                            if (!leftVal || (leftVal.optional) || !worker(leftVal.type, rightVal.type)) return false;
+                            if (!leftVal || (leftVal.optional) || !worker(leftVal.type, rightVal.type)) {
+                                runningComparisonMap.get(l)!.delete(r);
+                                return false;
+                            }
                         }
                     }
 
@@ -862,7 +897,10 @@ export function Checker(options: ProjectOptions) {
                     // if source is a literal expression, it may not have additional properties
                     if (sourceIsLiteralExpr) {
                         for (const propName of l.members.keys()) {
-                            if (!r.members.has(propName)) return false;
+                            if (!r.members.has(propName)) {
+                                runningComparisonMap.get(l)!.delete(r);
+                                return false;
+                            }
                         }
                     }
 
@@ -870,15 +908,29 @@ export function Checker(options: ProjectOptions) {
                 }
 
                 if (l.kind === TypeKind.array && r.kind === TypeKind.array) {
-                    return worker(l.memberType, r.memberType);
+                    if (worker(l.memberType, r.memberType)) {
+                        return true;
+                    }
+                    else {
+                        runningComparisonMap.get(l)!.delete(r);
+                    }
                 }
                 if (isStructLike(l) && isStructLike(r)) {
-                    return isLeftStructSubtypeOfRightStruct(l, r);
+                    if (isLeftStructSubtypeOfRightStruct(l, r)) {
+                        return true;
+                    }
+                    else {
+                        runningComparisonMap.get(l)!.delete(r);
+                        return false;
+                    }
                 }
                 
                 if (l.kind === TypeKind.functionSignature && r.kind === TypeKind.functionSignature) {
                     // covariant in return type
-                    if (!worker(l.returns, r.returns)) return false;
+                    if (!worker(l.returns, r.returns)) {
+                        runningComparisonMap.get(l)!.delete(r);
+                        return false;
+                    }
 
                     // contravariant in parameter types
                     // also every parameter needs the same names...?
@@ -886,6 +938,7 @@ export function Checker(options: ProjectOptions) {
                     const hasSpread = !!(r.params.length > 0 && r.params[r.params.length-1].flags & TypeFlags.spread);
                     const minParams = r.params.filter(param => !(param.flags & TypeFlags.optional)).length;
                     if (!hasSpread && l.params.length < minParams) {
+                        runningComparisonMap.get(l)!.delete(r);
                         return false;
                     }
 
@@ -894,11 +947,17 @@ export function Checker(options: ProjectOptions) {
                         if (r.params[i].flags & TypeFlags.spread) {
                             const rType = r.params[i].paramType;
                             const spreadType = rType.kind === TypeKind.array ? rType.memberType : null;
-                            if (!spreadType) return false; // all spread types must be arrays, we should have caught this before getting here
+                            if (!spreadType) {
+                                runningComparisonMap.get(l)!.delete(r);
+                                return false; // all spread types must be arrays, we should have caught this before getting here
+                            }
                             for (let j = i; j < l.params.length; j++) {
                                 const lpt = l.params[i].paramType;
                                 // contravariant, flip left/right
-                                if (!worker(spreadType, lpt)) return false;
+                                if (!worker(spreadType, lpt)) {
+                                    runningComparisonMap.get(l)!.delete(r);
+                                    return false;
+                                }
                             }
 
                             break;
@@ -907,7 +966,10 @@ export function Checker(options: ProjectOptions) {
                         const lpt = l.params[i].paramType;
                         const rpt = r.params[i].paramType;
                         // contravariant, flip left/right
-                        if (!worker(rpt, lpt)) return false;
+                        if (!worker(rpt, lpt)) {
+                            runningComparisonMap.get(l)!.delete(r);
+                            return false;
+                        }
                     }
                     return true;
                 }
@@ -920,7 +982,10 @@ export function Checker(options: ProjectOptions) {
                 //
                 if (l.kind === TypeKind.union) {
                     for (const leftConstituent of l.types) {
-                        if (!worker(leftConstituent, r)) return false;
+                        if (!worker(leftConstituent, r)) {
+                            runningComparisonMap.get(l)!.delete(r);
+                            return false;
+                        }
                     }
                     return true;
                 }
@@ -928,17 +993,24 @@ export function Checker(options: ProjectOptions) {
                     for (const rightConstituent of r.types) {
                         if (worker(l, rightConstituent)) return true;
                     }
+
+                    runningComparisonMap.get(l)!.delete(r);
                     return false;
                 }
                 if (l.kind === TypeKind.intersection) {
                     for (const leftConstituent of l.types) {
                         if (worker(leftConstituent, r)) return true;
                     }
+
+                    runningComparisonMap.get(l)!.delete(r);
                     return false;
                 }
                 if (r.kind === TypeKind.intersection) {
                     for (const rightConstituent of r.types) {
-                        if (!worker(l, rightConstituent)) return false;
+                        if (!worker(l, rightConstituent)) {
+                            runningComparisonMap.get(l)!.delete(r);
+                            return false;
+                        }
                     }
                     return true;
                 }
@@ -955,9 +1027,16 @@ export function Checker(options: ProjectOptions) {
                 }
 
                 if (didReinstantiate) {
-                    return worker(l,r);
+                    if (worker(l,r)) {
+                        return true;
+                    }
+                    else {
+                        runningComparisonMap.get(l)!.delete(r);
+                        return false;
+                    }
                 }
 
+                runningComparisonMap.get(l)!.delete(r);
                 return false;
             }
             finally {
@@ -965,20 +1044,6 @@ export function Checker(options: ProjectOptions) {
             }
         }
     }
-
-    /*
-    function pushTypesIntoInlineFunctionDefinition(context: Node, signature: cfFunctionSignature, functionDef: (FunctionDefinition | ArrowFunctionDefinition)) {
-        const existingArgumentsScope = functionDef.containedScope!.arguments!;
-        for (let i = 0; i < signature.params.length; i++) {
-            if (i === functionDef.params.length) {
-                break;
-            }
-            if (existingArgumentsScope.has(signature.params[i].canonicalName)) {
-                existingArgumentsScope.get(signature.params[i].canonicalName)!.type = evaluateType(context, signature.params[i].type);
-            }
-        }
-    }
-    */
 
     function chooseOverload(overloadSet: cfFunctionOverloadSet, args: CallArgument[]) {
         const availableOverloads = new Set(overloadSet.overloads);
@@ -1568,9 +1633,19 @@ export function Checker(options: ProjectOptions) {
         let rhsType : Type | undefined = undefined;
         let rhsExpr : Node | undefined = undefined;
         let assignabilityErrorNode : Node;
+        let didConsumeTypeAnnotation = false;
 
         if (node.expr.kind === NodeKind.binaryOperator) {
-            checkNode(node.expr.right);
+            if ((node.typeAnnotation?.type?.kind === TypeKind.functionSignature || node.typeAnnotation?.shimKind === TypeShimKind.nonCompositeFunctionTypeAnnotation)
+                && (node.expr.right.kind === NodeKind.functionDefinition || node.expr.right.kind === NodeKind.arrowFunctionDefinition)
+            ) {
+                checkFunctionDefinition(node.expr.right, node.typeAnnotation);
+                didConsumeTypeAnnotation = true;
+            }
+            else {
+                checkNode(node.expr.right);
+            }
+
             rhsExpr = node.expr.right;
             rhsType = getCachedEvaluatedNodeType(node.expr.right);
             assignabilityErrorNode = node.expr.right;
@@ -1589,82 +1664,14 @@ export function Checker(options: ProjectOptions) {
             return; // unreachable?
         }
 
-        // check for rebinding of final vars
-        // let hasOtherFinalDecl = false;
-
         const symbol = walkupScopesToResolveSymbol(node, name.canonical)?.symTabEntry;
-        // if (symbol && symbol.declarations) {
-        //     hasOtherFinalDecl = filterNodeList(symbol.declarations, (decl) => decl.kind === NodeType.variableDeclaration && !!decl.finalModifier && decl !== node).length > 0;
-        // }
-
-        // if (hasOtherFinalDecl) {
-        //     // this would maybe work in a block scoped context but not function scoped
-        //     // we need flow analysis to get it right
-        //     //typeErrorAtNode(lValue, `Cannot rebind identifier '${name.ui}', which was declared final.`);
-        //     return;
-        // }
-
-        //if (node.finalModifier) rhsType.flags |= TypeFlags.final; // need to clone the type
 
         if (symbol) {
-            if (CHECK_FLOW_TYPES && symbol.declarations) {
-                // function declarationsReachingToFlow(targetDecls: Set<Node>, flow: Flow) {
-                //     const reachable = new Set<Flow>();
-                //     const flowsToRun = [flow];
-                //     const seen = new Set([flow]);
-                //     while (flowsToRun.length > 0) {
-                //         const flow = flowsToRun.shift()!;
-                //         if (flow.node && targetDecls.has(flow.node)) {
-                //             reachable.add(flow);
-                //             targetDecls.delete(flow.node);
-                //         }
-                //         for (const xflow of flow.predecessors) {
-                //             if (seen.has(xflow)) {
-                //                 // megafixme: there shouldn't be flow circles when traversing backwards right? following only predecessors should never loop
-                //                 // actually this might be legit...two backwards paths can have the same predecessors...
-                //                 continue;
-                //                 //debugger;
-                //             }
-                //             else {
-                //                 flowsToRun.push(xflow);
-                //                 seen.add(xflow);
-                //             }
-                //         }
-                        
-                //     }
-                //     return reachable;
-                // }
-
-                // const declLValues = (() => {
-                //     const result = new Set<Node>();
-                //     for (const decl of symbol.declarations) {
-                //         if (decl === node || (decl.kind !== NodeKind.variableDeclaration && decl.kind !== NodeKind.binaryOperator)) continue;
-                //         const lval = getVariableDeclarationLValue(decl);
-                //         if (lval) result.add(lval);
-                //     }
-                //     return result;
-                // })();
-
-                // const earlierDeclarationAssignmentFlows = declarationsReachingToFlow(new Set(declLValues), lValue.flow!)
-
-                // for (const flow of earlierDeclarationAssignmentFlows) {
-                //     const previousType = getCachedEvaluatedFlowType(flow, symbol.symbolId);
-                //     if (previousType && !isAssignable(rhsType, previousType)) {
-                //         const l = stringifyType(rhsType);
-                //         const r = stringifyType(previousType);
-                //         issueDiagnosticAtNode(node, `Mismatched types on redeclaration; type '${l}' is not assignable to initially declared type '${r}'.`);
-                //         break;
-                //     }
-                // }
-            }
-            
             let effectivelyDeclaredType = sourceFile.effectivelyDeclaredTypes.get(symbol.symbolId);
-            let firstDeclaration = false;
 
             // first declaration
             if (!effectivelyDeclaredType) {
-                firstDeclaration = true;
-                if (node.typeAnnotation?.shimKind === TypeShimKind.annotation) {
+                if (node.typeAnnotation?.shimKind === TypeShimKind.annotation && !didConsumeTypeAnnotation) {
                     effectivelyDeclaredType = evaluateType(node, node.typeAnnotation.type);
                 }
                 else {
@@ -1676,7 +1683,7 @@ export function Checker(options: ProjectOptions) {
 
             let flowType : Type;
 
-            if (!firstDeclaration && !isAssignable(rhsType, effectivelyDeclaredType, isLiteralExpr(rhsExpr))) {
+            if (!isAssignable(rhsType, effectivelyDeclaredType, isLiteralExpr(rhsExpr))) {
                 if (CHECK_FLOW_TYPES) {
                     const l = stringifyType(effectivelyDeclaredType);
                     const r = stringifyType(rhsType);
@@ -2073,7 +2080,39 @@ export function Checker(options: ProjectOptions) {
         }
     }
 
-    function checkFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {
+    function mutateCfFunctionSignatureFromNonCompositeAnnotation(annotation: NonCompositeFunctionTypeAnnotation, signature: Mutable<cfFunctionSignature>, context: Node) : cfFunctionSignature {
+        for (const paramAnnotation of annotation.params) {
+            let sigParamUpdateTarget : cfFunctionSignatureParam | undefined = undefined;
+            for (const param of signature.params) {
+                if (param.canonicalName === paramAnnotation.name.text.toLowerCase()) {
+                    sigParamUpdateTarget = param;
+                    break;
+                }
+            }
+
+            if (!sigParamUpdateTarget) {
+                issueDiagnosticAtRange(
+                    paramAnnotation.name.range,
+                    `Annotation for parameter ${paramAnnotation.name.text} does not match any actual parameter name, and will be discarded.`,
+                    DiagnosticKind.warning);
+                continue;
+            }
+
+            const instantiatedAnnotatedParamType = evaluateType(context, paramAnnotation.type, new Map(), false, false);
+            if (!instantiatedAnnotatedParamType) {
+                issueDiagnosticAtRange(paramAnnotation.name.range, "Type failed to instantiate and will be treated as 'any'.", DiagnosticKind.warning);
+            }
+            else {
+                // this is safe because sigParamUpdateTarget is a member of finalType,
+                // and finalType has not yet met with the world; so it is treated as mutable
+                (sigParamUpdateTarget as Mutable<cfFunctionSignatureParam>).paramType = instantiatedAnnotatedParamType;
+            }
+        }
+
+        return signature;
+    }
+
+    function checkFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition, typeAnnotation = node.typeAnnotation) {
         if (node.flags & NodeFlags.checked) {
             return;
         }
@@ -2115,11 +2154,11 @@ export function Checker(options: ProjectOptions) {
         const cfSyntaxDirectedTypeSig = memberFunctionSignature ?? (evaluateType(node, extractCfFunctionSignature(node)) as cfFunctionSignature);
         let finalType : cfFunctionSignature | cfFunctionOverloadSet = cfSyntaxDirectedTypeSig;
         
-        if (node.typeAnnotation?.shimKind === TypeShimKind.annotation) {
-            const evaluatedSignature = evaluateType(node, node.typeAnnotation.type);
+        if (typeAnnotation?.shimKind === TypeShimKind.annotation) {
+            const evaluatedSignature = evaluateType(node, typeAnnotation.type);
             if (evaluatedSignature.kind === TypeKind.functionSignature) {
                 if (!isAnnotatedSigCompatibleWithCfFunctionSig(evaluatedSignature, cfSyntaxDirectedTypeSig)) {
-                    issueDiagnosticAtNode(node, `Type '${stringifyType(cfSyntaxDirectedTypeSig)}' is not assignable to the annotated type '${stringifyType(node.typeAnnotation.type)}'.`)
+                    issueDiagnosticAtNode(node, `Type '${stringifyType(cfSyntaxDirectedTypeSig)}' is not assignable to the annotated type '${stringifyType(typeAnnotation.type)}'.`)
                 }
                 else {
                     // copy cf-sig param names into annotated-type param names
@@ -2141,7 +2180,7 @@ export function Checker(options: ProjectOptions) {
             else if (evaluatedSignature.kind === TypeKind.functionOverloadSet) {
                 for (const overload of evaluatedSignature.overloads) {
                     if (!isAnnotatedOverloadCompatibleWithCfFunctionSig(overload.params, cfSyntaxDirectedTypeSig.params, overload.returns, cfSyntaxDirectedTypeSig.returns)) {
-                        issueDiagnosticAtNode(node, `Type '${stringifyType(cfSyntaxDirectedTypeSig)}' is not assignable to the annotated type '${stringifyType(node.typeAnnotation.type)}'.`)
+                        issueDiagnosticAtNode(node, `Type '${stringifyType(cfSyntaxDirectedTypeSig)}' is not assignable to the annotated type '${stringifyType(typeAnnotation.type)}'.`)
                         break;
                     }
                 }
@@ -2154,34 +2193,8 @@ export function Checker(options: ProjectOptions) {
                 issueDiagnosticAtNode(node, `Expected a function signature as an annotated type, but got type '${stringifyType(evaluatedSignature)}'.`)
             }
         }
-        else if (node.typeAnnotation?.shimKind === TypeShimKind.nonCompositeFunctionTypeAnnotation) {
-            for (const paramAnnotation of node.typeAnnotation.params) {
-                let sigParamUpdateTarget : cfFunctionSignatureParam | undefined = undefined;
-                for (const param of finalType.params) {
-                    if (param.canonicalName === paramAnnotation.name.text.toLowerCase()) {
-                        sigParamUpdateTarget = param;
-                        break;
-                    }
-                }
-
-                if (!sigParamUpdateTarget) {
-                    issueDiagnosticAtRange(
-                        paramAnnotation.name.range,
-                        `Annotation for parameter ${paramAnnotation.name.text} does not match any actual parameter name, and will be discarded.`,
-                        DiagnosticKind.warning);
-                    continue;
-                }
-
-                const instantiatedAnnotatedParamType = evaluateType(node, paramAnnotation.type, new Map(), false, false);
-                if (!instantiatedAnnotatedParamType) {
-                    issueDiagnosticAtRange(paramAnnotation.name.range, "Type failed to instantiate and will be treated as 'any'.", DiagnosticKind.warning);
-                }
-                else {
-                    // this is safe because sigParamUpdateTarget is a member of finalType,
-                    // and finalType has not yet met with the world; so it is treated as mutable
-                    (sigParamUpdateTarget as Mutable<cfFunctionSignatureParam>).paramType = instantiatedAnnotatedParamType;
-                }
-            }
+        else if (typeAnnotation?.shimKind === TypeShimKind.nonCompositeFunctionTypeAnnotation) {
+            mutateCfFunctionSignatureFromNonCompositeAnnotation(typeAnnotation, finalType, node);
         }
 
         // put access modifiers on the type signature for cfc member functions

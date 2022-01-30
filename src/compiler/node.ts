@@ -201,7 +201,7 @@ const staticallyKnownScopeName = [
     "__query", // magic scope inside <cfloop query=...> tags
     "__cfEngine", // things that the cf engine should provide (e.g. `encodeForHTML` or etc.)
     "__declaration", // for declaration files
-    "__transient", // for non-var-decl'd vars within functions that are not already defined outside of the function; we model them as visible during the function but they disappear on return to parent container
+    // @useless-transient "__transient", // for non-var-decl'd vars within functions that are not already defined outside of the function; we model them as visible during the function but they disappear on return to parent container
     "__property", // 'scope' of a (arbitrarily nested) property of a struct
 ] as const;
 

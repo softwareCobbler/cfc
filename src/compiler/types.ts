@@ -1031,7 +1031,11 @@ export function structurallyCompareTypes(l: Type, r: Type) : -1 | 0 | 1 {
     // but after instantiation, we will know if (context<0>, instantiated<T>) === (context<1>, instantiated<T>)
     // so checking if T[] is the same as T[] doesn't make sense,
     // but once instantiated we can check if `{x:number}[]` is the same as `{x:number}[]`
+    // same with type constructors, we don't know if they're equal until after (arbitrarily complicated) evaluation
     if (l.kind === TypeKind.typeId || r.kind === TypeKind.typeId) return -1; 
+    if (l.kind === TypeKind.typeConstructor || r.kind === TypeKind.typeConstructor) return -1;
+    if (l.kind === TypeKind.typeConstructorInvocation || r.kind === TypeKind.typeConstructorInvocation) return -1;
+    if (l.kind === TypeKind.typeConstructorParam || r.kind === TypeKind.typeConstructorParam) return -1;
 
     if (l.kind === TypeKind.literal && r.kind === TypeKind.literal) {
         if (typeof l.literalValue === typeof r.literalValue) {

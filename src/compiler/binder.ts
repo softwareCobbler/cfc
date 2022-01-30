@@ -20,7 +20,7 @@ export function Binder(options: ProjectOptions) {
     let currentFlow : Flow;
     let currentJumpTargetPredecessors : Flow[];
     let withPropertyAccessors = false;
-    let pendingSymbolResolutionStack : Map<string, Set<SymbolTable>>[] = [];
+    // @useless-transient let pendingSymbolResolutionStack : Map<string, Set<SymbolTable>>[] = [];
 
     function bind(sourceFile_: SourceFile) {
         if (sourceFile_.cfFileType === CfFileType.dCfm) {
@@ -37,7 +37,7 @@ export function Binder(options: ProjectOptions) {
         currentFlow = freshFlow([], FlowType.start);
         currentJumpTargetPredecessors = [];
         withPropertyAccessors = false;
-        pendingSymbolResolutionStack = [new Map()];
+        // @useless-transient pendingSymbolResolutionStack = [new Map()];
         
         sourceFile.containedScope = {
             parentContainer: null,
@@ -83,7 +83,7 @@ export function Binder(options: ProjectOptions) {
         (currentJumpTargetPredecessors as any) = undefined;
         (nodeMap as any) = undefined;
         (withPropertyAccessors as any) = undefined;
-        (pendingSymbolResolutionStack as any) = undefined;
+        // @useless-transient (pendingSymbolResolutionStack as any) = undefined;
     }
 
     function mergeFlowsToJumpTarget(...flows: (Flow|undefined)[]) {
@@ -555,8 +555,9 @@ export function Binder(options: ProjectOptions) {
         }
 
         if (node.finalModifier || node.varModifier) {
-            const canonicalName = canonicalPath[0];
-            resolvePendingSymbolResolutions(canonicalName);
+            // @useleess-transient 
+            // const canonicalName = canonicalPath[0];
+            // resolvePendingSymbolResolutions(canonicalName);
 
             if (getContainingFunction(node)) {
                 addFreshSymbolToTable(currentContainer.containedScope.local!, uiPath[0], node, null);
@@ -776,10 +777,12 @@ export function Binder(options: ProjectOptions) {
             return;
         }
 
+        // @useless-transient
         // unqualified result names (i.e. no dots in the name) get written to the transient scope if we are in a container with a transient scope (i.e. a function)
         // otherwise, it goes straight into the root variables scope
         // we do not push a symbol resolution for the __transient in this case; this is an assignment to a var that will be in play for the remainder of the function
-        let targetScope : SymbolTable = currentContainer.containedScope.__transient ?? sourceFile.containedScope.variables!;
+        //let targetScope : SymbolTable = currentContainer.containedScope.__transient ?? sourceFile.containedScope.variables!;
+        let targetScope : SymbolTable = currentContainer.containedScope.local ?? sourceFile.containedScope.variables!;
         let targetName = name.length === 1 ? name[0] : name[1];
 
         if (name.length === 2) {
@@ -805,7 +808,7 @@ export function Binder(options: ProjectOptions) {
             }
         }
 
-        resolvePendingSymbolResolutions(targetName);
+        // @useless-transient resolvePendingSymbolResolutions(targetName);
         addFreshSymbolToTable(
             targetScope,
             targetName,
@@ -945,18 +948,15 @@ export function Binder(options: ProjectOptions) {
                 else if (targetBaseName === "variables") {
                     if (sourceFile.cfFileType === CfFileType.cfc) {
                         const containingFunction = getContainingFunction(node);
-                        // only write into variables table in a cfc if we're in init...
-                        // seems reasonable
-                        if (containingFunction?.kind === NodeKind.functionDefinition && containingFunction.name?.canonical === "init") {
-                            if (targetBaseName in sourceFile.containedScope) {
-                                addFreshSymbolToTable(sourceFile.containedScope[targetBaseName]!, firstAccessAsString, node);
-                            }    
+                        // only treat this as a declaration if
+                        // we're in a function called "init"
+                        // or we're in the psuedoconstructor
+                        if (!containingFunction || (containingFunction.kind === NodeKind.functionDefinition && containingFunction.name?.canonical === "init")) {
+                            addFreshSymbolToTable(sourceFile.containedScope[targetBaseName]!, firstAccessAsString, node);
                         }
                     }
                     else {
-                        if (targetBaseName in sourceFile.containedScope) {
-                            addFreshSymbolToTable(sourceFile.containedScope[targetBaseName]!, firstAccessAsString, node);
-                        }
+                        addFreshSymbolToTable(sourceFile.containedScope[targetBaseName]!, firstAccessAsString, node);
                     }
                 }
                 else {
@@ -974,89 +974,95 @@ export function Binder(options: ProjectOptions) {
         else if (target.kind === NodeKind.identifier) {
             const targetBaseName = getTriviallyComputableString(target);
             if (targetBaseName) {
-                const targetBaseCanonicalName = targetBaseName.toLowerCase();
+                // @useless-transient const targetBaseCanonicalName = targetBaseName.toLowerCase();
 
                 const existingSymbol = walkupScopesToResolveSymbol(node, targetBaseName);
 
-                if (existingSymbol && existingSymbol.scopeName !== "__transient") {
+                if (existingSymbol) {
                     currentFlow = freshFlow(currentFlow, FlowType.assignment, target);
                     target.flow = currentFlow;
                     return;
                 }
 
-                const targetScope = currentContainer === sourceFile
-                    ? currentContainer.containedScope.variables!
-                    : currentContainer.containedScope.__transient!;
+                // @useless-transient
+                // const targetScope = currentContainer === sourceFile
+                //     ? currentContainer.containedScope.variables!
+                //     : currentContainer.containedScope.__transient!;
 
-                if (targetScope === currentContainer.containedScope.__transient) {
-                    pushPendingSymbolResolution(targetBaseName, currentContainer.containedScope.__transient);
-                }
+                // if (targetScope === currentContainer.containedScope.__transient) {
+                //     // @useless-transient
+                //     //pushPendingSymbolResolution(targetBaseName, currentContainer.containedScope.__transient);
+                // }
 
-                if (targetScope.has(targetBaseCanonicalName)) {
-                    const symbolResolution = targetScope.get(targetBaseCanonicalName)!;
-                    if (symbolResolution.declarations) symbolResolution.declarations.push(node);
-                    else symbolResolution.declarations = [node];
-                    return;
-                }
+                // if (targetScope.has(targetBaseCanonicalName)) {
+                //     const symbolResolution = targetScope.get(targetBaseCanonicalName)!;
+                //     if (symbolResolution.declarations) symbolResolution.declarations.push(node);
+                //     else symbolResolution.declarations = [node];
+                //     return;
+                // }
 
-                addFreshSymbolToTable(targetScope, targetBaseName, node);
+                // addFreshSymbolToTable(targetScope, targetBaseName, node);
             }
         }
     }
 
-    function pushPendingSymbolResolution(canonicalName: string, symTab: Map<string, SymTabEntry>) {
-        const stackTop = pendingSymbolResolutionStack[pendingSymbolResolutionStack.length - 1];
-        if (stackTop.has(canonicalName)) {
-            stackTop.get(canonicalName)!.add(symTab);
-        }
-        else {
-            stackTop.set(canonicalName, new Set([symTab]));
-        }
-    }
+    // @useless-transient
+    // function pushPendingSymbolResolution(canonicalName: string, symTab: Map<string, SymTabEntry>) {
+    //     const stackTop = pendingSymbolResolutionStack[pendingSymbolResolutionStack.length - 1];
+    //     if (stackTop.has(canonicalName)) {
+    //         stackTop.get(canonicalName)!.add(symTab);
+    //     }
+    //     else {
+    //         stackTop.set(canonicalName, new Set([symTab]));
+    //     }
+    // }
 
-    function pushPendingSymbolResolutionFrame() : void {
-        pendingSymbolResolutionStack.push(new Map());
-    }
+    // @useless-transient
+    // function pushPendingSymbolResolutionFrame() : void {
+    //     pendingSymbolResolutionStack.push(new Map());
+    // }
 
-    function popAndMergePendingSymbolResolutionFrame() : void {
-        const popped = pendingSymbolResolutionStack.pop();
-        if (!popped) return; // ?
-        const top = pendingSymbolResolutionStack[pendingSymbolResolutionStack.length - 1];
-        for (const [symbolCanonicalName, targetScopeSet] of popped) {
-            if (top.has(symbolCanonicalName)) {
-                const existingSet = top.get(symbolCanonicalName)!;
-                for (const scope of targetScopeSet) {
-                    existingSet.add(scope);
-                }
-            }
-            else {
-                top.set(symbolCanonicalName, targetScopeSet);
-            }
-        }
-    }
+    // @useless-transient
+    // function popAndMergePendingSymbolResolutionFrame() : void {
+    //     const popped = pendingSymbolResolutionStack.pop();
+    //     if (!popped) return; // ?
+    //     const top = pendingSymbolResolutionStack[pendingSymbolResolutionStack.length - 1];
+    //     for (const [symbolCanonicalName, targetScopeSet] of popped) {
+    //         if (top.has(symbolCanonicalName)) {
+    //             const existingSet = top.get(symbolCanonicalName)!;
+    //             for (const scope of targetScopeSet) {
+    //                 existingSet.add(scope);
+    //             }
+    //         }
+    //         else {
+    //             top.set(symbolCanonicalName, targetScopeSet);
+    //         }
+    //     }
+    // }
 
-    function resolvePendingSymbolResolutions(canonicalName: string) {
-        const stackTop = pendingSymbolResolutionStack[pendingSymbolResolutionStack.length - 1];
-        // if the top-most stack has the target symbol name, we remove the target symbol name from all the
-        // scopes listed as participating in trying to find this symbol;
-        // e.g.
-        // function outer() {
-        //     function inner1() {
-        //         a = 42; // pending resolution, set as __transient on `inner1`
-        //     }
-        //     function inner2() {
-        //         a = 42; // pending resolution, set as __transient on `inner2`
-        //     }
-        //     var a = 42; // resolved; remove the __transient symbol from `inner1` and `inner2`; in the checker, symbol lookup for 'a' within inner1/inner2 will now find `outer::local::a`
-        // }
-        //
-        if (stackTop.has(canonicalName)) {
-            for (const scope of stackTop.get(canonicalName)!) {
-                scope.delete(canonicalName);
-            }
-            stackTop.delete(canonicalName);
-        }
-    }
+    // @useless-transient
+    // function resolvePendingSymbolResolutions(canonicalName: string) {
+    //     const stackTop = pendingSymbolResolutionStack[pendingSymbolResolutionStack.length - 1];
+    //     // if the top-most stack has the target symbol name, we remove the target symbol name from all the
+    //     // scopes listed as participating in trying to find this symbol;
+    //     // e.g.
+    //     // function outer() {
+    //     //     function inner1() {
+    //     //         a = 42; // pending resolution, set as __transient on `inner1`
+    //     //     }
+    //     //     function inner2() {
+    //     //         a = 42; // pending resolution, set as __transient on `inner2`
+    //     //     }
+    //     //     var a = 42; // resolved; remove the __transient symbol from `inner1` and `inner2`; in the checker, symbol lookup for 'a' within inner1/inner2 will now find `outer::local::a`
+    //     // }
+    //     //
+    //     if (stackTop.has(canonicalName)) {
+    //         for (const scope of stackTop.get(canonicalName)!) {
+    //             scope.delete(canonicalName);
+    //         }
+    //         stackTop.delete(canonicalName);
+    //     }
+    // }
 
     // fixme: make more explicit that we grab signatures here for cfc member functions
     function bindFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition) {      
@@ -1130,12 +1136,12 @@ export function Binder(options: ProjectOptions) {
             typeinfo: typeinfo(),
             local: new Map<string, SymTabEntry>(),
             arguments: new Map<string, SymTabEntry>(),
-            __transient: new Map<string, SymTabEntry>(),
+            // @useless-transient __transient: new Map<string, SymTabEntry>(),
         };
 
         bindTypeAndInterfacedefsForContainer(node);
 
-        pushPendingSymbolResolutionFrame();
+        // @useless-transient pushPendingSymbolResolutionFrame();
 
         // fixme: we also do this in bindFunctionParameter, so we get duplicate nodes in each param's symbol decl list
         for (let i = 0; i < node.params.length; i++) {
@@ -1167,7 +1173,7 @@ export function Binder(options: ProjectOptions) {
 
         currentContainer = savedContainer;
 
-        popAndMergePendingSymbolResolutionFrame();
+        // @useless-transient popAndMergePendingSymbolResolutionFrame();
 
         sourceFile.endOfNodeFlowMap.set(node.nodeId, currentFlow);
         currentFlow = savedFlow;

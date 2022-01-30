@@ -1961,7 +1961,7 @@ export function Parser(config: ProjectOptions) {
 
             const declaration = VariableDeclaration(finalModifier, varModifier, assignmentExpr);
             if (savedLastDocBlock) {
-                declaration.typeAnnotation = savedLastDocBlock.typeAnnotation;
+                declaration.typeAnnotation = coalesceTypeAnnotationsToBindToNode(savedLastDocBlock);
                 
                 //
                 // clear lastTypeAnnotation *if* it hasn't changed since we entered this method
@@ -3407,7 +3407,7 @@ export function Parser(config: ProjectOptions) {
         let returnTypeAnnotation : Type | null = null; // fixme: unecessary?
         const result = Script.FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body, returnTypeAnnotation);
 
-        result.typeAnnotation = coalesceCurrentTypeAnnotationsToBindToNode(savedLastDocBlock);
+        result.typeAnnotation = coalesceTypeAnnotationsToBindToNode(savedLastDocBlock);
         
         // the next legit docblock might be parsed as trivia "attached" to the end of this function's final brace
         if (lastDocBlock === savedLastDocBlock) {
@@ -3419,7 +3419,7 @@ export function Parser(config: ProjectOptions) {
         return result;
     }
 
-    function coalesceCurrentTypeAnnotationsToBindToNode(docBlock: typeof lastDocBlock) : TypeAnnotation | NonCompositeFunctionTypeAnnotation | null {
+    function coalesceTypeAnnotationsToBindToNode(docBlock: typeof lastDocBlock) : TypeAnnotation | NonCompositeFunctionTypeAnnotation | null {
         if (docBlock?.argumentAnnotations) {
             return NonCompositeFunctionTypeAnnotation(docBlock.argumentAnnotations, null);
         }
