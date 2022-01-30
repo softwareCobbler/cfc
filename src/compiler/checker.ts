@@ -498,9 +498,9 @@ export function Checker(options: ProjectOptions) {
 
     function determineFlowType(base: Flow, symbolId: SymbolId) : Type | undefined {
         const seen = new Set<Flow>();
-        return work(base);
+        return work(base) ?? undefined;
 
-        function work(flow: Flow) : Type | undefined {
+        function work(flow: Flow) : Type | undefined | null {
             const type = getCachedEvaluatedFlowType(flow, symbolId);
 
             if (type) {
@@ -510,20 +510,35 @@ export function Checker(options: ProjectOptions) {
             seen.add(flow);
 
             const flowTypes : Type[] = [];
+            let seenCount = 0;
 
             for (let i = 0; i < flow.predecessors.length; i++) {
                 if (seen.has(flow.predecessors[i])) {
+                    seenCount++;
                     continue;
                 }
                 const type = work(flow.predecessors[i]);
-                if (type) flowTypes.push(type);
-                else flowTypes.push(BuiltinType.undefined);
+                if (type) {
+                    flowTypes.push(type);
+                }
+                else if (type === undefined) {
+                    flowTypes.push(BuiltinType.undefined);
+                }
+                else if (type === null) {
+                    seenCount++;
+                }
 
             }
 
-            return flowTypes.length === 0
-                ? undefined
-                : unionify(flowTypes);
+            if (seenCount === flow.predecessors.length) {
+                return null;
+            }
+            else if (flowTypes.length === 0) {
+                return undefined;
+            }
+            else {
+                return unionify(flowTypes);
+            }
         }
     }
 
@@ -574,6 +589,8 @@ export function Checker(options: ProjectOptions) {
     function unionify(types: Type[]) : Type {
         let flags : TypeFlags = TypeFlags.none;
         const membersBuilder = new Set<Type>();
+
+        outer:
         for (const type of types) {
             if (type === BuiltinType.any || type === BuiltinType.never) {
                 return type;
@@ -590,6 +607,9 @@ export function Checker(options: ProjectOptions) {
             const deletables : Type[] = [];
             let addedViaMerge = false;
             for (const existingUnionMember of membersBuilder) {
+                if (existingUnionMember === type) {
+                    continue outer;
+                }
                 if (isLeftSubtypeOfRight(existingUnionMember, type, false, false, true) || isLeftSubtypeOfRight(type, existingUnionMember, false, false, true)) {
                     deletables.push(existingUnionMember);
                     const merged = mergeTypes(existingUnionMember, type);
@@ -1376,7 +1396,7 @@ export function Checker(options: ProjectOptions) {
                     if (CHECK_FLOW_TYPES && lhsSymbol) {
                         const effectivelyDeclaredType = sourceFile.effectivelyDeclaredTypes.get(lhsSymbol.symTabEntry.symbolId);
                         if (effectivelyDeclaredType) {
-                            if (node.left.kind === NodeKind.identifier && isAssignable(rhsType, effectivelyDeclaredType)) {
+                            if (isAssignable(rhsType, effectivelyDeclaredType)) {
                                 setCachedEvaluatedFlowType(node.left.flow!, lhsSymbol.symTabEntry.symbolId, rhsType);
                             }
                             else {
