@@ -36,6 +36,7 @@ function projectFiddle() {
                     "b": {
                         "x.cfc": `
                         component accessors="true" {
+                            // @!arg:x string[]
                             function foo(array x) {
                                 x.map(
                             }

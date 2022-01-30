@@ -24,7 +24,7 @@ import {
     New,
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
-    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation } from "./node";
+    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard, Mutable } from "./utils";
 import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature } from "./types";
@@ -137,7 +137,12 @@ export function Parser(config: ProjectOptions) {
     let lastNonTriviaToken : Token;
     let diagnostics : Diagnostic[] = [];
     let typedefContainer! : Node;
-    let lastDocBlock : {type: Type | null, typedefs: (Typedef | Interfacedef)[], docBlockAttrs: TagAttribute[] } | null = null;
+    let lastDocBlock : {
+        typeAnnotation: TypeAnnotation | null,
+        typedefs: (Typedef | Interfacedef)[],
+        argumentAnnotations: NamedAnnotation[],
+        docBlockAttrs: TagAttribute[]
+    } | null = null;
     let parseErrorMsg : string | null = null;
 
     const SpeculationHelper = (function() {
@@ -218,6 +223,11 @@ export function Parser(config: ProjectOptions) {
 
     function peekChar(jump: number = 0): string {
         return scanner.peekChar(jump);
+    }
+
+    function advance(jump: number) : void {
+        scanner.advance(jump);
+        primePeekCacheAndLookahead();
     }
 
     function lookahead() : TokenType {
@@ -1697,7 +1707,7 @@ export function Parser(config: ProjectOptions) {
                     }
 
                     if (savedLastDocBlock) {
-                        tag.typeAnnotation = savedLastDocBlock.type;
+                        tag.typeAnnotation = savedLastDocBlock.typeAnnotation;
                     }
 
                     result.push(tag);
@@ -1951,7 +1961,7 @@ export function Parser(config: ProjectOptions) {
 
             const declaration = VariableDeclaration(finalModifier, varModifier, assignmentExpr);
             if (savedLastDocBlock) {
-                declaration.typeAnnotation = savedLastDocBlock.type;
+                declaration.typeAnnotation = savedLastDocBlock.typeAnnotation;
                 
                 //
                 // clear lastTypeAnnotation *if* it hasn't changed since we entered this method
@@ -1969,7 +1979,7 @@ export function Parser(config: ProjectOptions) {
         }
         else {
             if (savedLastDocBlock) {
-                assignmentExpr.typeAnnotation = savedLastDocBlock.type;
+                assignmentExpr.typeAnnotation = savedLastDocBlock.typeAnnotation;
                 if (lastDocBlock === savedLastDocBlock) lastDocBlock = null;
             }
             return assignmentExpr;
@@ -3397,7 +3407,7 @@ export function Parser(config: ProjectOptions) {
         let returnTypeAnnotation : Type | null = null; // fixme: unecessary?
         const result = Script.FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body, returnTypeAnnotation);
 
-        result.typeAnnotation = savedLastDocBlock?.type ?? null;
+        result.typeAnnotation = coalesceCurrentTypeAnnotationsToBindToNode(savedLastDocBlock);
         
         // the next legit docblock might be parsed as trivia "attached" to the end of this function's final brace
         if (lastDocBlock === savedLastDocBlock) {
@@ -3409,6 +3419,17 @@ export function Parser(config: ProjectOptions) {
         return result;
     }
 
+    function coalesceCurrentTypeAnnotationsToBindToNode(docBlock: typeof lastDocBlock) : TypeAnnotation | NonCompositeFunctionTypeAnnotation | null {
+        if (docBlock?.argumentAnnotations) {
+            return NonCompositeFunctionTypeAnnotation(docBlock.argumentAnnotations, null);
+        }
+        else if (docBlock?.typeAnnotation) {
+            return docBlock.typeAnnotation;
+        }
+        else {
+            return null;
+        }
+    }
     function parseDo() : Do {
         const doToken = parseExpectedTerminal(TokenType.KW_DO, ParseOptions.withTrivia);
         const body = parseStatement();
@@ -3931,8 +3952,9 @@ export function Parser(config: ProjectOptions) {
 
         let workingAttributeUiName : Terminal = NilTerminal(pos(), "hint");
         const docBlockAttrs : TagAttribute[] = [];
-        const defs : (Typedef | Interfacedef)[] = [];
-        let typeAnnotation : Type | null = null;
+        const typedefs : (Typedef | Interfacedef)[] = [];
+        const argumentAnnotations : NamedAnnotation[] = [];
+        let typeAnnotation : TypeAnnotation | null = null;
 
         function eatWhitespace() {
             while (lookahead() === TokenType.WHITESPACE) { // fixme: we are in trivia context, right?
@@ -3963,19 +3985,30 @@ export function Parser(config: ProjectOptions) {
                         restoreScannerState({...getScannerState(), index: getIndex() - name.length + 1}); // backup to start of `interface` "token" (without the "!")
                         const interfaceDef = parseType();
                         if (interfaceDef.kind === TypeKind.interface) {
-                            defs.push(Interfacedef(interfaceDef));
+                            typedefs.push(Interfacedef(interfaceDef));
                         }
                         continue;
                     }
                     else if (parseTypes && name === "!typedef") {
                         eatWhitespace();
-                        defs.push(parseTypeDef());
+                        typedefs.push(parseTypeDef());
                         continue;
                     }
                     else if (parseTypes && name == "!type") {
                         eatWhitespace();
-                        typeAnnotation = parseType();
+                        typeAnnotation = TypeAnnotation(parseType());
                         continue;
+                    }
+                    else if (parseTypes && name == "!arg" && peek().text === ":") {
+                        next();
+                        const name = scanIdentifier();
+                        if (!name) {
+                            next(); // some kind of error...
+                        }
+                        else {
+                            const type = parseType();
+                            argumentAnnotations.push(NamedAnnotation(name, type));
+                        }
                     }
                     // 1/21/22 -- not supporting decorators, the idea is/was to allow some kind of hook into the binder, to add/remove cfc member functions or properties or etc.
                     // else if (parseTypes && name === "!decorate") {
@@ -4004,7 +4037,12 @@ export function Parser(config: ProjectOptions) {
             docBlockAttrs.push(docBlockAttr);
         }
 
-        lastDocBlock = {type: typeAnnotation, typedefs: defs, docBlockAttrs: docBlockAttrs};
+        lastDocBlock = {
+            typeAnnotation,
+            typedefs,
+            argumentAnnotations,
+            docBlockAttrs
+        };
 
         restoreScannerState(savedScannerState);
     }
@@ -4052,7 +4090,7 @@ export function Parser(config: ProjectOptions) {
             mode: ScannerMode.tag | ScannerMode.script, // set docblock mode if we're in a docblock...
         })
 
-        const {defs, annotations} = parseTypeAnnotations();
+        const {defs, annotations, argumentAnnotations} = parseTypeAnnotations();
         
         if (annotations.length > 1) {
             // we need to get the type's ranges and terminals and etc.
@@ -4062,8 +4100,9 @@ export function Parser(config: ProjectOptions) {
         // <whitespace><comment><whitespace><comment>
         // only the last final comment's type annotation will be considered for the next non-trivial production
         lastDocBlock = {
-            type: annotations.length === 1 ? annotations[0].type : null,
+            typeAnnotation: annotations.length === 1 ? annotations[0] : null,
             typedefs: defs,
+            argumentAnnotations,
             docBlockAttrs: [] // this is not a docblock, if it were, we'd be using "parseDocBlockFromPreParsedTrivia"
         };
 
@@ -4086,31 +4125,15 @@ export function Parser(config: ProjectOptions) {
         
         const result = {
             defs: <(Typedef | Interfacedef)[]>[],
-            annotations: <TypeAnnotation[]>[]
+            annotations: <TypeAnnotation[]>[], // should only be on per docblock or comment right?
+            argumentAnnotations: <NamedAnnotation[]>[]
+
         }
 
         while (lookahead() !== TokenType.EOF) {
-            if (peek().text === "@" && peek(1).text === "!") {
+            if (peek().text === "@" && peek(1).text === "!") { // expensive to peek(1) and next(), next()
                 next(), next();
                 const contextualKeyword = peek();
-                // @rmme 10/31/21 -- no "global declarations" anymore, use "well known interface extensions"
-                // if (contextualKeyword.text === "declare") {
-                //     next(), parseTrivia();
-                //     const declarationSpecifier = peek();
-                //     if (declarationSpecifier.text === "function") {
-                //         const decl = tryParseNamedFunctionDefinition(/*speculative*/ false, /*asDeclaration*/ true);
-                //         const signature = extractCfFunctionSignature(decl, /*asDeclaration*/true);
-                //         result.push(TypeShim("typedef", signature));
-                //     }
-                //     // else if (declarationSpecifier.text === "global") {
-                //     //     parseErrorAtRange(contextualKeyword.range, "Global declarations are not yet supported. This would be for the cgi and etc. scopes.");
-                //     //     next();
-                //     // }
-                //     else {
-                //         parseErrorAtRange(contextualKeyword.range, "Invalid declaration specifier.");
-                //         next();
-                //     }
-                // }
                 if (contextualKeyword.text === "interface") {
                     // leave scanner alone, type parser needs "interface"
                     const ifaceDef = parseType();
@@ -4126,6 +4149,17 @@ export function Parser(config: ProjectOptions) {
                     next(), parseTrivia();
                     const typeDef = parseTypeDef();
                     result.defs.push(typeDef);
+                }
+                else if (contextualKeyword.text === "arg" && peekChar(3) === ":") {
+                    advance(4);
+                    const name = scanIdentifier();
+                    if (!name) {
+                        next(); // some kind of error...
+                    }
+                    else {
+                        const type = parseType();
+                        result.argumentAnnotations.push(NamedAnnotation(name, type));
+                    }
                 }
                 else {
                     next(), parseTrivia();
@@ -4186,6 +4220,7 @@ export function Parser(config: ProjectOptions) {
     function parseType() : Type;
     function parseType(fromInclusive: number, toExclusive: number) : Type;
     function parseType(fromInclusive?: number, toExclusive?: number) : Type {
+        // these are our annotation typenames, not cf typenames
         function tokenToType(lexeme: Token) {
             switch (lexeme.text) {
                 case "numeric":
@@ -4204,6 +4239,8 @@ export function Parser(config: ProjectOptions) {
                     return BuiltinType.void;
                 case "never":
                     return BuiltinType.never;
+                case "null":
+                    return BuiltinType.null;
                 default:
                     return cfTypeId(lexeme.text);
             }

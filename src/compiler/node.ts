@@ -242,7 +242,7 @@ export interface NodeBase {
     parent: Node | null,
     range: SourceRange,
 
-    typeAnnotation: Type | null,
+    typeAnnotation: TypeAnnotation | NonCompositeFunctionTypeAnnotation | null,
 
     fromTag?: boolean,
     tagOrigin: { // todo: make this only present on particular tags, and flatten it
@@ -2454,13 +2454,15 @@ export function New(
 }
 
 export const enum TypeShimKind {
-    typedef,         // `@!typedef Foo = sometype`, declaring the typeid "Foo" to be bound to "sometype"
-    interfacedef,    // `@!interface XYZ {}`, basically a typedef but different enough to need a separate treatement
-    annotation,      // `@!type sometype`, annotates the subsequent statement with a type
+    typedef,                           // `@!typedef Foo = sometype`, declaring the typeid "Foo" to be bound to "sometype"
+    interfacedef,                      // `@!interface XYZ {}`, basically a typedef but different enough to need a separate treatement
+    annotation,                        // `@!type sometype`, annotates the subsequent statement with a type
+    namedAnnotation,             // `@!arg:<argname> <type>` annotates a single function argument
+    nonCompositeFunctionTypeAnnotation // we combine any loose functionArgAnnotations into a type shim of this kind
     /*, decorator */ // unused
 };
 
-export type TypeShim = Typedef | Interfacedef | TypeAnnotation;
+export type TypeShim = Typedef | Interfacedef | TypeAnnotation | NamedAnnotation ;
 interface TypeShimBase extends NodeBase {
     kind: NodeKind.typeShim,
     shimKind: TypeShimKind,
@@ -2478,6 +2480,17 @@ export interface Interfacedef extends TypeShimBase {
 }
 export interface TypeAnnotation extends TypeShimBase {
     shimKind: TypeShimKind.annotation,
+}
+
+export interface NonCompositeFunctionTypeAnnotation extends TypeShimBase {
+    shimKind: TypeShimKind.nonCompositeFunctionTypeAnnotation,
+    params: NamedAnnotation[],
+    returns: NamedAnnotation | null
+}
+
+export interface NamedAnnotation extends TypeShimBase {
+    shimKind: TypeShimKind.namedAnnotation,
+    name: Token,
 }
 
 export function Typedef(type: Type, name: string) : Typedef {
@@ -2499,6 +2512,22 @@ export function TypeAnnotation(type: Type) : TypeAnnotation {
     const v = NodeBase<TypeShimBase>(NodeKind.typeShim, SourceRange.Nil()) as TypeAnnotation;
     v.shimKind = TypeShimKind.annotation;
     v.type = type;
+    return v;
+}
+
+export function NamedAnnotation(name: Token, type: Type) : NamedAnnotation {
+    const v = NodeBase<TypeShimBase>(NodeKind.typeShim, SourceRange.Nil()) as NamedAnnotation;
+    v.shimKind = TypeShimKind.namedAnnotation;
+    v.name = name;
+    v.type = type;
+    return v;
+}
+
+export function NonCompositeFunctionTypeAnnotation(params: NamedAnnotation[], returns: NamedAnnotation | null) : NonCompositeFunctionTypeAnnotation {
+    const v = NodeBase<TypeShimBase>(NodeKind.typeShim, SourceRange.Nil()) as NonCompositeFunctionTypeAnnotation;
+    v.shimKind = TypeShimKind.nonCompositeFunctionTypeAnnotation;
+    v.params = params;
+    v.returns = returns;
     return v;
 }
 
