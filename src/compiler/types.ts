@@ -957,7 +957,7 @@ export function stringifyType(type: Type) : string {
                 const result = builder.join(", ");
                 return "{" + result + "}";
             }
-            case TypeKind.symbolTableTypeWrapper: return "symbol-table-wrapper";
+            case TypeKind.symbolTableTypeWrapper: return "<<scope>>";
             case TypeKind.typeConstructor: return "type constructor";
             case TypeKind.typeConstructorInvocation: return "type constructor invocation";
             case TypeKind.typeConstructorParam: return "type constructor param";

@@ -141,7 +141,8 @@ export function Parser(config: ProjectOptions) {
         typeAnnotation: TypeAnnotation | null,
         typedefs: (Typedef | Interfacedef)[],
         argumentAnnotations: NamedAnnotation[] | null,
-        docBlockAttrs: TagAttribute[]
+        docBlockAttrs: TagAttribute[],
+        treatAsConstructor: boolean 
     } | null = null;
     let parseErrorMsg : string | null = null;
 
@@ -3955,6 +3956,7 @@ export function Parser(config: ProjectOptions) {
         const typedefs : (Typedef | Interfacedef)[] = [];
         const argumentAnnotations : NamedAnnotation[] = [];
         let typeAnnotation : TypeAnnotation | null = null;
+        let treatAsConstructor = false;
 
         function eatWhitespace() {
             while (lookahead() === TokenType.WHITESPACE) { // fixme: we are in trivia context, right?
@@ -3999,6 +4001,10 @@ export function Parser(config: ProjectOptions) {
                         typeAnnotation = TypeAnnotation(parseType());
                         continue;
                     }
+                    else if (parseTypes && name == "!init") {
+                        treatAsConstructor = true;
+                        continue;
+                    }
                     else if (parseTypes && name == "!arg" && peek().text === ":") {
                         next();
                         const name = scanIdentifier();
@@ -4041,7 +4047,8 @@ export function Parser(config: ProjectOptions) {
             typeAnnotation,
             typedefs,
             argumentAnnotations: argumentAnnotations.length > 0 ? argumentAnnotations : null,
-            docBlockAttrs
+            docBlockAttrs,
+            treatAsConstructor
         };
 
         restoreScannerState(savedScannerState);
@@ -4090,7 +4097,7 @@ export function Parser(config: ProjectOptions) {
             mode: ScannerMode.tag | ScannerMode.script, // set docblock mode if we're in a docblock...
         })
 
-        const {defs, typeAnnotations, argumentAnnotations} = parseTypeAnnotations();
+        const {defs, typeAnnotations, argumentAnnotations, treatAsConstructor} = parseTypeAnnotations();
         
         if (typeAnnotations.length > 1) {
             // we need to get the type's ranges and terminals and etc.
@@ -4104,7 +4111,8 @@ export function Parser(config: ProjectOptions) {
             typeAnnotation: typeAnnotations.length === 1 ? typeAnnotations[0] : null,
             typedefs: defs,
             argumentAnnotations,
-            docBlockAttrs: [] // this is not a docblock, if it were, we'd be using "parseDocBlockFromPreParsedTrivia"
+            docBlockAttrs: [], // this is not a docblock, if it were, we'd be using "parseDocBlockFromPreParsedTrivia"
+            treatAsConstructor
         };
 
         restoreScannerState(savedScannerState);
@@ -4128,8 +4136,9 @@ export function Parser(config: ProjectOptions) {
             defs: <(Typedef | Interfacedef)[]>[],
             typeAnnotations: <TypeAnnotation[]>[], // should only be on per docblock or comment right? (T | null) not (T[])
             argumentAnnotations: <NamedAnnotation[]>[]
-
         }
+
+        let treatAsConstructor = false;
 
         while (lookahead() !== TokenType.EOF) {
             if (peek().text === "@" && peek(1).text === "!") { // expensive to peek(1) and next(), next()
@@ -4150,6 +4159,10 @@ export function Parser(config: ProjectOptions) {
                     next(), parseTrivia();
                     const typeDef = parseTypeDef();
                     result.defs.push(typeDef);
+                }
+                else if (contextualKeyword.text === "init") {
+                    advance(5);
+                    treatAsConstructor = true;
                 }
                 else if (contextualKeyword.text === "arg" && peekChar(3) === ":") {
                     advance(4);
@@ -4178,7 +4191,8 @@ export function Parser(config: ProjectOptions) {
         return {
             defs:result.defs,
             typeAnnotations: result.typeAnnotations,
-            argumentAnnotations: result.argumentAnnotations.length > 0 ? result.argumentAnnotations : null
+            argumentAnnotations: result.argumentAnnotations.length > 0 ? result.argumentAnnotations : null,
+            treatAsConstructor
         }
     }
 

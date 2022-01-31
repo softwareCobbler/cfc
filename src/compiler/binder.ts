@@ -469,7 +469,7 @@ export function Binder(options: ProjectOptions) {
                 canonicalName,
                 declarations: [declaringNode],
                 type: type ?? BuiltinType.any,
-                symbolId: symbolId++,
+                symbolId: freshSymbolId,
             }
 
             symTab.set(canonicalName, symTabEntry);

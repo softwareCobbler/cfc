@@ -1523,14 +1523,22 @@ export function Checker(options: ProjectOptions) {
                 // an assignment, even fv-unqualified, will always be bound to a scope
                 // `x = y` is effectively `variables.x = y`
                 if (node.left.kind === NodeKind.identifier || node.left.kind === NodeKind.indexedAccess) {
+                    const lhsSymbol = getResolvedSymbol(node.left);
                     const lValIdent = stringifyLValue(node.left);
                     if (!lValIdent) return;
 
-                    const lhsSymbol = walkupScopesToResolveSymbol(node, lValIdent.canonical);
+                    //const lhsSymbol = walkupScopesToResolveSymbol(node, lValIdent.canonical);
                     const rhsType = getCachedEvaluatedNodeType(node.right);
 
                     if (CHECK_FLOW_TYPES && lhsSymbol) {
                         const effectivelyDeclaredType = sourceFile.effectivelyDeclaredTypes.get(lhsSymbol.symTabEntry.symbolId);
+
+                        // in `init` or a function marked `@!init`
+                        const XXX_IN_EFFECTIVE_CONSTRUCTOR = (() => {
+                            const f = getContainingFunction(node);
+                            return f?.kind === NodeKind.functionDefinition && f.name?.canonical === "init";
+                        })();
+
                         if (effectivelyDeclaredType) {
                             if (isAssignable(rhsType, effectivelyDeclaredType)) {
                                 setCachedEvaluatedFlowType(node.left.flow!, lhsSymbol.symTabEntry.symbolId, rhsType);
@@ -1541,6 +1549,16 @@ export function Checker(options: ProjectOptions) {
                                 const l = stringifyType(effectivelyDeclaredType);
                                 issueDiagnosticAtNode(node.right, `Type '${r}' is not assignable to type '${l}'`, DiagnosticKind.error);
                             }
+                        }
+                        else if (!effectivelyDeclaredType
+                            && XXX_IN_EFFECTIVE_CONSTRUCTOR
+                            && node.left.kind === NodeKind.indexedAccess
+                            && node.left.root.kind === NodeKind.identifier
+                            && node.left.root.canonicalName === "variables"
+                        ) {
+                            // fixme: check against a type annotation?
+                            setCachedEvaluatedFlowType(node.left.flow!, lhsSymbol.symTabEntry.symbolId, rhsType);
+                            sourceFile.effectivelyDeclaredTypes.set(lhsSymbol.symTabEntry.symbolId, rhsType);
                         }
                     }
                 }
@@ -1936,7 +1954,7 @@ export function Checker(options: ProjectOptions) {
                         }
                         const possiblyEmptyInterfaceExtension = walkupToFindInterfaceDefinition(name, node);
                         setCachedEvaluatedNodeType(node, structViewOfScope(sourceFile.containedScope[name]!, possiblyEmptyInterfaceExtension));
-                        break;
+                        return;
                     }
                     case "application": {
                         const possiblyEmptyInterfaceExtension = walkupToFindInterfaceDefinition(name, node);
@@ -2080,7 +2098,7 @@ export function Checker(options: ProjectOptions) {
                         symbol = getStructMember(element, type, propertyName);
                         if (symbol) {
                             setResolvedSymbol(element, symbol);
-                            type = evaluateType(node, symbol.symTabEntry.type);
+                            type = sourceFile.effectivelyDeclaredTypes.get(symbol.symTabEntry.symbolId);
                         }
                         else {
                             type = undefined;
