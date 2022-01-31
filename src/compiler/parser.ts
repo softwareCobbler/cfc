@@ -140,7 +140,7 @@ export function Parser(config: ProjectOptions) {
     let lastDocBlock : {
         typeAnnotation: TypeAnnotation | null,
         typedefs: (Typedef | Interfacedef)[],
-        argumentAnnotations: NamedAnnotation[],
+        argumentAnnotations: NamedAnnotation[] | null,
         docBlockAttrs: TagAttribute[]
     } | null = null;
     let parseErrorMsg : string | null = null;
@@ -4040,7 +4040,7 @@ export function Parser(config: ProjectOptions) {
         lastDocBlock = {
             typeAnnotation,
             typedefs,
-            argumentAnnotations,
+            argumentAnnotations: argumentAnnotations.length > 0 ? argumentAnnotations : null,
             docBlockAttrs
         };
 
@@ -4090,17 +4090,18 @@ export function Parser(config: ProjectOptions) {
             mode: ScannerMode.tag | ScannerMode.script, // set docblock mode if we're in a docblock...
         })
 
-        const {defs, annotations, argumentAnnotations} = parseTypeAnnotations();
+        const {defs, typeAnnotations, argumentAnnotations} = parseTypeAnnotations();
         
-        if (annotations.length > 1) {
+        if (typeAnnotations.length > 1) {
             // we need to get the type's ranges and terminals and etc.
+            // fixme: shouldn't return more than 1 annotation
             parseErrorAtRange(node.range, "Only one @type annotation is permitted per comment.");
         }
 
         // <whitespace><comment><whitespace><comment>
         // only the last final comment's type annotation will be considered for the next non-trivial production
         lastDocBlock = {
-            typeAnnotation: annotations.length === 1 ? annotations[0] : null,
+            typeAnnotation: typeAnnotations.length === 1 ? typeAnnotations[0] : null,
             typedefs: defs,
             argumentAnnotations,
             docBlockAttrs: [] // this is not a docblock, if it were, we'd be using "parseDocBlockFromPreParsedTrivia"
@@ -4125,7 +4126,7 @@ export function Parser(config: ProjectOptions) {
         
         const result = {
             defs: <(Typedef | Interfacedef)[]>[],
-            annotations: <TypeAnnotation[]>[], // should only be on per docblock or comment right?
+            typeAnnotations: <TypeAnnotation[]>[], // should only be on per docblock or comment right? (T | null) not (T[])
             argumentAnnotations: <NamedAnnotation[]>[]
 
         }
@@ -4143,7 +4144,7 @@ export function Parser(config: ProjectOptions) {
                 }
                 else if (contextualKeyword.text === "type") {
                     next(), parseTrivia();
-                    result.annotations.push(TypeAnnotation(parseType()));
+                    result.typeAnnotations.push(TypeAnnotation(parseType()));
                 }
                 else if (contextualKeyword.text === "typedef") {
                     next(), parseTrivia();
@@ -4174,7 +4175,11 @@ export function Parser(config: ProjectOptions) {
         parseContext = savedContext;
         setScannerMode(savedScannerMode);
         
-        return result;
+        return {
+            defs:result.defs,
+            typeAnnotations: result.typeAnnotations,
+            argumentAnnotations: result.argumentAnnotations.length > 0 ? result.argumentAnnotations : null
+        }
     }
 
     function parseTypeDef() : Typedef {

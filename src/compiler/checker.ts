@@ -2271,11 +2271,24 @@ export function Checker(options: ProjectOptions) {
             checkerStack.pop();
         }
 
-        if (symbol && node.flow) {
-            // having a symbol implies that we intended to have set an assignment flow on this node,
-            // because the name is now of this type from this point in the flow on
-            // we have a symbol for `function foo() {}` but not for `var foo = function() {}`
-            setCachedEvaluatedFlowType(node.flow!, symbol.symTabEntry.symbolId, finalType);
+        if (symbol) {
+            // fixme: interplay between inference and explicitly declared type
+            // what do we consider an explicitly declared type
+            // what if the user says "function foo(string bar, baz) {}"?
+            //   - there is no return type
+            //   - half of the arguments have explicit types
+            //   - considered a user defined type that overrides inference?
+            //   - probably we just care about return type
+            //
+
+            sourceFile.effectivelyDeclaredTypes.set(symbol.symTabEntry.symbolId, finalType);
+
+            if (node.flow) { // fixme: should always have this?
+                // having a symbol implies that we intended to have set an assignment flow on this node,
+                // because the name is now of this type from this point in the flow on
+                // we have a symbol for `function foo() {}` but not for `var foo = function() {}`
+                setCachedEvaluatedFlowType(node.flow!, symbol.symTabEntry.symbolId, finalType);
+            }
         }
     }
 
