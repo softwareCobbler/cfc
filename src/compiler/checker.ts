@@ -1940,21 +1940,17 @@ export function Checker(options: ProjectOptions) {
                 }
             }
 
-            //
-            // precedence:
-            // 1) forced type
-            // 2) flow-deduced type
-            // 3) annotation-declared type (@!type Foo)
-            // 4) cf-syntax-directed-declared type (like a typed function argument)
-            //
-            // "evaluateType" for #2
-            // "getInstantiatedDeclaredType" does for #3
-            // probably the two methods could merge, and internally choose the right thing
-            //
-            const apparentType = forcedType ? forcedType
+            const apparentType = forcedType
+                // when do we force a type? like forced-any or etc.?
+                ? forcedType
+                // if there's a flowtype, use that
                 : flowType ? evaluateType(node, flowType)
+                // resolved symbol likely comes from another file (and from the top-level of that file, implying we can't 'export' non member functions and the etc.?)
+                // resolvedSymbol.container might also be this sourceFile, which is OK, too
+                : resolvedSymbol.container.kind === NodeKind.sourceFile
+                    ? resolvedSymbol.container.effectivelyDeclaredTypes.get(resolvedSymbol.symTabEntry.symbolId) || BuiltinType.any
+                // resolvedSymbol's container is NOT a sourceFile, implying it's defined somewhere in this file
                 : sourceFile.effectivelyDeclaredTypes.get(resolvedSymbol.symTabEntry.symbolId) || BuiltinType.any;
-                //: evaluateType(resolvedSymbol.container, resolvedSymbol.symTabEntry.type);
 
             setCachedEvaluatedNodeType(node, apparentType);
             setResolvedSymbol(node, resolvedSymbol);
