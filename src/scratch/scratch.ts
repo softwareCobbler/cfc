@@ -24,6 +24,9 @@ function projectFiddle() {
                         }
                     }`,
                 "lib.d.cfm": `
+                    @!interface __cfEngine {
+                        callStackGet: () => {function: string, template: string}[]
+                    }
                     @!interface Array<T> {
                         map: <U>(callback: (e: T, i?: numeric, a?: T[]) => U, parallel?: boolean, maxThreads?: boolean) => U[]
                     }
@@ -36,13 +39,7 @@ function projectFiddle() {
                     "b": {
                         "x.cfc": `
                         component accessors="true" {
-                            function init() {
-                                variables.foo = {x: 1};
-                            }
-
-                            function bar() {
-                                foo.
-                            }
+                            callStackGet()
                         }
                         `,
                         "y.cfc": "component { function mlem() {} }",
@@ -61,7 +58,7 @@ function projectFiddle() {
         debug: true,
         parseTypes: true,
         engineVersion: EngineVersions["lucee.5"],
-        withWireboxResolution: true,
+        withWireboxResolution: false,
         wireboxConfigFileCanonicalAbsPath: "/Wirebox.cfc",
         checkReturnTypes: true,
         checkFlowTypes: true,
@@ -74,7 +71,7 @@ function projectFiddle() {
     //const project = Project([path.resolve(".")], FileSystem(), {debug: true, parseTypes: true, language: LanguageVersion.lucee5});
     //const target = path.join(path.resolve("./test/"), "mxunit/framework/javaloader/JavaProxy.cfc");
     
-    //project.addEngineLib("/lib.d.cfm");
+    project.addEngineLib("/lib.d.cfm");
     // project.addEngineLib("/realLib.d.cfm");
     project.addFile("/a/b/x.cfc");
     //project.addFile("C:\\Users\\anon\\dev\\cb\\testbox\\tests\\resources\\coldbox\\system\\EventHandler.cfc");

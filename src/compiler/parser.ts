@@ -3404,6 +3404,13 @@ export function Parser(config: ProjectOptions) {
         if (savedLastDocBlock?.docBlockAttrs) {
             attrs.push(...savedLastDocBlock.docBlockAttrs);
         }
+        if (savedLastDocBlock?.treatAsConstructor) {
+            const syntheticAttr = TagAttribute(NilTerminal(-1), "@!init");
+            // this node is synthetic, and isn't in lexical order;
+            // non-lexically ordered nodes must be skipped by the tree flatener, marking as doc block acheives this, perhaps cryptically
+            syntheticAttr.flags |= NodeFlags.docBlock;
+            attrs.push(syntheticAttr);
+        }
 
         let returnTypeAnnotation : Type | null = null; // fixme: unecessary?
         const result = Script.FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body, returnTypeAnnotation);

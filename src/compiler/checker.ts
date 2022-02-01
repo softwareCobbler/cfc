@@ -2,7 +2,7 @@ import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, State
 import { CfcResolution, CfcResolver, ComponentResolutionArgs, EngineSymbolResolver, LibTypeResolver, ProjectOptions } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, Struct, cfUnion, BuiltinType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, Type, stringifyType, cfFunctionSignatureParam, cfFunctionOverloadSet, cfTypeId, SymbolTableTypeWrapper, Cfc, Interface, createType, createLiteralType, typeFromJavaLikeTypename, structurallyCompareTypes, TypeKind, isStructLike, cfArray, cfStructLike, isStructLikeOrArray, cfGenericFunctionSignature } from "./types";
-import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, functionDefinitionHasUserSpecifiedReturnType, getAttributeValue, getCallExpressionNameErrorRange, getComponentAttrs, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionNameTerminalErrorNode, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isLiteralExpr, isNamedFunction, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue, tryGetCfcMemberFunctionDefinition } from "./utils";
+import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, functionDefinitionHasUserSpecifiedReturnType, getAttributeValue, getCallExpressionNameErrorRange, getComponentAttrs, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionNameTerminalErrorNode, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isInCfcPsuedoConstructor, isInEffectiveConstructorMethod, isLiteralExpr, isNamedFunction, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue, tryGetCfcMemberFunctionDefinition } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol, TupleKeyedWeakMap } from "./utils";
 import { Engine, supports } from "./engines";
 
@@ -1531,13 +1531,9 @@ export function Checker(options: ProjectOptions) {
                     const rhsType = getCachedEvaluatedNodeType(node.right);
 
                     if (CHECK_FLOW_TYPES && lhsSymbol) {
-                        const effectivelyDeclaredType = sourceFile.effectivelyDeclaredTypes.get(lhsSymbol.symTabEntry.symbolId);
-
-                        // in `init` or a function marked `@!init`
-                        const XXX_IN_EFFECTIVE_CONSTRUCTOR = (() => {
-                            const f = getContainingFunction(node);
-                            return f?.kind === NodeKind.functionDefinition && f.name?.canonical === "init";
-                        })();
+                        const effectivelyDeclaredType = lhsSymbol.scopeName === "__property"
+                            ? lhsSymbol.symTabEntry.type
+                            : sourceFile.effectivelyDeclaredTypes.get(lhsSymbol.symTabEntry.symbolId);
 
                         if (effectivelyDeclaredType) {
                             if (isAssignable(rhsType, effectivelyDeclaredType)) {
@@ -1551,7 +1547,7 @@ export function Checker(options: ProjectOptions) {
                             }
                         }
                         else if (!effectivelyDeclaredType
-                            && XXX_IN_EFFECTIVE_CONSTRUCTOR
+                            && (isInCfcPsuedoConstructor(node) || isInEffectiveConstructorMethod(node))
                             && node.left.kind === NodeKind.indexedAccess
                             && node.left.root.kind === NodeKind.identifier
                             && node.left.root.canonicalName === "variables"
@@ -1743,6 +1739,13 @@ export function Checker(options: ProjectOptions) {
             rhsType = getCachedEvaluatedNodeType(node.parent.expr); // `for (x in y)`, x gets its type from `y`
             rhsExpr = node.parent.expr;
             assignabilityErrorNode = node;
+
+            if (rhsType.kind === TypeKind.array) {
+                rhsType = rhsType.memberType;
+            }
+            else {
+                rhsType = BuiltinType.any;
+            }
         }
         else if (node.expr.kind === NodeKind.identifier) {
             // this is a variable declaration, like `var foo;`
@@ -2098,7 +2101,9 @@ export function Checker(options: ProjectOptions) {
                         symbol = getStructMember(element, type, propertyName);
                         if (symbol) {
                             setResolvedSymbol(element, symbol);
-                            type = sourceFile.effectivelyDeclaredTypes.get(symbol.symTabEntry.symbolId);
+                            type = symbol.scopeName === "__property" // is it ever NOT a property here?
+                                ? symbol.symTabEntry.type
+                                : sourceFile.effectivelyDeclaredTypes.get(symbol.symTabEntry.symbolId);
                         }
                         else {
                             type = undefined;

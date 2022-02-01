@@ -1400,6 +1400,16 @@ export function getCallExpressionNameErrorRange(node: CallExpression) : SourceRa
     }
 }
 
+export function isInEffectiveConstructorMethod(node: Node) : boolean {
+    const f = getContainingFunction(node);
+    if (f?.kind === NodeKind.functionDefinition) {
+        if (f.name?.canonical === "init" || getAttribute(f.attrs, "@!init")) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /**
  * check if `maybeDescendant` is a descendant of `ancestor`;
  * i.e. by one or more extends clauses can we climb from `maybeDescendant` to `ancestor`
