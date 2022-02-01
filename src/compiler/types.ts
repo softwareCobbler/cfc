@@ -388,8 +388,8 @@ export interface cfFunctionOverloadSet extends TypeBase {
     readonly uiName: string,
     readonly canonicalName: string,
     readonly overloads: {
-        params: readonly Readonly<cfFunctionSignatureParam>[],
-        returns: Readonly<Type>
+        readonly params: Readonly<cfFunctionSignatureParam>[],
+        readonly returns: Readonly<Type>
     }[],
     readonly attrs: readonly TagAttribute[],
 }

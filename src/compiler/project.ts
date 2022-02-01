@@ -7,7 +7,7 @@ import { EngineVersion } from "./engines";
 import { BlockType, CallExpression, mergeRanges, Node, NodeId, NodeKind, SourceFile, StatementType, SymTabEntry, DiagnosticKind, resetSourceFileInPlace } from "./node";
 import { Parser } from "./parser";
 import { CfFileType, SourceRange } from "./scanner";
-import { cfFunctionOverloadSet, cfFunctionSignatureParam, Interface, createLiteralType, Type, Struct, CfcLookup } from "./types";
+import { cfFunctionOverloadSet, cfFunctionSignatureParam, Interface, createLiteralType, Type, Struct, CfcLookup, BuiltinType } from "./types";
 
 import { isNamedFunction, cfmOrCfc, findNodeInFlatSourceMap, flattenTree, getAttributeValue, getComponentAttrs, getComponentBlock, getTriviallyComputableString, NodeSourceMap, visit } from "./utils";
 
@@ -197,8 +197,16 @@ export interface ProjectOptions {
 
 export function Project(__const__projectRoot: string, fileSystem: FileSystem, options: ProjectOptions) {
     type AbsPath = string;
-    
+    type Trie<T> = Map<T, Trie<T> | string>;
+    interface ProjectMappings {
+        CF: Trie<string>,
+        WIREBOX?: Map<string, string>
+    }
+
     const projectRoot = canonicalizePath(__const__projectRoot); // the value passed in is inconvenient to name; the convenient name is immutable
+    const ProjectMappings : ProjectMappings = loadPathMappingsFromDisk(path.join(projectRoot, ".cfls-mappings.json"));
+    const wireboxLib : SourceFile | undefined = constructWireboxLibFile(ProjectMappings);
+
     const projectRootDirName = (() => {
         const t = path.parse(projectRoot).base.split(fileSystem.pathSep);
         return t.length > 0 ? t[t.length - 1] : "";
@@ -220,7 +228,70 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     const files : FileCache = new Map();
 
     let engineLib : CachedFile | undefined;
-    let wireboxLib : SourceFile | null = null;
+
+    // mappings file should be configurable, relative to project root
+    function loadPathMappingsFromDisk(path: string) : ProjectMappings {
+        try {
+            const maybeJson = JSON.parse(fileSystem.readFileSync(path).toString());
+            const cfMappings = new Map() as Trie<string>;
+
+            if (isObject(maybeJson) && isObject(maybeJson.CF)) {
+                outer:
+                for (const [mapping, path] of Object.entries(maybeJson.CF)) {
+                    if (typeof mapping === "string" && typeof path === "string") {
+                        let trieWalker : Trie<string> = cfMappings;
+                        const components = mapping.split(".");
+                        if (components.length === 0) {
+                            continue outer;
+                        }
+
+                        while (components.length > 1) {
+                            const component = components.shift()!;
+                            if (trieWalker.has(component)) {
+                                const next = trieWalker.get(component)!;
+                                if (next instanceof Map) {
+                                    trieWalker = next;
+                                }
+                                else {
+                                    // bad def, like a.b.c = foo, a.b = bar; can "b" be a leaf and a directory?
+                                    continue outer;
+                                }
+                            }
+                        }
+
+                        if (trieWalker instanceof Map) {
+                            trieWalker.set(components[0]!, path);
+                        }
+                    }
+                }
+            }
+
+            if (options.withWireboxResolution) {
+                const wireboxMappings = new Map<string, string>();
+                if (isObject(maybeJson) && isObject(maybeJson.WIREBOX)) {
+                    for (const [name, mapping] of Object.entries(maybeJson.WIREBOX)) {
+                        if (typeof name === "string" && typeof mapping === "string") {
+                            wireboxMappings.set(name, mapping);
+                        }
+                    }
+                }
+                return {
+                    CF: cfMappings,
+                    WIREBOX: wireboxMappings
+                }
+            }
+            else {
+                return { CF: cfMappings };
+            }
+        }
+        catch {
+            return { CF: new Map() };
+        }
+
+        function isObject(v: any) : v is {[k: string]: any} {
+            return typeof v === "object" && v !== null;
+        }
+    }
 
     function tryAddFile(absPath: string) : CachedFile | undefined {
         if (!fileSystem.existsSync(absPath)) return undefined;
@@ -253,16 +324,16 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
 
             const checkStart = new Date().getTime();
 
-            if (options.withWireboxResolution && sourceFile.absPath === options.wireboxConfigFileCanonicalAbsPath) {
-                const wireboxInterface = constructWireboxInterface(sourceFile);
-                if (wireboxInterface) {
-                    if (!wireboxLib) wireboxLib = SourceFile("<<magic/wirebox>>", CfFileType.dCfm, "");
-                    wireboxLib.containedScope.typeinfo.mergedInterfaces.set("Wirebox", wireboxInterface);
-                }
-                else {
-                    wireboxLib = null;
-                }
-            }
+            // if (options.withWireboxResolution && sourceFile.absPath === options.wireboxConfigFileCanonicalAbsPath) {
+            //     const wireboxInterface = constructWireboxInterface(sourceFile);
+            //     if (wireboxInterface) {
+            //         if (!wireboxLib) wireboxLib = SourceFile("<<magic/wirebox>>", CfFileType.dCfm, "");
+            //         wireboxLib.containedScope.typeinfo.mergedInterfaces.set("Wirebox", wireboxInterface);
+            //     }
+            //     else {
+            //         wireboxLib = null;
+            //     }
+            // }
 
             if (options.withWireboxResolution && wireboxLib) {
                 sourceFile.libRefs.set("<<magic/wirebox>>", wireboxLib);
@@ -306,48 +377,101 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         return files.get(absPath)!;
     }
 
-    function constructWireboxInterface(sourceFile: SourceFile) : Interface | undefined {
-        const mappings = buildWireboxMappings(sourceFile);
-        if (!mappings) {
+    // function constructWireboxInterface(sourceFile: SourceFile) : Interface | undefined {
+    //     const mappings = buildWireboxMappings(sourceFile);
+    //     if (!mappings) {
+    //         return undefined;
+    //     }
+
+    //     const overloads : {params: cfFunctionSignatureParam[], returns: Type}[] = [];
+    //     const mappingsBuilder = new Map<string, SymTabEntry>();
+    //     for (const mapping of mappings) {
+    //         if (mapping.kind === "dir") {
+    //             const dirTarget = fileSystem.join(projectRoot, ...mapping.target.split("."));
+    //             if (!fileSystem.existsSync(dirTarget) || !fileSystem.lstatSync(dirTarget).isDirectory()) continue;
+    //             workDir(dirTarget);
+
+    //             function workDir(absPath: string) {
+    //                 const targets = fileSystem.readdirSync(absPath);
+    //                 for (const target of targets) {
+    //                     if (target.isSymbolicLink()) continue;
+    //                     if (target.isDirectory()) {
+    //                         workDir(fileSystem.join(absPath, target.name));
+    //                         continue;
+    //                     }
+    //                     if (!target.isFile()) continue;
+    //                     if (cfmOrCfc(target.name) !== CfFileType.cfc) continue;
+
+    //                     const instantiableName = target.name.replace(/\.cfc$/i, "");
+    //                     const instantiableNameAsLiteralType = createLiteralType(instantiableName);
+
+    //                     const param = cfFunctionSignatureParam(/*required*/true, instantiableNameAsLiteralType, "name")
+    //                     var cfcRefType = CfcLookup(instantiableNameAsLiteralType, ComponentSpecifier(fileSystem.join(absPath, target.name)));
+    //                     overloads.push({params: [param], returns: cfcRefType});
+    //                     const canonicalName = instantiableName.toLowerCase();
+    //                     mappingsBuilder.set(canonicalName, {
+    //                         canonicalName,
+    //                         uiName: instantiableName,
+    //                         type: cfcRefType,
+    //                         declarations: null,
+    //                         symbolId: -1,
+    //                     });
+    //                 }
+    //             }
+    //         }
+    //     }
+
+    //     const wireboxGetInstanceSymbol : SymTabEntry = {
+    //         uiName: "getInstance",
+    //         canonicalName: "getinstance",
+    //         declarations: null,
+    //         type: cfFunctionOverloadSet("getInstance", overloads, []),
+    //         symbolId: -1,
+    //     };
+
+    //     const wireboxMembers = new Map<string, SymTabEntry>([
+    //         ["getinstance", wireboxGetInstanceSymbol],
+    //         ["mappings", {
+    //             canonicalName: "mappings",
+    //             uiName: "mappings",
+    //             declarations: null,
+    //             type: Struct(mappingsBuilder),
+    //             symbolId: -1,
+    //         }]
+    //     ]);
+        
+    //     return Interface("Wirebox", wireboxMembers);
+    // }
+
+    function constructWireboxLibFile(mappings: ProjectMappings) : SourceFile | undefined {
+        if (!mappings.WIREBOX) {
             return undefined;
         }
-
+        
         const overloads : {params: cfFunctionSignatureParam[], returns: Type}[] = [];
         const mappingsBuilder = new Map<string, SymTabEntry>();
-        for (const mapping of mappings) {
-            if (mapping.kind === "dir") {
-                const dirTarget = fileSystem.join(projectRoot, ...mapping.target.split("."));
-                if (!fileSystem.existsSync(dirTarget) || !fileSystem.lstatSync(dirTarget).isDirectory()) continue;
-                workDir(dirTarget);
 
-                function workDir(absPath: string) {
-                    const targets = fileSystem.readdirSync(absPath);
-                    for (const target of targets) {
-                        if (target.isSymbolicLink()) continue;
-                        if (target.isDirectory()) {
-                            workDir(fileSystem.join(absPath, target.name));
-                            continue;
-                        }
-                        if (!target.isFile()) continue;
-                        if (cfmOrCfc(target.name) !== CfFileType.cfc) continue;
+        const initArgsParam = cfFunctionSignatureParam(false, BuiltinType.EmptyInterface, "initArgs");
+        const dslParam = cfFunctionSignatureParam(false, BuiltinType.string, "dsl");
 
-                        const instantiableName = target.name.replace(/\.cfc$/i, "");
-                        const instantiableNameAsLiteralType = createLiteralType(instantiableName);
-
-                        const param = cfFunctionSignatureParam(/*required*/true, instantiableNameAsLiteralType, "name")
-                        var cfcRefType = CfcLookup(instantiableNameAsLiteralType, ComponentSpecifier(fileSystem.join(absPath, target.name)));
-                        overloads.push({params: [param], returns: cfcRefType});
-                        const canonicalName = instantiableName.toLowerCase();
-                        mappingsBuilder.set(canonicalName, {
-                            canonicalName,
-                            uiName: instantiableName,
-                            type: cfcRefType,
-                            declarations: null,
-                            symbolId: -1,
-                        });
-                    }
-                }
+        for (const [name, mapping] of mappings.WIREBOX) {
+            const cfcAbsPath = findCfFileMappingByTypelikeName(mapping);
+            if (!cfcAbsPath) {
+                continue;
             }
+
+            const nameAsLiteralType = createLiteralType(name);
+            const nameParam = cfFunctionSignatureParam(/*required*/true, nameAsLiteralType, "name")
+            const cfcRefType = CfcLookup(nameAsLiteralType, ComponentSpecifier(cfcAbsPath));
+            overloads.push({params: [nameParam, initArgsParam, dslParam], returns: cfcRefType});
+            const canonicalName = name.toLowerCase();
+            mappingsBuilder.set(canonicalName, {
+                canonicalName,
+                uiName: name,
+                type: cfcRefType,
+                declarations: null,
+                symbolId: -1,
+            });
         }
 
         const wireboxGetInstanceSymbol : SymTabEntry = {
@@ -369,7 +493,10 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             }]
         ]);
         
-        return Interface("Wirebox", wireboxMembers);
+        const wireboxInterface = Interface("Wirebox", wireboxMembers);
+        const libFile = SourceFile("<<magic/wirebox>>", CfFileType.dCfm, "");
+        libFile.containedScope.typeinfo.mergedInterfaces.set("Wirebox", wireboxInterface);
+        return libFile;
     }
 
     function addEngineLib(absPath: string) {
@@ -490,9 +617,55 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         return files.get(canonicalizePath(absPath))?.parsedSourceFile.diagnostics || [];
     }
 
+    function findCfFileMappingByTypelikeName(name: string) : AbsPath | undefined {
+        const pathComponents = name.split(".");
+        if (pathComponents.length === 0) {
+            return undefined;
+        }
+
+        let trieWalker : Trie<string> | string | undefined = ProjectMappings.CF.get(pathComponents.shift()!);
+        while (trieWalker && typeof trieWalker !== "string" && pathComponents.length > 0) {
+            trieWalker = trieWalker.get(pathComponents.shift()!);
+        }
+
+        if (typeof trieWalker !== "string") {
+            return undefined;
+        }
+
+        const mappedPath = trieWalker;
+
+        return fileSystem.join(projectRoot, mappedPath, ...pathComponents) + ".cfc";
+    }
+    
+    // function tryGetDirectMappingHit(name: string) : {sourceFile: SourceFile, symbolTable: SymbolTable} | undefined {
+    //     const fileAbsPath = findCfFileMappingByTypelikeName(name);
+    //     if (!fileAbsPath) {
+    //         return undefined;
+    //     }
+
+    //     const maybeFile = tryAddFile(fileAbsPath);
+
+    //     if (maybeFile) {
+    //         return {
+    //             sourceFile: maybeFile.parsedSourceFile,
+    //             symbolTable: maybeFile.parsedSourceFile.containedScope.this || new Map()
+    //         }
+    //     }
+    //     else {
+    //         return undefined;
+    //     }
+    // }
+
     let cfcDepth = 0;
     const cfcDepthLimit = 16;
     function CfcResolver(args: ComponentResolutionArgs | ComponentSpecifier) {
+        // if (args.type === ComponentResolutionArgType.lookup) {
+        //     const directMappingHit = tryGetDirectMappingHit(args.cfcName);
+        //     if (directMappingHit) {
+        //         return directMappingHit;
+        //     }
+        // }
+
         const hasExplicitPath = args.type === ComponentResolutionArgType.explicit;
 
         if (cfcDepth > cfcDepthLimit) {

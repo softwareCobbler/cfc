@@ -2,7 +2,7 @@ import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, State
 import { CfcResolution, CfcResolver, ComponentResolutionArgs, EngineSymbolResolver, LibTypeResolver, ProjectOptions } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, Struct, cfUnion, BuiltinType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, Type, stringifyType, cfFunctionSignatureParam, cfFunctionOverloadSet, cfTypeId, SymbolTableTypeWrapper, Cfc, Interface, createType, createLiteralType, typeFromJavaLikeTypename, structurallyCompareTypes, TypeKind, isStructLike, cfArray, cfStructLike, isStructLikeOrArray, cfGenericFunctionSignature } from "./types";
-import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, functionDefinitionHasUserSpecifiedReturnType, getAttributeValue, getComponentAttrs, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionNameTerminalErrorNode, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isLiteralExpr, isNamedFunction, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue, tryGetCfcMemberFunctionDefinition } from "./utils";
+import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, functionDefinitionHasUserSpecifiedReturnType, getAttributeValue, getCallExpressionNameErrorRange, getComponentAttrs, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionNameTerminalErrorNode, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isLiteralExpr, isNamedFunction, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue, tryGetCfcMemberFunctionDefinition } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol, TupleKeyedWeakMap } from "./utils";
 import { Engine, supports } from "./engines";
 
@@ -374,10 +374,11 @@ export function Checker(options: ProjectOptions) {
                     const targetSymbol = sourceFile.containedScope.variables!.get(nameStringVal);
                     if (!mappings || !targetSymbol || mappings.type.kind !== TypeKind.struct) return;
 
-                    const cfc = mappings.type.members.get(injectStringVal);
-                    if (!cfc) return;
+                    const cfcLookup = mappings.type.members.get(injectStringVal)?.type;
+                    if (!cfcLookup) return;
+                    const cfc = evaluateType(node, cfcLookup);
 
-                    sourceFile.effectivelyDeclaredTypes.set(targetSymbol.symbolId, cfc.type);
+                    sourceFile.effectivelyDeclaredTypes.set(targetSymbol.symbolId, cfc);
                 }
                 return;
             }
@@ -1045,7 +1046,7 @@ export function Checker(options: ProjectOptions) {
         }
     }
 
-    function chooseOverload(overloadSet: cfFunctionOverloadSet, args: CallArgument[]) {
+    function chooseOverloadWithPositionalArgs(overloadSet: cfFunctionOverloadSet, args: CallArgument[]) : cfFunctionOverloadSet["overloads"] {
         const availableOverloads = new Set(overloadSet.overloads);
         for (let i = 0; i < args.length; i++) {
             const paramNum = i+1;
@@ -1064,12 +1065,71 @@ export function Checker(options: ProjectOptions) {
                     continue;
                 }
             }
+
             for (const deleteable of deleteableOverloads) {
                 availableOverloads.delete(deleteable);
             }
         }
 
         return [...availableOverloads];
+    }
+
+    function chooseOverloadWithNamedArgs(overloadSet: cfFunctionOverloadSet, args: CallArgument[]) : cfFunctionOverloadSet["overloads"] {
+        const argMap = new Map<string, Type>();
+        for (const arg of args) {
+            const name = getTriviallyComputableString(arg.name);
+            if (!name) return [];
+            argMap.set(name, getCachedEvaluatedNodeType(arg));
+        }
+
+        const availableOverloads = new Set(overloadSet.overloads);
+        const deleteableOverloads = new Set<cfFunctionOverloadSet["overloads"][number]>();
+
+        outer:
+        for (const overload of availableOverloads) {
+            for (const param of overload.params) {
+                const argType = argMap.get(param.canonicalName);
+                if ((!argType && !(param.flags & TypeFlags.optional)) || (argType && !isLeftSubtypeOfRight(argType, param.paramType))) {
+                    deleteableOverloads.add(overload);
+                    continue outer;
+                }
+            }
+        }
+
+        for (const deleteableOverload of deleteableOverloads) {
+            availableOverloads.delete(deleteableOverload);
+        }
+
+        return [...availableOverloads];
+    }
+
+    function chooseOverload(overloadSet: cfFunctionOverloadSet, args: CallArgument[]) : cfFunctionOverloadSet["overloads"] {
+        let named = 0;
+        let positional = 0;
+        for (const arg of args) {
+            if (arg.name) named++;
+            else positional++;
+        }
+
+        if (named === args.length) {
+            return chooseOverloadWithNamedArgs(overloadSet, args);
+        }
+        else if (positional === args.length) {
+            return chooseOverloadWithPositionalArgs(overloadSet, args);
+        }
+        else {
+            return [];
+        }
+    }
+
+    function countNamedArgs(args: CallArgument[]) : number {
+        let count = 0;
+        for (const arg of args) {
+            if (arg.name) {
+                count++;
+            }
+        }
+        return count;
     }
 
     function checkCallExpression(node: CallExpression) {
@@ -1093,7 +1153,12 @@ export function Checker(options: ProjectOptions) {
                 if (sig.returns === BuiltinType.never) {
                     flowBecameUnreachable = true;
                 }
-                
+
+                const namedArgCount = countNamedArgs(node.args);
+                if (namedArgCount > 0 && namedArgCount !== node.args.length) {
+                    issueDiagnosticAtRange(node.left.range, "All arguments must be named, if any are named.");
+                }
+
                 // check the expressions themselves, but for now we won't check that they are correct for the signature
                 checkList(node.args);
             }
@@ -1101,6 +1166,14 @@ export function Checker(options: ProjectOptions) {
         }
 
         const sig = getCachedEvaluatedNodeType(node.left);
+        
+        if (sig.kind === TypeKind.functionSignature || sig.kind === TypeKind.functionOverloadSet || sig.kind === TypeKind.genericFunctionSignature) {
+            const namedArgCount = countNamedArgs(node.args);
+            if (namedArgCount > 0 && namedArgCount !== node.args.length) {
+                issueDiagnosticAtRange(node.left.range, "All arguments must be named, if any are named.");
+            }
+        }
+
         let returnType : Type;
 
         if (sig.kind === TypeKind.functionOverloadSet) {
@@ -1108,6 +1181,7 @@ export function Checker(options: ProjectOptions) {
             const overloads = chooseOverload(sig, node.args);
             if (overloads.length !== 1) {
                 setCachedEvaluatedNodeType(node, returnType = BuiltinType.any);
+                issueDiagnosticAtRange(getCallExpressionNameErrorRange(node), "No overload matches this call.");
             }
             else {
                 setCachedEvaluatedNodeType(node, returnType = evaluateType(node, overloads[0].returns));
@@ -1115,7 +1189,7 @@ export function Checker(options: ProjectOptions) {
         }
         else if (sig.kind === TypeKind.functionSignature) {
             checkList(node.args);
-            checkCallLikeArguments(sig, node.args, node.left.range, /*isNewExpr*/false);
+            checkCallLikeArguments(sig, node.args, getCallExpressionNameErrorRange(node), /*isNewExpr*/false);
             setCachedEvaluatedNodeType(node, returnType = sig.returns);
         }
         else if (sig.kind === TypeKind.genericFunctionSignature) {
@@ -1311,10 +1385,7 @@ export function Checker(options: ProjectOptions) {
             return;
         }
         if (sig.kind === TypeKind.functionSignature) {
-            const namedArgCount = args.filter(arg => !!arg.equals).length;
-            if (namedArgCount > 0 && namedArgCount !== args.length) {
-                issueDiagnosticAtRange(nameRange, "All arguments must be named, if any are named.");
-            }
+            const namedArgCount = countNamedArgs(args);
 
             const minRequiredParams = sig.params.filter(param => !(param.flags & TypeFlags.optional) && !(param.flags & TypeFlags.spread)).length;
             // maxParams is undefined if there was a spread param, since it accepts any number of trailing args

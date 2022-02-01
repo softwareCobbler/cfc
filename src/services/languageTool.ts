@@ -339,9 +339,9 @@ function LanguageTool() {
             }
 
             // if we're doing wirebox resolution, add the wirebox config file immediately so we get the mappings
-            if (config.wireboxResolution && wireboxConfigFileAbsPath) {
-                project.addFile(wireboxConfigFileAbsPath);
-            }
+            // if (config.wireboxResolution && wireboxConfigFileAbsPath) {
+            //     project.addFile(wireboxConfigFileAbsPath);
+            // }
 
             workspaceProjects.set(rootAbsPath, project);
         }

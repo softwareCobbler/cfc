@@ -1,6 +1,6 @@
 import * as path from "path";
 import * as fs from "fs";
-import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CfTag, DottedPath, DUMMY_CONTAINER, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, isStaticallyKnownScopeName, NamedFunctionDefinition, Node, NodeFlags, NodeId, ParamStatementSubType, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymbolResolution, SymbolTable, SymTabEntry, SymTabResolution, TagAttribute, UnaryOperatorPos } from "./node";
+import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CallExpression, CfTag, DottedPath, DUMMY_CONTAINER, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, isStaticallyKnownScopeName, NamedFunctionDefinition, Node, NodeFlags, NodeId, ParamStatementSubType, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymbolResolution, SymbolTable, SymTabEntry, SymTabResolution, TagAttribute, UnaryOperatorPos } from "./node";
 import { NodeKind } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, isStructLike, TypeFlags } from "./types";
@@ -1376,6 +1376,27 @@ export function getFunctionDefinitionNameTerminalErrorNode(node: FunctionDefinit
     }
     else {
         return node.nameToken ?? node; // see fixme on nullish nameToken def
+    }
+}
+
+export function getCallExpressionNameErrorRange(node: CallExpression) : SourceRange {
+    if (node.left.kind === NodeKind.indexedAccess) {
+        const finalElement = node.left.accessElements[node.left.accessElements.length - 1];
+        if (finalElement.accessType === IndexedAccessType.dot || finalElement.accessType === IndexedAccessType.optionalDot) {
+            return finalElement.property.range;
+        }
+        else if (finalElement.accessType === IndexedAccessType.bracket || finalElement.accessType === IndexedAccessType.optionalBracket) {
+            return new SourceRange(finalElement.leftBracket.range.fromInclusive + 1, finalElement.rightBracket.range.toExclusive - 1);
+        }
+        else {
+            return finalElement.range;
+        }
+    }
+    else if (node.left.kind === NodeKind.callExpression) {
+        return new SourceRange(node.leftParen.range.fromInclusive + 1, node.rightParen.range.toExclusive - 1)
+    }
+    else {
+        return node.left.range;
     }
 }
 

@@ -4,7 +4,7 @@ import { Project } from "../compiler/project"
 import { Node, NodeKind, CallExpression, CfTag, StaticallyKnownScopeName, SymbolTable, SymTabEntry, SimpleStringLiteral, SourceFile } from "../compiler/node"
 import { CfFileType, SourceRange, TokenType } from "../compiler/scanner";
 import { cfFunctionSignatureParam, SymbolTableTypeWrapper, TypeFlags, Type, TypeKind, BuiltinType, isStructLikeOrArray } from "../compiler/types";
-import { isExpressionContext, isCfScriptTagBlock, stringifyCallExprArgName, getSourceFile, cfcIsDescendantOf, isPublicMethod } from "../compiler/utils";
+import { isExpressionContext, isCfScriptTagBlock, stringifyCallExprArgName, getSourceFile, cfcIsDescendantOf, isPublicMethod, getTriviallyComputableString } from "../compiler/utils";
 import { Checker } from "../compiler/checker";
 
 export const enum CompletionItemKind {
@@ -46,27 +46,51 @@ function getStringLiteralCompletions(checker: Checker, sourceFile: SourceFile, n
     const strings = new Set<string>();
 
     if (node.parent?.kind === NodeKind.callArgument && node.parent.parent?.kind === NodeKind.callExpression) {
-        const ziArgIndex = getCallExprArgIndex(node.parent.parent, node);
-        if (ziArgIndex === undefined) return undefined;
-        // const symbol = checker.getSymbol(node.parent.parent.left, sourceFile);
-        // if (!symbol) return undefined;
-        const type = checker.getCachedEvaluatedNodeType(node.parent.parent.left, sourceFile);
-        if (!type) return undefined;
+        if (node.parent.name) {
+            const paramName = getTriviallyComputableString(node.parent.name);
+            if (!paramName) return [];
+            const type = checker.getCachedEvaluatedNodeType(node.parent.parent.left, sourceFile);
+            if (!type) return undefined;
 
-        if (type.kind === TypeKind.functionOverloadSet) { // this was primarily to investigate wirebox typename completions in `getInstance`
-            for (const overload of type.overloads) {
-                const type = overload.params[ziArgIndex]?.paramType;
-                if (!type) continue;
-                if (type.kind === TypeKind.literal && type.underlyingType === BuiltinType.string) {
-                    strings.add(type.literalValue as string);
+            if (type.kind === TypeKind.functionOverloadSet) { // this was primarily to investigate wirebox typename completions in `getInstance`
+                for (const overload of type.overloads) {
+                    const type = overload.params.find(param => param.canonicalName === paramName)?.paramType;
+                    if (!type) continue;
+                    if (type.kind === TypeKind.literal && type.underlyingType === BuiltinType.string) {
+                        strings.add(type.literalValue as string);
+                    }
                 }
             }
-        }
-        else if (type.kind === TypeKind.functionSignature) {
-            return undefined; // not yet impl'd
+            else if (type.kind === TypeKind.functionSignature) {
+                return undefined; // not yet impl'd
+            }
+            else {
+                // no-op -- ?
+            }
         }
         else {
-            // no-op
+            const ziArgIndex = getCallExprArgIndex(node.parent.parent, node);
+            if (ziArgIndex === undefined) return undefined;
+            // const symbol = checker.getSymbol(node.parent.parent.left, sourceFile);
+            // if (!symbol) return undefined;
+            const type = checker.getCachedEvaluatedNodeType(node.parent.parent.left, sourceFile);
+            if (!type) return undefined;
+
+            if (type.kind === TypeKind.functionOverloadSet) { // this was primarily to investigate wirebox typename completions in `getInstance`
+                for (const overload of type.overloads) {
+                    const type = overload.params[ziArgIndex]?.paramType;
+                    if (!type) continue;
+                    if (type.kind === TypeKind.literal && type.underlyingType === BuiltinType.string) {
+                        strings.add(type.literalValue as string);
+                    }
+                }
+            }
+            else if (type.kind === TypeKind.functionSignature) {
+                return undefined; // not yet impl'd
+            }
+            else {
+                // no-op -- ?
+            }
         }
     }
     else if (node.parent?.kind === NodeKind.tagAttribute) {
