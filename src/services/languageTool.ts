@@ -183,9 +183,9 @@ function LanguageTool() {
             // ^^^^^^^^
             if (targetNode.parent?.kind === NodeKind.functionDefinition && !targetNode.parent.fromTag && targetNode.parent.returnType === targetNode) {
                 const symbol = checker.getSymbol(targetNode.parent, sourceFile)
-                if (symbol && symbol.symTabEntry.type.kind === TypeKind.functionSignature && symbol.symTabEntry.type.returns.kind === TypeKind.cfc) {
+                if (symbol && symbol.symTabEntry.firstLexicalType?.kind === TypeKind.functionSignature && symbol.symTabEntry.firstLexicalType.returns.kind === TypeKind.cfc) {
                     return [{
-                        sourceFile: symbol.symTabEntry.type.returns.cfc,
+                        sourceFile: symbol.symTabEntry.firstLexicalType.returns.cfc,
                         range: exactlyFirstCharRange,
                     }];
                 }

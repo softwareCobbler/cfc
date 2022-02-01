@@ -156,9 +156,12 @@ export interface SymTabEntry {
     uiName: string,
     canonicalName: string,
     declarations: Node[] | null,
-    type: Type,
+    firstLexicalType: Type | undefined,
     symbolId: SymbolId,
-    optional?: boolean,
+    links?: {
+        effectiveDeclaredType?: Type,
+        optional?: boolean,
+    }
 }
 
 export type SymbolTable = Map<string, SymTabEntry>;
@@ -354,7 +357,6 @@ export interface SourceFile extends NodeBase {
     cachedFlowTypes: Map<FlowId, Map<SymbolId, Type>>, // types for symbols as determined at particular flow nodes, zero or more per flow node
     nodeToSymbol: Map<NodeId, SymbolResolution>,
     symbolIdToSymbol: Map<SymbolId, SymTabEntry>,
-    effectivelyDeclaredTypes: Map<SymbolId, Type>,
     endOfNodeFlowMap: Map<NodeId, Flow>,
     cfc: {
         extends: SourceFile | null,
@@ -373,7 +375,6 @@ export function resetSourceFileInPlace(target: SourceFile, newSource: string | B
     target.cachedFlowTypes = new Map();
     target.nodeToSymbol = new Map();
     target.symbolIdToSymbol = new Map();
-    target.effectivelyDeclaredTypes = new Map();
     target.endOfNodeFlowMap = new Map<NodeId, Flow>();
     target.cfc = undefined;
 }
@@ -395,7 +396,6 @@ export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: 
     sourceFile.cachedFlowTypes = new Map<FlowId, Map<SymbolId, Type>>();
     sourceFile.nodeToSymbol = new Map<NodeId, SymbolResolution>();
     sourceFile.symbolIdToSymbol = new Map();
-    sourceFile.effectivelyDeclaredTypes = new Map();
     sourceFile.endOfNodeFlowMap = new Map<NodeId, Flow>();
     return sourceFile;
 }

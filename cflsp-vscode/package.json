@@ -1,9 +1,9 @@
 {
-	"name": "cflsp",
+	"name": "dev-cflsp",
 	"description": "ColdFusion syntax error checker",
 	"author": "David Rogers",
 	"license": "MIT",
-	"version": "1.0.33",
+	"version": "999.0.33",
 	"publisher": "DavidRogers",
 	"categories": [],
 	"repository": {

@@ -4597,8 +4597,10 @@ export function Parser(config: ProjectOptions) {
                                     uiName: member.name.token.text,
                                     canonicalName: member.name.token.text.toLowerCase(),
                                     declarations: null,
-                                    type: member.type,
-                                    optional: member.optional,
+                                    firstLexicalType: member.type,
+                                    links: {
+                                        optional: member.optional,
+                                    },
                                     symbolId: -1,
                                 })
                             }

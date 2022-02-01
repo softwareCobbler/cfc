@@ -25,7 +25,7 @@ function projectFiddle() {
                     }`,
                 "lib.d.cfm": `
                     @!interface __cfEngine {
-                        callStackGet: () => {function: string, template: string}[]
+                        callStackGet: () => {function: string, lineNumber: numeric, template: string}[],
                     }
                     @!interface Array<T> {
                         map: <U>(callback: (e: T, i?: numeric, a?: T[]) => U, parallel?: boolean, maxThreads?: boolean) => U[]

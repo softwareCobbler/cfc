@@ -950,8 +950,8 @@ export function stringifyType(type: Type) : string {
             case TypeKind.struct: {
                 const builder = [];
                 for (const [propName, member] of type.members) {
-                    const type = member.type;
-                    const colon = member.optional ? "?: " : ": ";
+                    const type = member.firstLexicalType!;
+                    const colon = member.links?.optional ? "?: " : ": ";
                     builder.push(propName + colon + stringifyTypeWorker(type, depth+1));
                 }
                 const result = builder.join(", ");
@@ -1083,13 +1083,13 @@ export function structurallyCompareTypes(l: Type, r: Type) : -1 | 0 | 1 {
         const rmembers = [...r.members.entries()].sort(sortStructMembersByName);
 
         for (let i = 0; i < lmembers.length; i++) {
-            const [lname, {type: ltype}] = lmembers[i];
-            const [rname, {type: rtype}] = rmembers[i];
+            const [lname, {firstLexicalType: ltype}] = lmembers[i];
+            const [rname, {firstLexicalType: rtype}] = rmembers[i];
 
             if (lname < rname) return -1;
             if (lname > rname) return 1;
 
-            const recursiveCompare = structurallyCompareTypes(ltype, rtype);
+            const recursiveCompare = structurallyCompareTypes(ltype!, rtype!);
             if (recursiveCompare !== 0) return recursiveCompare;
         }
 

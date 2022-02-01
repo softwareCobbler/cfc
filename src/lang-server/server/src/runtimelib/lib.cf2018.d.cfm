@@ -91,7 +91,7 @@
     cacheRemoveAll: (region?: string) => any,
     cacheSetProperties: (properties: {}, region?: string) => any,
     callStackDump: (output?: string) => any,
-    callStackGet: () => any,
+    callStackGet: () => {function: string, lineNumber: numeric, template: string}[],
     canonicalize: (input: string, restrictMultiple: boolean, restrictMixed: boolean, throwOnError?: boolean) => any,
     ceiling: (number: numeric) => any,
     cfusion_Decrypt: (string: string, key: string) => any,

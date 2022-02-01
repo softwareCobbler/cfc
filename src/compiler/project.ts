@@ -468,7 +468,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             mappingsBuilder.set(canonicalName, {
                 canonicalName,
                 uiName: name,
-                type: cfcRefType,
+                firstLexicalType: cfcRefType,
                 declarations: null,
                 symbolId: -1,
             });
@@ -478,7 +478,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             uiName: "getInstance",
             canonicalName: "getinstance",
             declarations: null,
-            type: cfFunctionOverloadSet("getInstance", overloads, []),
+            firstLexicalType: cfFunctionOverloadSet("getInstance", overloads, []),
             symbolId: -1,
         };
 
@@ -488,7 +488,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
                 canonicalName: "mappings",
                 uiName: "mappings",
                 declarations: null,
-                type: Struct(mappingsBuilder),
+                firstLexicalType: Struct(mappingsBuilder),
                 symbolId: -1,
             }]
         ]);

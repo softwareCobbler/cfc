@@ -1,7 +1,7 @@
 import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, UnreachableFlow, FlowType, ConditionalSubtype, SymbolTable, Property, ParamStatement, ParamStatementSubType, typeinfo, DiagnosticKind, StaticallyKnownScopeName, SwitchCaseType } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol, findAncestor, TupleKeyedMap, isNamedFunction, isInEffectiveConstructorMethod } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
-import { BuiltinType, Type, extractCfFunctionSignature, Interface, cfTypeId, TypeKind } from "./types";
+import { BuiltinType, Type, Interface, cfTypeId, TypeKind } from "./types";
 import { Engine, supports } from "./engines";
 import { ProjectOptions } from "./project";
 
@@ -468,8 +468,8 @@ export function Binder(options: ProjectOptions) {
                 uiName,
                 canonicalName,
                 declarations: [declaringNode],
-                type: type ?? BuiltinType.any,
-                symbolId: freshSymbolId,
+                firstLexicalType: type ?? BuiltinType.any,
+                symbolId: symbolId++,
             }
 
             symTab.set(canonicalName, symTabEntry);
@@ -1070,7 +1070,6 @@ export function Binder(options: ProjectOptions) {
             issueDiagnosticAtRange(node.params[0].range, `CF engine '${engineVersion.uiString}' requires arrow function parameter lists to be parenthesized.`)
         }
 
-        const signature = extractCfFunctionSignature(node);
         if (isNamedFunction(node)) {
             currentFlow = freshFlow(currentFlow, FlowType.assignment, node); // a named function def is effectively a variable declaration
             node.flow = currentFlow;
@@ -1083,13 +1082,6 @@ export function Binder(options: ProjectOptions) {
             // }
             // function bar() {} -- error, functions may only be defined once
             // bar(); -- error, bar is not visible
-
-            const existingFunction = sourceFile.containedScope.variables!.get(node.name.canonical) || currentContainer.containedScope.this?.get(node.name.canonical);
-            if (existingFunction && ((existingFunction as SymTabEntry).type).kind === TypeKind.functionSignature) {
-                // if acf { ...
-                //      errorAtRange(getFunctionNameRange(node.range), "Redefinition of hoistable function.");
-                // }
-            }
 
             let scopeTargets : SymbolTable[];
 
@@ -1120,8 +1112,7 @@ export function Binder(options: ProjectOptions) {
                 addFreshSymbolToTable(
                     scopeTarget,
                     node.name.ui,
-                    node,
-                    signature);
+                    node);
             }
         }
 
@@ -1143,10 +1134,9 @@ export function Binder(options: ProjectOptions) {
         // fixme: we also do this in bindFunctionParameter, so we get duplicate nodes in each param's symbol decl list
         for (let i = 0; i < node.params.length; i++) {
             const param = node.params[i];
-            const type = signature.params[i]?.paramType || null;
             //const annotatedType = typeAnnotatedParams ? typeAnnotatedParams[i]?.paramType : null;
             // we also need the annotation-provided type if it exists; for now it is implicitly null
-            addFreshSymbolToTable(node.containedScope.arguments!, param.uiName, param, type);
+            addFreshSymbolToTable(node.containedScope.arguments!, param.uiName, param);
         }
 
         if (!node.fromTag && node.kind === NodeKind.functionDefinition) {

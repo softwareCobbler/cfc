@@ -306,12 +306,12 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
 
             const runOne = (symTabEntry: SymTabEntry) => {
                 if (symTabEntry.canonicalName === "init" && currentStructLikeIsCfc) return; // don't need to show init, we can still check its signature though?
-                if ( currentStructLikeIsCfc && symTabEntry.type.kind === TypeKind.functionSignature && !isPublicMethod(symTabEntry.type)) {
+                if ( currentStructLikeIsCfc && symTabEntry.firstLexicalType?.kind === TypeKind.functionSignature && !isPublicMethod(symTabEntry.firstLexicalType)) {
                     if (!parsedSourceFileIsDescendantOfTypeinfoCfc) return; // don't offer completions for non-public members for non-descendants
                 }
                 result.push({
                     label: symTabEntry.uiName,
-                    kind: symTabEntry.type.kind === TypeKind.functionSignature || symTabEntry.type.kind === TypeKind.genericFunctionSignature
+                    kind: symTabEntry.firstLexicalType?.kind === TypeKind.functionSignature || symTabEntry.firstLexicalType?.kind === TypeKind.genericFunctionSignature
                         ? CompletionItemKind.function
                         : CompletionItemKind.structMember,
                     detail: ""
@@ -351,7 +351,7 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
                     }
 
                     for (const symTabEntry of iterableSymTabEntries) {
-                        const completionKind = symTabEntry.type.kind === TypeKind.functionSignature
+                        const completionKind = symTabEntry.firstLexicalType?.kind === TypeKind.functionSignature
                             ? CompletionItemKind.function
                             : CompletionItemKind.variable;
                         result.set(symTabEntry.uiName, [searchScope, completionKind, scopeDistance]);
