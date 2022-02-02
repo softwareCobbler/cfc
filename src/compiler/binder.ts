@@ -441,7 +441,7 @@ export function Binder(options: ProjectOptions) {
         else symbol.declarations = [decl];
     }
 
-    function addFreshSymbolToTable(symTab: SymbolTable, uiName: string, declaringNode: Node, type: Type | null = null) : SymTabEntry {
+    function addFreshSymbolToTable(symTab: SymbolTable, uiName: string, declaringNode: Node, type?: Type) : SymTabEntry {
         const canonicalName = uiName.toLowerCase();
         let symTabEntry : SymTabEntry;
 
@@ -468,7 +468,7 @@ export function Binder(options: ProjectOptions) {
                 uiName,
                 canonicalName,
                 declarations: [declaringNode],
-                firstLexicalType: type ?? BuiltinType.any,
+                firstLexicalType: type,
                 symbolId: symbolId++,
             }
 
@@ -548,7 +548,7 @@ export function Binder(options: ProjectOptions) {
             }
 
             if (targetScope) {
-                addFreshSymbolToTable(targetScope, uiPath[1], node, null);
+                addFreshSymbolToTable(targetScope, uiPath[1], node);
             }
 
             return;
@@ -560,7 +560,7 @@ export function Binder(options: ProjectOptions) {
             // resolvePendingSymbolResolutions(canonicalName);
 
             if (getContainingFunction(node)) {
-                addFreshSymbolToTable(currentContainer.containedScope.local!, uiPath[0], node, null);
+                addFreshSymbolToTable(currentContainer.containedScope.local!, uiPath[0], node);
             }
             else {
                 // we're not in a function, so we must be at top-level scope
@@ -815,7 +815,7 @@ export function Binder(options: ProjectOptions) {
             tag,
             engineInterfaceTypeIdName
                 ? cfTypeId(engineInterfaceTypeIdName)
-                : null);
+                : undefined);
     }
 
     function bindSimpleStringLiteral(node: SimpleStringLiteral) {

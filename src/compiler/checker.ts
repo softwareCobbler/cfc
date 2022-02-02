@@ -1554,7 +1554,7 @@ export function Checker(options: ProjectOptions) {
                         ) {
                             // fixme: check against a type annotation?
                             setCachedEvaluatedFlowType(node.left.flow!, lhsSymbol.symTabEntry.symbolId, rhsType);
-                            sourceFile.effectivelyDeclaredTypes.set(lhsSymbol.symTabEntry.symbolId, rhsType);
+                            setEffectivelyDeclaredType(lhsSymbol.symTabEntry, rhsType);
                         }
                     }
                 }
@@ -1929,13 +1929,6 @@ export function Checker(options: ProjectOptions) {
     }
 
     function checkIdentifier(node: Identifier) {
-        // if we're on the lefthand side of a non-fv qualified assignment, we're done
-        // an fv-qualified assignment is handled by checkVariableDeclaration
-        // assignment should alter the type of the variable for this flow in checkBinaryOperator
-        if (node.parent?.kind === NodeKind.binaryOperator && node.parent.optype === BinaryOpType.assign && node === node.parent.left) {
-            return;
-        }
-
         const name = node.canonicalName;
         let isBuiltinScopeName = false;
 
@@ -2042,7 +2035,7 @@ export function Checker(options: ProjectOptions) {
 
             const apparentType = forcedType ? forcedType // when do we force a type? like forced-any or etc.?
                 : flowType ? evaluateType(node, flowType) // if there's a flowtype, use that
-                : resolvedSymbol.symTabEntry.firstLexicalType || BuiltinType.any; //sourceFile.effectivelyDeclaredTypes.get(resolvedSymbol.symTabEntry.symbolId) || BuiltinType.any;
+                : getEffectivelyDeclaredType(resolvedSymbol.symTabEntry) || BuiltinType.any; //sourceFile.effectivelyDeclaredTypes.get(resolvedSymbol.symTabEntry.symbolId) || BuiltinType.any;
 
             
             setCachedEvaluatedNodeType(node, apparentType);
@@ -2103,8 +2096,10 @@ export function Checker(options: ProjectOptions) {
                         symbol = getStructMember(element, type, propertyName);
                         if (symbol) {
                             setResolvedSymbol(element, symbol);
-                            type = evaluateType(node, symbol.symTabEntry.firstLexicalType!);
-                            setEffectivelyDeclaredType(symbol.symTabEntry, type);
+                            type = symbol.symTabEntry.firstLexicalType ? evaluateType(node, symbol.symTabEntry.firstLexicalType) : undefined;
+                            if (type) {
+                                setEffectivelyDeclaredType(symbol.symTabEntry, type);
+                            }
                         }
                         else {
                             type = undefined;
@@ -2605,11 +2600,14 @@ export function Checker(options: ProjectOptions) {
 
                     const canonicalName = key.toLowerCase();
                     memberTypes.set(canonicalName, {
+                        symbolId: -1, // do we need this here?
                         uiName: key,
                         canonicalName,
                         declarations: [member],
-                        firstLexicalType: memberType,
-                        symbolId: -1 // do we need this here?
+                        firstLexicalType: undefined,
+                        links: {
+                            effectiveDeclaredType: memberType
+                        }
                     });
 
                     break;

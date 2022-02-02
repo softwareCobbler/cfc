@@ -950,8 +950,12 @@ export function stringifyType(type: Type) : string {
             case TypeKind.struct: {
                 const builder = [];
                 for (const [propName, member] of type.members) {
-                    const type = member.firstLexicalType!;
+                    const type = member.links?.effectiveDeclaredType;
                     const colon = member.links?.optional ? "?: " : ": ";
+                    if (!type) {
+                        console.log(`[dev] no type for struct memmber ${propName}`);
+                        continue;
+                    }
                     builder.push(propName + colon + stringifyTypeWorker(type, depth+1));
                 }
                 const result = builder.join(", ");
