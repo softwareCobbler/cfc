@@ -534,4 +534,14 @@ describe("general smoke test for particular constructs", () => {
         assert.strictEqual(luceeProject.getDiagnostics("/a.cfc").length, 1, "Lucee project got an error");
         assert.strictEqual(acfProject.getDiagnostics("/a.cfc").length, 0, "acf project did not get an error");
     })
+    it("Infers the return type of a function returning a struct", () => {
+        const completionsAt = TestLoader.loadCompletionAtTest("./test/sourcefiles/inferredStructReturn.cfc");
+        const fsRoot : FileSystemNode = {"/": {}};
+        pushFsNode(fsRoot, "/a.cfc", completionsAt.sourceText);
+        const luceeProject = Project("/", DebugFileSystem(fsRoot), {...commonProjectOptions, engineVersion: EngineVersions["lucee.5"]});
+        luceeProject.addFile("/a.cfc");
+        const completions = getCompletions(luceeProject, "/a.cfc", completionsAt.index, ".");
+        assert.strictEqual(completions.length, 1, "got one completion");
+        assert.strictEqual(completions[0].label, "innerB", "completion is as expected");
+    })
 });

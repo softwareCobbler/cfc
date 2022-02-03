@@ -157,6 +157,7 @@ export interface TypeBase {
 
     readonly underlyingType?: Type,
     readonly capturedContext?: ReadonlyMap<string, Type>, // for type evaluation of typeconstructors, is this necessary?
+    readonly concrete?: boolean
 }
 
 // readonly name?: string,

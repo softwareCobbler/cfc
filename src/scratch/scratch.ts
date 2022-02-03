@@ -28,7 +28,8 @@ function projectFiddle() {
                         callStackGet: () => {function: string, lineNumber: numeric, template: string}[],
                     }
                     @!interface Array<T> {
-                        map: <U>(callback: (e: T, i?: numeric, a?: T[]) => U, parallel?: boolean, maxThreads?: boolean) => U[]
+                        PLACEHOLDER: any
+                        
                     }
                 `,
                 //"realLib.d.cfm": fs.readFileSync("C:\\Users\\anon\\dev\\cfc\\src\\lang-server\\server\\src\\runtimelib\\lib.cf2018.d.cfm").toString(),
@@ -39,7 +40,15 @@ function projectFiddle() {
                     "b": {
                         "x.cfc": `
                         component accessors="true" {
-                            callStackGet()
+                            function foo() {
+                                var inner = () => {
+                                    return {
+                                        b: [{x:1}],
+                                    }
+                                }
+                        
+                                inner().b[999].
+                            }
                         }
                         `,
                         "y.cfc": "component { function mlem() {} }",

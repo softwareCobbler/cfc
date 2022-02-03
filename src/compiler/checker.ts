@@ -2096,10 +2096,7 @@ export function Checker(options: ProjectOptions) {
                         symbol = getStructMember(element, type, propertyName);
                         if (symbol) {
                             setResolvedSymbol(element, symbol);
-                            type = symbol.symTabEntry.firstLexicalType ? evaluateType(node, symbol.symTabEntry.firstLexicalType) : undefined;
-                            if (type) {
-                                setEffectivelyDeclaredType(symbol.symTabEntry, type);
-                            }
+                            type = getEffectivelyDeclaredType(symbol.symTabEntry);
                         }
                         else {
                             type = undefined;
@@ -2303,7 +2300,8 @@ export function Checker(options: ProjectOptions) {
             // this may not be always true
             // we might need to infer the return type
             // we can set it again after inference, but maybe would get wrong return type results while checking a recursive call?
-            symbol.symTabEntry.firstLexicalType = finalType;
+            // we know the args are right (except in a generic function, where the caller will skip this method and check/infer the args itself?)
+            setEffectivelyDeclaredType(symbol.symTabEntry, finalType);
         }
 
         // fixme: why do we only do this for TypeKind.functionSignature?
@@ -2950,6 +2948,9 @@ export function Checker(options: ProjectOptions) {
                     if (!type) {
                         return fallbackToAny ? BuiltinType.any : null;
                     }
+                    else if (type.concrete) {
+                        return type;
+                    }
                     else if (type.kind === TypeKind.array) {
                         return type;
                     }
@@ -2978,26 +2979,32 @@ export function Checker(options: ProjectOptions) {
                         const evaluatedStructContents = new Map<string, SymTabEntry>();
                         let concrete = true;
                         for (const [canonicalName, symTabEntry] of type.members.entries()) {
-                            const evaluatedType = typeWorker(symTabEntry.firstLexicalType!);
+                            const evaluatableType = (symTabEntry.links?.effectiveDeclaredType ?? symTabEntry.firstLexicalType)!;
+                            const evaluatedType = typeWorker(evaluatableType);
                             if (!evaluatedType) return null;
-                            if (symTabEntry.firstLexicalType !== evaluatedType) { // fixme: merely expanding a non-generic alias will trigger this, since (alias !== *alias)
+
+                            if (evaluatableType !== evaluatedType) { // fixme: merely expanding a non-generic alias will trigger this, since (alias !== *alias)
                                 concrete = false;
                             }
                             evaluatedStructContents.set(canonicalName, {
                                 uiName: symTabEntry.uiName,
                                 declarations: null,
                                 canonicalName,
-                                firstLexicalType: evaluatedType,
+                                firstLexicalType: undefined,
+                                links: {
+                                    effectiveDeclaredType: evaluatedType
+                                },
                                 symbolId: -1,
                             });
                         }
 
+                        const result = Struct(evaluatedStructContents);
+
                         if (concrete) {
-                            return type;
+                            (result as Mutable<Type>).concrete = true;
                         }
-                        else {
-                            return Struct(evaluatedStructContents);
-                        }
+
+                        return type;
                     }
                     else if (type.kind === TypeKind.functionSignature || (type.kind === TypeKind.genericFunctionSignature && partiallyApplyGenericFunctionSigs)) {
                         const sig = type;
