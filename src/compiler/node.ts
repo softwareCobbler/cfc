@@ -7,6 +7,7 @@ export function setDebug() { // can't unset after setting it, per program run
     if (debugNodeModule) {
         return;
     }
+    debugNodeModule = true;
 }
 
 let nextNodeId : NodeId = 0;

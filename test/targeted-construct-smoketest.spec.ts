@@ -537,9 +537,14 @@ describe("general smoke test for particular constructs", () => {
     it("Infers the return type of a function returning a struct", () => {
         const completionsAt = TestLoader.loadCompletionAtTest("./test/sourcefiles/inferredStructReturn.cfc");
         const fsRoot : FileSystemNode = {"/": {}};
+        debugger;
+        pushFsNode(fsRoot, "/lib.d.cfm", `@!interface Array<T> { PLACEHOLDER: any }`);
         pushFsNode(fsRoot, "/a.cfc", completionsAt.sourceText);
-        const luceeProject = Project("/", DebugFileSystem(fsRoot), {...commonProjectOptions, engineVersion: EngineVersions["lucee.5"]});
+        const luceeProject = Project("/", DebugFileSystem(fsRoot), {...commonProjectOptions, checkReturnTypes: true, engineVersion: EngineVersions["lucee.5"]});
+
+        luceeProject.addEngineLib("/lib.d.cfm");
         luceeProject.addFile("/a.cfc");
+
         const completions = getCompletions(luceeProject, "/a.cfc", completionsAt.index, ".");
         assert.strictEqual(completions.length, 1, "got one completion");
         assert.strictEqual(completions[0].label, "innerB", "completion is as expected");
