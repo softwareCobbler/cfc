@@ -537,7 +537,6 @@ describe("general smoke test for particular constructs", () => {
     it("Infers the return type of a function returning a struct", () => {
         const completionsAt = TestLoader.loadCompletionAtTest("./test/sourcefiles/inferredStructReturn.cfc");
         const fsRoot : FileSystemNode = {"/": {}};
-        debugger;
         pushFsNode(fsRoot, "/lib.d.cfm", `@!interface Array<T> { PLACEHOLDER: any }`);
         pushFsNode(fsRoot, "/a.cfc", completionsAt.sourceText);
         const luceeProject = Project("/", DebugFileSystem(fsRoot), {...commonProjectOptions, checkReturnTypes: true, engineVersion: EngineVersions["lucee.5"]});
@@ -548,5 +547,23 @@ describe("general smoke test for particular constructs", () => {
         const completions = getCompletions(luceeProject, "/a.cfc", completionsAt.index, ".");
         assert.strictEqual(completions.length, 1, "got one completion");
         assert.strictEqual(completions[0].label, "innerB", "completion is as expected");
+    })
+    it("Understands a non-composite-function-type annotation", () => {
+        const completionsAt = TestLoader.loadCompletionAtTest("./test/sourcefiles/non-composite-function-type-annotation.cfc");
+        const fsRoot : FileSystemNode = {"/": {}};
+        pushFsNode(fsRoot, "/lib.d.cfm", `@!interface Array<T> { PLACEHOLDER: any }`);
+        pushFsNode(fsRoot, "/a.cfc", completionsAt.sourceText);
+        const luceeProject = Project("/", DebugFileSystem(fsRoot), {...commonProjectOptions, parseTypes: true, engineVersion: EngineVersions["lucee.5"]});
+
+        luceeProject.addEngineLib("/lib.d.cfm");
+        debugger;
+        luceeProject.addFile("/a.cfc");
+
+        const completions = getCompletions(luceeProject, "/a.cfc", completionsAt.index, ".");
+        completions.sort((l,r) => l.label < r.label ? -1 : l.label == r.label ? 0 : 1);
+        assert.strictEqual(completions.length, 2, "got 2 completions");
+
+        assert.strictEqual(completions[0].label, "aMember", "completion is as expected");
+        assert.strictEqual(completions[1].label, "bar", "completion is as expected");
     })
 });

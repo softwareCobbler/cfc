@@ -4012,13 +4012,22 @@ export function Parser(config: ProjectOptions) {
                         treatAsConstructor = true;
                         continue;
                     }
-                    else if (parseTypes && name == "!arg" && peek().text === ":") {
-                        next();
+                    else if (parseTypes && name == "!arg") {
+                        //
+                        // @!arg <identifier> : <type>
+                        //
+                        // we could validate that the identifier is not some illegal name,
+                        // but this does not introduce a binding, just annotates an existing one that the user has declared in code
+                        // so the checker will issue a warning if this name does not exactly match an argument for the function this binds to
+                        //
+                        parseTrivia();
                         const name = scanIdentifier();
                         if (!name) {
-                            next(); // some kind of error...
+                            parseErrorAtRange(new SourceRange(pos(), pos() + 1), "Expected an identifier");
+                            next();
                         }
                         else {
+                            parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
                             const type = parseType();
                             argumentAnnotations.push(NamedAnnotation(name, type));
                         }
@@ -4171,13 +4180,17 @@ export function Parser(config: ProjectOptions) {
                     advance(5);
                     treatAsConstructor = true;
                 }
-                else if (contextualKeyword.text === "arg" && peekChar(3) === ":") {
-                    advance(4);
+                else if (contextualKeyword.text === "arg") {
+                    advance(3);
+                    parseTrivia();
                     const name = scanIdentifier();
                     if (!name) {
+                        parseErrorAtRange(new SourceRange(pos(), pos() + 1), "Expected an identifier");
                         next(); // some kind of error...
                     }
                     else {
+                        parseTrivia();
+                        parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
                         const type = parseType();
                         result.argumentAnnotations.push(NamedAnnotation(name, type));
                     }

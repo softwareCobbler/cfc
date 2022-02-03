@@ -1798,7 +1798,7 @@ export function Checker(options: ProjectOptions) {
     }
 
     function getEffectivelyDeclaredType(symbol: SymTabEntry) : Type | undefined {
-        return symbol.links?.effectiveDeclaredType;
+        return symbol.links?.effectiveDeclaredType ?? symbol.firstLexicalType;
     }
 
     function checkTag(tag: CfTag.Common) {
@@ -2296,7 +2296,7 @@ export function Checker(options: ProjectOptions) {
       
         setCachedEvaluatedNodeType(node, finalType);
 
-        if (symbol && !symbol.symTabEntry.firstLexicalType) {
+        if (symbol) {
             // this may not be always true
             // we might need to infer the return type
             // we can set it again after inference, but maybe would get wrong return type results while checking a recursive call?
