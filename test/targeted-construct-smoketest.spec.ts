@@ -12,7 +12,7 @@ const options : ProjectOptions = {
     debug: true,
     parseTypes: false,
     withWireboxResolution: false,
-    wireboxConfigFileCanonicalAbsPath: null,
+    cfConfigProjectRelativePath: null,
     engineVersion: EngineVersions["acf.2018"],
     genericFunctionInference: false,
     checkReturnTypes: false,

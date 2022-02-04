@@ -254,7 +254,7 @@ describe("MX-Unit smoke test", () => {
         debug: true,
         parseTypes: false,
         withWireboxResolution: false,
-        wireboxConfigFileCanonicalAbsPath: "",
+        cfConfigProjectRelativePath: "",
         engineVersion: EngineVersions["acf.2018"],
         genericFunctionInference: false,
         checkReturnTypes: false,
