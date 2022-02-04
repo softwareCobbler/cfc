@@ -43,6 +43,7 @@ export type Type =
     | cfIndexedType
     | cfDecorator
     | CfcLookup
+    | cfKeyof
     
 export const enum TypeKind {
     any,
@@ -73,6 +74,7 @@ export const enum TypeKind {
     indexedType,
     decorator,
     cfcLookup,
+    keyof,
 }
 
 export const enum TypeFlags {
@@ -117,6 +119,7 @@ const TypeKindUiString : Record<TypeKind, string> = {
     [TypeKind.mappedType]:                "mappedType",
     [TypeKind.indexedType]:               "indexedType",
     [TypeKind.decorator]:                 "decorator",
+    [TypeKind.keyof]:                     "keyof",
 }
 
 const TypeFlagsUiString : Record<TypeFlags, string> = {
@@ -352,7 +355,7 @@ export interface cfFunctionSignature extends cfFunctionSignatureBase {
 }
 export interface cfGenericFunctionSignature extends cfFunctionSignatureBase {
     readonly kind: TypeKind.genericFunctionSignature,
-    readonly typeParams: cfTypeConstructorParam[]
+    readonly typeParams: Readonly<cfTypeConstructorParam>[]
 }
 
 export function cfFunctionSignature(uiName: string, params: cfFunctionSignatureParam[], returns: Type, attrs: TagAttribute[]) : cfFunctionSignature {
@@ -494,9 +497,10 @@ export interface cfTypeConstructorParam extends TypeBase {
     kind: TypeKind.typeConstructorParam,
     name: string,
     defaultType?: Type // 'U' in <T = U>
+    extends?: Type
 }
 
-export function TypeConstructorParam(name: string, defaultType?: Type) {
+export function TypeConstructorParam(name: string, defaultType?: Type, extends_?: Type) {
     const type : cfTypeConstructorParam = {
         kind: TypeKind.typeConstructorParam,
         flags: TypeFlags.none,
@@ -507,16 +511,20 @@ export function TypeConstructorParam(name: string, defaultType?: Type) {
         type.defaultType = defaultType;
     }
 
+    if (extends_) {
+        type.extends = extends_;
+    }
+
     return createType(type);
 }
 
 export interface cfTypeId extends TypeBase {
     readonly kind: TypeKind.typeId,
     readonly name: string,
-    readonly indexChain?: readonly string[]
+    readonly indexChain?: readonly (cfLiteralType | cfTypeId)[]
 }
 
-export function cfTypeId(name: string, indexChain?: string[]) : cfTypeId {
+export function cfTypeId(name: string, indexChain?: (cfLiteralType | cfTypeId)[]) : cfTypeId {
     const type : cfTypeId = {
         kind: TypeKind.typeId,
         flags: TypeFlags.none,
@@ -578,6 +586,37 @@ export function cfUnion(types: ReadonlySet<Type>, flags: TypeFlags = TypeFlags.n
 
         return createType(union);
     }
+}
+
+export interface cfKeyof extends TypeBase {
+    readonly kind: TypeKind.keyof,
+    readonly operand: Type,
+    // for comparison ease, it's not Set<cfLiteralType>
+    // we could maybe do that if we had universally intern'd literal string types
+    // but as it is now, two literal types with the same literal value are not guaranteed to be object-identity-equal
+    readonly keyNames: Set<string>
+}
+
+export function freshKeyof(operand: Type) {
+    const t : cfKeyof = {
+        kind: TypeKind.keyof,
+        flags: TypeFlags.none,
+        operand,
+        keyNames: new Set(),
+        concrete: false
+    }
+    return createType(t);
+}
+
+export function cfKeyof(operand: Type, keyNames: Set<string>) : cfKeyof {
+    const t : cfKeyof = {
+        kind: TypeKind.keyof,
+        flags: TypeFlags.none,
+        operand,
+        keyNames: keyNames,
+        concrete: true
+    }
+    return createType(t);
 }
 
 export interface cfMappedType extends TypeBase {
@@ -992,6 +1031,9 @@ export function stringifyType(type: Type) : string {
             case TypeKind.void: return "void";
             case TypeKind.undefined: {
                 return "undefined";
+            }
+            case TypeKind.keyof: {
+                return "keyof " + stringifyTypeWorker(type.operand, depth + 1);
             }
             default: exhaustiveCaseGuard(type);
         }

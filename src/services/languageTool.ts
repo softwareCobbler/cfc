@@ -2,8 +2,6 @@
  * The languageTool accepts requests (our own, limited set of request types, not the LSP request types) and processes
  * them, adding/dropping files from a project, checking files, finding completions, etc.
  */
-import * as path from "path";
-
 import type { IREPLACED_AT_BUILD } from "./buildShim";
 import { Project, FileSystem } from "../compiler/project"
 import { ClientAdapter } from "../services/clientAdapter";
@@ -307,15 +305,9 @@ function LanguageTool() {
     function reset(freshConfig: SerializableCflsConfig) {
         config = {...freshConfig, engineVersion: EngineVersions[freshConfig.engineVersion]};
         const fileSystem = FileSystem();
-        let wireboxConfigFileAbsPath : string | null = null;
-
-        if (config.wireboxConfigFile && workspaceRoots[0]) {
-            wireboxConfigFileAbsPath = path.join(workspaceRoots[0], config.wireboxConfigFile);
-            if (!fileSystem.caseSensitive) wireboxConfigFileAbsPath = wireboxConfigFileAbsPath.toLowerCase();
-        }
-
+        
         workspaceProjects.clear();
-
+        
         for (const workspace of workspaceRoots) {
             const rootAbsPath = workspace;
             const project = Project(
@@ -326,7 +318,7 @@ function LanguageTool() {
                     debug: REPLACED_AT_BUILD.debug,
                     engineVersion: config.engineVersion,
                     withWireboxResolution: config.wireboxResolution,
-                    wireboxConfigFileCanonicalAbsPath: wireboxConfigFileAbsPath,
+                    cfConfigProjectRelativePath: config.cfConfigProjectRelativePath,
                     checkReturnTypes: config.x_checkReturnTypes,
                     checkFlowTypes: config.x_checkFlowTypes,
                     genericFunctionInference: config.x_genericFunctionInference,

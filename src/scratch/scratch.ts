@@ -17,44 +17,45 @@ function projectFiddle() {
     const debugfs = DebugFileSystem(
         {
             "/": {
-                "Wirebox.cfc": `
-                    component {
-                        public function mega() {
-                            x.foobar();
+                "cfconfig.json": `
+                    {
+                        "cf": {
+                            "foo": "foo/bar/baz"
+                        },
+                        "wirebox": {
+                            "someBinding": "foo.someCfc"
                         }
-                    }`,
+                    }
+                `,
                 "lib.d.cfm": `
-                    @!interface __cfEngine {
-                        callStackGet: () => {function: string, lineNumber: numeric, template: string}[],
-                    }
-                    @!interface Array<T> {
-                        PLACEHOLDER: any
-                        
-                    }
+                    @!interface Array<T> { PLACEHOLDER: any }
                 `,
                 //"realLib.d.cfm": fs.readFileSync("C:\\Users\\anon\\dev\\cfc\\src\\lang-server\\server\\src\\runtimelib\\lib.cf2018.d.cfm").toString(),
-                "someFile.cfm": `
-                    <cfqueryparam cfsqltype="">
-                `,
-                "a": {
-                    "b": {
-                        "x.cfc": `
-                        component accessors="true" {
-                            function foo() {
-                                var inner = () => {
-                                    return {
-                                        b: [{x:1}],
+                "someFolder": {
+                    "someFile.cfc": `
+                        component {
+                            property name="uhok" inject="someBinding";
+
+                            //// @!type Wirebox.getInstance
+                            //function getInstance() {}
+//
+                            //function doit() {
+                            //    getInstance("someBinding")
+                            //}
+                        }
+                    `
+                },
+                "foo": {
+                    "bar": {
+                        "baz": {
+                            "someCfc.cfc": `
+                                component {
+                                    function fromSomeResolvedWireboxComponent() {
+                                        return {helloWorld: 42};
                                     }
                                 }
-                        
-                                inner().b[999].
-                            }
+                            `,
                         }
-                        `,
-                        "y.cfc": "component { function mlem() {} }",
-                    },
-                    "c": {
-                        "x.cfc": "component extends='a.b.x' {}"
                     }
                 },
             }
@@ -67,8 +68,8 @@ function projectFiddle() {
         debug: true,
         parseTypes: true,
         engineVersion: EngineVersions["lucee.5"],
-        withWireboxResolution: false,
-        wireboxConfigFileCanonicalAbsPath: "/Wirebox.cfc",
+        withWireboxResolution: true,
+        cfConfigProjectRelativePath: "/Wirebox.cfc",
         checkReturnTypes: true,
         checkFlowTypes: true,
         genericFunctionInference: true,
@@ -80,18 +81,18 @@ function projectFiddle() {
     //const project = Project([path.resolve(".")], FileSystem(), {debug: true, parseTypes: true, language: LanguageVersion.lucee5});
     //const target = path.join(path.resolve("./test/"), "mxunit/framework/javaloader/JavaProxy.cfc");
     
-    project.addEngineLib("/lib.d.cfm");
+    //project.addEngineLib("/lib.d.cfm");
     // project.addEngineLib("/realLib.d.cfm");
-    project.addFile("/a/b/x.cfc");
+    project.addFile("/someFolder/someFile.cfc");
     //project.addFile("C:\\Users\\anon\\dev\\cb\\testbox\\tests\\resources\\coldbox\\system\\EventHandler.cfc");
-    const diagnostics = project.getDiagnostics("/a/b/x.cfc");
+    //const diagnostics = project.getDiagnostics("/a/b/x.cfc");
 
     //const x = project.getInterestingNodeToLeftOfCursor("/someFile.cfc", 378);
     //const completions = getCompletions(project, "/someFile.cfc", 381, null);
     //console.log(completions);
-    for (const diagnostic of diagnostics) {
-        console.log(diagnostic);
-    }
+    // for (const diagnostic of diagnostics) {
+    //     console.log(diagnostic);
+    // }
 }
 
 function bench() {
@@ -115,7 +116,7 @@ function bench() {
         parseTypes: true,
         engineVersion: EngineVersions["lucee.5"],
         withWireboxResolution: true,
-        wireboxConfigFileCanonicalAbsPath: "/Wirebox.cfc",
+        cfConfigProjectRelativePath: "cfconfig.json",
         checkReturnTypes: true,
         checkFlowTypes: true,
         genericFunctionInference: true,

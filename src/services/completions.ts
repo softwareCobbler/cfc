@@ -53,13 +53,14 @@ function getStringLiteralCompletions(checker: Checker, sourceFile: SourceFile, n
             if (!type) return undefined;
 
             if (type.kind === TypeKind.functionOverloadSet) { // this was primarily to investigate wirebox typename completions in `getInstance`
-                for (const overload of type.overloads) {
-                    const type = overload.params.find(param => param.canonicalName === paramName)?.paramType;
-                    if (!type) continue;
-                    if (type.kind === TypeKind.literal && type.underlyingType === BuiltinType.string) {
-                        strings.add(type.literalValue as string);
-                    }
-                }
+                // for (const overload of type.overloads) {
+                //     const type = overload.params.find(param => param.canonicalName === paramName)?.paramType;
+                //     if (!type) continue;
+                //     if (type.kind === TypeKind.literal && type.underlyingType === BuiltinType.string) {
+                //         strings.add(type.literalValue as string);
+                //     }
+                // }
+                return undefined;
             }
             else if (type.kind === TypeKind.functionSignature) {
                 return undefined; // not yet impl'd
@@ -77,18 +78,32 @@ function getStringLiteralCompletions(checker: Checker, sourceFile: SourceFile, n
             if (!type) return undefined;
 
             if (type.kind === TypeKind.functionOverloadSet) { // this was primarily to investigate wirebox typename completions in `getInstance`
-                for (const overload of type.overloads) {
-                    const type = overload.params[ziArgIndex]?.paramType;
-                    if (!type) continue;
-                    if (type.kind === TypeKind.literal && type.underlyingType === BuiltinType.string) {
-                        strings.add(type.literalValue as string);
-                    }
-                }
+                // for (const overload of type.overloads) {
+                //     const type = overload.params[ziArgIndex]?.paramType;
+                //     if (!type) continue;
+                //     if (type.kind === TypeKind.literal && type.underlyingType === BuiltinType.string) {
+                //         strings.add(type.literalValue as string);
+                //     }
+                // }
             }
             else if (type.kind === TypeKind.functionSignature) {
                 return undefined; // not yet impl'd
             }
-            else {
+            else if (type.kind === TypeKind.genericFunctionSignature) {
+                const argType = type.params[ziArgIndex]?.paramType;
+                if (!argType || argType.kind !== TypeKind.typeId) {
+                    return undefined;
+                }
+                const typeParam = type.typeParams.find(typeParam => typeParam.name === argType.name);
+                if (!typeParam) {
+                    return undefined;
+                }
+                if (typeParam.extends?.kind === TypeKind.keyof && typeParam.extends.concrete) {
+                    for (const keyName of typeParam.extends.keyNames) {
+                        strings.add(keyName);
+                    }
+                }
+
                 // no-op -- ?
             }
         }

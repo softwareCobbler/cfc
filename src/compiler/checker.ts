@@ -1,7 +1,7 @@
 import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, UnreachableFlow, DiagnosticKind, TagAttribute, SymbolId, TypeShimKind, NonCompositeFunctionTypeAnnotation, DUMMY_CONTAINER } from "./node";
 import { CfcResolution, CfcResolver, ComponentResolutionArgs, EngineSymbolResolver, LibTypeResolver, ProjectOptions } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
-import { cfFunctionSignature, Struct, cfUnion, BuiltinType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, Type, stringifyType, cfFunctionSignatureParam, cfFunctionOverloadSet, cfTypeId, SymbolTableTypeWrapper, Cfc, Interface, createType, createLiteralType, typeFromJavaLikeTypename, structurallyCompareTypes, TypeKind, isStructLike, cfArray, cfStructLike, isStructLikeOrArray, cfGenericFunctionSignature } from "./types";
+import { cfFunctionSignature, Struct, cfUnion, BuiltinType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, Type, stringifyType, cfFunctionSignatureParam, cfFunctionOverloadSet, cfTypeId, SymbolTableTypeWrapper, Cfc, Interface, createType, createLiteralType, typeFromJavaLikeTypename, structurallyCompareTypes, TypeKind, isStructLike, cfArray, cfStructLike, isStructLikeOrArray, cfGenericFunctionSignature, cfKeyof, cfTypeConstructorParam } from "./types";
 import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, functionDefinitionHasUserSpecifiedReturnType, getAttributeValue, getCallExpressionNameErrorRange, getComponentAttrs, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionNameTerminalErrorNode, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isInCfcPsuedoConstructor, isInEffectiveConstructorMethod, isLiteralExpr, isNamedFunction, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue, tryGetCfcMemberFunctionDefinition } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol, TupleKeyedWeakMap } from "./utils";
 import { Engine, supports } from "./engines";
@@ -374,15 +374,20 @@ export function Checker(options: ProjectOptions) {
                     const injectStringVal = getTriviallyComputableString(injectAttrVal)?.toLowerCase();
                     if (!injectStringVal || !nameStringVal) return;
 
-                    const mappings = sourceFile.libRefs.get("<<magic/wirebox>>")!.containedScope.typeinfo.mergedInterfaces.get("Wirebox")?.members.get("mappings");
+                    const mappings = sourceFile.libRefs.get("<<magic/wirebox>>")!.containedScope.typeinfo.mergedInterfaces.get("__INTERNAL__WireboxMappings");
                     const targetSymbol = sourceFile.containedScope.variables!.get(nameStringVal);
-                    if (!mappings || !targetSymbol || mappings.firstLexicalType!.kind !== TypeKind.struct) return;
+                    if (!mappings || !targetSymbol || mappings.kind !== TypeKind.interface) return;
 
-                    const cfcLookup = mappings.firstLexicalType.members.get(injectStringVal)?.firstLexicalType;
+                    const cfcLookup = mappings.members.get(injectStringVal)?.firstLexicalType;
                     if (!cfcLookup) return;
                     const cfc = evaluateType(node, cfcLookup);
 
                     setEffectivelyDeclaredType(targetSymbol, cfc);
+
+                    if (node.flow) {
+                        // should have an assignment flow on a property
+                        setCachedEvaluatedFlowType(node.flow, targetSymbol.symbolId, cfc);
+                    }
                 }
                 return;
             }
@@ -807,6 +812,21 @@ export function Checker(options: ProjectOptions) {
                         runningComparisonMap.get(l)!.delete(r);
                         return false; // number is not a subtype of `0`
                     }
+                    if (l.kind === TypeKind.literal && r.kind === TypeKind.keyof) {
+                        if (!r.concrete) {
+                            // we could instantiate it, but we don't have a context?
+                            // if it's not concrete it doesn't have any keys in it
+                            runningComparisonMap.get(l)!.delete(r);
+                            return false;
+                        }
+                        else if (l.kind !== TypeKind.literal || l.underlyingType !== BuiltinType.string) {
+                            runningComparisonMap.get(l)!.delete(r);
+                            return false;
+                        }
+                        else {
+                            return r.keyNames.has(l.literalValue as string);
+                        }
+                    }
                     if (l.kind === TypeKind.literal && r.kind !== TypeKind.literal && worker(l.underlyingType, r)) {
                         return true; // `0` is a subtype of number
                     }
@@ -884,16 +904,26 @@ export function Checker(options: ProjectOptions) {
                         // check for optional property of R -- if left doesn't exist, OK; if left does exist, check for subtype-ness
                         if (rightVal.links?.optional) {
                             if (!leftVal) continue;
-                            if (!worker(leftVal.firstLexicalType!, rightVal.firstLexicalType!)) {
+                            const x = leftVal.links?.effectiveDeclaredType ?? leftVal.firstLexicalType;
+                            const y = rightVal.links?.effectiveDeclaredType ?? rightVal.firstLexicalType;
+                            if (!x || !y || !worker(x, y)) {
                                 runningComparisonMap.get(l)!.delete(r);
                                 return false;
                             }
                         }
                         // check for required properties of R -- left must exist, not be optional, and be a subtype
                         else {
-                            if (!leftVal || (leftVal.links?.optional) || !worker(leftVal.firstLexicalType!, rightVal.firstLexicalType!)) {
+                            if (!leftVal || (leftVal.links?.optional)) {
                                 runningComparisonMap.get(l)!.delete(r);
                                 return false;
+                            }
+                            else {
+                                const x = leftVal?.links?.effectiveDeclaredType ?? leftVal.firstLexicalType;
+                                const y = rightVal?.links?.effectiveDeclaredType ?? rightVal.firstLexicalType;
+                                if (!x || !y || !worker(x,y)) {
+                                    runningComparisonMap.get(l)!.delete(r);
+                                    return false;
+                                }
                             }
                         }
                     }
@@ -985,6 +1015,17 @@ export function Checker(options: ProjectOptions) {
                 // S&T <: U     iff S <: U || T <: U   (e.g `U = S&T` is valid if either S or T is a subtype of U)
                 // U   <: S&T   iff U <: S && U <: T   (e.g `S&T = U` is valid only if U is a subtype of both S and T)
                 //
+                if (l.kind === TypeKind.keyof) {
+                    // this isn't accurate but we don't have much use for it
+                    // (keyof T) <: U if every member of T is in U, or if U is string
+                    // (keyof T) is a union but we don't really treat it that way
+                    if (r !== BuiltinType.string) {
+                        runningComparisonMap.get(l)!.delete(r);
+                        return false;
+                    }
+                    return true;
+                }
+
                 if (l.kind === TypeKind.union) {
                     for (const leftConstituent of l.types) {
                         if (!worker(leftConstituent, r)) {
@@ -1206,6 +1247,7 @@ export function Checker(options: ProjectOptions) {
 
             const typeParamMap = new Map<string, Type | undefined>();
             const definitelyResolvedTypeParamMap = new Map<string, Type>();
+            const typeConstraintMap = new Map<string, Type>(); // all constraints are "subtypeof" at this point, e.g. <T extends "a" | "b">(...)
             const pushResolution = (name: string, type: Type) => {
                 typeParamMap.set(name, type);
                 definitelyResolvedTypeParamMap.set(name, type);
@@ -1213,6 +1255,20 @@ export function Checker(options: ProjectOptions) {
 
             for (const p of sig.typeParams) {
                 typeParamMap.set(p.name, undefined);
+                if (p.extends) {
+                    // we'll evaluate the constraints here, which means that
+                    // we cannot constrain a generic against earlier parameters, since we don't know what they are yet
+                    // also
+                    // we're going to mutate the actual signature here, under the assumption, that a constraint won't ever change, since types are "closed",
+                    // i.e.
+                    // @!interface I <T> { gf: <U extends {v: T}>(arg0: U) => U }
+                    // var x : I<string> ===> instantiates I<string>, and should stamp out <U extends {v: string}>
+                    // this will mutate the instantiated interface, but not the underlying template
+                    //
+                    const evaluatedConstraint = evaluateType(node, p.extends);
+                    typeConstraintMap.set(p.name, evaluatedConstraint);
+                    (p as Mutable<cfTypeConstructorParam>).extends = evaluatedConstraint;
+                }
             }
 
             for (let i = 0; i < sig.params.length && i < node.args.length; i++) {
@@ -1227,6 +1283,7 @@ export function Checker(options: ProjectOptions) {
                         for (let j = 0; j < callSiteArg.expr.params.length; j++) {
                             const resolutions = resolveGenericFunctionTypeParams(
                                 typeParamMap,
+                                typeConstraintMap,
                                 sigParamType.params[j].paramType,
                                 evaluateType(callSiteArg, typeFromJavaLikeTypename(callSiteArg.expr.params[j].javaLikeTypename)));
                             if (resolutions) {
@@ -1261,20 +1318,22 @@ export function Checker(options: ProjectOptions) {
                     }
                 }
                 else {
-                    // if param is optional and callSiteArg is undefined we don't need to do this
+                    // if param is optional and callSiteArg is undefined we don't need to do this?
                     checkNode(callSiteArg);
                     const argType = getCachedEvaluatedNodeType(node.args[i])
-                    const resolutions = resolveGenericFunctionTypeParams(typeParamMap, sigParamType, argType);
+                    const resolutions = resolveGenericFunctionTypeParams(typeParamMap, typeConstraintMap, sigParamType, argType);
                     if (resolutions) {
                         for (const [k,v] of resolutions) {
-                            if (v) typeParamMap.set(k,v)
+                            if (v) {
+                                pushResolution(k, v);
+                            }
                         }
                     }
                 }
             }
 
             if (definitelyResolvedTypeParamMap.size === typeParamMap.size) {
-                returnType = evaluateType(EmptyInstantiationContext, sig.returns, definitelyResolvedTypeParamMap);
+                returnType = evaluateType(node, sig.returns, definitelyResolvedTypeParamMap);
                 setCachedEvaluatedNodeType(node, returnType);
             }
             else {
@@ -1289,11 +1348,16 @@ export function Checker(options: ProjectOptions) {
                 return undefined;
             }
 
-            function resolveGenericFunctionTypeParams(unifiees: ReadonlyMap<string, Type | undefined>, target: Type, source: Type) : ReadonlyMap<string, Type | undefined> | undefined {
+            function resolveGenericFunctionTypeParams(unifiees: ReadonlyMap<string, Type | undefined>, constraintMap: ReadonlyMap<string, Type>, target: Type, source: Type) : ReadonlyMap<string, Type | undefined> | undefined {
                 if (target.kind === TypeKind.typeId) {
                     if (unifiees.has(target.name)) {
                         if (!unifiees.get(target.name)) {
-                            return new Map([[target.name, source]]);
+                            if (!constraintMap.has(target.name) || isAssignable(source, constraintMap.get(target.name)!)) {
+                                return new Map([[target.name, source]]);
+                            }
+                            else {
+                                return undefined;
+                            }
                         }
 
                         const resolvedTarget = unifiees.get(target.name)!;
@@ -1314,7 +1378,7 @@ export function Checker(options: ProjectOptions) {
                     }
                 }
                 else if (target.kind === TypeKind.array && source.kind === TypeKind.array) {
-                    return resolveGenericFunctionTypeParams(unifiees, target.memberType, source.memberType);
+                    return resolveGenericFunctionTypeParams(unifiees, constraintMap, target.memberType, source.memberType);
                 }
                 else if (isStructLike(target) && isStructLike(source)) {
                     if (target.kind === TypeKind.cfc && source.kind === TypeKind.cfc) {
@@ -1328,7 +1392,7 @@ export function Checker(options: ProjectOptions) {
                     for (const [name, symTabEntry] of target.members) {
                         const targetType = symTabEntry.firstLexicalType!;
                         if (!source.members.has(name)) return;
-                        const result = resolveGenericFunctionTypeParams(freshResolutions, targetType, source.members.get(name)!.firstLexicalType!);
+                        const result = resolveGenericFunctionTypeParams(freshResolutions, constraintMap, targetType, source.members.get(name)!.firstLexicalType!);
                         if (result) {
                             for (const [k,v] of result) freshResolutions.set(k,v);
                         }
@@ -1344,13 +1408,13 @@ export function Checker(options: ProjectOptions) {
                     for (let i = 0; i < target.params.length; i++) {
                         const targetParamType = target.params[i].paramType;
                         const sourceParamType = source.params[i].paramType;
-                        const result = resolveGenericFunctionTypeParams(unifiees, targetParamType, sourceParamType);
+                        const result = resolveGenericFunctionTypeParams(unifiees, constraintMap, targetParamType, sourceParamType);
                         if (result) {
                             for (const[k,v] of result) freshResolutions.set(k,v);
                         }
                     }
 
-                    const returnTypeResolution = resolveGenericFunctionTypeParams(unifiees, target.returns, source.returns);
+                    const returnTypeResolution = resolveGenericFunctionTypeParams(unifiees, constraintMap, target.returns, source.returns);
                     if (returnTypeResolution) {
                         for (const[k,v] of returnTypeResolution) freshResolutions.set(k,v);
                     }
@@ -1618,7 +1682,7 @@ export function Checker(options: ProjectOptions) {
             // ```
             const hasFlow = !!flow;
             const hasFlowId = !!(flow?.flowId);
-            const name = sourceFile.symbolIdToSymbol.get(symbolId)!.uiName;
+            const name = sourceFile.symbolIdToSymbol.get(symbolId)?.uiName || "<<no-symbol>>";
             debug.out(`Expected a flow when setting flowtype for '${name}'; hasFlow=${hasFlow}, hasFlowID='${hasFlowId}'`)
             return;
         }
@@ -2235,7 +2299,7 @@ export function Checker(options: ProjectOptions) {
         }
 
         const cfSyntaxDirectedTypeSig = memberFunctionSignature ?? (evaluateType(node, extractCfFunctionSignature(node)) as cfFunctionSignature);
-        let finalType : cfFunctionSignature | cfFunctionOverloadSet = cfSyntaxDirectedTypeSig;
+        let finalType : cfFunctionSignature | cfGenericFunctionSignature | cfFunctionOverloadSet = cfSyntaxDirectedTypeSig;
         
         if (typeAnnotation?.shimKind === TypeShimKind.annotation) {
             const evaluatedSignature = evaluateType(node, typeAnnotation.type);
@@ -2255,6 +2319,13 @@ export function Checker(options: ProjectOptions) {
                     }
                 }
 
+                finalType = evaluatedSignature;
+                if (isMemberFunction && sourceFile.containedScope.variables!.has(node.name.canonical)) {
+                    sourceFile.containedScope.variables!.get(node.name.canonical)!.firstLexicalType = finalType; // updates the 'this' copy of the symbol too, the refs are the same
+                }
+            }
+            else if (evaluatedSignature.kind === TypeKind.genericFunctionSignature) {
+                // to see if we can get interesting behavior, we do not do any checking here right now
                 finalType = evaluatedSignature;
                 if (isMemberFunction && sourceFile.containedScope.variables!.has(node.name.canonical)) {
                     sourceFile.containedScope.variables!.get(node.name.canonical)!.firstLexicalType = finalType; // updates the 'this' copy of the symbol too, the refs are the same
@@ -3133,15 +3204,60 @@ export function Checker(options: ProjectOptions) {
                             return fallbackToAny ? BuiltinType.any : null;
                         }
                         if (type.indexChain) {
-                            for (const name of type.indexChain) {
-                                if (!isStructLike(result)) return BuiltinType.any; // should error with "not indexable" or etc.
-                                const nextType = result.members.get(name)?.firstLexicalType;
+                            for (const indexElement of type.indexChain) {
+                                if (!isStructLike(result)) {
+                                    // should bubble up an error with "not indexable" or etc.
+                                    return fallbackToAny ? BuiltinType.any : null;
+                                }
+                                let indexAsString : string;
+                                switch (indexElement.kind) {
+                                    case TypeKind.typeId: {
+                                        const evaluatedShouldBeString = typeParamMap?.get(indexElement.name) || walkUpContainersToResolveType(context, indexElement) || null;
+                                        if (evaluatedShouldBeString?.kind === TypeKind.literal && evaluatedShouldBeString.underlyingType === BuiltinType.string) {
+                                            indexAsString = evaluatedShouldBeString.literalValue as string;
+                                            break;
+                                        }
+                                        else {
+                                            return fallbackToAny ? BuiltinType.any : null;
+                                        }
+                                    }
+                                    case TypeKind.literal: {
+                                        if (indexElement.underlyingType === BuiltinType.string) {
+                                            indexAsString = indexElement.literalValue as string;
+                                            break;
+                                        }
+                                        else {
+                                            // literal type as index should be a string
+                                            // e.g. T[1] should be T["1"]
+                                            // well, we should support numbers, but not T[true]
+                                            return fallbackToAny ? BuiltinType.any : null;
+                                            break;
+                                        }
+                                    }
+                                    default: exhaustiveCaseGuard(indexElement);
+                                }
+
+                                // when have we been guaranteed to have evaluated this member?
+                                const nextType = result.members.get(indexAsString.toLowerCase())?.links?.effectiveDeclaredType
+                                    ?? result.members.get(indexAsString.toLowerCase())?.firstLexicalType;
+
                                 if (nextType) result = typeWorker(nextType);
                                 if (!result) return null;
                             }
                         }
                         
                         return typeWorker(result);
+                    }
+                    else if (type.kind === TypeKind.keyof) {
+                        const operandType = typeWorker(type.operand);
+                        if (!operandType || !isStructLike(operandType)) {
+                            return fallbackToAny ? BuiltinType.any : null;
+                        }
+                        const keys = new Set<string>();
+                        for (const symTabEntry of operandType.members.values()) {
+                            keys.add(symTabEntry.uiName);
+                        }
+                        return cfKeyof(type.operand, keys);
                     }
                     else {
                         // a type not requiring evaluation: number, string, boolean,

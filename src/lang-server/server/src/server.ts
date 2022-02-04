@@ -147,8 +147,8 @@ function mungeConfig(config: Record<string, any> | null) : SerializableCflsConfi
 		x_checkReturnTypes: !!config?.x_checkReturnTypes,
 		x_checkFlowTypes: !!config?.x_checkFlowTypes,
 		engineVersion: config?.engineVersion ?? "lucee.5",
-		wireboxConfigFile: config?.wireboxConfigFile ?? null,
 		wireboxResolution: config?.wireboxResolution ?? false,
+		cfConfigProjectRelativePath: config?.cfConfigProjectRelativePath ?? null,
 	}
 }
 

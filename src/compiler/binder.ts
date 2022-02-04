@@ -1366,6 +1366,9 @@ export function Binder(options: ProjectOptions) {
             }
         }
         else {
+            currentFlow = freshFlow(currentFlow, FlowType.assignment);
+            node.flow = currentFlow;
+            
             const uiNameAttr = getAttributeValue(node.attrs, "name");
             if (!uiNameAttr) {
                 issueDiagnosticAtRange(node.range, "Properties must have a 'name' attribute.");

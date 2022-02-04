@@ -7,7 +7,7 @@ import { EngineVersion } from "./engines";
 import { BlockType, CallExpression, mergeRanges, Node, NodeId, NodeKind, SourceFile, StatementType, SymTabEntry, DiagnosticKind, resetSourceFileInPlace } from "./node";
 import { Parser } from "./parser";
 import { CfFileType, SourceRange } from "./scanner";
-import { cfFunctionOverloadSet, cfFunctionSignatureParam, Interface, createLiteralType, Type, Struct, CfcLookup, BuiltinType } from "./types";
+import { cfFunctionSignatureParam, Interface, Type, CfcLookup, BuiltinType, cfTypeId, cfGenericFunctionSignature, TypeConstructorParam, freshKeyof } from "./types";
 
 import { isNamedFunction, cfmOrCfc, findNodeInFlatSourceMap, flattenTree, getAttributeValue, getComponentAttrs, getComponentBlock, getTriviallyComputableString, NodeSourceMap, visit } from "./utils";
 
@@ -188,7 +188,7 @@ export interface ProjectOptions {
     parseTypes: boolean,
     engineVersion: EngineVersion,
     withWireboxResolution: boolean,
-    wireboxConfigFileCanonicalAbsPath: string | null,
+    cfConfigProjectRelativePath: string | null,
     genericFunctionInference: boolean,
     checkReturnTypes: boolean,
     checkFlowTypes: boolean,
@@ -199,12 +199,17 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     type AbsPath = string;
     type Trie<T> = Map<T, Trie<T> | string>;
     interface ProjectMappings {
-        CF: Trie<string>,
-        WIREBOX?: Map<string, string>
+        cf: Trie<string>,
+        wirebox?: Map<string, string>
+    }
+
+    if (options.debug) {
+        setNodeModuleDebug();
+        setTypeModuleDebug();
     }
 
     const projectRoot = canonicalizePath(__const__projectRoot); // the value passed in is inconvenient to name; the convenient name is immutable
-    const ProjectMappings : ProjectMappings = loadPathMappingsFromDisk(path.join(projectRoot, ".cfls-mappings.json"));
+    const ProjectMappings : ProjectMappings = loadPathMappingsFromDisk(path.join(projectRoot, options.cfConfigProjectRelativePath ?? "cfconfig.json"));
     const wireboxLib : SourceFile | undefined = constructWireboxLibFile(ProjectMappings);
 
     const projectRootDirName = (() => {
@@ -216,11 +221,6 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     const binder = Binder(options);
     const checker = Checker(options);
     const heritageCircularityDetector = new Set<string>();
-
-    if (options.debug) {
-        setNodeModuleDebug();
-        setTypeModuleDebug();
-    }
 
     checker.install({CfcResolver, EngineSymbolResolver, LibTypeResolver});
 
@@ -235,9 +235,9 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             const maybeJson = JSON.parse(fileSystem.readFileSync(path).toString());
             const cfMappings = new Map() as Trie<string>;
 
-            if (isObject(maybeJson) && isObject(maybeJson.CF)) {
+            if (isObject(maybeJson) && isObject(maybeJson.cf)) {
                 outer:
-                for (const [mapping, path] of Object.entries(maybeJson.CF)) {
+                for (const [mapping, path] of Object.entries(maybeJson.cf)) {
                     if (typeof mapping === "string" && typeof path === "string") {
                         let trieWalker : Trie<string> = cfMappings;
                         const components = mapping.split(".");
@@ -268,24 +268,24 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
 
             if (options.withWireboxResolution) {
                 const wireboxMappings = new Map<string, string>();
-                if (isObject(maybeJson) && isObject(maybeJson.WIREBOX)) {
-                    for (const [name, mapping] of Object.entries(maybeJson.WIREBOX)) {
+                if (isObject(maybeJson) && isObject(maybeJson.wirebox)) {
+                    for (const [name, mapping] of Object.entries(maybeJson.wirebox)) {
                         if (typeof name === "string" && typeof mapping === "string") {
                             wireboxMappings.set(name, mapping);
                         }
                     }
                 }
                 return {
-                    CF: cfMappings,
-                    WIREBOX: wireboxMappings
+                    cf: cfMappings,
+                    wirebox: wireboxMappings
                 }
             }
             else {
-                return { CF: cfMappings };
+                return { cf: cfMappings };
             }
         }
         catch {
-            return { CF: new Map() };
+            return { cf: new Map(), wirebox: new Map() };
         }
 
         function isObject(v: any) : v is {[k: string]: any} {
@@ -444,28 +444,22 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     // }
 
     function constructWireboxLibFile(mappings: ProjectMappings) : SourceFile | undefined {
-        if (!mappings.WIREBOX) {
+        if (!mappings.wirebox) {
             return undefined;
         }
         
-        const overloads : {params: cfFunctionSignatureParam[], returns: Type}[] = [];
-        const mappingsBuilder = new Map<string, SymTabEntry>();
+        const wireboxNamesToCfcMappings = new Map<string, SymTabEntry>();
 
-        const initArgsParam = cfFunctionSignatureParam(false, BuiltinType.EmptyInterface, "initArgs");
-        const dslParam = cfFunctionSignatureParam(false, BuiltinType.string, "dsl");
-
-        for (const [name, mapping] of mappings.WIREBOX) {
+        for (const [name, mapping] of mappings.wirebox) {
             const cfcAbsPath = findCfFileMappingByTypelikeName(mapping);
             if (!cfcAbsPath) {
                 continue;
             }
 
-            const nameAsLiteralType = createLiteralType(name);
-            const nameParam = cfFunctionSignatureParam(/*required*/true, nameAsLiteralType, "name")
-            const cfcRefType = CfcLookup(nameAsLiteralType, ComponentSpecifier(cfcAbsPath));
-            overloads.push({params: [nameParam, initArgsParam, dslParam], returns: cfcRefType});
+            const cfcRefType = CfcLookup(mapping, ComponentSpecifier(cfcAbsPath));
             const canonicalName = name.toLowerCase();
-            mappingsBuilder.set(canonicalName, {
+
+            wireboxNamesToCfcMappings.set(canonicalName, {
                 canonicalName,
                 uiName: name,
                 firstLexicalType: cfcRefType,
@@ -474,28 +468,56 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             });
         }
 
+        /*
+            we want to say:
+
+            @!interface WireboxMappings {
+                "someBinding@folder": "foo.bar.baz",
+                "someOtherBinding": "a.b.c.d",
+                ...
+            }
+
+            @!interface Wirebox {
+                getInstance: <T extends keyof WireboxMappings>(name: T, initArgs: {}, dslParam: string) => WireboxMappings[T]
+            }
+
+            the machinery mostly exists but there's no user-surfaced syntax that we parse for this
+
+            also we need something like namespaces
+
+            @!namespace Wirebox {
+                @!interface Mappings {
+                    "a": "b",
+                    ...
+                }
+                getInstance: <T extends keyof Mappings>(name: T, initArgs: {}, dslParam: string) => Mappings[T]
+            }
+        */
+
+        const wireboxMappingInterface = Interface("__INTERNAL__WireboxMappings", wireboxNamesToCfcMappings);
+        const wireboxLookup = cfTypeId("__INTERNAL__WireboxMappings", [cfTypeId("T")]);
+
+        const typeParam = TypeConstructorParam("T", undefined, freshKeyof(wireboxMappingInterface));
+        const nameParam = cfFunctionSignatureParam(true, cfTypeId("T"), "name");
+        const initArgsParam = cfFunctionSignatureParam(false, BuiltinType.EmptyInterface, "initArgs");
+        const dslParam = cfFunctionSignatureParam(false, BuiltinType.string, "dsl");
+
         const wireboxGetInstanceSymbol : SymTabEntry = {
             uiName: "getInstance",
             canonicalName: "getinstance",
             declarations: null,
-            firstLexicalType: cfFunctionOverloadSet("getInstance", overloads, []),
+            firstLexicalType: cfGenericFunctionSignature("getInstance", [typeParam], [nameParam, initArgsParam, dslParam], wireboxLookup, []),
             symbolId: -1,
         };
 
         const wireboxMembers = new Map<string, SymTabEntry>([
             ["getinstance", wireboxGetInstanceSymbol],
-            ["mappings", {
-                canonicalName: "mappings",
-                uiName: "mappings",
-                declarations: null,
-                firstLexicalType: Struct(mappingsBuilder),
-                symbolId: -1,
-            }]
         ]);
         
         const wireboxInterface = Interface("Wirebox", wireboxMembers);
         const libFile = SourceFile("<<magic/wirebox>>", CfFileType.dCfm, "");
         libFile.containedScope.typeinfo.mergedInterfaces.set("Wirebox", wireboxInterface);
+        libFile.containedScope.typeinfo.mergedInterfaces.set("__INTERNAL__WireboxMappings", wireboxMappingInterface)
         return libFile;
     }
 
@@ -623,7 +645,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             return undefined;
         }
 
-        let trieWalker : Trie<string> | string | undefined = ProjectMappings.CF.get(pathComponents.shift()!);
+        let trieWalker : Trie<string> | string | undefined = ProjectMappings.cf.get(pathComponents.shift()!);
         while (trieWalker && typeof trieWalker !== "string" && pathComponents.length > 0) {
             trieWalker = trieWalker.get(pathComponents.shift()!);
         }

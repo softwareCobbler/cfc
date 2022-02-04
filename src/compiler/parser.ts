@@ -4493,7 +4493,7 @@ export function Parser(config: ProjectOptions) {
                             }
 
                             if (rest.length > 0) {
-                                result = cfTypeId(result.name, rest);
+                                result = cfTypeId(result.name, rest.map((s) => createLiteralType(s)));
                             }
 
                             if (lookahead() === TokenType.LEFT_ANGLE) {

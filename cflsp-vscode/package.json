@@ -108,11 +108,11 @@
 					"description": "Enable experimental resolution of CFCs via Wirebox's `getInstance`.",
 					"default": false
 				},
-				"cflsp.wireboxConfigFile": {
+				"cflsp.cfConfigProjectRelativePath": {
 					"scope": "resource",
 					"type": "string",
-					"description": "Project-relative path to the Wirebox config file.",
-					"default": "config/Wirebox.cfc"
+					"description": "Project-relative path to the cfls config file.",
+					"default": "cfconfig.json"
 				}
 			}
 		}
