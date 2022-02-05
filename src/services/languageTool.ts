@@ -169,7 +169,7 @@ function LanguageTool() {
             const project = getOwningProjectFromAbsPath(fsPath);
             if (!project) return undefined;
 
-            const sourceFile = project.__unsafe_dev_getFile(fsPath)?.parsedSourceFile;
+            const sourceFile = project.__unsafe_dev_getFile(fsPath);
             if (!sourceFile) return undefined;
 
             const targetNode = project.getInterestingNodeToLeftOfCursor(fsPath, targetIndex);

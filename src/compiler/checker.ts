@@ -2424,7 +2424,7 @@ export function Checker(options: ProjectOptions) {
                 }
             }
             else {
-                if (node.kind === NodeKind.functionDefinition && !functionDefinitionHasUserSpecifiedReturnType(node)) {
+                if (!functionDefinitionHasUserSpecifiedReturnType(node)) {
                     (finalType as Mutable<cfFunctionSignature>).returns = inferredReturnType;
                 }
             }

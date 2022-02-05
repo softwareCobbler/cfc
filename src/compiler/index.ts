@@ -2,7 +2,7 @@ export { Scanner, CfFileType } from "./scanner";
 export { Parser } from "./parser";
 export { Binder } from "./binder";
 export { Checker } from "./checker";
-export { cfmOrCfc, flattenTree, NodeSourceMap, binarySearch } from "./utils";
+export { cfmOrCfc, flattenTree, binarySearch } from "./utils";
 export { Node, SourceFile, Diagnostic, NilDCfm, NilCfc, NilCfm } from "./node";
 
 export { DebugFileSystem, FileSystem, Project } from "./project";

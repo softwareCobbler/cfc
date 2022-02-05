@@ -342,14 +342,18 @@ export interface SymbolResolution extends SymTabResolution {
     container: Node
 }
 
-
+export interface NodeSourceMap {
+    nodeId: number,
+    range: SourceRange
+}
 
 export interface SourceFile extends NodeBase {
     kind: NodeKind.sourceFile,
     absPath: string,
     cfFileType: CfFileType,
     containedScope: ScopeDisplay,
-    content: Node[]
+    content: Node[],
+    flatTree: NodeSourceMap[],
     libRefs: Map<string, SourceFile>,
     diagnostics: Diagnostic[],
     scanner: Scanner,
@@ -368,6 +372,7 @@ export interface SourceFile extends NodeBase {
 export function resetSourceFileInPlace(target: SourceFile, newSource: string | Buffer) : void {
     target.containedScope = {parentContainer: null, typeinfo: typeinfo()};
     target.content = [];
+    target.flatTree = [];
     // target.libRefs untouched
     target.diagnostics = [];
     target.scanner = Scanner(newSource);
@@ -389,6 +394,7 @@ export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: 
         typeinfo: typeinfo(),
     };
     sourceFile.content = [];
+    sourceFile.flatTree = [];
     sourceFile.libRefs = new Map();
     sourceFile.diagnostics = [];
     sourceFile.scanner = Scanner(sourceText);

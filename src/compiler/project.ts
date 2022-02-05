@@ -4,23 +4,18 @@ import * as path from "path";
 import { Binder } from "./binder";
 import { Checker } from "./checker";
 import { EngineVersion } from "./engines";
-import { BlockType, CallExpression, mergeRanges, Node, NodeId, NodeKind, SourceFile, StatementType, SymTabEntry, DiagnosticKind, resetSourceFileInPlace } from "./node";
+import { BlockType, CallExpression, mergeRanges, Node, NodeKind, SourceFile, StatementType, SymTabEntry, DiagnosticKind, resetSourceFileInPlace } from "./node";
 import { Parser } from "./parser";
 import { CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignatureParam, Interface, Type, CfcLookup, BuiltinType, cfTypeId, cfGenericFunctionSignature, TypeConstructorParam, freshKeyof } from "./types";
 
-import { isNamedFunction, cfmOrCfc, findNodeInFlatSourceMap, flattenTree, getAttributeValue, getComponentAttrs, getComponentBlock, getTriviallyComputableString, NodeSourceMap, visit } from "./utils";
+import { isNamedFunction, cfmOrCfc, findNodeInFlatSourceMap, flattenTree, getAttributeValue, getComponentAttrs, getComponentBlock, getTriviallyComputableString, visit } from "./utils";
 
 import { CancellationException, CancellationTokenConsumer } from "./cancellationToken";
 
 import { setDebug as setNodeModuleDebug } from "./node";
 import { setDebug as setTypeModuleDebug } from "./types";
-
-interface CachedFile {
-    parsedSourceFile: SourceFile,
-    flatTree: NodeSourceMap[],
-    nodeMap: ReadonlyMap<NodeId, Node>
-}
+import { Diagnostic } from ".";
 
 interface DevTimingInfo {
     parse: number,
@@ -226,10 +221,10 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
 
     checker.install({CfcResolver, EngineSymbolResolver, LibTypeResolver});
 
-    type FileCache = Map<AbsPath, CachedFile>;
+    type FileCache = Map<AbsPath, SourceFile>;
     const files : FileCache = new Map();
 
-    let engineLib : CachedFile | undefined;
+    let engineLib : SourceFile | undefined;
 
     // mappings file should be configurable, relative to project root
     function loadPathMappingsFromDisk(path: string) : ProjectMappings {
@@ -295,7 +290,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         }
     }
 
-    function tryAddFile(absPath: string) : CachedFile | undefined {
+    function tryAddFile(absPath: string) : SourceFile | undefined {
         if (!fileSystem.existsSync(absPath)) return undefined;
         return addFile(absPath);
     }
@@ -306,23 +301,22 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             parser.parse(sourceFile);
             const parseElapsed = new Date().getTime() - parseStart;
 
-            if (engineLib && engineLib.parsedSourceFile !== sourceFile) {
-                sourceFile.libRefs.set("<<engine>>", engineLib.parsedSourceFile);
+            if (engineLib && engineLib !== sourceFile) {
+                sourceFile.libRefs.set("<<engine>>", engineLib);
             }
 
             const bindStart = new Date().getTime();
             binder.bind(sourceFile);
             const bindElapsed = new Date().getTime() - bindStart;
 
-            maybeFollowParentComponents(sourceFile);
+            sourceFile.flatTree = flattenTree(sourceFile);
 
             // do before checking so resolving a self-referential cfc in the checker works
             // e.g. in foo.cfc `public foo function bar() { return this; }`
-            files.set(canonicalizePath(sourceFile.absPath), {
-                parsedSourceFile: sourceFile,
-                flatTree: flattenTree(sourceFile),
-                nodeMap: sourceFile.nodeMap
-            });
+            files.set(canonicalizePath(sourceFile.absPath), sourceFile);
+
+            maybeFollowParentComponents(sourceFile);
+
 
             const checkStart = new Date().getTime();
 
@@ -358,7 +352,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         }
     }
 
-    function addFile(absPath: string) {
+    function addFile(absPath: string) : SourceFile | undefined {
         absPath = canonicalizePath(absPath);
 
         if (!fileSystem.existsSync(absPath)) return undefined;
@@ -376,7 +370,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             
         }
 
-        return files.get(absPath)!;
+        return files.get(absPath);
     }
 
     // function constructWireboxInterface(sourceFile: SourceFile) : Interface | undefined {
@@ -538,7 +532,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         }
 
         if (sourceFile.cfFileType === CfFileType.cfc) {
-            let maybeParent : CachedFile | undefined = undefined;
+            let maybeParent : SourceFile | undefined = undefined;
 
             // if there is a circularity, report it and don't put attach the parent to this cfc file
             if (heritageCircularityDetector.has(sourceFile.absPath)) {
@@ -547,14 +541,14 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             else {
                 heritageCircularityDetector.add(sourceFile.absPath);
                 maybeParent = tryGetParentComponent(sourceFile);
-                if (maybeParent && maybeParent.parsedSourceFile.cfc?.extends && heritageCircularityDetector.has(maybeParent.parsedSourceFile.cfc.extends.absPath)) {
+                if (maybeParent && maybeParent.cfc?.extends && heritageCircularityDetector.has(maybeParent.cfc.extends.absPath)) {
                     reportCircularity();
                     maybeParent = undefined;
                 }
                 heritageCircularityDetector.delete(sourceFile.absPath);
             }
 
-            sourceFile.cfc = {extends: maybeParent?.parsedSourceFile ?? null, implements: []};
+            sourceFile.cfc = {extends: maybeParent ?? null, implements: []};
         }
     }
 
@@ -567,7 +561,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         return fileSystem.caseSensitive ? path : path.toLowerCase() as any;
     }
 
-    function getCachedFile(absPath: string) : CachedFile | undefined {
+    function getCachedFile(absPath: string) : SourceFile | undefined {
         return files.get(canonicalizePath(absPath));
     }
 
@@ -586,7 +580,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     }
 
     // this assumes work has already been done to load the parent file
-    function tryGetParentComponent(sourceFile: SourceFile) : CachedFile | undefined {
+    function tryGetParentComponent(sourceFile: SourceFile) : SourceFile | undefined {
         if (sourceFile.cfFileType !== CfFileType.cfc) return undefined;
         const heritageInfo = getExtendsSpecifier(sourceFile);
         if (!heritageInfo) return undefined;
@@ -598,7 +592,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             return undefined;
         }
 
-        let result : CachedFile | undefined = undefined;
+        let result : SourceFile | undefined = undefined;
         for (const specifier of noSelfExtendsSpecifier) {
             result = getCachedFile(specifier.absPath) ?? tryAddFile(specifier.absPath);
             if (result) break;
@@ -625,20 +619,19 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     // if for some reason it isn't, we try to add it
     // as a dev kludge, we return parse/bind/check times; this method otherwise returns void
     function parseBindCheck(absPath: AbsPath, newSource: string | Buffer) : DevTimingInfo {
-        const cache = getCachedFile(absPath);
-        if (!cache) {
+        const sourceFile = getCachedFile(absPath);
+        if (!sourceFile) {
             tryAddFile(absPath);
             return {parse: -1, bind: -1, check: -1};
         }
 
-        const sourceFile = cache.parsedSourceFile;
         resetSourceFileInPlace(sourceFile, newSource);
 
         return parseBindCheckWorker(sourceFile);
     }
 
-    function getDiagnostics(absPath: string) {
-        return files.get(canonicalizePath(absPath))?.parsedSourceFile.diagnostics || [];
+    function getDiagnostics(absPath: string) : Diagnostic[] {
+        return files.get(canonicalizePath(absPath))?.diagnostics || [];
     }
 
     /**
@@ -718,7 +711,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
                     return undefined;
                 }
     
-                const file =  tryAddFile(args.absPath)?.parsedSourceFile;
+                const file =  tryAddFile(args.absPath);
     
                 if (file) {
                     return {
@@ -734,7 +727,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             const specifiers = buildPossibleCfcResolutionPaths(args.resolveFrom, args.cfcName);
             if (!specifiers) return undefined;
             for (const specifier of specifiers) {
-                const file = getCachedFile(specifier.absPath)?.parsedSourceFile;
+                const file = getCachedFile(specifier.absPath);
                 if (file) {
                     return {
                         sourceFile: file,
@@ -743,7 +736,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
                 }
             }
             for (const specifier of specifiers) {
-                const file =  tryAddFile(specifier.absPath)?.parsedSourceFile;
+                const file =  tryAddFile(specifier.absPath);
                 if (file) {
                     return {
                         sourceFile: file,
@@ -760,9 +753,9 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     }
 
     function getNodeToLeftOfCursor(absPath: string, targetIndex: number) : Node | undefined {
-		const docCache = getCachedFile(absPath);
-		if (!docCache) return undefined;
-		return findNodeInFlatSourceMap(docCache.flatTree, docCache.nodeMap, targetIndex);
+		const sourceFile = getCachedFile(absPath);
+		if (!sourceFile) return undefined;
+		return findNodeInFlatSourceMap(sourceFile.flatTree, sourceFile.nodeMap, targetIndex);
     }
 
     /**
@@ -770,9 +763,9 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
      * so instead of a terminal, return Identifier, or etc.
      */
     function getInterestingNodeToLeftOfCursor(absPath: string, targetIndex: number) : Node | undefined {
-		const docCache = getCachedFile(absPath);
-		if (!docCache) return undefined;
-		const node = findNodeInFlatSourceMap(docCache.flatTree, docCache.nodeMap, targetIndex);
+		const sourceFile = getCachedFile(absPath);
+		if (!sourceFile) return undefined;
+		const node = findNodeInFlatSourceMap(sourceFile.flatTree, sourceFile.nodeMap, targetIndex);
         if (!node
             || node.kind === NodeKind.comment
             || (node.kind === NodeKind.textSpan
@@ -783,10 +776,6 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         if (node.kind === NodeKind.terminal || node.kind === NodeKind.textSpan) return node.parent ?? undefined;
 
         return node;
-    }
-
-    function getParsedSourceFile(absPath: string) {
-        return getCachedFile(absPath)?.parsedSourceFile || undefined;
     }
 
     function findColdboxParentModulesFolders(canonicalBase: string) : string[] {
@@ -860,14 +849,14 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
 
     function EngineSymbolResolver(canonicalName: string) : SymTabEntry | undefined {
         if (!engineLib) return undefined;
-        if (!engineLib.parsedSourceFile.containedScope.typeinfo.mergedInterfaces.has("__cfEngine")) return undefined;
-        return engineLib.parsedSourceFile.containedScope.typeinfo.mergedInterfaces.get("__cfEngine")!.members.get(canonicalName);
+        if (!engineLib.containedScope.typeinfo.mergedInterfaces.has("__cfEngine")) return undefined;
+        return engineLib.containedScope.typeinfo.mergedInterfaces.get("__cfEngine")!.members.get(canonicalName);
     }
 
     // resolve types (right now, just interfaces) from *the* lib file
     function LibTypeResolver(name: string) : Type | undefined {
         if (!engineLib) return undefined;
-        return engineLib.parsedSourceFile.containedScope.typeinfo.mergedInterfaces.get(name);
+        return engineLib.containedScope.typeinfo.mergedInterfaces.get(name);
     }
 
     return {
@@ -877,7 +866,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         getDiagnostics,
         getNodeToLeftOfCursor,
         getInterestingNodeToLeftOfCursor,
-        getParsedSourceFile,
+        getParsedSourceFile: (absPath: string) => getCachedFile(absPath),
         getFileListing: () => [...files.keys()],
         __unsafe_dev_getChecker: () => checker,
         __unsafe_dev_getFile: (fname: string) => files.get(canonicalizePath(fname))
