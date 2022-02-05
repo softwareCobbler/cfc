@@ -112,9 +112,10 @@ function LanguageTool() {
     }
 
     function getOwningProjectFromAbsPath(absPath: AbsPath) : Project | undefined {
-        for (const workspaceRoot of workspaceProjects.keys()) {
-            if (absPath.startsWith(workspaceRoot)) {
-                return workspaceProjects.get(workspaceRoot)!;
+        for (const [workspaceRoot, project] of workspaceProjects) {
+            const effectiveAbsPath = project.canonicalizePath(absPath);
+            if (effectiveAbsPath.startsWith(workspaceRoot)) {
+                return project;
             }
         }
         return undefined;
@@ -309,9 +310,9 @@ function LanguageTool() {
         workspaceProjects.clear();
         
         for (const workspace of workspaceRoots) {
-            const rootAbsPath = workspace;
+            const rootAbsPath = fileSystem.caseSensitive ? workspace : workspace.toLowerCase();
             const project = Project(
-                workspace,
+                rootAbsPath,
                 fileSystem,
                 {
                     parseTypes: config.x_parseTypes,
@@ -329,11 +330,6 @@ function LanguageTool() {
             if (config.engineLibAbsPath) {
                 project.addEngineLib(config.engineLibAbsPath);
             }
-
-            // if we're doing wirebox resolution, add the wirebox config file immediately so we get the mappings
-            // if (config.wireboxResolution && wireboxConfigFileAbsPath) {
-            //     project.addFile(wireboxConfigFileAbsPath);
-            // }
 
             workspaceProjects.set(rootAbsPath, project);
         }

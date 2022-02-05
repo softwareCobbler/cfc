@@ -15,10 +15,14 @@ export const coldfusionMappingsScript = `
 		var appRoot = expandPath("");
 
 		for (var key in cfMappings) {
-			var stripLeadingPathSep = reReplace(regex="^[\\\\/]", scope="one", string=key, substring="");
-			var replacePathSepsWithDots = reReplace(regex="[\\\\/]", scope="all", string=stripLeadingPathSep, substring=".");
-			result[replacePathSepsWithDots] = replace(string=cfMappings[key], scope="one", substring1=appRoot, substring2="");
+			var mapping_stripLeadingPathSep = reReplace(regex="^[\\\\/]", scope="one", string=key, substring="");
+			var mapping_replacePathSepsWithDots = reReplace(regex="[\\\\/]", scope="all", string=mapping_stripLeadingPathSep, substring=".");
+
+			var target_stripRootPrefix = replace(string=cfMappings[key], scope="one", substring1=appRoot, substring2="");
+			var target_normalized = reReplace(regex="[\\\\/]", scope="all", string=target_stripRootPrefix, substring="/");
+			result[mapping_replacePathSepsWithDots] = target_normalized;
 		}
+		writedump(result)
 		return result;
 	}
 

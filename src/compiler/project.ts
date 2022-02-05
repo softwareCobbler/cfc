@@ -4,12 +4,12 @@ import * as path from "path";
 import { Binder } from "./binder";
 import { Checker } from "./checker";
 import { EngineVersion } from "./engines";
-import { BlockType, CallExpression, mergeRanges, Node, NodeKind, SourceFile, StatementType, SymTabEntry, DiagnosticKind, resetSourceFileInPlace } from "./node";
+import { BlockType, mergeRanges, Node, NodeKind, SourceFile, SymTabEntry, DiagnosticKind, resetSourceFileInPlace } from "./node";
 import { Parser } from "./parser";
 import { CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignatureParam, Interface, Type, CfcLookup, BuiltinType, cfTypeId, cfGenericFunctionSignature, TypeConstructorParam, freshKeyof } from "./types";
 
-import { isNamedFunction, cfmOrCfc, findNodeInFlatSourceMap, flattenTree, getAttributeValue, getComponentAttrs, getComponentBlock, getTriviallyComputableString, visit } from "./utils";
+import { cfmOrCfc, findNodeInFlatSourceMap, flattenTree, getAttributeValue, getComponentAttrs, getComponentBlock, getTriviallyComputableString } from "./utils";
 
 import { CancellationException, CancellationTokenConsumer } from "./cancellationToken";
 
@@ -204,15 +204,15 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     }
 
     const projectRoot = canonicalizePath(__const__projectRoot); // the value passed in is inconvenient to name; the convenient name is immutable
-    const ProjectMappings : ProjectMappings = loadPathMappingsFromDisk(path.join(projectRoot, options.cfConfigProjectRelativePath ?? "cfconfig.json"));
-    const wireboxLib : SourceFile | undefined = constructWireboxLibFile(ProjectMappings);
-
     // project root abs path: "a/b/c"
     // project root dir name: "c"
     const projectRootDirName = (() => {
         const t = path.parse(projectRoot).base.split(fileSystem.pathSep);
         return t.length > 0 ? t[t.length - 1] : "";
     })();
+    
+    const ProjectMappings : ProjectMappings = loadPathMappingsFromDisk(path.join(projectRoot, options.cfConfigProjectRelativePath ?? "cfconfig.json"));
+    const wireboxLib : SourceFile | undefined = constructWireboxLibFile(ProjectMappings);
 
     const parser = Parser(options);
     const binder = Binder(options);
@@ -447,7 +447,19 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         const wireboxNamesToCfcMappings = new Map<string, SymTabEntry>();
 
         for (const [name, mapping] of mappings.wirebox) {
-            const cfcAbsPath = findCfFileMappingByJavalikeTypename(mapping);
+            const possibleResolutions = buildPossibleCfcResolutionPaths(projectRoot, mapping);
+            if (!possibleResolutions) {
+                continue;
+            }
+
+            let cfcAbsPath : string | undefined = undefined;
+            for (const resolution of possibleResolutions) {
+                if (fileSystem.existsSync(resolution.absPath)) {
+                    cfcAbsPath = resolution.absPath;
+                    break;
+                }
+            }
+
             if (!cfcAbsPath) {
                 continue;
             }
@@ -869,7 +881,8 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         getParsedSourceFile: (absPath: string) => getCachedFile(absPath),
         getFileListing: () => [...files.keys()],
         __unsafe_dev_getChecker: () => checker,
-        __unsafe_dev_getFile: (fname: string) => files.get(canonicalizePath(fname))
+        __unsafe_dev_getFile: (fname: string) => files.get(canonicalizePath(fname)),
+        canonicalizePath
     }
 }
 
@@ -903,70 +916,5 @@ export function ComponentResolutionArgs(resolveFrom: string, cfcName: string) : 
         type: ComponentResolutionArgType.lookup,
         resolveFrom,
         cfcName
-    }
-}
-
-interface WireboxMappingDef {
-    kind: "file" | "dir",
-    target: string,
-}
-export function buildWireboxMappings(root: SourceFile) {
-    const mappings : WireboxMappingDef[] = [];
-    const CONTINUE_VISITOR_DESCENT = false;
-
-    const component = getComponentBlock(root);
-
-    if (!component) return undefined;
-    for (const node of component.stmtList) {
-        // find the `configure` function, and descend into it, to extract mapping definitions
-        if (!node.fromTag && isNamedFunction(node) && node.name.canonical === "configure") {
-            visit(node.body.stmtList, wireboxConfigureFunctionMappingExtractingVisitor);
-            break;
-        }
-    }
-
-    return mappings;
-
-    function wireboxConfigureFunctionMappingExtractingVisitor(node: Node | null | undefined) : boolean {
-        if (!node) return CONTINUE_VISITOR_DESCENT;
-        // when we hit a top-level call expression
-        // (from the current context, top-level should be "within the configure() definition", i.e.
-        // configure() { /* here */ } )
-        // visit it, possibly extracting a mapping definition
-        if (node.kind === NodeKind.statement && node.subType === StatementType.expressionWrapper && node.expr?.kind === NodeKind.callExpression) {
-            const mapping = tryMapOne(node.expr);
-            if (mapping) mappings.push(mapping);
-        }
-        // keep going, find additional mappings
-        return CONTINUE_VISITOR_DESCENT;
-    }
-
-    function tryMapOne(node: CallExpression) : WireboxMappingDef | undefined {
-        let result : {kind: "file" | "dir", target: string} | undefined;
-        function tryMapWorker(node: Node) {
-            // recursive base case: hit bottom of call chain; if we don't get a mapper we're done
-            if (node.kind === NodeKind.callExpression && node.left.kind === NodeKind.identifier) {
-                let kind : "file" | "dir";
-                if (node.left.canonicalName === "map") kind = "file";
-                else if (node.left.canonicalName === "mapdirectory") kind = "dir";
-                else return false;
-
-                if (node.args.length === 0) return false;
-                const target = getTriviallyComputableString(node.args[0].expr);
-                if (!target) return false;
-                result = {kind, target: target};
-                return true;
-            }
-            else if (node.kind === NodeKind.callExpression && node.left.kind === NodeKind.indexedAccess && node.left.accessElements.length === 1) {
-                if (!tryMapWorker(node.left.root)) return false;
-                // here we could get "to" and etc.
-                return true;
-            }
-
-            return false;
-        }
-
-        tryMapWorker(node);
-        return result;
     }
 }

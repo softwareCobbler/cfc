@@ -2413,13 +2413,15 @@ export function Checker(options: ProjectOptions) {
                         }
                     }
                     
-                    if (node.finalFlow !== UnreachableFlow && literalReturnType && (literalReturnType.canonical !== "void" && literalReturnType.canonical !== "any")) {
-                        const range = node.fromTag ? getAttributeValue(node.attrs, "returntype")!.range : node.returnType!.range;
-                        issueDiagnosticAtRange(range, `Function does not have a final return statement, and may return 'null' which is not assignable to declared return type '${literalReturnType.ui}'.`);
-                    }
-                    else {
-                        const range = node.fromTag ? node.tagOrigin.startTag!.range : mergeRanges(node.accessModifier, node.returnType, node.functionToken, node.nameToken);
-                        issueDiagnosticAtRange(range, `Function declares return type '${stringifyType(finalType.returns)}' but actual return type is '${stringifyType(inferredReturnType)}'.}`);
+                    if (CHECK_FLOW_TYPES) {
+                        if (node.finalFlow !== UnreachableFlow && literalReturnType && (literalReturnType.canonical !== "void" && literalReturnType.canonical !== "any")) {
+                            const range = node.fromTag ? getAttributeValue(node.attrs, "returntype")!.range : node.returnType!.range;
+                            issueDiagnosticAtRange(range, `Function does not have a final return statement, and may return 'null' which is not assignable to declared return type '${literalReturnType.ui}'.`);
+                        }
+                        else {
+                            const range = node.fromTag ? node.tagOrigin.startTag!.range : mergeRanges(node.accessModifier, node.returnType, node.functionToken, node.nameToken);
+                            issueDiagnosticAtRange(range, `Function declares return type '${stringifyType(finalType.returns)}' but actual return type is '${stringifyType(inferredReturnType)}'.}`);
+                        }
                     }
                 }
             }
