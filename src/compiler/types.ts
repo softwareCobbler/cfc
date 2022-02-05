@@ -252,6 +252,7 @@ export interface Interface extends StructBase {
 export interface Cfc extends StructBase {
     readonly kind: TypeKind.cfc,
     readonly cfc: Readonly<SourceFile>,
+    // fixme: this should be on SourceFile ?
     readonly interfaceExtension: Readonly<Interface> | undefined // extension of `this` via interface, mostly experimental
     readonly isCfInterface: boolean,
 }

@@ -68,5 +68,5 @@ function doResources() {
         fs.copyFileSync(from, to);
     }
     fromTo(path.resolve("src/lang-server/server/src/runtimelib/lib.cf2018.d.cfm"), path.resolve("cflsp-vscode/out/lib.cf2018.d.cfm"));
-    fromTo(path.resolve("src/grammar.json"), path.resolve("cflsp-vscode/out/grammar.json"));
+    fromTo(path.resolve("src/grammar/grammar.json"), path.resolve("cflsp-vscode/out/grammar.json"));
 }

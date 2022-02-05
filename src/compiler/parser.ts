@@ -4027,6 +4027,7 @@ export function Parser(config: ProjectOptions) {
                             next();
                         }
                         else {
+                            parseTrivia();
                             parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
                             const type = parseType();
                             argumentAnnotations.push(NamedAnnotation(name, type));

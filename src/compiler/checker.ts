@@ -25,7 +25,7 @@ export function Checker(options: ProjectOptions) {
     const engineVersion = options.engineVersion;
 
     // dev feature flags, generally enable-able via editor config options
-    const GENERIC_FUNCTION_INFERENCE = options.genericFunctionInference;
+    const GENERIC_FUNCTION_INFERENCE = true; // reasonably crash-free, needed for a nice getInstance("") experience
     const CHECK_RETURN_TYPES = options.checkReturnTypes;
     const CHECK_FLOW_TYPES = options.checkFlowTypes;
     const debug = Debug();
@@ -1597,7 +1597,7 @@ export function Checker(options: ProjectOptions) {
                     const lhsSymbol = getResolvedSymbol(node.left);
                     const rhsType = getCachedEvaluatedNodeType(node.right);
 
-                    if (CHECK_FLOW_TYPES && lhsSymbol) {
+                    if (lhsSymbol) {
                         const effectivelyDeclaredType = getEffectivelyDeclaredType(lhsSymbol.symTabEntry);
                         if (effectivelyDeclaredType) {
                             if (isAssignable(rhsType, effectivelyDeclaredType)) {
@@ -1607,7 +1607,9 @@ export function Checker(options: ProjectOptions) {
                                 setCachedEvaluatedFlowType(node.left.flow!, lhsSymbol.symTabEntry.symbolId, effectivelyDeclaredType);
                                 const r = stringifyType(rhsType);
                                 const l = stringifyType(effectivelyDeclaredType);
-                                issueDiagnosticAtNode(node.right, `Type '${r}' is not assignable to type '${l}'`, DiagnosticKind.error);
+                                if (CHECK_FLOW_TYPES) {
+                                    issueDiagnosticAtNode(node.right, `Type '${r}' is not assignable to type '${l}'`, DiagnosticKind.error);
+                                }
                             }
                         }
                         else if (!effectivelyDeclaredType
@@ -2281,20 +2283,24 @@ export function Checker(options: ProjectOptions) {
             POP_CHECKER_STACK = true;
 
             if (node.kind === NodeKind.functionDefinition && node.name.canonical) {
-                if (symbol) setResolvedSymbol(node, symbol);
-                if (symbol?.symTabEntry.firstLexicalType && symbol.symTabEntry.firstLexicalType.kind === TypeKind.functionSignature) {
-                    const freshType = evaluateType(symbol.container, symbol.symTabEntry.firstLexicalType); // consider a type annotation?
-                    if (freshType.kind === TypeKind.functionSignature) {
-                        memberFunctionSignature = freshType;
-                        const variablesSymbol = sourceFile.containedScope.variables?.get(node.name.canonical);
-                        // keep both `variables` and `this` in sync with member functions
-                        if (variablesSymbol) {
-                            variablesSymbol.firstLexicalType = freshType;
-                            sourceFile.containedScope.variables?.set(node.name.canonical, variablesSymbol);
-                            sourceFile.containedScope.this?.set(node.name.canonical, variablesSymbol);
-                        }
-                    }
+                if (symbol) {
+                    setResolvedSymbol(node, symbol);
+                    sourceFile.containedScope.variables?.set(node.name.canonical, symbol.symTabEntry);
+                    sourceFile.containedScope.this?.set(node.name.canonical, symbol.symTabEntry);
                 }
+                // if (symbol?.symTabEntry.firstLexicalType && symbol.symTabEntry.firstLexicalType.kind === TypeKind.functionSignature) {
+                //     const freshType = evaluateType(symbol.container, symbol.symTabEntry.firstLexicalType); // consider a type annotation?
+                //     if (freshType.kind === TypeKind.functionSignature) {
+                //         memberFunctionSignature = freshType;
+                //         const variablesSymbol = sourceFile.containedScope.variables?.get(node.name.canonical);
+                //         // keep both `variables` and `this` in sync with member functions
+                //         if (variablesSymbol) {
+                //             variablesSymbol.firstLexicalType = freshType;
+                //             sourceFile.containedScope.variables?.set(node.name.canonical, variablesSymbol);
+                //             sourceFile.containedScope.this?.set(node.name.canonical, variablesSymbol);
+                //         }
+                //     }
+                // }
             }
         }
 
@@ -2418,7 +2424,7 @@ export function Checker(options: ProjectOptions) {
                 }
             }
             else {
-                if (!node.typeAnnotation) {
+                if (node.kind === NodeKind.functionDefinition && !functionDefinitionHasUserSpecifiedReturnType(node)) {
                     (finalType as Mutable<cfFunctionSignature>).returns = inferredReturnType;
                 }
             }
@@ -2825,7 +2831,7 @@ export function Checker(options: ProjectOptions) {
         if (!member && type.kind === TypeKind.symbolTableTypeWrapper && type.interfaceExtension) {
             member = type.interfaceExtension.members.get(canonicalName);
         }
-        else if (type.kind === TypeKind.cfc) {
+        else if (!member && type.kind === TypeKind.cfc) {
             member = type.interfaceExtension?.members.get(canonicalName);
             if (!member) {
                 let workingNode : SourceFile | null = type.cfc;

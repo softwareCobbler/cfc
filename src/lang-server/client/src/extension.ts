@@ -5,7 +5,7 @@
 
 import * as path from 'path';
 import * as fs from "fs";
-import { window, ProgressLocation, workspace, ExtensionContext } from 'vscode';
+import { window, ProgressLocation, workspace, ExtensionContext, commands, TextDocumentContentProvider, Uri } from 'vscode';
 import { URI } from "vscode-uri";
 
 import {
@@ -15,10 +15,24 @@ import {
 	TransportKind
 } from 'vscode-languageclient/node';
 
+import { coldfusionMappingsScript } from "./coldfusionMappingsScript";
+
 let client: LanguageClient;
 let libAbsPath : string | null = null;
 
 export function activate(context: ExtensionContext) {
+	workspace.registerTextDocumentContentProvider("cfls", new (class implements TextDocumentContentProvider {
+		provideTextDocumentContent(_uri: Uri): string {
+			return coldfusionMappingsScript;
+		}
+	  })());
+
+	commands.registerCommand("cflsp.generateColdfusionMappingsScript", async () => {
+		const uri = URI.parse("cfls:coldFusionMappingsScript.cfm");
+		let doc = await workspace.openTextDocument(uri);
+		await window.showTextDocument(doc, { preview: false });
+	});
+
 	libAbsPath = context.asAbsolutePath("./out/lib.cf2018.d.cfm");
 	
 	// The server is implemented in node

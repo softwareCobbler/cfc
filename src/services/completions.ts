@@ -324,9 +324,10 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
                 if ( currentStructLikeIsCfc && symTabEntry.firstLexicalType?.kind === TypeKind.functionSignature && !isPublicMethod(symTabEntry.firstLexicalType)) {
                     if (!parsedSourceFileIsDescendantOfTypeinfoCfc) return; // don't offer completions for non-public members for non-descendants
                 }
+                const effectiveType = symTabEntry.links?.effectiveDeclaredType ?? symTabEntry.firstLexicalType;
                 result.push({
                     label: symTabEntry.uiName,
-                    kind: symTabEntry.firstLexicalType?.kind === TypeKind.functionSignature || symTabEntry.firstLexicalType?.kind === TypeKind.genericFunctionSignature
+                    kind: effectiveType?.kind === TypeKind.functionSignature || effectiveType?.kind === TypeKind.genericFunctionSignature
                         ? CompletionItemKind.function
                         : CompletionItemKind.structMember,
                     detail: ""

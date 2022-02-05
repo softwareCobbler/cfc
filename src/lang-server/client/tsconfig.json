@@ -9,6 +9,7 @@
 		"baseUrl": "./"
 	},
 	"files": [
-		"src/extension.ts"
+		"src/extension.ts",
+		"src/coldfusionMappingsScript.ts"
 	],
 }

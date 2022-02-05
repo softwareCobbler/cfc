@@ -212,6 +212,8 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     const ProjectMappings : ProjectMappings = loadPathMappingsFromDisk(path.join(projectRoot, options.cfConfigProjectRelativePath ?? "cfconfig.json"));
     const wireboxLib : SourceFile | undefined = constructWireboxLibFile(ProjectMappings);
 
+    // project root abs path: "a/b/c"
+    // project root dir name: "c"
     const projectRootDirName = (() => {
         const t = path.parse(projectRoot).base.split(fileSystem.pathSep);
         return t.length > 0 ? t[t.length - 1] : "";
@@ -451,7 +453,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         const wireboxNamesToCfcMappings = new Map<string, SymTabEntry>();
 
         for (const [name, mapping] of mappings.wirebox) {
-            const cfcAbsPath = findCfFileMappingByTypelikeName(mapping);
+            const cfcAbsPath = findCfFileMappingByJavalikeTypename(mapping);
             if (!cfcAbsPath) {
                 continue;
             }
@@ -639,8 +641,15 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         return files.get(canonicalizePath(absPath))?.parsedSourceFile.diagnostics || [];
     }
 
-    function findCfFileMappingByTypelikeName(name: string) : AbsPath | undefined {
-        const pathComponents = name.split(".");
+    /**
+     * a "javalikeTypename" is just a series of 1 or more identifiers separated by a "."
+     * "a"
+     * "a.b"
+     * "a.b.c"
+     * etc.
+     */
+    function findCfFileMappingByJavalikeTypename(javalikeTypename: string) : AbsPath | undefined {
+        const pathComponents = javalikeTypename.split(".");
         if (pathComponents.length === 0) {
             return undefined;
         }
@@ -826,9 +835,14 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         //   - /root/proj/proj/foo/bar.cfc
         const cfcNameStartsWithProjectRootDirName = canonicalCfcName.startsWith(projectRootDirName);
 
-        const result = [
-            ComponentSpecifier(fileSystem.join(resolveFrom, ...cfcComponents))
-        ];
+        const result = [];
+
+        const explicitMapping = findCfFileMappingByJavalikeTypename(inCodeCfcName);
+        if (explicitMapping) {
+            result.push(ComponentSpecifier(explicitMapping));
+        }
+
+        result.push(ComponentSpecifier(fileSystem.join(resolveFrom, ...cfcComponents)));
 
         // magic coldbox/wirebox resolution, might want something to toggle this
         for (const coldboxModulePath of parentModulesFolders) {
