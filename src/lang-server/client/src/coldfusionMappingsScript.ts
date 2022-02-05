@@ -15,8 +15,8 @@ export const coldfusionMappingsScript = `
 		var appRoot = expandPath("");
 
 		for (var key in cfMappings) {
-			var stripLeadingPathSep = reReplace(regex="^[\\/]", scope="one", string=key, substring="");
-			var replacePathSepsWithDots = reReplace(regex="[\\/]", scope="all", string=stripLeadingPathSep, substring=".");
+			var stripLeadingPathSep = reReplace(regex="^[\\\\/]", scope="one", string=key, substring="");
+			var replacePathSepsWithDots = reReplace(regex="[\\\\/]", scope="all", string=stripLeadingPathSep, substring=".");
 			result[replacePathSepsWithDots] = replace(string=cfMappings[key], scope="one", substring1=appRoot, substring2="");
 		}
 		return result;
