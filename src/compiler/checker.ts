@@ -38,6 +38,12 @@ export function Checker(options: ProjectOptions) {
     let warnOnUndefined: boolean;
     let checkerStack : Node[];
     let forcedReturnTypes : WeakMap<Node, Type>;
+    
+    // generally false;
+    // in declarator positions we set it as true by default by could maybe be overridden with a @!const or similar
+    // so `var x = 'foo'` is `x: string`
+    // but later `x = 'bar'` is `x <- 'bar'`, which is checks OK because 'bar' <: string
+    let widenLiteralTypes : boolean; 
 
     function check(sourceFile_: SourceFile) {
         // we're using the Checker as a singleton, and checking one source file might trigger checking another
@@ -50,6 +56,7 @@ export function Checker(options: ProjectOptions) {
         const savedWarnOnUndefined = warnOnUndefined;
         const savedCheckerStack = checkerStack;
         const savedForcedReturnTypes = forcedReturnTypes;
+        const savedCheckingAsAssignment = widenLiteralTypes;
 
         sourceFile = sourceFile_;
         scanner = sourceFile_.scanner;
@@ -59,6 +66,7 @@ export function Checker(options: ProjectOptions) {
         warnOnUndefined = savedWarnOnUndefined;
         checkerStack = savedCheckerStack;
         forcedReturnTypes = savedForcedReturnTypes;
+        widenLiteralTypes = false;
 
         sourceFile = sourceFile_;
         scanner = sourceFile.scanner;
@@ -94,6 +102,7 @@ export function Checker(options: ProjectOptions) {
         warnOnUndefined = savedWarnOnUndefined;
         checkerStack = savedCheckerStack;
         forcedReturnTypes = savedForcedReturnTypes;
+        widenLiteralTypes = savedCheckingAsAssignment;
     }
 
     function checkerStackContains(node: Node) {
@@ -271,21 +280,39 @@ export function Checker(options: ProjectOptions) {
                 }
                 return;
             case NodeKind.simpleStringLiteral:
-                setCachedEvaluatedNodeType(node, createLiteralType(node.textSpan.text));
-                return;
+                if (widenLiteralTypes) {
+                    setCachedEvaluatedNodeType(node, BuiltinType.string);
+                    return;
+                }
+                else {
+                    setCachedEvaluatedNodeType(node, createLiteralType(node.textSpan.text));
+                    return;
+                }
             case NodeKind.interpolatedStringLiteral:
                 checkList(node.elements);
                 setCachedEvaluatedNodeType(node, BuiltinType.string);
                 return;
             case NodeKind.numericLiteral: {
-                const val = parseFloat(node.literal.token.text);
-                if (!isNaN(val)) setCachedEvaluatedNodeType(node, createLiteralType(val));
-                else setCachedEvaluatedNodeType(node, BuiltinType.numeric);
-                return;
+                if (widenLiteralTypes) {
+                    setCachedEvaluatedNodeType(node, BuiltinType.numeric);
+                    return;
+                }
+                else {
+                    const val = parseFloat(node.literal.token.text);
+                    if (!isNaN(val)) setCachedEvaluatedNodeType(node, createLiteralType(val));
+                    else setCachedEvaluatedNodeType(node, BuiltinType.numeric);
+                    return;
+                }
             }
             case NodeKind.booleanLiteral:
-                setCachedEvaluatedNodeType(node, node.booleanValue ? BuiltinType.true : BuiltinType.false);
-                return;
+                if (widenLiteralTypes) {
+                    setCachedEvaluatedNodeType(node, BuiltinType.boolean);
+                    return;
+                }
+                else {
+                    setCachedEvaluatedNodeType(node, node.booleanValue ? BuiltinType.true : BuiltinType.false);
+                    return;
+                }
             case NodeKind.identifier:
                 // klude/fixme!: identifier.source can be an indexed access
                 // this was to support `a.b.c = 42`
@@ -1587,17 +1614,18 @@ export function Checker(options: ProjectOptions) {
 
     function checkBinaryOperator(node: BinaryOperator) {
         checkNode(node.left);
-        checkNode(node.right);
-
+        
         switch (node.optype) {
             case BinaryOpType.assign: {
                 // an assignment, even fv-unqualified, will always be bound to a scope
                 // `x = y` is effectively `variables.x = y`
                 if (node.left.kind === NodeKind.identifier || node.left.kind === NodeKind.indexedAccess) {
                     const lhsSymbol = getResolvedSymbol(node.left);
-                    const rhsType = getCachedEvaluatedNodeType(node.right);
-
+                    
                     if (lhsSymbol) {
+                        checkNode(node.right);
+                        const rhsType = getCachedEvaluatedNodeType(node.right);
+
                         const effectivelyDeclaredType = getEffectivelyDeclaredType(lhsSymbol.symTabEntry);
                         if (effectivelyDeclaredType) {
                             if (isAssignable(rhsType, effectivelyDeclaredType)) {
@@ -1618,7 +1646,14 @@ export function Checker(options: ProjectOptions) {
                             && node.left.root.kind === NodeKind.identifier
                             && node.left.root.canonicalName === "variables"
                         ) {
+                            widenLiteralTypes = true;
+                            checkNode(node.right);
+                            widenLiteralTypes = false;
+
+                            const rhsType = getCachedEvaluatedNodeType(node.right);
+
                             // fixme: check against a type annotation?
+
                             setCachedEvaluatedFlowType(node.left.flow!, lhsSymbol.symTabEntry.symbolId, rhsType);
                             setEffectivelyDeclaredType(lhsSymbol.symTabEntry, rhsType);
                         }
@@ -1794,7 +1829,11 @@ export function Checker(options: ProjectOptions) {
                 didConsumeTypeAnnotation = true;
             }
             else {
+                // if there is a type annotation, it might be for some literal type, and we need to check assignability
+                // this pattern might be used to support an annotation like "@!const", too
+                widenLiteralTypes = node.typeAnnotation?.shimKind === TypeShimKind.annotation ? false : true;
                 checkNode(node.expr.right);
+                widenLiteralTypes = false;
             }
 
             rhsExpr = node.expr.right;
