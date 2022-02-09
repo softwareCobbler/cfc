@@ -8,14 +8,44 @@ export function CancellationToken() {
     }
     
     const id = `\\\\.\\pipe\\cfls-token-${randomName()}`;
+
+    //
+    // ENGAGED = true if the socket is open
+    //   - "this socket is listening"
+    //   - "or we've asked it to and it could start at any time"
+    //   - "or we've asked it to close but it hasn't yet"
+    //
+    // Plenty of EADDRINUSE if we try to open a socket on the same name
+    //
+    let ENGAGED = false;
     let socket = net.createServer();
 
+    socket.on("close", () => {
+        // it can take a few microseconds between `socket.close()` and the actual close event
+        // during which time, the OS (or at least Windows) will say that
+        //   - socket.listening is false,
+        //   - but socket.listen(id) is an error because it really actually is still listening
+        //
+        ENGAGED = false;
+    })
+
+    socket.on("error", (_err) => {
+        // almost certainly EADDRINUSE
+        // which is thrown asynchronously,
+        // so registering this listener acts as a catch block
+        // 
+        // can put a breakpoint here if necessary,
+        // otherwise this is a no-op
+    })
+
     function requestCancellation() {
-        if (socket.listening) {
-            // fixme: asynchronicity issues; ideally this wouldn't ever happen?
+        if (ENGAGED) {
             return;
         }
-        socket.listen(id);
+        else {
+            socket.listen(id);
+            ENGAGED = true;
+        }
     }
 
     function reset() {
