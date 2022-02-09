@@ -2126,7 +2126,11 @@ export function Checker(options: ProjectOptions) {
                         if (checkerStackContains(decl)) {
                             const name = decl.name?.ui;
                             const errorNode = getFunctionDefinitionNameTerminalErrorNode(decl);
-                            issueDiagnosticAtNode(errorNode, `Function '${name}' requires an explicit return type because it directly or indirectly references itself.`);
+
+                            if (CHECK_RETURN_TYPES) {
+                                issueDiagnosticAtNode(errorNode, `Function '${name}' requires an explicit return type because it directly or indirectly references itself.`);
+                            }
+
                             forcedType = BuiltinType.any;
                             forcedReturnTypes.set(decl, forcedType);
                         }
