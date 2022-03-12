@@ -64,6 +64,7 @@ export const enum TokenType {
     AMPERSAND_EQUAL,
     CARET,
     COLON,
+    DBL_COLON,
     COMMA,
     DBL_AMPERSAND,
     DBL_EQUAL,
@@ -178,6 +179,7 @@ export const TokenTypeUiString : Record<TokenType, string> = {
     [TokenType.AMPERSAND_EQUAL]:      "&=",
     [TokenType.CARET]:                "^",
     [TokenType.COLON]:                ":",
+    [TokenType.DBL_COLON]:            "::", 
     [TokenType.COMMA]:                ",",
     [TokenType.DBL_AMPERSAND]:        "&&",
     [TokenType.DBL_EQUAL]:            "==",
@@ -358,6 +360,7 @@ const xxx = {
     xor: /xor\b/iy,
     ident: /[$_a-z][$_a-z0-9]*/iy,
     number: /\d+e[+-]?\d+(\.\d+)?\b|\d+(\.\d+)?\b/iy,
+    dblColon: /::/iy,
 }
 
 export interface AnnotatedChar {
@@ -613,7 +616,9 @@ export function Scanner(source_: string | Buffer) {
             case AsciiMap.QUOTE_SINGLE:  return consumeCurrentCharAs(TokenType.QUOTE_SINGLE);
             case AsciiMap.QUOTE_DOUBLE:  return consumeCurrentCharAs(TokenType.QUOTE_DOUBLE);
             case AsciiMap.COMMA:         return consumeCurrentCharAs(TokenType.COMMA);
-            case AsciiMap.COLON:         return consumeCurrentCharAs(TokenType.COLON);
+            case AsciiMap.COLON:
+                if (maybeEat(xxx.dblColon)) return makeToken(TokenType.DBL_COLON, from, getIndex());
+                else return consumeCurrentCharAs(TokenType.COLON);
             case AsciiMap.SEMICOLON:     return consumeCurrentCharAs(TokenType.SEMICOLON);
             case AsciiMap.DOT:           
                 if (maybeEat(xxx.dotDotDot)) return makeToken(TokenType.DOT_DOT_DOT, from, getIndex());

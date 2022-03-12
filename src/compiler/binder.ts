@@ -254,6 +254,10 @@ export function Binder(options: ProjectOptions) {
             case NodeKind.paramStatement:
                 bindParamStatement(node);
                 return;
+            case NodeKind.staticAccess:
+                bindNode(node.left, node);
+                bindNode(node.right, node);
+                return;
             default:
                 exhaustiveCaseGuard(node);
         }

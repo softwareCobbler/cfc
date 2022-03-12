@@ -420,6 +420,12 @@ export function Checker(options: ProjectOptions) {
             }
             case NodeKind.paramStatement:
                 return;
+            case NodeKind.staticAccess:
+                // lefthand side is a cfc path name
+                // righthand side is an expression, presumably a property lookup on <cfc>.static
+                // can be like left::r1.r2(ahThisIsLocal).etc[3]
+                checkNode(node.right);
+                return;
             default:
                 exhaustiveCaseGuard(node);
         }

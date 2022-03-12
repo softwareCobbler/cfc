@@ -34,7 +34,8 @@ export const enum NodeKind {
     structLiteralInitializerMember, arrayLiteralInitializerMember, try, catch, finally,
     breakStatement, continueStatement, returnStatement, importStatement,
     new, typeShim,
-    property, paramStatement
+    property, paramStatement,
+    staticAccess,
 }
 
 const NodeTypeUiString : Record<NodeKind, string> = {
@@ -88,6 +89,7 @@ const NodeTypeUiString : Record<NodeKind, string> = {
     [NodeKind.typeShim]: "typeshim",
     [NodeKind.property]: "property",
     [NodeKind.paramStatement]: "param",
+    [NodeKind.staticAccess]: "staticAccess",
 };
 
 export type Node =
@@ -145,6 +147,7 @@ export type Node =
     | TypeShim // Node-based Type wrapper, would be nice to unify all types/nodes
     | Property
     | ParamStatement
+    | StaticAccess
 
 //
 // wip:
@@ -1376,6 +1379,21 @@ export function Identifier(identifier: Node, uiName: string | undefined) {
     v.source = identifier;
     v.uiName = uiName;
     v.canonicalName = uiName?.toLowerCase();
+    return v;
+}
+
+export interface StaticAccess extends NodeBase {
+    kind: NodeKind.staticAccess,
+    left: Identifier,
+    dblColon: Terminal,
+    right: Node // identifier or indexed-access-chain or call expr or ... probably not constrainable
+}
+
+export function StaticAccess(left: Identifier, dblColon: Terminal, right: Node) {
+    const v = NodeBase<StaticAccess>(NodeKind.staticAccess, mergeRanges(left, right));
+    v.left =left;
+    v.dblColon = dblColon;
+    v.right = right;
     return v;
 }
 

@@ -651,6 +651,10 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
             return (node.subType === ParamStatementSubType.withImplicitTypeAndName ? visitor(node.implicitType) : undefined)
                 || (node.subType === ParamStatementSubType.withImplicitName ? visitor(node.implicitName) || visitor(node.implicitNameEquals) || visitor(node.implicitNameExpr) : undefined)
                 || forEachNode(node.attrs, visitor);
+        case NodeKind.staticAccess:
+            return visitor(node.left)
+                || visitor(node.dblColon)
+                || visitor(node.right);
         default:
             exhaustiveCaseGuard(node);
     }

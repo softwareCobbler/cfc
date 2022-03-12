@@ -24,7 +24,7 @@ import {
     New,
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
-    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation } from "./node";
+    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard, Mutable } from "./utils";
 import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature } from "./types";
@@ -2291,7 +2291,7 @@ export function Parser(config: ProjectOptions) {
         return HashWrappedExpr(leftHash, expr, rightHash);
     }
 
-    function parseCallExpressionOrLower() : Node {
+    function parseCallExpressionOrLower(recognizeStaticAccess = true) : Node {
         switch(lookahead()) {
             case TokenType.DOT:
             case TokenType.NUMBER:
@@ -2331,7 +2331,23 @@ export function Parser(config: ProjectOptions) {
         }
 
         let root : Node = parseIdentifier();
-        root = parseCallExpressionOrLowerRest(root);
+        if (recognizeStaticAccess && lookahead() === TokenType.DBL_COLON) {
+            const dblColon = parseExpectedTerminal(TokenType.DBL_COLON, ParseOptions.withTrivia);
+            let rhs : Node;
+            if (!isLexemeLikeToken(peek(0), /*allowNumeric*/ false)) {
+                parseErrorAtCurrentToken("Expected an identifier.");
+                rhs = Identifier(NilTerminal(pos(), ""), undefined);
+                rhs.flags |= NodeFlags.error;
+                return StaticAccess(root, dblColon, rhs);
+            }
+            else {
+                const rhs = parseCallExpressionOrLower(/*recognizeStaticAccess*/ false);
+                return StaticAccess(root, dblColon, rhs);
+            }
+        }
+        else {
+            root = parseCallExpressionOrLowerRest(root);
+        }
         return root;
     }
 
