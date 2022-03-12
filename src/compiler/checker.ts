@@ -218,8 +218,18 @@ export function Checker(options: ProjectOptions) {
                 return;
             case NodeKind.terminal:
                 return;
+            case NodeKind.parenthetical:
+                // the type of T is the type of (T) is the type of ((T)) ...
+                checkNode(node.expr);
+                setCachedEvaluatedNodeType(node, getCachedEvaluatedNodeType(node.expr));
+                return;
             case NodeKind.hashWrappedExpr: // fallthrough
-            case NodeKind.parenthetical:   // fallthrough
+                checkNode(node.expr);
+                const type = getCachedEvaluatedNodeType(node.expr);
+                if (CHECK_FLOW_TYPES && !isAssignable(type, BuiltinType.string)) {
+                    issueDiagnosticAtNode(node, `Type '${stringifyType(type)}' is not assignable to type 'string'.`);
+                }
+                return;
             case NodeKind.tagAttribute:
                 checkNode(node.expr);
                 return;
@@ -1620,8 +1630,8 @@ export function Checker(options: ProjectOptions) {
 
     function checkBinaryOperator(node: BinaryOperator) {
         checkNode(node.left);
-        
-        switch (node.optype) {
+        const optype = node.optype;
+        switch (optype) {
             case BinaryOpType.assign: {
                 // an assignment, even fv-unqualified, will always be bound to a scope
                 // `x = y` is effectively `variables.x = y`
@@ -1668,38 +1678,107 @@ export function Checker(options: ProjectOptions) {
 
                 break;
             }
-            case BinaryOpType.assign_cat:
+            case BinaryOpType.assign_cat: {
+                checkNode(node.right);
+                const rhsType = getCachedEvaluatedNodeType(node.right);
+                if (CHECK_FLOW_TYPES && !isAssignable(rhsType, BuiltinType.string)) {
+                    issueDiagnosticAtNode(node.right, `Type ${stringifyType(rhsType)} is not assignable to type 'string'.`);
+                }
+                break;
+            }
             case BinaryOpType.contains:
-            case BinaryOpType.does_not_contain:
+            case BinaryOpType.does_not_contain: {
+                checkNode(node.right);
+                const rhsType = getCachedEvaluatedNodeType(node.right);
+                if (CHECK_FLOW_TYPES && !isAssignable(rhsType, BuiltinType.string)) {
+                    issueDiagnosticAtNode(node.right, `Type ${stringifyType(rhsType)} is not assignable to type 'string'.`);
+                }
+                setCachedEvaluatedNodeType(node, BuiltinType.boolean);
+                break;
+            }
             case BinaryOpType.cat: {
-                /*
-                const leftType = getCachedEvaluatedNodeType(node.left);
-                const rightType = getCachedEvaluatedNodeType(node.right);
-                if (leftType.typeKind !== TypeKind.any && leftType.typeKind !== TypeKind.string) {
-                    //typeErrorAtNode(node.left, `Left operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a string.`);
+                checkNode(node.right);
+                const rhsType = getCachedEvaluatedNodeType(node.right);
+                if (CHECK_FLOW_TYPES && !isAssignable(rhsType, BuiltinType.string)) {
+                    issueDiagnosticAtNode(node.right, `Type ${stringifyType(rhsType)} is not assignable to type 'string'.`);
                 }
-                if (rightType.typeKind !== TypeKind.any && rightType.typeKind !== TypeKind.string) {
-                    //typeErrorAtNode(node.right, `Right operand to '${BinaryOpTypeUiString[node.optype]}' operator must be a string.`);
-                }
-                */
+                setCachedEvaluatedNodeType(node, BuiltinType.string);
                 break;
             }
             case BinaryOpType.eq:
             case BinaryOpType.neq:
+            case BinaryOpType.strict_eq:
+            case BinaryOpType.strict_neq: {
+                checkNode(node.right);
+                const lhsType = getCachedEvaluatedNodeType(node.left);
+                const rhsType = getCachedEvaluatedNodeType(node.right);
+                // "isEqualityComparable" we are assuming is the same as assignability; i.e. if `a = b` is sound, then `a == b` or `a === b` is sound
+                if (CHECK_FLOW_TYPES && !isAssignable(rhsType, lhsType)) {
+                    issueDiagnosticAtNode(node.right, `Type '${stringifyType(rhsType)}' is not comparable to type '${stringifyType(lhsType)}'.`);
+                }
+                setCachedEvaluatedNodeType(node, BuiltinType.boolean);
+                break;
+            }
             case BinaryOpType.equivalent:
-            case BinaryOpType.implies: {
+            case BinaryOpType.implies:
+            case BinaryOpType.and:
+            case BinaryOpType.or:
+            case BinaryOpType.xor: {
+                checkNode(node.right);
+                const rhsType = getCachedEvaluatedNodeType(node.right);
+                if (CHECK_FLOW_TYPES && !isAssignable(rhsType, BuiltinType.boolean)) {
+                    issueDiagnosticAtNode(node.right, `Type '${stringifyType(rhsType)}' is not assignable to type 'boolean'.`);
+                }
+                setCachedEvaluatedNodeType(node, BuiltinType.boolean);
                 break;
             }
             case BinaryOpType.assign_add:
             case BinaryOpType.assign_sub:
             case BinaryOpType.assign_mul:
             case BinaryOpType.assign_div:
-            case BinaryOpType.assign_mod:
+            case BinaryOpType.assign_mod: {
+                checkNode(node.right);
+                const rhsType = getCachedEvaluatedNodeType(node.right);
+                if (CHECK_FLOW_TYPES && !isAssignable(rhsType, BuiltinType.numeric)) {
+                    issueDiagnosticAtNode(node.right, `Type '${stringifyType(rhsType)}' is not assignable to type 'numeric'.`);
+                }
+                // no node type
+                break;
+            }
+            case BinaryOpType.add:
+            case BinaryOpType.sub:
+            case BinaryOpType.mul:
+            case BinaryOpType.div:
+            case BinaryOpType.quotient:
+            case BinaryOpType.mod:
             case BinaryOpType.exp: {
+                checkNode(node.right);
+                const rhsType = getCachedEvaluatedNodeType(node.right);
+                if (CHECK_FLOW_TYPES && !isAssignable(rhsType, BuiltinType.numeric)) {
+                    issueDiagnosticAtNode(node.right, `Type '${stringifyType(rhsType)}' is not assignable to type 'numeric'.`);
+                }
+                setCachedEvaluatedNodeType(node, BuiltinType.numeric);
+                break;
+            }
+            case BinaryOpType.lt:
+            case BinaryOpType.lte:
+            case BinaryOpType.gt:
+            case BinaryOpType.gte: {
+                checkNode(node.right);
+                const rhsType = getCachedEvaluatedNodeType(node.right);
+                if (CHECK_FLOW_TYPES && !isAssignable(rhsType, BuiltinType.numeric)) {
+                    issueDiagnosticAtNode(node.right, `Type '${stringifyType(rhsType)}' is not assignable to type 'numeric'.`);
+                }
+                setCachedEvaluatedNodeType(node, BuiltinType.boolean);
+                break;
+            }
+            case BinaryOpType.nullCoalesce: {
+                checkNode(node.right);
+                // node type union of left/right?
                 break;
             }
             default: {
-                // exhaustiveCaseGuard(node);
+                exhaustiveCaseGuard(optype);
             }
         }
     }
