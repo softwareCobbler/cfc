@@ -1305,7 +1305,7 @@ export function Checker(options: ProjectOptions) {
                     // we're going to mutate the actual signature here, under the assumption, that a constraint won't ever change, since types are "closed",
                     // i.e.
                     // @!interface I <T> { gf: <U extends {v: T}>(arg0: U) => U }
-                    // var x : I<string> ===> instantiates I<string>, and should stamp out <U extends {v: string}>
+                    // var x : I<string> ===> instantiates I<string>, and should stamp out {gf: <U extends {v: string}>(arg0: U) => U}
                     // this will mutate the instantiated interface, but not the underlying template
                     //
                     const evaluatedConstraint = evaluateType(node, p.extends);
@@ -1338,20 +1338,30 @@ export function Checker(options: ProjectOptions) {
                             }
                         }
 
+                        // like an arguments scope in coldfusion,
+                        // we have a map here of (string -> Type),
+                        // in the positional arg case, the key is a stringified integer
+                        // in the named arg case, the key is a string
+                        const effectiveParamTypes : cfFunctionSignatureParam[] = [];
+
+                        // unnamed/positional arguments case
                         for (let j = 0; j < callSiteArg.expr.params.length; j++) {
                             const argScopeSymTabEntry = callSiteArg.expr.containedScope!.arguments!.get(callSiteArg.expr.params[j].canonicalName)!;
-                            argScopeSymTabEntry.firstLexicalType = evaluateType(callSiteArg, sigParamType.params[j].paramType, definitelyResolvedTypeParamMap);
+                            const type = evaluateType(callSiteArg, sigParamType.params[j].paramType, definitelyResolvedTypeParamMap);
+                            effectiveParamTypes.push({...sigParamType.params[j], uiName: callSiteArg.expr.params[j].uiName, canonicalName: callSiteArg.expr.params[j].canonicalName});
+                            argScopeSymTabEntry.firstLexicalType = type;
                         }
 
                         if (callSiteArg.expr.fromTag) {
                             // not possible, can't have a tag expr in an inline function expression, like `needsACallback(<cffunction>....)`
+                            // not even with tag-islands does this appear possible, like `needsACallback(```<cffunction name="cb"> ... </cffunction>```)
                         }
                         else {
                             const returnType = checkFunctionBody(
                                 callSiteArg.expr,
                                 // fixme: we need to send the actual determined types;
                                 // have they been checked by virtue of `resolveGenericFunctionTypeParams`?
-                                sig.params.map((param) => createType({...param, paramType: BuiltinType.any})));
+                                effectiveParamTypes);
                             pushResolution((sigParamType.returns as cfTypeId).name, returnType);
                         }
                     }
@@ -2589,6 +2599,11 @@ export function Checker(options: ProjectOptions) {
 
     // fixme: we probably have enough info from "effectivelyDeclaredTypes" to set flowstart type information,
     // without having to pass in `params[]`
+    //
+    // we have "params" which has type info, and also node.containedScope.arguments which has type info
+    // why do we need both?
+    //
+    // we set the flow type of the arguments on the startflow of the function to be the params[] types, can we just use node.containedScope.arguments types?
     function checkFunctionBody(node: FunctionDefinition | ArrowFunctionDefinition, params: cfFunctionSignatureParam[]) : Type {
         // "start flow" of a function has the argument types set to their declared types
         function setStartFlowArgTypes(startFlow: Flow) {

@@ -1,6 +1,6 @@
 import * as path from "path";
 import * as fs from "fs";
-import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CallExpression, CfTag, DottedPath, DUMMY_CONTAINER, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, isStaticallyKnownScopeName, NamedFunctionDefinition, Node, NodeFlags, NodeId, NodeSourceMap, ParamStatementSubType, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymbolResolution, SymbolTable, SymTabEntry, SymTabResolution, TagAttribute, UnaryOperatorPos } from "./node";
+import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CallExpression, CfTag, DottedPath, DUMMY_CONTAINER, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, isStaticallyKnownScopeName, NamedFunctionDefinition, Node, NodeFlags, NodeId, NodeSourceMap, ParamStatementSubType, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymbolResolution, SymbolTable, SymTabEntry, SymTabResolution, TagAttribute, TypeShimKind, UnaryOperatorPos } from "./node";
 import { NodeKind } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, isStructLike, TypeFlags } from "./types";
@@ -1331,7 +1331,7 @@ export function getFunctionDefinitionReturnsLiteral(node: FunctionDefinition) : 
 }
 
 export function functionDefinitionHasUserSpecifiedReturnType(node: FunctionDefinition | ArrowFunctionDefinition) : boolean {
-    if (node.typeAnnotation) {
+    if (node.typeAnnotation && (node.typeAnnotation.shimKind === TypeShimKind.annotation || node.typeAnnotation.shimKind === TypeShimKind.nonCompositeFunctionTypeAnnotation && node.typeAnnotation.returns)) {
         // the annotation could be invalid, but it exists;
         // if its invalid, the checker will treat it as though the user said "any"
         return true;

@@ -991,7 +991,7 @@ export function stringifyType(type: Type) : string {
             case TypeKind.struct: {
                 const builder = [];
                 for (const [propName, member] of type.members) {
-                    const type = member.links?.effectiveDeclaredType;
+                    const type = member.links?.effectiveDeclaredType ?? member.firstLexicalType;
                     const colon = member.links?.optional ? "?: " : ": ";
                     if (!type) {
                         console.log(`[dev] no type for struct memmber ${propName}`);
