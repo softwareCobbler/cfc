@@ -34,14 +34,11 @@ function projectFiddle() {
                 "someFolder": {
                     "someFile.cfc": `
                         component {
-                            property name="uhok" inject="someBinding";
-
-                            //// @!type Wirebox.getInstance
-                            //function getInstance() {}
-//
-                            //function doit() {
-                            //    getInstance("someBinding")
-                            //}
+                            function foo(haha, ok) {
+                                //rest[   ::   ];
+                                rest[ (v) ::   ];
+                                //rest[   :: v ];
+                            }
                         }
                     `
                 },
@@ -85,14 +82,14 @@ function projectFiddle() {
     // project.addEngineLib("/realLib.d.cfm");
     project.addFile("/someFolder/someFile.cfc");
     //project.addFile("C:\\Users\\anon\\dev\\cb\\testbox\\tests\\resources\\coldbox\\system\\EventHandler.cfc");
-    //const diagnostics = project.getDiagnostics("/a/b/x.cfc");
+    const diagnostics = project.getDiagnostics("/someFolder/someFile.cfc");
 
     //const x = project.getInterestingNodeToLeftOfCursor("/someFile.cfc", 378);
     //const completions = getCompletions(project, "/someFile.cfc", 381, null);
     //console.log(completions);
-    // for (const diagnostic of diagnostics) {
-    //     console.log(diagnostic);
-    // }
+    for (const diagnostic of diagnostics) {
+        console.log(diagnostic);
+    }
 }
 
 function bench() {

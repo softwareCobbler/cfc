@@ -2291,7 +2291,7 @@ export function Parser(config: ProjectOptions) {
         return HashWrappedExpr(leftHash, expr, rightHash);
     }
 
-    function parseCallExpressionOrLower(recognizeStaticAccess = true) : Node {
+    function parseCallExpressionOrLower() : Node {
         switch(lookahead()) {
             case TokenType.DOT:
             case TokenType.NUMBER:
@@ -2330,42 +2330,71 @@ export function Parser(config: ProjectOptions) {
                 break;
         }
 
-        let root : Node = parseIdentifier();
-        if (recognizeStaticAccess && lookahead() === TokenType.DBL_COLON) {
-            const dblColon = parseExpectedTerminal(TokenType.DBL_COLON, ParseOptions.withTrivia);
-            let rhs : Node;
-            if (!isLexemeLikeToken(peek(0), /*allowNumeric*/ false)) {
-                parseErrorAtCurrentToken("Expected an identifier.");
-                rhs = Identifier(NilTerminal(pos(), ""), undefined);
-                rhs.flags |= NodeFlags.error;
-                return StaticAccess(root, dblColon, rhs);
-            }
-            else {
-                const rhs = parseCallExpressionOrLower(/*recognizeStaticAccess*/ false);
-                return StaticAccess(root, dblColon, rhs);
-            }
+        const identifier = parseIdentifier();
+        return parseStaticAccessOrCallExpressionOrLowerRest(identifier);
+    }
+
+    /**
+     * we have identifier "foo"
+     * what follows may be a callExpressionOrLower chain (e.g. foo.bar[3].baz()++)
+     * or it may be a qualified pathname followed by a static access token followed by a callexpression or lower (e.g. `foo.bar.baz::indexed["access"]().chain`)
+     * it seems like static access is only allowable at the "top level", because you can't do something like `#pathnameVar#::member`, so you can't do `x.y.getPathName()::foo`
+     */
+    function parseStaticAccessOrCallExpressionOrLowerRest(root: Identifier) : Node {
+        let workingRoot : Identifier | IndexedAccess<Identifier> = root;
+        while (lookahead() === TokenType.DOT) {
+            const dot = parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
+            const propertyName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ true);
+
+            workingRoot = transformingPushAccessElement(workingRoot, DotAccess(dot, propertyName));
+            continue;
         }
+
+        // we've parsed "id ['.' id]*"
+        // if what follows is '::', convert what we've got so far into a string, use it as the pathname and the right-hand-side is a callExpressionOrLower
+        if (lookahead() === TokenType.DBL_COLON) {
+            const headTerminal = workingRoot.kind === NodeKind.identifier ? workingRoot.source : workingRoot.root.source;
+            const qualifiedID  = DottedPath(headTerminal)
+            if (workingRoot.kind === NodeKind.indexedAccess) {
+                for (const element of (workingRoot.accessElements as DotAccess[])) {
+                    pushDottedPathElement(qualifiedID, element.dot, element.property);
+                }
+            }
+
+            const dblColon     = parseExpectedTerminal(TokenType.DBL_COLON, ParseOptions.withTrivia);
+            const rhsHead      = parseIdentifier();
+            const rhs          = parseCallAndIndexedAccessChain(rhsHead);
+            const staticAccess = StaticAccess(qualifiedID, dblColon, rhs);
+            const withPostfix  = parsePostfixUnaryOperator(staticAccess);
+            return withPostfix;
+        }
+        // what follows is not a static access, but is the end of the initial sequence of dot-separated names
+        // this is not a static access, we can use what we've parsed so far and continue parsing callExpressionOrLowerRest
         else {
-            root = parseCallExpressionOrLowerRest(root);
+            const indexedAccessChain = parseCallAndIndexedAccessChain(workingRoot);
+            const withPostfix = parsePostfixUnaryOperator(indexedAccessChain);
+            return withPostfix;
         }
-        return root;
     }
 
     /**
      * given some root, parse a chain of dot/bracket | call expression accesses, and a postfix ++/-- operator
      * something like `a.b["c"]().d["e"]++`
      */
-    function parseCallExpressionOrLowerRest<T extends Node>(root: T) : T | IndexedAccess | CallExpression | UnaryOperator {
-        (root as Node) = parseCallAndIndexedAccessChain(root);
+    function parseCallExpressionOrLowerRest<T extends Node>(root: T) : Node {
+        const chain = parseCallAndIndexedAccessChain(root);
+        const chainWithMaybePostfixUnaryOperator = parsePostfixUnaryOperator(chain);
+        return chainWithMaybePostfixUnaryOperator;
+    }
 
+    function parsePostfixUnaryOperator(postfixable: Node) : Node {
         switch (lookahead()) {
             case TokenType.DBL_PLUS:
             case TokenType.DBL_MINUS:
                 const unaryOp = parseExpectedTerminal(lookahead(), ParseOptions.withTrivia);
-                (root as Node) = UnaryOperator(root, unaryOp);
+                return UnaryOperator(postfixable, unaryOp);
         }
-
-        return root;
+        return postfixable;
     }
 
     function nextNonTriviaIsDot() : boolean {
@@ -2378,20 +2407,19 @@ export function Parser(config: ProjectOptions) {
      * accept a Node, and if it is an IndexedAccess node, push an access element into it
      * if it is not already an IndexedAccess node, convert it to one, and then push the access element into it
      */
-    function transformingPushAccessElement(root: Node, accessElement: IndexedAccessChainElement) : IndexedAccess {
-        if (root.kind !== NodeKind.indexedAccess) {
-            root = IndexedAccess(root);
-        }
-        pushAccessElement(root, accessElement);
-        return root;
+    function transformingPushAccessElement<T extends Node>(root: T, accessElement: IndexedAccessChainElement) : T extends IndexedAccess<infer U> ? IndexedAccess<U> : IndexedAccess<T> {
+        const v : IndexedAccess = root.kind === NodeKind.indexedAccess ? root : IndexedAccess(root);
+        pushAccessElement(v, accessElement);
+        return v as any;
     }
 
-    function parseCallAndIndexedAccessChain<T extends Node>(root: T) : T | IndexedAccess | CallExpression {
+    function parseCallAndIndexedAccessChain<T extends Node>(root: T) : Node {
+        let workingRoot : T | IndexedAccess | CallExpression = root;
         outer:
         while (true) {
             switch (lookahead()) {
                 case TokenType.LEFT_PAREN: {
-                    root = parseCallExpression(root) as T;
+                    workingRoot = parseCallExpression(workingRoot) as T;
                     continue;
                 }
                 case TokenType.QUESTION_MARK: {
@@ -2406,19 +2434,19 @@ export function Parser(config: ProjectOptions) {
                             const expr                  = parseArrayIndexOrSliceExpression();
                             const rightBracket          = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
                             const optionalBracketAccess = OptionalBracketAccess(questionMark, dot, leftBracket, expr, rightBracket);
-                            root                        = transformingPushAccessElement(root, optionalBracketAccess) as T;
+                            workingRoot                 = transformingPushAccessElement(workingRoot, optionalBracketAccess);
                             parseErrorAtRange(questionMark.range.fromInclusive, rightBracket.range.toExclusive, "CF does not support optional bracket access expressions.");
                             continue;
                         }
                         else if (lookahead() === TokenType.LEFT_PAREN) {
-                            root = transformingPushAccessElement(root, OptionalCall(questionMark, dot)) as T;
-                            root = parseCallExpression(root) as T;
-                            parseErrorAtRange(questionMark.range.fromInclusive, (<CallExpression>root).rightParen.range.toExclusive, "CF does not support optional call expressions.");
+                            workingRoot = transformingPushAccessElement(workingRoot, OptionalCall(questionMark, dot)) // as T;
+                            workingRoot = parseCallExpression(workingRoot) as T;
+                            parseErrorAtRange(questionMark.range.fromInclusive, (<CallExpression>workingRoot).rightParen.range.toExclusive, "CF does not support optional call expressions.");
                             continue;
                         }
                         else {
                             const propertyName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ false, /*allowNumeric*/ true, "Expected a property name.");
-                            root = transformingPushAccessElement(root, OptionalDotAccess(questionMark, dot, propertyName)) as T;
+                            workingRoot        = transformingPushAccessElement(workingRoot, OptionalDotAccess(questionMark, dot, propertyName)) // as T;
                             // todo -- parseError if first char of propertyName is an ascii digit?
                             continue;
                         }
@@ -2432,7 +2460,7 @@ export function Parser(config: ProjectOptions) {
                     const expr = parseArrayIndexOrSliceExpression();
                     const rightBracket = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
 
-                    root = transformingPushAccessElement(root, BracketAccess(leftBracket, expr, rightBracket)) as T;
+                    workingRoot = transformingPushAccessElement(workingRoot, BracketAccess(leftBracket, expr, rightBracket)) // as T;
                     continue;
                 }
                 case TokenType.DOT: {
@@ -2449,27 +2477,52 @@ export function Parser(config: ProjectOptions) {
                         parseErrorAtRange(dot.rangeWithTrivia, "Expected a property name.");
                     }
 
-                    root = transformingPushAccessElement(root, DotAccess(dot, propertyName)) as T;
+                    workingRoot = transformingPushAccessElement(workingRoot, DotAccess(dot, propertyName)) // as T;
                     continue;
                 }
             }
             break;
         }
 
-        return root;
+        return workingRoot;
 
         function parseArrayIndexOrSliceExpression() {
+            // with the introduction of static access lookup "::", a double colon is now a token
+            // so an 'empty slice expression' can now be 3 tokens `[::]`, which previously was 4
+            if (lookahead() === TokenType.DBL_COLON) {
+                const dblColon = parseExpectedTerminal(TokenType.DBL_COLON, ParseOptions.withTrivia);
+                // "reparse" the double colon as a single colon
+                // any trivia is attached to the second colon
+                const colon1 = Terminal(Token(TokenType.COLON, ":", new SourceRange(dblColon.range.fromInclusive, dblColon.range.fromInclusive+1)));
+                const colon2 = Terminal(Token(TokenType.COLON, ":", new SourceRange(dblColon.range.fromInclusive + 1, dblColon.range.toExclusive)), dblColon.trivia);
+                // we may have `x[::expr]`
+                const stride = isStartOfExpression() ? parseExpression() : null;
+                return SliceExpression(null, colon1, null, colon2, stride);
+            }
+
             const first = isStartOfExpression()
                 ? parseExpression()
                 : lookahead() === TokenType.COLON
                 ? parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia)
                 : (parseErrorAtCurrentToken("Expression expected."), createMissingNode(Identifier(NilTerminal(pos()), "")));
-            
+                
+            if (first.kind !== NodeKind.terminal && lookahead() === TokenType.DBL_COLON) {
+                const dblColon = parseExpectedTerminal(TokenType.DBL_COLON, ParseOptions.withTrivia);
+                // "reparse" the double colon as a single colon
+                // any trivia is attached to the second colon
+                const colon1 = Terminal(Token(TokenType.COLON, ":", new SourceRange(dblColon.range.fromInclusive, dblColon.range.fromInclusive+1)));
+                const colon2 = Terminal(Token(TokenType.COLON, ":", new SourceRange(dblColon.range.fromInclusive + 1, dblColon.range.toExclusive)), dblColon.trivia);
+                // we may have `x[(first)::expr]`
+                const stride = isStartOfExpression() ? parseExpression() : null;
+                return SliceExpression(first, colon1, null, colon2, stride);
+            }
+
             // we got an expression and the next token is not a colon -- so this is just a basic index expression
             // like `x[e]`
             if (first.kind !== NodeKind.terminal && lookahead() !== TokenType.COLON) {
                 return first;
             }
+
 
             // otherwise, we got a slice expression
             let from : Node | null = first.kind === NodeKind.terminal ? null : first;
@@ -2480,23 +2533,23 @@ export function Parser(config: ProjectOptions) {
             return SliceExpression(from, colon1, to, colon2, stride);
         }
 
-        function previousElement() : T | IndexedAccessChainElement {
-            if (root.kind !== NodeKind.indexedAccess) {
-                return root;
+        function previousElement() : T | IndexedAccessChainElement | CallExpression  {
+            if (workingRoot.kind !== NodeKind.indexedAccess) {
+                return workingRoot;
             }
             else {
-                const element = (root as IndexedAccess).accessElements[(root as IndexedAccess).accessElements.length-1];
+                const element = (workingRoot as IndexedAccess).accessElements[(workingRoot as IndexedAccess).accessElements.length-1];
                 return element;
             }
         }
 
         function previousElementIsIdentifier() {
-            if (root.kind !== NodeKind.indexedAccess) {
-                return root.kind === NodeKind.identifier;
+            if (workingRoot.kind !== NodeKind.indexedAccess) {
+                return workingRoot.kind === NodeKind.identifier;
             }
 
             // if root is an IndexedAccess node, it is because there is at least one contained access element
-            const element = (root as IndexedAccess).accessElements[(root as IndexedAccess).accessElements.length-1];
+            const element = (workingRoot as IndexedAccess).accessElements[(workingRoot as IndexedAccess).accessElements.length-1];
             return element.accessType === IndexedAccessType.dot
         }
     }

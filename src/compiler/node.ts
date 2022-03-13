@@ -1363,7 +1363,7 @@ export function BooleanLiteral(literal: Terminal, value: boolean) {
 
 export interface Identifier extends NodeBase {
     kind: NodeKind.identifier;
-    source: Node; // can be e.g, `var x = 42`, `var 'x' = 42`, `var #x# = 42`; <cfargument name="#'interpolated_string_but_constant'#">`
+    source: Terminal;
     /* might be nice to do the following, to know that if canonical is not undefined, then ui is not either
     name: {
         canonical: string,
@@ -1374,7 +1374,7 @@ export interface Identifier extends NodeBase {
     uiName: string | undefined;
 }
 
-export function Identifier(identifier: Node, uiName: string | undefined) {
+export function Identifier(identifier: Terminal, uiName: string | undefined) {
     const v = NodeBase<Identifier>(NodeKind.identifier, identifier.range);
     v.source = identifier;
     v.uiName = uiName;
@@ -1384,16 +1384,18 @@ export function Identifier(identifier: Node, uiName: string | undefined) {
 
 export interface StaticAccess extends NodeBase {
     kind: NodeKind.staticAccess,
-    left: Identifier,
+    left: Identifier | DottedPath, // should be "qualified-id", the indexedAccess here should only be dot-access
     dblColon: Terminal,
-    right: Node // identifier or indexed-access-chain or call expr or ... probably not constrainable
+    right: Node, // identifier or indexed-access-chain or call expr or ... probably not constrainable
+    pathname: string
 }
 
-export function StaticAccess(left: Identifier, dblColon: Terminal, right: Node) {
+export function StaticAccess(left: Identifier | DottedPath, dblColon: Terminal, right: Node) {
     const v = NodeBase<StaticAccess>(NodeKind.staticAccess, mergeRanges(left, right));
-    v.left =left;
+    v.left = left;
     v.dblColon = dblColon;
     v.right = right;
+    v.pathname = getTriviallyComputableString(left) ?? "<<PATHNAME-ERROR>>";
     return v;
 }
 
@@ -1529,16 +1531,16 @@ export function OptionalCall(questionMark: Terminal, dot: Terminal) : OptionalCa
     return node;
 }
 
-export interface IndexedAccess extends NodeBase {
+export interface IndexedAccess<RootNode = Node> extends NodeBase {
     kind: NodeKind.indexedAccess,
-    root: Node,
+    root: RootNode,
     accessElements: IndexedAccessChainElement[],
 }
 
-export function IndexedAccess(root: Node) : IndexedAccess {
+export function IndexedAccess<T extends Node>(root: T) : IndexedAccess<T> {
     // make a copy of the source range, so that we can update the range of the full indexed access expression without mutating
     // the root's original range
-    const v = NodeBase<IndexedAccess>(NodeKind.indexedAccess, new SourceRange(root.range.fromInclusive, root.range.toExclusive));
+    const v = NodeBase<IndexedAccess<T>>(NodeKind.indexedAccess, new SourceRange(root.range.fromInclusive, root.range.toExclusive));
     v.root = root;
     v.accessElements = [];
     return v;

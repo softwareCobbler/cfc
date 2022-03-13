@@ -7,6 +7,9 @@ import * as TestLoader from "./TestLoader";
 import { CompletionItem, getCompletions } from "../src/services/completions";
 import { ProjectOptions, FileSystemNode, pushFsNode } from "../src/compiler/project";
 import { EngineVersions, EngineVersion } from "../src/compiler/engines";
+import { setDebug as setNodeModuleDebug } from "../src/compiler/node";
+
+setNodeModuleDebug();
 
 const options : ProjectOptions = {
     debug: true,
@@ -101,10 +104,10 @@ describe("general smoke test for particular constructs", () => {
         parser.parse(sourceFile);
         flattenTree(sourceFile);
     });
-    it("should accept 8 of 9 possible indexed access expression (dot|trivia) configurations", () => {
+    it("should accept 9 of 9 possible indexed access expression (dot|trivia) configurations", () => {
         assertDiagnosticsCount(`
             <cfscript>
-                z = x. y;     // expected a property name | cf engine error is "a variable may not end in '.'"
+                z = x. y;     // in adobe, this should be 'expected a property name' | cf engine error is "a variable may not end in '.'"; do this in the binder probably, not at parse time
                 z = x . y;    // ok
                 z = x .y;     // ok
                 z = x[1]. y;  // ok
@@ -114,7 +117,7 @@ describe("general smoke test for particular constructs", () => {
                 z = x() . y   // ok
                 z = x() .y    // ok
             </cfscript>`,
-            CfFileType.cfm, 1);
+            CfFileType.cfm, 0);
     });
     it("Should find a dot terminal attached to an indexed access expression with a root scope name of arguments", () => {
         const completionsTestCase = TestLoader.loadCompletionAtTest("./test/sourcefiles/arguments_lookup.cfc");
@@ -163,6 +166,9 @@ describe("general smoke test for particular constructs", () => {
     it("Should accept slice expressions in bracket access context", () => {
         assertDiagnosticsCount(`<cfscript>
             function foo(first, ...rest) {
+                rest[     ::   ];
+                rest[ (v) ::   ]; // ambiguity between '[v::]' meaning 'slice from v to end with stride 1' or 'lookup element v::<missing-static-prop-name>', resolved with (v)
+                rest[     :: v ];
                 rest[  :   :   ];
                 rest[v :   :   ];
                 rest[  : v :   ];
@@ -172,7 +178,7 @@ describe("general smoke test for particular constructs", () => {
                 rest[  : v : v ];
                 rest[v : v : v ];
 
-                first.x()[3::][4:5:6]().z; // some random expression chain
+                first.x()[(3)::][4:5:6]().z; // some random expression chain
             }
         </cfscript>`, CfFileType.cfm, 0);
     });
