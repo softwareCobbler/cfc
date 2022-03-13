@@ -3,7 +3,7 @@
 import { Project } from "../compiler/project"
 import { Node, NodeKind, CallExpression, CfTag, StaticallyKnownScopeName, SymbolTable, SymTabEntry, SimpleStringLiteral, SourceFile } from "../compiler/node"
 import { CfFileType, SourceRange, TokenType } from "../compiler/scanner";
-import { cfFunctionSignatureParam, SymbolTableTypeWrapper, TypeFlags, Type, TypeKind, BuiltinType, isStructLikeOrArray } from "../compiler/types";
+import { cfFunctionSignatureParam, SymbolTableTypeWrapper, TypeFlags, Type, TypeKind, BuiltinType, isStructLikeOrArray, cfFunctionSignature } from "../compiler/types";
 import { isExpressionContext, isCfScriptTagBlock, stringifyCallExprArgName, getSourceFile, cfcIsDescendantOf, isPublicMethod, getTriviallyComputableString } from "../compiler/utils";
 import { Checker } from "../compiler/checker";
 
@@ -42,17 +42,43 @@ function getCallExprArgIndex(callExpr: CallExpression, node: Node) {
     return index === -1 ? undefined : index;
 }
 
+function getParamTypeByName(signature: cfFunctionSignature, canonicalArgName: string) : Type | undefined {
+    for (const param of signature.params) {
+        if (param.canonicalName === canonicalArgName) {
+            return param.paramType;
+        }
+    }
+    return undefined;
+}
+
+function extractTopLevelStringsFromType(type: Type) : string[] {
+    switch (type.kind) {
+        case TypeKind.union: {
+            return type.types.map(extractTopLevelStringsFromType).flat();
+        }
+        case TypeKind.literal: {
+            if (typeof type.literalValue === "string") {
+                return [type.literalValue];
+            }
+            return [];
+        }
+        default: {
+            return [];
+        }
+    }
+}
+
 function getStringLiteralCompletions(checker: Checker, sourceFile: SourceFile, node: SimpleStringLiteral) : CompletionItem[] | undefined {
     const strings = new Set<string>();
 
     if (node.parent?.kind === NodeKind.callArgument && node.parent.parent?.kind === NodeKind.callExpression) {
         if (node.parent.name) {
-            const paramName = getTriviallyComputableString(node.parent.name);
-            if (!paramName) return [];
-            const type = checker.getCachedEvaluatedNodeType(node.parent.parent.left, sourceFile);
-            if (!type) return undefined;
+            const canonicalParamName = getTriviallyComputableString(node.parent.name)?.toLowerCase();
+            if (!canonicalParamName) return [];
+            const calledSignature = checker.getCachedEvaluatedNodeType(node.parent.parent.left, sourceFile);
+            if (!calledSignature) return undefined;
 
-            if (type.kind === TypeKind.functionOverloadSet) { // this was primarily to investigate wirebox typename completions in `getInstance`
+            if (calledSignature.kind === TypeKind.functionOverloadSet) { // this was primarily to investigate wirebox typename completions in `getInstance`
                 // for (const overload of type.overloads) {
                 //     const type = overload.params.find(param => param.canonicalName === paramName)?.paramType;
                 //     if (!type) continue;
@@ -62,8 +88,12 @@ function getStringLiteralCompletions(checker: Checker, sourceFile: SourceFile, n
                 // }
                 return undefined;
             }
-            else if (type.kind === TypeKind.functionSignature) {
-                return undefined; // not yet impl'd
+            else if (calledSignature.kind === TypeKind.functionSignature) {
+                const paramType = getParamTypeByName(calledSignature, canonicalParamName);
+                if (!paramType) {
+                    return undefined;
+                }
+                return extractTopLevelStringsFromType(paramType).map((s) => ({label: s, kind: CompletionItemKind.stringLiteral}));
             }
             else {
                 // no-op -- ?

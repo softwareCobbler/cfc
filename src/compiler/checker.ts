@@ -39,12 +39,6 @@ export function Checker(options: ProjectOptions) {
     let checkerStack : Node[];
     let forcedReturnTypes : WeakMap<Node, Type>;
     
-    // generally false;
-    // in declarator positions we set it as true by default by could maybe be overridden with a @!const or similar
-    // so `var x = 'foo'` is `x: string`
-    // but later `x = 'bar'` is `x <- 'bar'`, which is checks OK because 'bar' <: string
-    let widenLiteralTypes : boolean; 
-
     function check(sourceFile_: SourceFile) {
         // we're using the Checker as a singleton, and checking one source file might trigger checking another
         // so, we have to save state before descending into the next check
@@ -56,7 +50,6 @@ export function Checker(options: ProjectOptions) {
         const savedWarnOnUndefined = warnOnUndefined;
         const savedCheckerStack = checkerStack;
         const savedForcedReturnTypes = forcedReturnTypes;
-        const savedCheckingAsAssignment = widenLiteralTypes;
 
         sourceFile = sourceFile_;
         scanner = sourceFile_.scanner;
@@ -66,7 +59,6 @@ export function Checker(options: ProjectOptions) {
         warnOnUndefined = savedWarnOnUndefined;
         checkerStack = savedCheckerStack;
         forcedReturnTypes = savedForcedReturnTypes;
-        widenLiteralTypes = false;
 
         sourceFile = sourceFile_;
         scanner = sourceFile.scanner;
@@ -102,7 +94,6 @@ export function Checker(options: ProjectOptions) {
         warnOnUndefined = savedWarnOnUndefined;
         checkerStack = savedCheckerStack;
         forcedReturnTypes = savedForcedReturnTypes;
-        widenLiteralTypes = savedCheckingAsAssignment;
     }
 
     function checkerStackContains(node: Node) {
@@ -290,39 +281,21 @@ export function Checker(options: ProjectOptions) {
                 }
                 return;
             case NodeKind.simpleStringLiteral:
-                if (widenLiteralTypes) {
-                    setCachedEvaluatedNodeType(node, BuiltinType.string);
-                    return;
-                }
-                else {
-                    setCachedEvaluatedNodeType(node, createLiteralType(node.textSpan.text));
-                    return;
-                }
+                setCachedEvaluatedNodeType(node, createLiteralType(node.textSpan.text));
+                return;                
             case NodeKind.interpolatedStringLiteral:
                 checkList(node.elements);
                 setCachedEvaluatedNodeType(node, BuiltinType.string);
                 return;
             case NodeKind.numericLiteral: {
-                if (widenLiteralTypes) {
-                    setCachedEvaluatedNodeType(node, BuiltinType.numeric);
-                    return;
-                }
-                else {
-                    const val = parseFloat(node.literal.token.text);
-                    if (!isNaN(val)) setCachedEvaluatedNodeType(node, createLiteralType(val));
-                    else setCachedEvaluatedNodeType(node, BuiltinType.numeric);
-                    return;
-                }
+                const val = parseFloat(node.literal.token.text);
+                if (!isNaN(val)) setCachedEvaluatedNodeType(node, createLiteralType(val));
+                else setCachedEvaluatedNodeType(node, BuiltinType.numeric);
+                return;
             }
             case NodeKind.booleanLiteral:
-                if (widenLiteralTypes) {
-                    setCachedEvaluatedNodeType(node, BuiltinType.boolean);
-                    return;
-                }
-                else {
-                    setCachedEvaluatedNodeType(node, node.booleanValue ? BuiltinType.true : BuiltinType.false);
-                    return;
-                }
+                setCachedEvaluatedNodeType(node, node.booleanValue ? BuiltinType.true : BuiltinType.false);
+                return;
             case NodeKind.identifier:
                 // klude/fixme!: identifier.source can be an indexed access
                 // this was to support `a.b.c = 42`
@@ -663,7 +636,9 @@ export function Checker(options: ProjectOptions) {
                 if (existingUnionMember === type) {
                     continue outer;
                 }
-                if (isLeftSubtypeOfRight(existingUnionMember, type, false, false, true) || isLeftSubtypeOfRight(type, existingUnionMember, false, false, true)) {
+                if (isLeftSubtypeOfRight(existingUnionMember, type, /*sourceIsLiteralExpression*/false, /*forReturnType*/false, /*widenLiterals*/false)
+                    || isLeftSubtypeOfRight(type, existingUnionMember, /*sourceIsLiteralExpression*/false, /*forReturnType*/false, /*widenLiterals*/false)
+                ) {
                     deletables.push(existingUnionMember);
                     const merged = mergeTypes(existingUnionMember, type);
                     membersBuilder.add(merged);
@@ -1672,16 +1647,14 @@ export function Checker(options: ProjectOptions) {
                             && node.left.root.kind === NodeKind.identifier
                             && node.left.root.canonicalName === "variables"
                         ) {
-                            widenLiteralTypes = true;
                             checkNode(node.right);
-                            widenLiteralTypes = false;
-
                             const rhsType = getCachedEvaluatedNodeType(node.right);
+                            const widenedRhsType = recursiveWidenTypeByDiscardingLiteralTypes(rhsType);
 
                             // fixme: check against a type annotation?
 
-                            setCachedEvaluatedFlowType(node.left.flow!, lhsSymbol.symTabEntry.symbolId, rhsType);
-                            setEffectivelyDeclaredType(lhsSymbol.symTabEntry, rhsType);
+                            setCachedEvaluatedFlowType(node.left.flow!, lhsSymbol.symTabEntry.symbolId, widenedRhsType);
+                            setEffectivelyDeclaredType(lhsSymbol.symTabEntry, widenedRhsType);
                         }
                     }
                 }
@@ -1922,17 +1895,21 @@ export function Checker(options: ProjectOptions) {
             ) {
                 checkFunctionDefinition(node.expr.right, node.typeAnnotation);
                 didConsumeTypeAnnotation = true;
+
+                rhsExpr = node.expr.right;
+                rhsType = getCachedEvaluatedNodeType(node.expr.right);
             }
             else {
                 // if there is a type annotation, it might be for some literal type, and we need to check assignability
                 // this pattern might be used to support an annotation like "@!const", too
-                widenLiteralTypes = node.typeAnnotation?.shimKind === TypeShimKind.annotation ? false : true;
+                const shouldWidenLiteralTypes = node.typeAnnotation?.shimKind === TypeShimKind.annotation ? false : true;
                 checkNode(node.expr.right);
-                widenLiteralTypes = false;
+
+                const baseRhsType = getCachedEvaluatedNodeType(node.expr.right);
+                rhsExpr = node.expr.right;
+                rhsType = shouldWidenLiteralTypes ? recursiveWidenTypeByDiscardingLiteralTypes(baseRhsType) : baseRhsType;
             }
 
-            rhsExpr = node.expr.right;
-            rhsType = getCachedEvaluatedNodeType(node.expr.right);
             assignabilityErrorNode = node.expr.right;
         }
         else if (isForInit && node.parent?.kind === NodeKind.for && node.parent.subType === ForSubType.forIn && node === node.parent.init) {
@@ -3029,6 +3006,44 @@ export function Checker(options: ProjectOptions) {
 
     function isReachableFlow(flow: Flow) {
         return flow !== UnreachableFlow && !flow.becameUnreachable;
+    }
+
+    /**
+     * a type like {x: (0|1)[]} becomes {x: numeric[]}
+     */
+    function recursiveWidenTypeByDiscardingLiteralTypes(type: Type) : Type {
+        switch (type.kind) {
+            case TypeKind.literal: {
+                return type.underlyingType;
+            }
+            case TypeKind.array: {
+                const widenedMemberType = recursiveWidenTypeByDiscardingLiteralTypes(type.memberType);
+                if (widenedMemberType === type.memberType) {
+                    return type;
+                }
+                else {
+                    return createType({...type, memberType: widenedMemberType});
+                }
+            }
+            case TypeKind.struct: {
+                const widenedMembers = new Map<string, SymTabEntry>();
+                for (const [name,symtabEntry] of type.members) {
+                    const links = {
+                        ...symtabEntry.links,
+                        effectivelyDeclaredType: recursiveWidenTypeByDiscardingLiteralTypes(symtabEntry.links?.effectiveDeclaredType ?? symtabEntry.firstLexicalType ?? BuiltinType.any)
+                    };
+                    widenedMembers.set(name, {...symtabEntry, links});
+                }
+                return Struct(widenedMembers);
+            }
+            case TypeKind.union: {
+                const widenedTypes = type.types.map(recursiveWidenTypeByDiscardingLiteralTypes);
+                return unionify(widenedTypes);
+            }
+            default: {
+                return type;
+            }
+        }
     }
     //
     // type evaluation
