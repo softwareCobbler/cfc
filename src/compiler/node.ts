@@ -156,6 +156,13 @@ export type Node =
 // inferredInitialType would be typeof assignment at declartion, if any 
 // annotatedType is for first declaration
 //
+// "first lexical type" and "links.effectivelyDeclaredType" are painful to deal with, have to check 2 things for undefined at every use site
+// do we NEED first lexical type? just have SymtabEntry.effectivelyDeclaredType, where
+// // @! arg v : "A" | "B"
+// function foo(string v) {}
+// on binding, symtab entry gets effectively declared type of string; then is refined in checker to "A" | "B"
+// during the refinement is when we'd make sure that the annotated type is a subtype of the original "effectively declared type"
+//
 export interface SymTabEntry {
     uiName: string,
     canonicalName: string,

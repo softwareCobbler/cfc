@@ -2,7 +2,7 @@ import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, State
 import { CfcResolution, CfcResolver, ComponentResolutionArgs, EngineSymbolResolver, LibTypeResolver, ProjectOptions } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, Struct, cfUnion, BuiltinType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, Type, stringifyType, cfFunctionSignatureParam, cfFunctionOverloadSet, cfTypeId, SymbolTableTypeWrapper, Cfc, Interface, createType, createLiteralType, typeFromJavaLikeTypename, structurallyCompareTypes, TypeKind, isStructLike, cfArray, cfStructLike, isStructLikeOrArray, cfGenericFunctionSignature, cfKeyof, cfTypeConstructorParam } from "./types";
-import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, functionDefinitionHasUserSpecifiedReturnType, getAttributeValue, getCallExpressionNameErrorRange, getComponentAttrs, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionNameTerminalErrorNode, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isInCfcPsuedoConstructor, isInEffectiveConstructorMethod, isLiteralExpr, isNamedFunction, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue, tryGetCfcMemberFunctionDefinition } from "./utils";
+import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, getUserSpecifiedReturnTypeType, getAttributeValue, getCallExpressionNameErrorRange, getComponentAttrs, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionNameTerminalErrorNode, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isInCfcPsuedoConstructor, isInEffectiveConstructorMethod, isLiteralExpr, isNamedFunction, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue, tryGetCfcMemberFunctionDefinition } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol, TupleKeyedWeakMap } from "./utils";
 import { Engine, supports } from "./engines";
 
@@ -585,6 +585,7 @@ export function Checker(options: ProjectOptions) {
                 for (const key of keys) {
                     if (l.members.has(key) && r.members.has(key)) {
                         const mergedType = mergeTypes(l.members.get(key)!.firstLexicalType!, r.members.get(key)!.firstLexicalType!);
+                        // doesn't copy links?
                         mergedMembers.set(key, {
                             canonicalName: key,
                             uiName: l.members.get(key)!.uiName,
@@ -594,8 +595,13 @@ export function Checker(options: ProjectOptions) {
                         })
                     }
                     else {
-                        // would be good to mark it as optional
-                        const oneDefinitelyExists = (l.members.get(key) || r.members.get(key))!
+                        // only one, so it is optional
+                        // cast to Mutable<> borders on dangerous here
+                        // we make a shallow copy of the target SymTabEntry, and then a shallow copy of `links`, and then update `optional`
+                        // This should not mutate the source object in any way
+                        const oneDefinitelyExists = {...(l.members.get(key) || r.members.get(key))!};
+                        (oneDefinitelyExists as Mutable<SymTabEntry>).links = {...(oneDefinitelyExists.links || {})};
+                        (oneDefinitelyExists as Mutable<SymTabEntry>).links!.optional = true;
                         mergedMembers.set(key, oneDefinitelyExists)
                     }
                 }
@@ -804,9 +810,9 @@ export function Checker(options: ProjectOptions) {
                 if (l === BuiltinType.numeric && r === BuiltinType.boolean) return true;
 
                 if (widenLiterals) {
-                    const widenedLeft = l.kind === TypeKind.literal ? l.underlyingType : undefined;
-                    const widenedRight = r.kind === TypeKind.literal ? r.underlyingType : undefined;
-                    if (widenedLeft && widenedRight && widenedLeft === widenedRight) {
+                    const widenedLeft = l.kind === TypeKind.literal ? l.underlyingType : l;
+                    const widenedRight = r.kind === TypeKind.literal ? r.underlyingType : r;
+                    if (widenedLeft === widenedRight) {
                         return true;
                     }
 
@@ -1054,8 +1060,25 @@ export function Checker(options: ProjectOptions) {
                     return true;
                 }
                 if (r.kind === TypeKind.union) {
-                    for (const rightConstituent of r.types) {
-                        if (worker(l, rightConstituent)) return true;
+                    if (sourceIsLiteralExpr) {
+                        for (const rightConstituent of r.types) {
+                            if (worker(l, rightConstituent)) return true;
+                        }
+                    }
+                    else {
+                        // {a: boolean} <: {a: false} | {a: true} ?
+                        const merged = (() => {
+                            let merged = r.types[0]; // .length always >= 2 right? otherwise we should have collapsed it to a single non-union type way before here
+                            for (let i = 1; i < r.types.length; i++) {
+                                merged = mergeTypes(merged, r.types[i]);
+                            }
+                            return merged;
+                        })();
+                        widenLiterals = true; // this mutates a function argument, probably optimizes poorly
+                        if (worker(l, merged)) {
+                            return true;
+                        }
+                        widenLiterals = false;
                     }
 
                     runningComparisonMap.get(l)!.delete(r);
@@ -2194,7 +2217,7 @@ export function Checker(options: ProjectOptions) {
             if (maybeMemberFunctionDefinition) {
                 const decl = maybeMemberFunctionDefinition;
                 if (!(decl.flags & NodeFlags.checked)) {
-                    if (!functionDefinitionHasUserSpecifiedReturnType(decl)) {
+                    if (getUserSpecifiedReturnTypeType(decl).none) {
                         if (checkerStackContains(decl)) {
                             const name = decl.name?.ui;
                             const errorNode = getFunctionDefinitionNameTerminalErrorNode(decl);
@@ -2243,6 +2266,11 @@ export function Checker(options: ProjectOptions) {
         if (isStructLikeOrArray(type)) {
             for (let i = 0; i < node.accessElements.length; i++) {
                 const element = node.accessElements[i];
+
+                if (element.accessType === IndexedAccessType.bracket) {
+                    checkNode(element.expr);
+                }
+
                 if (element.accessType === IndexedAccessType.bracket && type.kind === TypeKind.array) {
                     symbol = undefined;
                     type = type.memberType;
@@ -2541,7 +2569,15 @@ export function Checker(options: ProjectOptions) {
                 }
             }
             else {
-                if (!functionDefinitionHasUserSpecifiedReturnType(node)) {
+                //
+                // in `/*@!type () => {x:number}*/ [struct] function foo() { ... }`
+                // we want to use the annotated return type, since the user went through the trouble of spelling it, it is probably as precise as necessary
+                // in `struct function foo() { ... }`
+                // we want to use the inferred return type, IF IT TYPECHECKED as a subtype of the cf type, since "struct" is not very informative, and the user
+                // probably wants the more specific type, but with legacy cf function return type runtime type checking
+                //
+                const {hasAnnotatedReturnType} = getUserSpecifiedReturnTypeType(node);
+                if (!hasAnnotatedReturnType) {
                     (finalType as Mutable<cfFunctionSignature>).returns = inferredReturnType;
                 }
             }
@@ -2706,6 +2742,11 @@ export function Checker(options: ProjectOptions) {
         }
     }
 
+    /**
+     * we walkup into parent components to resolve their types, too
+     * which almost certainly not The Right Thing, but was easier to get running than an import syntax
+     * eventually we'll need to import types
+     */
     function walkUpContainersToResolveType(context: Node, type: cfTypeId) : Type | undefined {
         let node : Node | null = context;
         const typeName = type.name;
@@ -2716,14 +2757,29 @@ export function Checker(options: ProjectOptions) {
                     if (node.containedScope.typeinfo.aliases.has(typeName)) {
                         return node.containedScope.typeinfo.aliases.get(typeName)!;
                     }
+                    if (node.containedScope.typeinfo.mergedInterfaces.has(typeName)) {
+                        return node.containedScope.typeinfo.mergedInterfaces.get(typeName);
+                    }
                 }
                 if (node.kind === NodeKind.sourceFile) {
                     for (const lib of node.libRefs.values()) {
+                        if (node.containedScope.typeinfo.aliases.has(typeName)) {
+                            return node.containedScope.typeinfo.aliases.get(typeName)!;
+                        }
                         if (lib.containedScope.typeinfo.mergedInterfaces.has(type.name)) {
                             return lib.containedScope.typeinfo.mergedInterfaces.get(type.name)!;
                         }
                     }
-                    return libTypeResolver(type.name);
+
+                    // walk up into parent component
+                    if (node.cfc?.extends) {
+                        node = node.cfc.extends;
+                    }
+                    else {
+                        // no parent component, resolve from lib
+                        // (didn't we just do this in the `for` block above?)
+                        return libTypeResolver(type.name);
+                    }
                 }
                 else {
                     node = node.containedScope.parentContainer;
@@ -3028,9 +3084,9 @@ export function Checker(options: ProjectOptions) {
             case TypeKind.struct: {
                 const widenedMembers = new Map<string, SymTabEntry>();
                 for (const [name,symtabEntry] of type.members) {
-                    const links = {
+                    const links : SymTabEntry["links"] = {
                         ...symtabEntry.links,
-                        effectivelyDeclaredType: recursiveWidenTypeByDiscardingLiteralTypes(symtabEntry.links?.effectiveDeclaredType ?? symtabEntry.firstLexicalType ?? BuiltinType.any)
+                        effectiveDeclaredType: recursiveWidenTypeByDiscardingLiteralTypes(symtabEntry.links?.effectiveDeclaredType ?? symtabEntry.firstLexicalType ?? BuiltinType.any)
                     };
                     widenedMembers.set(name, {...symtabEntry, links});
                 }

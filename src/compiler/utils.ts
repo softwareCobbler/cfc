@@ -1330,24 +1330,44 @@ export function getFunctionDefinitionReturnsLiteral(node: FunctionDefinition) : 
     }
 }
 
-export function functionDefinitionHasUserSpecifiedReturnType(node: FunctionDefinition | ArrowFunctionDefinition) : boolean {
+export function getUserSpecifiedReturnTypeType(node: FunctionDefinition | ArrowFunctionDefinition) : {none: true, hasAnnotatedReturnType: false, hasCfSyntaxReturnType: false} | {none: false, hasAnnotatedReturnType: boolean, hasCfSyntaxReturnType: boolean} {
+    let hasAnnotatedReturnType = false;
+    let hasCfSyntaxReturnType = false;
     if (node.typeAnnotation && (node.typeAnnotation.shimKind === TypeShimKind.annotation || node.typeAnnotation.shimKind === TypeShimKind.nonCompositeFunctionTypeAnnotation && node.typeAnnotation.returns)) {
         // the annotation could be invalid, but it exists;
         // if its invalid, the checker will treat it as though the user said "any"
-        return true;
+        hasAnnotatedReturnType = true;
     }
 
     if (node.kind === NodeKind.arrowFunctionDefinition) {
-        return false;
+        // probably we can have an annotated return type if we think about it
+        return {
+            none: true,
+            hasAnnotatedReturnType: false,
+            hasCfSyntaxReturnType: false
+        }
     }
 
     if (node.fromTag) {
-        return !!getAttributeValue(node.attrs, "returntype");
+        hasCfSyntaxReturnType = !!getAttributeValue(node.attrs, "returntype");
     }
     else {
-        return !!node.returnType;
+        hasCfSyntaxReturnType = !!node.returnType;
     }
 
+    if (!hasAnnotatedReturnType && !hasCfSyntaxReturnType) {
+        return {
+            none: true,
+            hasAnnotatedReturnType: false,
+            hasCfSyntaxReturnType: false,
+        }
+    }
+
+    return {
+        none: false,
+        hasAnnotatedReturnType,
+        hasCfSyntaxReturnType
+    };
 }
 
 export function getFunctionDefinitionAccessLiteral(node: FunctionDefinition) {

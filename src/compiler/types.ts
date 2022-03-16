@@ -975,6 +975,9 @@ export function stringifyType(type: Type) : string {
                 if (type === BuiltinType.EmptyInterface) {
                     return "{}";
                 }
+                else {
+                    return type.name;
+                }
             }
             case TypeKind.intersection: return "intersection";
             case TypeKind.literal: {
@@ -1018,7 +1021,7 @@ export function stringifyType(type: Type) : string {
                     const s = stringifyTypeWorker(memberType, depth + 1);
                     const earlyExit = i > 0 && (s.length > remaining);
                     if (earlyExit) {
-                        result.push("...and " + (type.types.length - i + 1) + " more");
+                        result.push("...and " + (type.types.length - i) + " more");
                         break;
                     }
                     else {
