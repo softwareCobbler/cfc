@@ -1759,9 +1759,16 @@ export function Checker(options: ProjectOptions) {
             case BinaryOpType.mod:
             case BinaryOpType.exp: {
                 checkNode(node.right);
-                const rhsType = getCachedEvaluatedNodeType(node.right);
-                if (CHECK_FLOW_TYPES && !isAssignable(rhsType, BuiltinType.numeric)) {
-                    issueDiagnosticAtNode(node.right, `Type '${stringifyType(rhsType)}' is not assignable to type 'numeric'.`);
+
+                if (CHECK_FLOW_TYPES) {
+                    const lhsType = getCachedEvaluatedNodeType(node.left);
+                    const rhsType = getCachedEvaluatedNodeType(node.right);
+                    if (!isAssignable(lhsType, BuiltinType.numeric)) {
+                        issueDiagnosticAtNode(node.left, `Type '${stringifyType(lhsType)}' is not assignable to type 'numeric'.`);
+                    }
+                    if (!isAssignable(rhsType, BuiltinType.numeric)) {
+                        issueDiagnosticAtNode(node.right, `Type '${stringifyType(rhsType)}' is not assignable to type 'numeric'.`);
+                    }
                 }
                 setCachedEvaluatedNodeType(node, BuiltinType.numeric);
                 break;
@@ -1771,9 +1778,16 @@ export function Checker(options: ProjectOptions) {
             case BinaryOpType.gt:
             case BinaryOpType.gte: {
                 checkNode(node.right);
-                const rhsType = getCachedEvaluatedNodeType(node.right);
-                if (CHECK_FLOW_TYPES && !isAssignable(rhsType, BuiltinType.numeric)) {
-                    issueDiagnosticAtNode(node.right, `Type '${stringifyType(rhsType)}' is not assignable to type 'numeric'.`);
+
+                if (CHECK_FLOW_TYPES) {
+                    const lhsType = getCachedEvaluatedNodeType(node.left);
+                    const rhsType = getCachedEvaluatedNodeType(node.right);
+                    if (!isAssignable(lhsType, BuiltinType.numeric)) {
+                        issueDiagnosticAtNode(node.left, `Type '${stringifyType(lhsType)}' is not assignable to type 'numeric'.`);
+                    }
+                    if (!isAssignable(rhsType, BuiltinType.numeric)) {
+                        issueDiagnosticAtNode(node.right, `Type '${stringifyType(rhsType)}' is not assignable to type 'numeric'.`);
+                    }
                 }
                 setCachedEvaluatedNodeType(node, BuiltinType.boolean);
                 break;
@@ -2276,9 +2290,12 @@ export function Checker(options: ProjectOptions) {
                     type = type.memberType;
                 }
                 else if (element.accessType === IndexedAccessType.dot || element.accessType === IndexedAccessType.bracket) {
+                    // in bracket access, if expr is not a string literal, it might have a string literal type, we should check for that
                     const propertyName = element.accessType === IndexedAccessType.dot
                         ? element.property.token.text.toLowerCase()
-                        : getTriviallyComputableString(element.expr);
+                        : element.expr.kind === NodeKind.simpleStringLiteral
+                        ? getTriviallyComputableString(element.expr)
+                        : undefined;
 
                     const walkupInheritance = sourceFile.cfFileType === CfFileType.cfc
                         && i === 0

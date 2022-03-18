@@ -1096,6 +1096,7 @@ export function structurallyCompareTypes(l: Type, r: Type) : -1 | 0 | 1 {
                 ? -1
                 : 1;
         }
+        else return -1;
     }
 
     if (isPrimitiveType(l) && isPrimitiveType(r)) {
