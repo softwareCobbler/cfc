@@ -1096,7 +1096,7 @@ export function Binder(options: ProjectOptions) {
             }
             else if (sourceFile.cfFileType === CfFileType.cfc && isInCfcPsuedoConstructor(node)) {
                 scopeTargets = [sourceFile.containedScope.this!, sourceFile.containedScope.variables!];
-                const maybeAlreadyDefined = sourceFile.containedScope.this!.get(node.name.ui);
+                const maybeAlreadyDefined = sourceFile.containedScope.this!.get(node.name.canonical);
                 if (maybeAlreadyDefined && maybeAlreadyDefined.declarations) {
                     for (const decl of [...maybeAlreadyDefined.declarations, node]) {
                         if (decl.kind === NodeKind.functionDefinition) {
