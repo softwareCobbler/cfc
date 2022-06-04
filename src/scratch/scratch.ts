@@ -37,12 +37,13 @@ function projectFiddle() {
                          * parse as namespace-ish, some types are magically available, like 'inject'; 'T' or some param must be provided and is
                          * the property being inspected
                          * 
-                         * @!typedef properties<T> = T.cfname extends string ? inject<"get#T.cfname#", () => string> : 0;
+                         * @!typedef functions<F> = F.cfname extends "scope#infer name#__heh#infer name2#" ? inject<name, () => void> : 0
                          * 
                          */
                         component {
-                            property name="aaa" type="bar" attr0="i am attr 0 for aaa";
-                            property name="bbb" type="XYZ" attr0="i am attr 0 for bbb";
+                            function scopeWithFoo__heh() {
+
+                            }
                         }
                     `
                 },

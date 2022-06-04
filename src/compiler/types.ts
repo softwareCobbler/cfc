@@ -77,7 +77,7 @@ export const enum TypeKind {
     cfcLookup,
     keyof,
     interpolatedString,
-    conditional
+    conditional,
 }
 
 export const enum TypeFlags {
@@ -90,6 +90,7 @@ export const enum TypeFlags {
     protected         = 1 << 6,
     private           = 1 << 7,
     containsUndefined = 1 << 8,
+    inferenceTarget             = 1 << 9,
     end
 }
 
@@ -123,7 +124,7 @@ const TypeKindUiString : Record<TypeKind, string> = {
     [TypeKind.indexedType]:               "indexedType",
     [TypeKind.decorator]:                 "decorator",
     [TypeKind.keyof]:                     "keyof",
-    [TypeKind.interpolatedString]:      "interpolatedStringType",
+    [TypeKind.interpolatedString]:        "interpolatedStringType",
     [TypeKind.conditional]:               "conditionalType",
 }
 
@@ -138,7 +139,8 @@ const TypeFlagsUiString : Record<TypeFlags, string> = {
     [TypeFlags.public]:                          "public",
     [TypeFlags.protected]:                       "protected",
     [TypeFlags.private]:                         "private",
-    [TypeFlags.containsUndefined]:                   "uninitialized",
+    [TypeFlags.containsUndefined]:               "uninitialized",
+    [TypeFlags.inferenceTarget]:                           "infer",
     [TypeFlags.end]:                             "",
 };
 
@@ -544,6 +546,16 @@ export function cfTypeId(name: string, indexChain?: (cfLiteralType | cfTypeId)[]
     return createType(type);
 }
 
+export function cfInferenceTarget(name: string) : cfTypeId{
+    const type : cfTypeId = {
+        kind: TypeKind.typeId,
+        flags: TypeFlags.inferenceTarget,
+        name
+    } as const;
+
+    return createType(type);
+}
+
 export interface cfIntersection extends TypeBase {
     readonly kind: TypeKind.intersection,
     readonly types: readonly Type[]
@@ -666,10 +678,10 @@ export interface cfInterpolatedString extends TypeBase {
     readonly expr: InterpolatedStringLiteral,
 }
 
-export function cfInterpolatedString(expr: InterpolatedStringLiteral): cfInterpolatedString{
+export function cfInterpolatedString(expr: InterpolatedStringLiteral, isInferenceTarget = false): cfInterpolatedString{
     const t : cfInterpolatedString = {
         kind: TypeKind.interpolatedString,
-        flags: TypeFlags.none,
+        flags: isInferenceTarget ? TypeFlags.inferenceTarget : TypeFlags.none,
         expr
     }
 
@@ -1037,7 +1049,14 @@ export function stringifyType(type: Type) : string {
             case TypeKind.typeConstructorInvocation: return "type constructor invocation";
             case TypeKind.typeConstructorParam: return "type constructor param";
             case TypeKind.typeId: {
-                return type.name;
+                if (type.flags & TypeFlags.inferenceTarget) {
+                    // inference target will never have a suffix chain
+                    return `infer ${type.name}`
+                }
+                else {
+                    // need to show possible chain like a.b.c.
+                    return type.name;
+                }
             }
             case TypeKind.union: {
                 const maxPrintSize = 100;

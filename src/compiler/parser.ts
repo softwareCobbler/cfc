@@ -27,7 +27,7 @@ import {
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess, Namespace } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard, Mutable } from "./utils";
-import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature, cfConditionalType, cfInterpolatedString } from "./types";
+import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature, cfConditionalType, cfInterpolatedString, cfInferenceTarget } from "./types";
 import { Type, UninstantiatedArray, Struct, cfFunctionSignature, cfTypeId, cfUnion, BuiltinType, cfFunctionSignatureParam } from "./types";
 import { Engine } from "./engines";
 import { ProjectOptions } from "./project";
@@ -63,6 +63,8 @@ const enum ParseContext {
     typeAnnotation,
     interface,
     cfcPsuedoConstructor, // inside the top-level of a cfc
+    typeExtends,
+    typeString,
     END                 // sentinel for looping over ParseContexts
 }
 
@@ -873,9 +875,6 @@ export function Parser(config: ProjectOptions) {
                 case TokenType.FORWARD_SLASH_STAR: {
                     const comment = parseScriptMultiLineComment();
                     preamble.push(comment);
-                    if (comment.flags & NodeFlags.docBlock) {
-                        parseDocBlockFromPreParsedComment(comment);
-                    }
                     gotScriptComment = true;
                     continue;
                 }
@@ -1845,7 +1844,7 @@ export function Parser(config: ProjectOptions) {
                             case StringUniverse.type: {
                                 finishTextRange();
                                 const leftHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
-                                const type_fixme_shimmedAsAnnotation = TypeAnnotation(parseTypeId());
+                                const type_fixme_shimmedAsAnnotation = TypeAnnotation(parseTypeIdWithMaybeExplicitInfer());
                                 const rightHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
                                 result.push(HashWrappedExpr(leftHash, type_fixme_shimmedAsAnnotation, rightHash));
                                 continue;
@@ -4592,7 +4591,9 @@ export function Parser(config: ProjectOptions) {
                             if (peek().type === TokenType.LEXEME && peek().text === "extends") {
                                 next();
                                 parseTrivia();
-                                const extends_ = parseType();
+
+                                const extends_ = doInExtendedContext(ParseContext.typeExtends, parseType);
+
                                 parseExpectedTerminal(TokenType.QUESTION_MARK, ParseOptions.withTrivia);
                                 const consequent = parseType();
                                 parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
@@ -4740,7 +4741,7 @@ export function Parser(config: ProjectOptions) {
                 }
                 case TokenType.QUOTE_SINGLE:
                 case TokenType.QUOTE_DOUBLE: {
-                    const s = parseStringLiteral(StringUniverse.type);
+                    const s = doInExtendedContext(ParseContext.typeString, () => parseStringLiteral(StringUniverse.type));
                     if (s.kind === NodeKind.simpleStringLiteral) {
                         result = createLiteralType(s.textSpan.text);
                     }
@@ -4830,9 +4831,20 @@ export function Parser(config: ProjectOptions) {
         return result;
     }
 
-    function parseTypeId() {
+    function canParseExplicitInfer() {
+        const inStringInExtends = (parseContext & 1 << ParseContext.typeExtends) && (parseContext & 1 << ParseContext.typeString);
+        return inStringInExtends;
+    }
+
+    function parseTypeIdWithMaybeExplicitInfer() {
         const terminal = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
-        return cfTypeId(terminal.token.text, parseTypeIdRest());
+        if (canParseExplicitInfer() && terminal.token.text === "infer") {
+            const name = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
+            return cfInferenceTarget(name.token.text);
+        }
+        else {
+            return cfTypeId(terminal.token.text, parseTypeIdRest());
+        }
     }
 
     function parseTypeIdRest() {
