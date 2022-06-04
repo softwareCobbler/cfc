@@ -10264,7 +10264,7 @@
         },
         {
           "name": "variable.language.scope.cfml",
-          "match": "(?x)\n  \\b(?i:(\n  application|arguments|attributes|caller|cgi|client|cookie|flash|form|\n  local|request|server|session|this|thistag|url|variables|self|static\n))\\b"
+          "match": "(?x)\n  \\b(?i:(\n  application|arguments|attributes|caller|cgi|client|cookie|flash|form|\n  local|request|server|session|this|thistag|url|variables|static\n))\\b"
         }
       ]
     },
