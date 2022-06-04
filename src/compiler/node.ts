@@ -168,6 +168,9 @@ export interface SymTabEntry {
     canonicalName: string,
     declarations: Node[] | null,
     firstLexicalType: Type | undefined,
+    /**
+     * this can be -1 for cases where it's irrelevant, otherwise should be a unique id for lookup purposes in other maps
+     */
     symbolId: SymbolId,
     links?: {
         effectiveDeclaredType?: Type,
@@ -181,8 +184,8 @@ export function typeinfo() {
     return {
         interfaces: new Map<string, Interface[]>(),
         mergedInterfaces: new Map<string, Interface>(),
-        // decorators: <Decorator[]>[], // 1/21/22 -- not supporting this
         aliases: new Map<string, Type>(),
+        namespaces: <Namespace[]>[]
     };
 }
 
@@ -2569,6 +2572,7 @@ interface PropertyBase extends NodeBase {
     kind: NodeKind.property,
     fromTag: boolean,
     attrs: TagAttribute[],
+    name: string,
 }
 
 export type Property = Tag.Property | Script.Property;
@@ -2590,6 +2594,7 @@ export namespace Tag {
             endTag: null
         }
         v.attrs = tag.attrs;
+        v.name = getTriviallyComputableString(getAttributeValue(tag.attrs, "name")) ?? "<<missing-name>>"
         return v;
     }
 }
@@ -2605,6 +2610,7 @@ export namespace Script {
         v.fromTag = false;
         v.propertyTerminal = terminal;
         v.attrs = attrs;
+        v.name = getTriviallyComputableString(getAttributeValue(attrs, "name")) ?? "<<missing-name>>"
         return v;
     }
 }
@@ -2681,4 +2687,16 @@ export function ParamStatement(paramToken: Terminal, attrs: TagAttribute[]) {
     v.paramToken = paramToken;
     v.attrs = attrs;
     return v;
+}
+
+export interface Namespace {
+    name: string,
+    typedefs: Typedef[]
+}
+
+export function Namespace(name: string, typedefs: Typedef[]) : Namespace {
+    return {
+        name,
+        typedefs
+    }
 }

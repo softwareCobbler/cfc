@@ -24,10 +24,10 @@ import {
     New,
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
-    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess } from "./node";
+    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess, Namespace } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard, Mutable } from "./utils";
-import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature } from "./types";
+import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature, cfConditionalType, cfInterpolatedString } from "./types";
 import { Type, UninstantiatedArray, Struct, cfFunctionSignature, cfTypeId, cfUnion, BuiltinType, cfFunctionSignatureParam } from "./types";
 import { Engine } from "./engines";
 import { ProjectOptions } from "./project";
@@ -38,6 +38,8 @@ const enum ParseOptions {
     withTrivia        = 0x00000001,
     allowHashWrapped  = 0x00000002,
 };
+
+enum StringUniverse { value = 1, type = 2 }
 
 const enum ParseContext {
     none = 0,
@@ -1037,7 +1039,7 @@ export function Parser(config: ProjectOptions) {
                 break;
             }
             case CfFileType.dCfm: {
-                sourceFile.content = parseTypeAnnotations().defs;
+                sourceFile.content = parseTypeAnnotations().typedefs;
                 break;
             }
         }
@@ -1780,7 +1782,7 @@ export function Parser(config: ProjectOptions) {
         return treeifyTagList(result);
     }  
 
-    function parseStringBody(quoteDelimiter: TokenType.QUOTE_SINGLE | TokenType.QUOTE_DOUBLE, allowInterpolations: boolean) : (TextSpan | HashWrappedExpr)[] {
+    function parseStringBody(quoteDelimiter: TokenType.QUOTE_SINGLE | TokenType.QUOTE_DOUBLE, stringUniverse: StringUniverse) : (TextSpan | HashWrappedExpr)[] {
         // when we enter a new interpolation context, we can reset our hashWrappedExpr flag;
         // hash wrapped expressions don't nest directly, but indirectly is ok; e.g,
         // #someVal & "some-string-literal #nesting_here_is_ok#" & trying_to_nest_here_is_an_error #
@@ -1834,15 +1836,21 @@ export function Parser(config: ProjectOptions) {
                         continue;
                     }
                     else { // single hash, meaning this is an interpolated string element
-                        if (allowInterpolations) {
-                            finishTextRange();
-                            result.push(parseHashWrappedExpression());
-                            continue;
-                        }
-                        else {
-                            parseErrorAtCurrentToken("Unexpected interpolation element.");
-                            startOrContinueTextRange();
-                            next();
+                        switch (stringUniverse) {
+                            case StringUniverse.value: {
+                                finishTextRange();
+                                result.push(parseHashWrappedExpression());
+                                continue;
+                            }
+                            case StringUniverse.type: {
+                                finishTextRange();
+                                const leftHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
+                                const type_fixme_shimmedAsAnnotation = TypeAnnotation(parseTypeId());
+                                const rightHash = parseExpectedTerminal(TokenType.HASH, ParseOptions.withTrivia);
+                                result.push(HashWrappedExpr(leftHash, type_fixme_shimmedAsAnnotation, rightHash));
+                                continue;
+                            }
+                            default: exhaustiveCaseGuard(stringUniverse);
                         }
                     }
                 }
@@ -2936,7 +2944,7 @@ export function Parser(config: ProjectOptions) {
         return Identifier(terminal, name);
     }
 
-    function parseStringLiteral(allowInterpolations = true) : SimpleStringLiteral | InterpolatedStringLiteral {
+    function parseStringLiteral(stringUniverse = StringUniverse.value) : SimpleStringLiteral | InterpolatedStringLiteral {
         const quoteType = lookahead();
         if (quoteType !== TokenType.QUOTE_SINGLE && quoteType !== TokenType.QUOTE_DOUBLE) {
             // will a lookahead or speculate ever trigger this ... ?
@@ -2944,7 +2952,7 @@ export function Parser(config: ProjectOptions) {
         }
 
         const leftQuote = parseExpectedTerminal(quoteType, ParseOptions.noTrivia);
-        const stringElements = parseStringBody(quoteType, allowInterpolations);
+        const stringElements = parseStringBody(quoteType, stringUniverse);
         const rightQuote = parseExpectedTerminal(quoteType, ParseOptions.withTrivia);
 
         if (stringElements.length === 0) {
@@ -4031,9 +4039,11 @@ export function Parser(config: ProjectOptions) {
         const docBlockAttrs : TagAttribute[] = [];
         const typedefs : (Typedef | Interfacedef)[] = [];
         const argumentAnnotations : NamedAnnotation[] = [];
+        const namespaces : Namespace[] = [];
         let typeAnnotation : TypeAnnotation | null = null;
         let treatAsConstructor = false;
 
+        // why this instead of parse trivia? probably some interaction with accidentally parsing comments inside comments
         function eatWhitespace() {
             while (lookahead() === TokenType.WHITESPACE) { // fixme: we are in trivia context, right?
                 next();
@@ -4100,6 +4110,23 @@ export function Parser(config: ProjectOptions) {
                             parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
                             const type = parseType();
                             argumentAnnotations.push(NamedAnnotation(name, type));
+                        }
+                    }
+                    else if (parseTypes && name == "!cfc-transform") {
+                        eatWhitespace();
+                        const namespace = parseNamespaceBody("cf_CfcTransform");
+                        namespaces.push(namespace);
+
+                        /**
+                         * should be recursive, namespaces in namespaces, support all sorts of decls in the body
+                         * but, we just want to support single-level namespaces that contain typedefs, at the moment
+                         * with the goal of support cfc-transform experiments
+                         */
+                        function parseNamespaceBody(name: string) : Namespace {
+                            parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
+                            const body = parseTypeAnnotations();
+                            const justTypedefs = body.typedefs.filter((v) : v is Typedef => v.shimKind === TypeShimKind.typedef);
+                            return {name, typedefs: justTypedefs};
                         }
                     }
                     // 1/21/22 -- not supporting decorators, the idea is/was to allow some kind of hook into the binder, to add/remove cfc member functions or properties or etc.
@@ -4183,7 +4210,7 @@ export function Parser(config: ProjectOptions) {
             mode: ScannerMode.tag | ScannerMode.script, // set docblock mode if we're in a docblock...
         })
 
-        const {defs, typeAnnotations, argumentAnnotations, treatAsConstructor} = parseTypeAnnotations();
+        const {typedefs: defs, typeAnnotations, argumentAnnotations, treatAsConstructor} = parseTypeAnnotations();
         
         if (typeAnnotations.length > 1) {
             // we need to get the type's ranges and terminals and etc.
@@ -4206,6 +4233,7 @@ export function Parser(config: ProjectOptions) {
     }
 
     /**
+     * fixme: this is duplicate work along w/ doing the same in a docblock
      * parse type annotations
      */
     function parseTypeAnnotations() {
@@ -4279,7 +4307,7 @@ export function Parser(config: ProjectOptions) {
         setScannerMode(savedScannerMode);
         
         return {
-            defs:result.defs,
+            typedefs:result.defs,
             typeAnnotations: result.typeAnnotations,
             argumentAnnotations: result.argumentAnnotations.length > 0 ? result.argumentAnnotations : null,
             treatAsConstructor
@@ -4289,6 +4317,7 @@ export function Parser(config: ProjectOptions) {
     function parseTypeDef() : Typedef {
         const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/true, /*allowNumeric*/ false);
         if (lookahead() === TokenType.LEFT_ANGLE) {
+            next();
             function parseTypeId() : cfTypeId {
                 const start = pos();
                 let element = parseType();
@@ -4302,7 +4331,13 @@ export function Parser(config: ProjectOptions) {
 
             const params : cfTypeConstructorParam[] = [];
 
-            while (lookahead() !== TokenType.RIGHT_ANGLE && lookahead() !== TokenType.EOF) {
+            while (true) {
+                if (lookahead() === TokenType.RIGHT_ANGLE || lookahead() === TokenType.EOF) {
+                    // next will do nothing on EOF, but will advance past RIGHT_ANGLE
+                    next();
+                    parseTrivia();
+                    break;
+                }
                 // fixme: types don't have ranges
                 const typeId = parseTypeId();
                 if (lookahead() === TokenType.EQUAL) {
@@ -4549,24 +4584,23 @@ export function Parser(config: ProjectOptions) {
                             result = CfcLookup(cfcPathNameAsLiteralType);
                         }
                         else if (result.kind === TypeKind.typeId) {
-                            const rest : string[] = [];
-                            while (lookahead() !== TokenType.EOF) {
+                            result = (() => {
+                                const rest = parseTypeIdRest();
+                                return rest.length === 0 ? result : cfTypeId(result.name, rest);
+                            })();
+
+                            if (peek().type === TokenType.LEXEME && peek().text === "extends") {
+                                next();
                                 parseTrivia();
-                                if (lookahead() === TokenType.DOT) {
-                                    parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
-                                    const propertyName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/true, /*allowNumeric*/false, "Expected an indexed-type property name.");
-                                    rest.push(propertyName.token.text.toLowerCase());
-                                }
-                                else {
-                                    break;
-                                }
+                                const extends_ = parseType();
+                                parseExpectedTerminal(TokenType.QUESTION_MARK, ParseOptions.withTrivia);
+                                const consequent = parseType();
+                                parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
+                                const alternative = parseType();
+                                result = cfConditionalType(result, extends_, consequent, alternative);
+                                break;
                             }
-
-                            if (rest.length > 0) {
-                                result = cfTypeId(result.name, rest.map((s) => createLiteralType(s)));
-                            }
-
-                            if (lookahead() === TokenType.LEFT_ANGLE) {
+                            else if (lookahead() === TokenType.LEFT_ANGLE) {
                                 parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
                                 const args : Type[] = [];
                                 while (lookahead() !== TokenType.RIGHT_ANGLE && lookahead() !== TokenType.EOF) {
@@ -4706,12 +4740,12 @@ export function Parser(config: ProjectOptions) {
                 }
                 case TokenType.QUOTE_SINGLE:
                 case TokenType.QUOTE_DOUBLE: {
-                    const s = parseStringLiteral(/*allowInterpolations*/false);
+                    const s = parseStringLiteral(StringUniverse.type);
                     if (s.kind === NodeKind.simpleStringLiteral) {
                         result = createLiteralType(s.textSpan.text);
                     }
                     else {
-                        result = BuiltinType.string; // should never happen, parseStringLiteral(false) should always return a simpleStringLiteral
+                        result = cfInterpolatedString(s);
                     }
                     break;
                 }
@@ -4749,7 +4783,7 @@ export function Parser(config: ProjectOptions) {
 
         // in `type T = | A` --- we have a union of one element, which gets collapsed to A anyway (and we'll actually just parse exactly A), so this seems legit
         // makes multiline unions nicer
-        parseOptionalTerminal(TokenType.PIPE, ParseOptions.withTrivia); // discarded
+        parseOptionalTerminal(TokenType.PIPE, ParseOptions.withTrivia); // discarded, not correct if we just parsed an interface or namespace or other non-unionable thing
         let result = localParseType();
 
         if (isStructLike(result) && result.kind === TypeKind.interface) {
@@ -4793,6 +4827,28 @@ export function Parser(config: ProjectOptions) {
             restoreScannerState(savedScannerState);
         }
 
+        return result;
+    }
+
+    function parseTypeId() {
+        const terminal = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
+        return cfTypeId(terminal.token.text, parseTypeIdRest());
+    }
+
+    function parseTypeIdRest() {
+        const result : cfTypeId[] = [];
+        while (lookahead() !== TokenType.EOF) {
+            parseTrivia();
+            if (lookahead() === TokenType.DOT) {
+                parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
+                const propertyName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/true, /*allowNumeric*/false, "Expected an indexed-type property name.");
+                // why to lower case ... ? probably to aid lookup in the toplevel of a symbol table where keynames have been canonicalized?...
+                result.push(cfTypeId(propertyName.token.text.toLowerCase()));
+            }
+            else {
+                break;
+            }
+        }
         return result;
     }
 }

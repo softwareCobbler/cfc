@@ -1,13 +1,40 @@
-import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, UnreachableFlow, DiagnosticKind, TagAttribute, SymbolId, TypeShimKind, NonCompositeFunctionTypeAnnotation, DUMMY_CONTAINER } from "./node";
+import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, UnreachableFlow, DiagnosticKind, TagAttribute, SymbolId, TypeShimKind, NonCompositeFunctionTypeAnnotation, DUMMY_CONTAINER, Property, TypeAnnotation } from "./node";
 import { CfcResolution, CfcResolver, ComponentResolutionArgs, EngineSymbolResolver, LibTypeResolver, ProjectOptions } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
-import { cfFunctionSignature, Struct, cfUnion, BuiltinType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, Type, stringifyType, cfFunctionSignatureParam, cfFunctionOverloadSet, cfTypeId, SymbolTableTypeWrapper, Cfc, Interface, createType, createLiteralType, typeFromJavaLikeTypename, structurallyCompareTypes, TypeKind, isStructLike, cfArray, cfStructLike, isStructLikeOrArray, cfGenericFunctionSignature, cfKeyof, cfTypeConstructorParam } from "./types";
+import { cfFunctionSignature, Struct, cfUnion, BuiltinType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, Type, stringifyType, cfFunctionSignatureParam, cfFunctionOverloadSet, cfTypeId, SymbolTableTypeWrapper, Cfc, Interface, createType, createLiteralType, typeFromJavaLikeTypename, structurallyCompareTypes, TypeKind, isStructLike, cfArray, cfStructLike, isStructLikeOrArray, cfGenericFunctionSignature, cfKeyof, cfTypeConstructorParam, TypeConstructorParam } from "./types";
 import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, getUserSpecifiedReturnTypeType, getAttributeValue, getCallExpressionNameErrorRange, getComponentAttrs, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionNameTerminalErrorNode, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isInCfcPsuedoConstructor, isInEffectiveConstructorMethod, isLiteralExpr, isNamedFunction, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue, tryGetCfcMemberFunctionDefinition } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol, TupleKeyedWeakMap } from "./utils";
 import { Engine, supports } from "./engines";
 
 const structViewCache = TupleKeyedWeakMap<[SymbolTable, Interface], SymbolTableTypeWrapper>(); // map a SymbolTable -> Interface -> Struct, used to check prior existence of a wrapping of a symbol table into a struct with a possible interface extension
 const EmptyInstantiationContext = SourceFile("", CfFileType.cfc, ""); // an empty type type instantiation context, no symbols are visible; there we rely entirely on captured or provided contexts attached the instantiable target
+
+// builtin typedef for `@!interface inject<name extends string, type extends any> = {name: name, type: type}
+const builtin_inject = (() => {
+    const members = new Map<string, SymTabEntry>();
+    const name = "name";
+    const type = "type";
+    members.set(name, {
+        canonicalName: name,
+        uiName: name,
+        declarations: null,
+        firstLexicalType: cfTypeId(name),
+        symbolId: -1
+    });
+    members.set(type, {
+        canonicalName: type,
+        uiName: type,
+        declarations: null,
+        firstLexicalType: cfTypeId(type),
+        symbolId: -1
+    });
+
+    const params = [
+        TypeConstructorParam(name),
+        TypeConstructorParam(type)
+    ]
+    return Interface("", members, params);
+})()
 
 // the "debug" object should be moved into the Project object, and passed into the checker
 // but this gets it going
@@ -77,14 +104,13 @@ export function Checker(options: ProjectOptions) {
         }
 
         instantiateInterfaces(sourceFile);
-        checkList(sourceFile.content);
 
-        // 1/22/21 -- not supporting decorators
-        // for (const decorator of sourceFile.containedScope.typedefs.decorators) {
-        //     if (decorator.name === "QuickInstance") {
-        //         QuickInstance(sourceFile);
-        //     }
-        // }
+        // in a cfc, need to do in order like:
+        // 1. properites
+        // 2. static blocks, top-level declarations
+        // 3. functions
+
+        checkList(sourceFile.content);
 
         sourceFile = savedSourceFile;
         scanner = savedScanner;
@@ -376,6 +402,83 @@ export function Checker(options: ProjectOptions) {
             case NodeKind.typeShim:
                 return;
             case NodeKind.property: {
+                const propertyMapper = sourceFile.containedScope.typeinfo.aliases.get("properties");
+                if (propertyMapper) {
+                    tryEvaluatePropertyMapper(propertyMapper, node);
+
+                    function propertyAsTypeForPropertyMappingContext(property: Property) : Interface {
+                        const members = new Map<string, SymTabEntry>();
+
+                        members.set("cfname", {
+                            canonicalName: "cfname", 
+                            uiName: "cfname",
+                            declarations: null,
+                            firstLexicalType: createLiteralType(property.name),
+                            symbolId: -1
+                        })
+
+                        for (const attr of property.attrs) {
+                            // for an attr without a right hand side like
+                            // foo=bar baz
+                            //         ^^^
+                            // we want `baz extend string` to be true
+                            const value = getTriviallyComputableString(attr.expr) ?? "";
+
+                            const name = attr.name.token.text;
+                            const lcName = name.toLowerCase();
+
+                            members.set(lcName, {
+                                canonicalName: lcName,
+                                uiName: name,
+                                declarations: null,
+                                firstLexicalType: createLiteralType(value),
+                                symbolId: -1
+                            })  
+                        }
+                        return Interface("", members);
+                    }
+
+                    function tryEvaluatePropertyMapper(mapper: Type, property: Property) : void {
+                        // must be exactly @!typedef properties<T> = (conditional-type)
+                        if (
+                            mapper.kind !== TypeKind.typeConstructor
+                            || mapper.params.length !== 1
+                            || mapper.params[0].defaultType
+                            || mapper.params[0].extends
+                            || mapper.body.kind !== TypeKind.conditional
+                        ) {
+                            return;
+                        }
+
+                        const evalContext = new Map<string, Type>();
+                        // @!typedef properties<T> = ... [inject<name, type>] ---> `inject` is provided by compiler in this context
+                        evalContext.set("inject", builtin_inject);
+                        // @!typedef properties<T> = ... ----> T maps to a compiler provided interface containing property information
+                        evalContext.set(mapper.params[0].name,  propertyAsTypeForPropertyMappingContext(property));
+                        const resultType = evaluateType(sourceFile, mapper.body, evalContext);
+                        // interface evaluated to a struct ...
+                        if (resultType.kind === TypeKind.struct) {
+                            const nameType = resultType.members.get("name")?.firstLexicalType;
+                            const type = resultType.members.get("type")?.firstLexicalType;
+                            const hasValidName = nameType?.kind === TypeKind.literal && typeof nameType.literalValue === "string";
+                            const hasValidType = !!type;
+                            if (hasValidName && hasValidType) {
+                                const name = nameType.literalValue;
+                                const lcName = nameType.literalValue.toLowerCase();
+                                const symbol : SymTabEntry = {
+                                    canonicalName: lcName,
+                                    uiName: name,
+                                    declarations: null,
+                                    firstLexicalType: type,
+                                    symbolId: -1 // might need one for this for later checking, maybe we can do this during bind, but we need the type evaluator
+                                };
+
+                                sourceFile.containedScope.variables?.set(lcName, symbol);
+                                sourceFile.containedScope.this?.set(lcName, symbol);
+                            }
+                        }
+                    }
+                }
                 // if we're in Wirebox mode, and the property has an inject attribute that we can resolve, add the type to the property value
                 if (sourceFile.libRefs.has("<<magic/wirebox>>")) {
                     const nameAttrVal = getAttributeValue(node.attrs, "name");
@@ -3451,14 +3554,16 @@ export function Checker(options: ProjectOptions) {
                                 let indexAsString : string;
                                 switch (indexElement.kind) {
                                     case TypeKind.typeId: {
-                                        const evaluatedShouldBeString = typeParamMap?.get(indexElement.name) || walkUpContainersToResolveType(context, indexElement) || null;
-                                        if (evaluatedShouldBeString?.kind === TypeKind.literal && evaluatedShouldBeString.underlyingType === BuiltinType.string) {
-                                            indexAsString = evaluatedShouldBeString.literalValue as string;
-                                            break;
-                                        }
-                                        else {
-                                            return fallbackToAny ? BuiltinType.any : null;
-                                        }
+                                        indexAsString = indexElement.name;
+                                        break;
+                                        // const evaluatedShouldBeString = typeParamMap?.get(indexElement.name) || walkUpContainersToResolveType(context, indexElement) || null;
+                                        // if (evaluatedShouldBeString?.kind === TypeKind.literal && evaluatedShouldBeString.underlyingType === BuiltinType.string) {
+                                        //     indexAsString = evaluatedShouldBeString.literalValue as string;
+                                        //     break;
+                                        // }
+                                        // else {
+                                        //     return fallbackToAny ? BuiltinType.any : null;
+                                        // }
                                     }
                                     case TypeKind.literal: {
                                         if (indexElement.underlyingType === BuiltinType.string) {
@@ -3487,6 +3592,20 @@ export function Checker(options: ProjectOptions) {
                         
                         return typeWorker(result);
                     }
+                    else if (type.kind === TypeKind.conditional) {
+                        const what = typeWorker(type.typeId, typeParamMap);
+                        const extends_ = typeWorker(type.extends, typeParamMap);
+                        if (!what || !extends_) {
+                            return null;
+                        }
+
+                        if (isLeftSubtypeOfRight(what, extends_)) {
+                            return typeWorker(type.consequent, typeParamMap);
+                        }
+                        else {
+                            return typeWorker(type.alternative, typeParamMap);
+                        }
+                    }
                     else if (type.kind === TypeKind.keyof) {
                         const operandType = typeWorker(type.operand);
                         if (!operandType || !isStructLike(operandType)) {
@@ -3497,6 +3616,28 @@ export function Checker(options: ProjectOptions) {
                             keys.add(symTabEntry.uiName);
                         }
                         return cfKeyof(type.operand, keys);
+                    }
+                    else if (type.kind === TypeKind.interpolatedString) {
+                        const result : string[] = [];
+                        for (const element of type.expr.elements) {
+                            if (element.kind === NodeKind.textSpan) {
+                                result.push(element.text);
+                            }
+                            else {
+                                // fixme: heavy reliance on how not very strictly  typed structure here
+                                const typeExpr = ((element.expr as TypeAnnotation | undefined)?.type as cfTypeId | undefined);
+                                if (!typeExpr) {
+                                    continue; // effectively push ""
+                                }
+                                else {
+                                    const resultingString = typeWorker(typeExpr, typeParamMap);
+                                    if (resultingString?.kind === TypeKind.literal && typeof resultingString.literalValue === "string") {
+                                        result.push(resultingString.literalValue)
+                                    }
+                                }
+                            }
+                        }
+                        return createLiteralType(result.join(""))
                     }
                     else {
                         // a type not requiring evaluation: number, string, boolean,

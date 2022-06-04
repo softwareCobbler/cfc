@@ -1,4 +1,4 @@
-import type { ArrowFunctionDefinition, CfTag, DottedPath, FunctionDefinition, Script, SourceFile, SymbolTable, SymTabEntry, Tag, TagAttribute } from "./node";
+import type { ArrowFunctionDefinition, CfTag, DottedPath, FunctionDefinition, InterpolatedStringLiteral, Script, SourceFile, SymbolTable, SymTabEntry, Tag, TagAttribute } from "./node";
 import { NodeKind } from "./node";
 import { exhaustiveCaseGuard, getAttributeValue, getTriviallyComputableString, Mutable } from "./utils";
 import * as path from "path"; // !! for stringifying CFC types...do we really want this dependency here?
@@ -41,9 +41,10 @@ export type Type =
     | cfLiteralType
     | cfMappedType
     | cfIndexedType
-    | cfDecorator
     | CfcLookup
     | cfKeyof
+    | cfInterpolatedString
+    | cfConditionalType
     
 export const enum TypeKind {
     any,
@@ -75,6 +76,8 @@ export const enum TypeKind {
     decorator,
     cfcLookup,
     keyof,
+    interpolatedString,
+    conditional
 }
 
 export const enum TypeFlags {
@@ -120,6 +123,8 @@ const TypeKindUiString : Record<TypeKind, string> = {
     [TypeKind.indexedType]:               "indexedType",
     [TypeKind.decorator]:                 "decorator",
     [TypeKind.keyof]:                     "keyof",
+    [TypeKind.interpolatedString]:      "interpolatedStringType",
+    [TypeKind.conditional]:               "conditionalType",
 }
 
 const TypeFlagsUiString : Record<TypeFlags, string> = {
@@ -532,7 +537,7 @@ export function cfTypeId(name: string, indexChain?: (cfLiteralType | cfTypeId)[]
         name
     } as const;
 
-    if (indexChain) {
+    if (indexChain?.length) {
         (type as Mutable<cfTypeId>).indexChain = indexChain;
     }
 
@@ -656,17 +661,40 @@ export function cfIndexedType(type: Type, index: cfTypeId) : cfIndexedType {
     return createType(t);
 }
 
-export interface cfDecorator extends TypeBase {
-    readonly kind: TypeKind.decorator,
-    readonly name: string
+export interface cfInterpolatedString extends TypeBase {
+    readonly kind: TypeKind.interpolatedString,
+    readonly expr: InterpolatedStringLiteral,
 }
 
-export function cfDecorator(name: string) : cfDecorator {
-    return {
-        kind: TypeKind.decorator,
+export function cfInterpolatedString(expr: InterpolatedStringLiteral): cfInterpolatedString{
+    const t : cfInterpolatedString = {
+        kind: TypeKind.interpolatedString,
         flags: TypeFlags.none,
-        name
+        expr
     }
+
+    return createType(t);
+}
+
+export interface cfConditionalType extends TypeBase {
+    readonly kind: TypeKind.conditional,
+    readonly typeId: cfTypeId,
+    readonly extends: Type,
+    readonly consequent: Type,
+    readonly alternative: Type
+}
+
+export function cfConditionalType(typeId: cfTypeId, extends_: Type, consequent: Type, alternative: Type) : cfConditionalType {
+    const t = {
+        kind: TypeKind.conditional,
+        flags: TypeFlags.none,
+        typeId,
+        extends: extends_,
+        consequent,
+        alternative
+    } as const;
+
+    return createType(t);
 }
 
 export interface cfAny extends TypeBase {
@@ -953,7 +981,6 @@ export function stringifyType(type: Type) : string {
             case TypeKind.cfcLookup: {
                 return "cfc<" + type.cfcName + ">";
             }
-            case TypeKind.decorator: return "decorator<>";
             case TypeKind.functionOverloadSet: return "function overload set";
             case TypeKind.functionSignature: {
                 const params = [];
@@ -1038,6 +1065,12 @@ export function stringifyType(type: Type) : string {
             }
             case TypeKind.keyof: {
                 return "keyof " + stringifyTypeWorker(type.operand, depth + 1);
+            }
+            case TypeKind.interpolatedString: {
+                return "<interpolated-string>";
+            }
+            case TypeKind.conditional: {
+                return "<conditional-type>"
             }
             default: exhaustiveCaseGuard(type);
         }
@@ -1211,5 +1244,5 @@ export function structurallyCompareTypes(l: Type, r: Type) : -1 | 0 | 1 {
         debugger;
     }
 
-    throw "unreachable";
+    throw "unhandled types in structurallyCompareTypes";
 }

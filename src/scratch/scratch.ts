@@ -33,12 +33,16 @@ function projectFiddle() {
                 //"realLib.d.cfm": fs.readFileSync("C:\\Users\\anon\\dev\\cfc\\src\\lang-server\\server\\src\\runtimelib\\lib.cf2018.d.cfm").toString(),
                 "someFolder": {
                     "someFile.cfc": `
+                        /**
+                         * parse as namespace-ish, some types are magically available, like 'inject'; 'T' or some param must be provided and is
+                         * the property being inspected
+                         * 
+                         * @!typedef properties<T> = T.cfname extends string ? inject<"get#T.cfname#", () => string> : 0;
+                         * 
+                         */
                         component {
-                            function foo(haha, ok) {
-                                //rest[   ::   ];
-                                rest[ (v) ::   ];
-                                //rest[   :: v ];
-                            }
+                            property name="aaa" type="bar" attr0="i am attr 0 for aaa";
+                            property name="bbb" type="XYZ" attr0="i am attr 0 for bbb";
                         }
                     `
                 },
