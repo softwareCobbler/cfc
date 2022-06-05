@@ -163,10 +163,20 @@ export type Node =
 // on binding, symtab entry gets effectively declared type of string; then is refined in checker to "A" | "B"
 // during the refinement is when we'd make sure that the annotated type is a subtype of the original "effectively declared type"
 //
+export const enum SymbolFlags {
+    synthesizedInjection = 1 << 0
+}
+
 export interface SymTabEntry {
     uiName: string,
     canonicalName: string,
     declarations: Node[] | null,
+    flags: SymbolFlags,
+    /**
+     * we try this type, and fallback to links.effectivelyDeclared type
+     * this is a poorly thought out approach to "the lexical type is not necessarily the declared type so ... !"
+     * makes it weird to reason about, or at least weird that every use site needs to check both
+     */
     firstLexicalType: Type | undefined,
     /**
      * this can be -1 for cases where it's irrelevant, otherwise should be a unique id for lookup purposes in other maps
@@ -175,6 +185,7 @@ export interface SymTabEntry {
     links?: {
         effectiveDeclaredType?: Type,
         optional?: boolean,
+
     }
 }
 

@@ -37,11 +37,11 @@ function projectFiddle() {
                          * parse as namespace-ish, some types are magically available, like 'inject'; 'T' or some param must be provided and is
                          * the property being inspected
                          * 
-                         * @!typedef functions<F> = F.cfname extends "scope#infer name#__heh#infer name2#" ? inject<name, () => void> : 0
+                         * @!typedef functions<F> = F.cfname extends "scope#infer V#" ? inject<V, (...args: F.cfargs) => F.cfreturn> : 0
                          * 
                          */
                         component {
-                            function scopeWithFoo__heh() {
+                            function scopeWithFoo(required string foo, string baz) {
 
                             }
                         }

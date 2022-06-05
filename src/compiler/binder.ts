@@ -471,6 +471,7 @@ export function Binder(options: ProjectOptions) {
             symTabEntry = {
                 uiName,
                 canonicalName,
+                flags: 0,
                 declarations: [declaringNode],
                 firstLexicalType: type,
                 symbolId: symbolId++,

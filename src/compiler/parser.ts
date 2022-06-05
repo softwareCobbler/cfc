@@ -27,7 +27,7 @@ import {
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess, Namespace } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard, Mutable } from "./utils";
-import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature, cfConditionalType, cfInterpolatedString, cfInferenceTarget } from "./types";
+import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature, cfConditionalType, cfInterpolatedString, cfInferenceTarget, cfTuple } from "./types";
 import { Type, UninstantiatedArray, Struct, cfFunctionSignature, cfTypeId, cfUnion, BuiltinType, cfFunctionSignatureParam } from "./types";
 import { Engine } from "./engines";
 import { ProjectOptions } from "./project";
@@ -489,6 +489,13 @@ export function Parser(config: ProjectOptions) {
         }
     }
 
+    function phonyTerminalFromCurrentPos(type: TokenType) {
+        const errorPos = pos();
+        const emptyRange = new SourceRange(errorPos, errorPos);
+        const phonyToken : Token = Token(type, "", emptyRange);
+        return createMissingNode(Terminal(phonyToken));
+    }
+
     function parseExpectedTerminal(type: TokenType, parseOptions: ParseOptions, errorMsg?: string) : Terminal {
         const maybeTerminal = parseOptionalTerminal(type, parseOptions);
         if (maybeTerminal) {
@@ -497,11 +504,7 @@ export function Parser(config: ProjectOptions) {
         else {
             const actualError = errorMsg ?? "Expected '" + TokenTypeUiString[type] + "'";
             parseErrorAtPos(lastNonTriviaToken.range.toExclusive, actualError);
-
-            const errorPos = pos();
-            const emptyRange = new SourceRange(errorPos, errorPos);
-            const phonyToken : Token = Token(type, "", emptyRange);
-            return createMissingNode(Terminal(phonyToken));
+            return phonyTerminalFromCurrentPos(type);
         }
     }
 
@@ -514,6 +517,25 @@ export function Parser(config: ProjectOptions) {
         }
 
         return Terminal(tagName, parseTrivia());
+    }
+
+    /**
+     * the other parseExpectedLexemeLike terminal has a "consumeOnFailure" but it doesn't
+     * we shouldn't need two implementations, but need to see what breaks if we get rid of the other one
+     */
+    function parseExpectedLexemeLikeTerminal_alwaysAdvanceOnFaliure(parseOptions: ParseOptions, allowLeadingNumeric = false) {
+        if (isLexemeLikeToken(peek(), allowLeadingNumeric)) {
+            const result = Terminal(next());
+            if (parseOptions === ParseOptions.withTrivia) {
+                result.trivia = parseTrivia();
+            }
+            return result;
+        }
+        else {
+            const result = phonyTerminalFromCurrentPos(TokenType.LEXEME);
+            next();
+            return result;
+        }
     }
 
     function parseExpectedLexemeLikeTerminal(consumeOnFailure: boolean, allowNumeric: boolean, errorMsg?: string) : Terminal {
@@ -3086,10 +3108,11 @@ export function Parser(config: ProjectOptions) {
                     parseErrorAtRange(param.range, "Spread parameter must be in last parameter position.");
                     param.type = BuiltinType.any;
                 }
-                if (!isUninstantiatedArray(param.type) && param.name.token.text.toLowerCase() !== "arguments") {
-                    parseErrorAtRange(param.range, "A spread parameter must be an array type (unless it is the only parameter, and its name is 'arguments').");
-                    param.type = BuiltinType.any;
-                }
+                // probably can't be done at parse time; (...v: T) => void ----> T could be a tuple or array, we don't know here
+                // if (param.type.kind !== TypeKind.tuple && !isUninstantiatedArray(param.type) && param.name.token.text.toLowerCase() !== "arguments") {
+                //     parseErrorAtRange(param.range, "A spread parameter must be an array type (unless it is the only parameter, and its name is 'arguments').");
+                //     param.type = BuiltinType.any;
+                // }
                 if (param.name.token.text.toLowerCase() === "arguments") {
                     if (params.length > 1 || !isUninstantiatedArray(param.type) || param.type.args[0] !== BuiltinType.any) {
                         parseErrorAtRange(param.range, "The well-known spread parameter 'arguments' must be the only parameter in the signature, and it must have type 'any[]'.")
@@ -4527,14 +4550,6 @@ export function Parser(config: ProjectOptions) {
             let result : Type = BuiltinType.any;
 
             switch (lookahead()) {
-                // 1/21/22 - refactor types, we don't support tuples (and really before this all we did was try to parse them, we didn't reason about them)
-                // case TokenType.LEFT_BRACKET: {
-                //     parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
-                //     const tupleTypes = parseList(ParseContext.typeTupleOrArrayElement, parseTypeListElement);
-                //     parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
-                //     result = maybeParseArrayModifier(cfTuple(tupleTypes));
-                //     break;
-                // }
                 case TokenType.LEXEME: {
                     const terminal = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
 
@@ -4713,6 +4728,7 @@ export function Parser(config: ProjectOptions) {
                             else {
                                 members.set(member.name.token.text.toLowerCase(), {
                                     uiName: member.name.token.text,
+                                    flags: 0,
                                     canonicalName: member.name.token.text.toLowerCase(),
                                     declarations: null,
                                     firstLexicalType: member.type,
@@ -4738,6 +4754,49 @@ export function Parser(config: ProjectOptions) {
                     parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);
                     parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
                     return fixme__parseArrowFunctionTypeAssumingFirstParenIsAlreadyParsed(/*asGenericFunction*/true, typeParams);
+                }
+                case TokenType.LEFT_BRACKET: {
+                    parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
+                    const elements : SymTabEntry[] = [];
+                    let first = true;
+                    while (true) {
+                        if (!first) {
+                            parseExpectedTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+                        }
+                        const nameOrElement = parseExpectedLexemeLikeTerminal_alwaysAdvanceOnFaliure(ParseOptions.withTrivia);
+                        if (lookahead() === TokenType.COLON) {
+                            parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
+                            const type = parseType();
+                            elements.push({
+                                canonicalName: nameOrElement.token.text.toLowerCase(),
+                                uiName: nameOrElement.token.text,
+                                flags: 0,
+                                declarations: null,
+                                firstLexicalType: type,
+                                symbolId: -1
+                            })
+                        }
+                        else {
+                            const type = tokenToType(nameOrElement.token);
+                            elements.push({
+                                canonicalName: "",
+                                uiName: "",
+                                flags: 0,
+                                declarations: null,
+                                firstLexicalType: type,
+                                symbolId: -1
+                            })
+                        }
+
+                        if (lookahead() === TokenType.RIGHT_BRACKET || lookahead() === TokenType.EOF) {
+                            next();
+                            parseTrivia();
+                            break;
+                        }
+
+                        first = false;
+                    }
+                    return cfTuple(elements);
                 }
                 case TokenType.QUOTE_SINGLE:
                 case TokenType.QUOTE_DOUBLE: {

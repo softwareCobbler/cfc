@@ -1,7 +1,7 @@
-import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, UnreachableFlow, DiagnosticKind, TagAttribute, SymbolId, TypeShimKind, NonCompositeFunctionTypeAnnotation, DUMMY_CONTAINER, Property, TypeAnnotation, InterpolatedStringLiteral, TextSpan, HashWrappedExpr } from "./node";
+import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, UnreachableFlow, DiagnosticKind, TagAttribute, SymbolId, TypeShimKind, NonCompositeFunctionTypeAnnotation, DUMMY_CONTAINER, Property, TypeAnnotation, InterpolatedStringLiteral, TextSpan, HashWrappedExpr, SymbolFlags } from "./node";
 import { CfcResolution, CfcResolver, ComponentResolutionArgs, EngineSymbolResolver, LibTypeResolver, ProjectOptions } from "./project";
 import { Scanner, CfFileType, SourceRange, TokenType } from "./scanner";
-import { cfFunctionSignature, Struct, cfUnion, BuiltinType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, Type, stringifyType, cfFunctionSignatureParam, cfFunctionOverloadSet, cfTypeId, SymbolTableTypeWrapper, Cfc, Interface, createType, createLiteralType, typeFromJavaLikeTypename, structurallyCompareTypes, TypeKind, isStructLike, cfArray, cfStructLike, isStructLikeOrArray, cfGenericFunctionSignature, cfKeyof, cfTypeConstructorParam, TypeConstructorParam, cfInterpolatedString } from "./types";
+import { cfFunctionSignature, Struct, cfUnion, BuiltinType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, Type, stringifyType, cfFunctionSignatureParam, cfFunctionOverloadSet, cfTypeId, SymbolTableTypeWrapper, Cfc, Interface, createType, createLiteralType, typeFromJavaLikeTypename, structurallyCompareTypes, TypeKind, isStructLike, cfArray, cfStructLike, isStructLikeOrArray, cfGenericFunctionSignature, cfKeyof, cfTypeConstructorParam, TypeConstructorParam, cfInterpolatedString, cfTuple } from "./types";
 import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, getUserSpecifiedReturnTypeType, getAttributeValue, getCallExpressionNameErrorRange, getComponentAttrs, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionNameTerminalErrorNode, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isInCfcPsuedoConstructor, isInEffectiveConstructorMethod, isLiteralExpr, isNamedFunction, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue, tryGetCfcMemberFunctionDefinition } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol, TupleKeyedWeakMap } from "./utils";
 import { Engine, supports } from "./engines";
@@ -18,6 +18,7 @@ const builtin_inject = (() => {
     members.set(name, {
         canonicalName: name,
         uiName: name,
+        flags: 0,
         declarations: null,
         firstLexicalType: cfTypeId(name),
         symbolId: -1
@@ -25,6 +26,7 @@ const builtin_inject = (() => {
     members.set(type, {
         canonicalName: type,
         uiName: type,
+        flags: 0,
         declarations: null,
         firstLexicalType: cfTypeId(type),
         symbolId: -1
@@ -413,6 +415,7 @@ export function Checker(options: ProjectOptions) {
                         members.set("cfname", {
                             canonicalName: "cfname", 
                             uiName: "cfname",
+                            flags: 0,
                             declarations: null,
                             firstLexicalType: createLiteralType(property.name),
                             symbolId: -1
@@ -431,6 +434,7 @@ export function Checker(options: ProjectOptions) {
                             members.set(lcName, {
                                 canonicalName: lcName,
                                 uiName: name,
+                                flags: 0,
                                 declarations: null,
                                 firstLexicalType: createLiteralType(value),
                                 symbolId: -1
@@ -621,9 +625,10 @@ export function Checker(options: ProjectOptions) {
                 const symbol : SymTabEntry = {
                     canonicalName: lcName,
                     uiName: name,
+                    flags: SymbolFlags.synthesizedInjection,
                     declarations: null,
                     firstLexicalType: type,
-                    symbolId: -1 // might need one for this for later checking, maybe we can do this during bind, but we need the type evaluator
+                    symbolId: -1
                 };
 
                 sourceFile.containedScope.variables?.set(lcName, symbol);
@@ -699,6 +704,7 @@ export function Checker(options: ProjectOptions) {
                         mergedMembers.set(key, {
                             canonicalName: key,
                             uiName: l.members.get(key)!.uiName,
+                            flags: 0,
                             declarations: [],
                             firstLexicalType: mergedType,
                             symbolId: -1,
@@ -2354,7 +2360,9 @@ export function Checker(options: ProjectOptions) {
             // implying that it is used before assignment
             // except in the case of member functions, which are always visible
             // maybe we could hoist just member functions so they are always first in flow
-            if (!isOuterVar && (CHECK_FLOW_TYPES && !flowType) && !maybeMemberFunctionDefinition) {
+            if (!(resolvedSymbol.symTabEntry.flags & SymbolFlags.synthesizedInjection)
+                && !isOuterVar && !flowType && !maybeMemberFunctionDefinition
+            ) {
                 if (CHECK_FLOW_TYPES) {
                     issueDiagnosticAtNode(node, `${node.uiName} is used before its first local declaration.`);
                 }
@@ -2575,6 +2583,7 @@ export function Checker(options: ProjectOptions) {
                 members.set("cfname", {
                     canonicalName: "cfname", 
                     uiName: "cfname",
+                    flags: 0,
                     declarations: null,
                     firstLexicalType: createLiteralType(f.name?.ui ?? "<<missing-name>>"),
                     symbolId: -1
@@ -2593,13 +2602,43 @@ export function Checker(options: ProjectOptions) {
                     members.set(lcName, {
                         canonicalName: lcName,
                         uiName: name,
+                        flags: 0,
                         declarations: null,
                         firstLexicalType: createLiteralType(value),
                         symbolId: -1
                     })  
                 }
 
-                // members.set("cfargs", [some tuple of arg types]);
+                members.set("cfargs", {
+                    canonicalName: "cfargs",
+                    uiName: "cfargs",
+                    flags: 0,
+                    declarations: null,
+                    firstLexicalType: cfTuple(f.params.map((v) : SymTabEntry => {
+                        return {
+                            canonicalName: v.canonicalName,
+                            uiName: v.uiName,
+                            flags: 0,
+                            declarations: null,
+                            firstLexicalType: BuiltinType.any, // need to pull type info
+                            symbolId: -1,
+                            links: {
+                                optional: !v.required
+                            }
+                        }
+                    })),
+                    symbolId: -1
+                });
+
+                members.set("cfreturns", {
+                    canonicalName: "cfreturns",
+                    uiName: "cfreturns",
+                    flags: 0,
+                    declarations: null,
+                    firstLexicalType: BuiltinType.any, // evaluateType(f.returns) from context ... decl site (i.e. f), if there is an annotation or explicit return
+                    symbolId: -1
+                });
+
                 return Interface("", members);
             }
 
@@ -3071,6 +3110,7 @@ export function Checker(options: ProjectOptions) {
                     memberTypes.set(canonicalName, {
                         symbolId: -1, // do we need this here?
                         uiName: key,
+                        flags: 0,
                         canonicalName,
                         declarations: [member],
                         firstLexicalType: undefined,
@@ -3497,6 +3537,7 @@ export function Checker(options: ProjectOptions) {
                             }
                             evaluatedStructContents.set(canonicalName, {
                                 uiName: symTabEntry.uiName,
+                                flags: 0,
                                 declarations: null,
                                 canonicalName,
                                 firstLexicalType: undefined,
@@ -3528,18 +3569,51 @@ export function Checker(options: ProjectOptions) {
                         let originalTypeWasConcrete = true;
 
                         for (let i = 0; i < sig.params.length; i++) {
-                            const freshType = typeWorker(sig.params[i].paramType,
-                                typeParamMap, partiallyApplyGenericFunctionSigs, updatedLookupDeferrals);
+                            const freshType = typeWorker(
+                                sig.params[i].paramType,
+                                typeParamMap,
+                                partiallyApplyGenericFunctionSigs,
+                                updatedLookupDeferrals
+                            );
 
-                            if (!freshType) return null;
+                            if (!freshType) {
+                                return null;
+                            }
 
-                            originalTypeWasConcrete = originalTypeWasConcrete && (freshType === sig.params[i].paramType);
-                            params.push(
-                                cfFunctionSignatureParam(
-                                    !(sig.params[i].flags & TypeFlags.optional),
-                                    freshType,
-                                    sig.params[i].uiName,
-                                    !!(sig.params[i].flags & TypeFlags.spread)));
+                            if (sig.params[i].flags & TypeFlags.spread && freshType.kind === TypeKind.tuple) {
+                                originalTypeWasConcrete = false;
+                                for (const tupleElement of freshType.elements) {
+                                    if (!tupleElement.firstLexicalType) {
+                                        return null;
+                                    }
+                                    const freshType = typeWorker(
+                                        tupleElement.firstLexicalType,
+                                        typeParamMap,
+                                        partiallyApplyGenericFunctionSigs,
+                                        updatedLookupDeferrals
+                                    );
+                                    if (!freshType) {
+                                        return null;
+                                    }
+                                    params.push(
+                                        cfFunctionSignatureParam(
+                                            /*required*/ !tupleElement.links?.optional,
+                                            freshType,
+                                            tupleElement.uiName,
+                                            /*spread*/ false
+                                        )
+                                    );
+                                }
+                            }
+                            else {
+                                originalTypeWasConcrete = originalTypeWasConcrete && (freshType === sig.params[i].paramType);
+                                params.push(
+                                    cfFunctionSignatureParam(
+                                        !(sig.params[i].flags & TypeFlags.optional),
+                                        freshType,
+                                        sig.params[i].uiName,
+                                        !!(sig.params[i].flags & TypeFlags.spread)));
+                            }
                         }
 
                         const returns = typeWorker(sig.returns, typeParamMap, partiallyApplyGenericFunctionSigs, updatedLookupDeferrals);

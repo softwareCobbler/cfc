@@ -470,6 +470,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             wireboxNamesToCfcMappings.set(canonicalName, {
                 canonicalName,
                 uiName: name,
+                flags: 0,
                 firstLexicalType: cfcRefType,
                 declarations: null,
                 symbolId: -1,
@@ -513,6 +514,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         const wireboxGetInstanceSymbol : SymTabEntry = {
             uiName: "getInstance",
             canonicalName: "getinstance",
+            flags: 0,
             declarations: null,
             firstLexicalType: cfGenericFunctionSignature("getInstance", [typeParam], [nameParam, initArgsParam, dslParam], wireboxLookup, []),
             symbolId: -1,

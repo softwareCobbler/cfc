@@ -45,6 +45,7 @@ export type Type =
     | cfKeyof
     | cfInterpolatedString
     | cfConditionalType
+    | cfTuple
     
 export const enum TypeKind {
     any,
@@ -78,6 +79,7 @@ export const enum TypeKind {
     keyof,
     interpolatedString,
     conditional,
+    tuple
 }
 
 export const enum TypeFlags {
@@ -126,6 +128,7 @@ const TypeKindUiString : Record<TypeKind, string> = {
     [TypeKind.keyof]:                     "keyof",
     [TypeKind.interpolatedString]:        "interpolatedStringType",
     [TypeKind.conditional]:               "conditionalType",
+    [TypeKind.tuple]:                     "tuple",
 }
 
 const TypeFlagsUiString : Record<TypeFlags, string> = {
@@ -140,7 +143,7 @@ const TypeFlagsUiString : Record<TypeFlags, string> = {
     [TypeFlags.protected]:                       "protected",
     [TypeFlags.private]:                         "private",
     [TypeFlags.containsUndefined]:               "uninitialized",
-    [TypeFlags.inferenceTarget]:                           "infer",
+    [TypeFlags.inferenceTarget]:                 "infer",
     [TypeFlags.end]:                             "",
 };
 
@@ -546,12 +549,32 @@ export function cfTypeId(name: string, indexChain?: (cfLiteralType | cfTypeId)[]
     return createType(type);
 }
 
-export function cfInferenceTarget(name: string) : cfTypeId{
+/**
+ * an inference target is like `A extends "foo#infer bar#"`
+ * it seems that in `infer FOO` foo is always exactly a type id,
+ * so this just returns a type id with the inferenceTarget flag set
+ */
+export function cfInferenceTarget(name: string) : cfTypeId {
     const type : cfTypeId = {
         kind: TypeKind.typeId,
         flags: TypeFlags.inferenceTarget,
         name
     } as const;
+
+    return createType(type);
+}
+
+export interface cfTuple extends TypeBase {
+    readonly kind: TypeKind.tuple,
+    readonly elements: readonly Readonly<SymTabEntry>[]
+}
+
+export function cfTuple(es: SymTabEntry[]) {
+    const type : cfTuple = {
+        kind: TypeKind.tuple,
+        flags: TypeFlags.none,
+        elements: es
+    }
 
     return createType(type);
 }
@@ -1090,6 +1113,9 @@ export function stringifyType(type: Type) : string {
             }
             case TypeKind.conditional: {
                 return "<conditional-type>"
+            }
+            case TypeKind.tuple: {
+                return "[...tuple]"
             }
             default: exhaustiveCaseGuard(type);
         }
