@@ -31,16 +31,19 @@ function projectFiddle() {
                     @!interface Array<T> { PLACEHOLDER: any }
                 `,
                 //"realLib.d.cfm": fs.readFileSync("C:\\Users\\anon\\dev\\cfc\\src\\lang-server\\server\\src\\runtimelib\\lib.cf2018.d.cfm").toString(),
+                "coolFolder": {
+                    "QuickOrmTypedefs.d.cfm": `
+                        @!namespace transforms {
+                            @!typedef cfcFunctions<F> = F.cfname extends "scope#infer V#" ? inject<V, (...args: F.cfargs) => F.cfreturn> : 0;
+                        }
+                    `
+                },
                 "someFolder": {
                     "someFile.cfc": `
                         /**
-                         * parse as namespace-ish, some types are magically available, like 'inject'; 'T' or some param must be provided and is
-                         * the property being inspected
-                         * 
-                         * @!typedef Z<F> = F.cfname extends "scope#infer V#" ? inject<V, (...args: F.cfargs) => F.cfreturn> : 0
-                         * 
+                         * @!import "coolFolder/QuickOrmTypedefs.d.cfm" qualified Quick
                          * @!cfc-transform {
-                         *      @!typedef functions = Z;
+                         *      @!typedef functions = Quick.transforms.cfcFunctions
                          * }
                          * 
                          */
@@ -89,6 +92,7 @@ function projectFiddle() {
     
     //project.addEngineLib("/lib.d.cfm");
     // project.addEngineLib("/realLib.d.cfm");
+    //project.addFile("/coolFolder/QuickOrmTypedefs.d.cfm");
     project.addFile("/someFolder/someFile.cfc");
     //project.addFile("C:\\Users\\anon\\dev\\cb\\testbox\\tests\\resources\\coldbox\\system\\EventHandler.cfc");
     const diagnostics = project.getDiagnostics("/someFolder/someFile.cfc");

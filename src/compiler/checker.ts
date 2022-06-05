@@ -1,7 +1,7 @@
-import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, UnreachableFlow, DiagnosticKind, TagAttribute, SymbolId, TypeShimKind, NonCompositeFunctionTypeAnnotation, DUMMY_CONTAINER, Property, TypeAnnotation, InterpolatedStringLiteral, TextSpan, HashWrappedExpr, SymbolFlags } from "./node";
-import { CfcResolution, CfcResolver, ComponentResolutionArgs, EngineSymbolResolver, LibTypeResolver, ProjectOptions } from "./project";
+import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, UnreachableFlow, DiagnosticKind, TagAttribute, SymbolId, TypeShimKind, NonCompositeFunctionTypeAnnotation, DUMMY_CONTAINER, Property, TypeAnnotation, InterpolatedStringLiteral, TextSpan, HashWrappedExpr, SymbolFlags, Namespace } from "./node";
+import { CfcResolution, CfcResolver, ComponentResolutionArgs, EngineSymbolResolver, LibTypeResolver, ProjectOptions, ProjectRelativeImportLookup } from "./project";
 import { Scanner, CfFileType, SourceRange, TokenType } from "./scanner";
-import { cfFunctionSignature, Struct, cfUnion, BuiltinType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, Type, stringifyType, cfFunctionSignatureParam, cfFunctionOverloadSet, cfTypeId, SymbolTableTypeWrapper, Cfc, Interface, createType, createLiteralType, typeFromJavaLikeTypename, structurallyCompareTypes, TypeKind, isStructLike, cfArray, cfStructLike, isStructLikeOrArray, cfGenericFunctionSignature, cfKeyof, cfTypeConstructorParam, TypeConstructorParam, cfInterpolatedString, cfTuple } from "./types";
+import { cfFunctionSignature, Struct, cfUnion, BuiltinType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, Type, stringifyType, cfFunctionSignatureParam, cfFunctionOverloadSet, cfTypeId, SymbolTableTypeWrapper, Cfc, Interface, createType, createLiteralType, typeFromJavaLikeTypename, structurallyCompareTypes, TypeKind, isStructLike, cfArray, cfStructLike, isStructLikeOrArray, cfGenericFunctionSignature, cfKeyof, cfTypeConstructorParam, TypeConstructorParam, cfInterpolatedString, cfTuple, cfLiteralType } from "./types";
 import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, getUserSpecifiedReturnTypeType, getAttributeValue, getCallExpressionNameErrorRange, getComponentAttrs, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionNameTerminalErrorNode, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isInCfcPsuedoConstructor, isInEffectiveConstructorMethod, isLiteralExpr, isNamedFunction, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue, tryGetCfcMemberFunctionDefinition } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol, TupleKeyedWeakMap } from "./utils";
 import { Engine, supports } from "./engines";
@@ -2072,7 +2072,9 @@ export function Checker(options: ProjectOptions) {
         let didConsumeTypeAnnotation = false;
 
         if (node.expr.kind === NodeKind.binaryOperator) {
-            if ((node.typeAnnotation?.type?.kind === TypeKind.functionSignature || node.typeAnnotation?.shimKind === TypeShimKind.nonCompositeFunctionTypeAnnotation)
+            if (
+                ((node.typeAnnotation?.shimKind === TypeShimKind.annotation && node.typeAnnotation.type.kind === TypeKind.functionSignature)
+                    || (node.typeAnnotation?.shimKind === TypeShimKind.nonCompositeFunctionTypeAnnotation))
                 && (node.expr.right.kind === NodeKind.functionDefinition || node.expr.right.kind === NodeKind.arrowFunctionDefinition)
             ) {
                 checkFunctionDefinition(node.expr.right, node.typeAnnotation);
@@ -3016,8 +3018,11 @@ export function Checker(options: ProjectOptions) {
      * we walkup into parent components to resolve their types, too
      * which almost certainly not The Right Thing, but was easier to get running than an import syntax
      * eventually we'll need to import types
+     * 
+     * this "consumes" the index chain of a typeid like "a.b.c" if it is walking down into a namespace
+     * really, we should return a "Namespace | Type", and maybe bring Namespace into `Type` so we can just keep returning 
      */
-    function walkUpContainersToResolveType(context: Node, type: cfTypeId) : Type | undefined {
+    function walkUpContainersToResolveType(context: Node, type: cfTypeId, __FIXME__outparam_remaining_index_chain: {value: (cfTypeId|cfLiteralType)[]}) : Type | undefined {
         let node : Node | null = context;
         const typeName = type.name;
 
@@ -3032,6 +3037,34 @@ export function Checker(options: ProjectOptions) {
                     }
                 }
                 if (node.kind === NodeKind.sourceFile) {
+                    for (const importDef of node.containedScope.typeinfo.imports.values()) {
+                        // we only support qualified right now
+                        if (importDef.qualifiedName !== type.name) {
+                            continue;
+                        }
+
+                        const maybeImport = cfcResolver(ProjectRelativeImportLookup(importDef.path));
+
+                        if (maybeImport && maybeImport.sourceFile.cfFileType === CfFileType.dCfm) {
+                            if (type.indexChain?.length) {
+                                const toplevelNonQualifiedName = nameFromTypePathElement(type.indexChain[0]);
+                                const namespace = maybeImport.sourceFile.containedScope.typeinfo.namespaces.get(toplevelNonQualifiedName);
+                                if (namespace) {
+                                    const result = descendNamespaceToFindType(namespace, type.indexChain.slice(1));
+                                    if (result) {
+                                        __FIXME__outparam_remaining_index_chain.value = [];
+                                        return result;
+                                    }
+                                }
+                                
+                                const typedef = maybeImport.sourceFile.containedScope.typeinfo.aliases.get(toplevelNonQualifiedName);
+                                if (typedef) {
+                                    __FIXME__outparam_remaining_index_chain.value = type.indexChain.slice(1);
+                                    return typedef;
+                                }
+                            }
+                        }
+                    }
                     for (const lib of node.libRefs.values()) {
                         if (node.containedScope.typeinfo.aliases.has(typeName)) {
                             return node.containedScope.typeinfo.aliases.get(typeName)!;
@@ -3062,21 +3095,36 @@ export function Checker(options: ProjectOptions) {
 
         return undefined;
 
-        // if (node) { // should always be true (we hit the top, SourceFile, and broke out of the above loop)
-        //     // find the `std` type in the libfiles, which we're just assuming will be either present or not, and if so, it is the only libfile
-        //     /*for (const libFile of node.libRefs) {
-        //         for (const typedef of libFile.content) {
-        //             if (typedef.kind === NodeType.type && typedef.typeKind === TypeKind.struct && typedef.uiName === "std") {
-        //                 return typedef.membersMap.get(type.uiName)?.type;
-        //             }
-        //         }
-        //     }*/
-        // }
+        /**
+         * we only support the following: @namespace { @typedef foo = bar; @typedef baz = qux; }
+         * can't recurse into nested namespaces, can't declare interfaces in namespaces
+         * eventually we will probably want to
+         * So at the moment this is pretty much "traverse a non-nested list of typedefs looking for a matching name"
+         */
+        function descendNamespaceToFindType(namespace: Namespace, pathElements: readonly (cfTypeId | cfLiteralType)[]) : Type | undefined {
+            let working : Namespace | Type = namespace;
+            for (const pathElement of pathElements) {
+                for (const typedef of working.typedefs) {
+                    if (typedef.name === nameFromTypePathElement(pathElement)) {
+                        return typedef.type;
+                    }
+                }
+            }
 
-        // if (!(type.flags & TypeFlags.synthetic)) {
-        //     //typeErrorAtNode(type, `Cannot find name '${type.uiName}'.`);
-        // }
-        // return undefined;
+            return undefined;
+        }
+
+        function nameFromTypePathElement(element: cfTypeId | cfLiteralType) : string {
+            switch (element.kind) {
+                case TypeKind.typeId: {
+                    return element.name;
+                }
+                case TypeKind.literal: {
+                    return element.literalValue.toString();
+                }
+                default: exhaustiveCaseGuard(element);
+            }
+        }
     }
 
     function checkFor(node: For) {
@@ -3682,7 +3730,7 @@ export function Checker(options: ProjectOptions) {
                             }
                         }
                         else if (type.left.kind === TypeKind.typeId) {
-                            const constructor = typeParamMap?.get(type.left.name) || walkUpContainersToResolveType(context, type.left) || null;
+                            const constructor = typeParamMap?.get(type.left.name) || walkUpContainersToResolveType(context, type.left, /*__FIXME__ but unused here*/{value: []}) || null;
                             if (constructor && constructor.kind === TypeKind.interface) {
                                 for (const arg of type.args) {
                                     if (arg.kind === TypeKind.typeId && lookupDeferrals?.has(arg.name)) {
@@ -3726,12 +3774,13 @@ export function Checker(options: ProjectOptions) {
                     }
                     else if (type.kind === TypeKind.typeId && !lookupDeferrals?.has(type.name)) {
                         // @fixme: should error if we can't find it; and return never ?
-                        let result = typeParamMap?.get(type.name) || walkUpContainersToResolveType(context, type) || null;
+                        const __FIXME__outparam_remaining_index_chain = {value: <(cfTypeId|cfLiteralType)[]> [...(type.indexChain ?? [])]}  
+                        let result = typeParamMap?.get(type.name) || walkUpContainersToResolveType(context, type, __FIXME__outparam_remaining_index_chain) || null;
                         if (!result) {
                             return fallbackToAny ? BuiltinType.any : null;
                         }
-                        if (type.indexChain) {
-                            for (const indexElement of type.indexChain) {
+                        if (__FIXME__outparam_remaining_index_chain.value.length > 0) {
+                            for (const indexElement of __FIXME__outparam_remaining_index_chain.value) {
                                 if (!isStructLike(result)) {
                                     // should bubble up an error with "not indexable" or etc.
                                     return fallbackToAny ? BuiltinType.any : null;
@@ -3891,7 +3940,7 @@ export function Checker(options: ProjectOptions) {
                         }
                     }
                     else {
-                        // a type not requiring evaluation: number, string, boolean,
+                        // a type not requiring evaluation: number, string, boolean, some alias for a type constructor
                         return type;
                     }
                 }

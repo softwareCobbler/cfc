@@ -196,7 +196,12 @@ export function typeinfo() {
         interfaces: new Map<string, Interface[]>(),
         mergedInterfaces: new Map<string, Interface>(),
         aliases: new Map<string, Type>(),
+        //
+        // the following are only relevant in a cfc preamble, a bit wasteful if this is on every scope's typeinfo
+        // maybe we could import at the function level? would we ever need or want to?
+        //
         namespaces: new Map<string, Namespace>(),
+        imports: new Map<string, TypeImport>(),
     };
 }
 
@@ -2508,18 +2513,19 @@ export const enum TypeShimKind {
     namedAnnotation,                    // `@!arg:<argname> <type>` annotates a single function argument
     nonCompositeFunctionTypeAnnotation, // we combine any loose functionArgAnnotations into a type shim of this kind
     namespace,                          // @!namespace Foo { typedef* }
+    import,
 };
 
-export type TypeShim = Typedef | Interfacedef | TypeAnnotation | NamedAnnotation ;
+export type TypeShim = Typedef | Interfacedef | TypeAnnotation | NamedAnnotation | Namespace | TypeImport | NonCompositeFunctionTypeAnnotation;
 interface TypeShimBase extends NodeBase {
     kind: NodeKind.typeShim,
     shimKind: TypeShimKind,
-    type: Type,
 }
 
 export interface Typedef extends TypeShimBase {
     shimKind: TypeShimKind.typedef,
     name: string,
+    type: Type,
 }
 
 export interface Interfacedef extends TypeShimBase {
@@ -2541,8 +2547,26 @@ export function Namespace(name: string, typedefs: Typedef[]) : Namespace {
     return v;
 }
 
+/**
+ * our "@!import" is different than a coldfusion "import a.b.c" statement
+ */
+ export interface TypeImport extends TypeShimBase {
+    shimKind: TypeShimKind.import,
+    path: string
+    qualifiedName: string,
+}
+
+export function TypeImport(path: string, qualifiedName: string) : TypeImport {
+    const v = NodeBase<TypeShimBase>(NodeKind.typeShim, SourceRange.Nil()) as TypeImport;
+    v.shimKind = TypeShimKind.import;
+    v.qualifiedName = qualifiedName;
+    v.path = path;
+    return v;
+}
+
 export interface TypeAnnotation extends TypeShimBase {
     shimKind: TypeShimKind.annotation,
+    type: Type,
 }
 
 export interface NonCompositeFunctionTypeAnnotation extends TypeShimBase {
@@ -2551,9 +2575,13 @@ export interface NonCompositeFunctionTypeAnnotation extends TypeShimBase {
     returns: NamedAnnotation | null
 }
 
+/**
+ * there is no structural difference between this and a typedef?
+ */
 export interface NamedAnnotation extends TypeShimBase {
     shimKind: TypeShimKind.namedAnnotation,
     name: Token,
+    type: Type,
 }
 
 export function Typedef(type: Type, name: string) : Typedef {

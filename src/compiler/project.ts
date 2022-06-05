@@ -696,7 +696,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
 
     let cfcDepth = 0;
     const cfcDepthLimit = 16;
-    function CfcResolver(args: ComponentResolutionArgs | ComponentSpecifier) {
+    function CfcResolver(args: ComponentResolutionArgs | ComponentSpecifier | ProjectRelativeImportLookup) {
         // if (args.type === ComponentResolutionArgType.lookup) {
         //     const directMappingHit = tryGetDirectMappingHit(args.cfcName);
         //     if (directMappingHit) {
@@ -705,10 +705,14 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         // }
 
         const hasExplicitPath = args.type === ComponentResolutionArgType.explicit;
+        const hasRelativePath = args.type === ComponentResolutionArgType.projectRelative;
 
         if (cfcDepth > cfcDepthLimit) {
             if (hasExplicitPath) {
                 console.log(`hit cfc resolution depth limit of ${cfcDepthLimit} resolving ` + args.absPath);
+            }
+            else if (hasRelativePath) {
+                console.log(`hit cfc resolution depth limit of ${cfcDepthLimit} resolving ` + args.relPath);
             }
             else {
                 console.log(`hit cfc resolution depth limit of ${cfcDepthLimit} resolving from ` + args.resolveFrom);
@@ -719,13 +723,15 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         try {
             cfcDepth++;
 
-            if (hasExplicitPath) {
+            if (hasExplicitPath || hasRelativePath) {
+                const absPath = hasExplicitPath ? args.absPath : fileSystem.normalize(fileSystem.join(__const__projectRoot, args.relPath));
+
                 if (cfcDepth > cfcDepthLimit) {
-                    console.log(`hit cfc resolution depth limit of ${cfcDepthLimit} on attempt to resolve cfc at '${args.absPath}'`);
+                    console.log(`hit cfc resolution depth limit of ${cfcDepthLimit} on attempt to resolve cfc at '${absPath}'`);
                     return undefined;
                 }
     
-                const file =  tryAddFile(args.absPath);
+                const file = tryAddFile(absPath);
     
                 if (file) {
                     return {
@@ -893,11 +899,12 @@ export interface CfcResolution {
     sourceFile: SourceFile,
     symbolTable: ReadonlyMap<string, SymTabEntry>
 }
-export type CfcResolver = (args: ComponentResolutionArgs | ComponentSpecifier) => CfcResolution | undefined;
+export type CfcResolver = (args: ComponentResolutionArgs | ComponentSpecifier | ProjectRelativeImportLookup) => CfcResolution | undefined;
 export type EngineSymbolResolver = (name: string) => SymTabEntry | undefined;
 export type LibTypeResolver = (name: string) => Type | undefined;
 
-const enum ComponentResolutionArgType { explicit, lookup }
+const enum ComponentResolutionArgType { explicit, lookup, projectRelative }
+
 export interface ComponentSpecifier {
     type: ComponentResolutionArgType.explicit,
     absPath: string,
@@ -908,6 +915,7 @@ export function ComponentSpecifier(absPath: string) : ComponentSpecifier {
         absPath
     }
 }
+
 interface ComponentResolutionArgs {
     type: ComponentResolutionArgType.lookup,
     resolveFrom: string,
@@ -918,5 +926,16 @@ export function ComponentResolutionArgs(resolveFrom: string, cfcName: string) : 
         type: ComponentResolutionArgType.lookup,
         resolveFrom,
         cfcName
+    }
+}
+
+export interface ProjectRelativeImportLookup {
+    type: ComponentResolutionArgType.projectRelative,
+    relPath: string,
+}
+export function ProjectRelativeImportLookup(relPath: string) : ProjectRelativeImportLookup {
+    return {
+        type: ComponentResolutionArgType.projectRelative,
+        relPath
     }
 }

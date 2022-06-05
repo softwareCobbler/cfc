@@ -1,7 +1,7 @@
-import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, UnreachableFlow, FlowType, ConditionalSubtype, SymbolTable, Property, ParamStatement, ParamStatementSubType, typeinfo, DiagnosticKind, StaticallyKnownScopeName, SwitchCaseType } from "./node";
+import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, UnreachableFlow, FlowType, ConditionalSubtype, SymbolTable, Property, ParamStatement, ParamStatementSubType, typeinfo, DiagnosticKind, StaticallyKnownScopeName, SwitchCaseType, TypeShimKind } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol, findAncestor, TupleKeyedMap, isNamedFunction, isInEffectiveConstructorMethod } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
-import { BuiltinType, Type, Interface, cfTypeId, TypeKind } from "./types";
+import { BuiltinType, Type, Interface, cfTypeId } from "./types";
 import { Engine, supports } from "./engines";
 import { ProjectOptions } from "./project";
 
@@ -23,11 +23,6 @@ export function Binder(options: ProjectOptions) {
     // @useless-transient let pendingSymbolResolutionStack : Map<string, Set<SymbolTable>>[] = [];
 
     function bind(sourceFile_: SourceFile) {
-        if (sourceFile_.cfFileType === CfFileType.dCfm) {
-            bindDeclarationFile(sourceFile_);
-            return;
-        }
-        
         sourceFile = sourceFile_ as NodeWithScope<SourceFile>;
         currentContainer = sourceFile_;
         scanner = sourceFile_.scanner;
@@ -37,7 +32,11 @@ export function Binder(options: ProjectOptions) {
         currentFlow = freshFlow([], FlowType.start);
         currentJumpTargetPredecessors = [];
         withPropertyAccessors = false;
-        // @useless-transient pendingSymbolResolutionStack = [new Map()];
+
+        if (sourceFile_.cfFileType === CfFileType.dCfm) {
+            bindDeclarationFile(sourceFile_);
+            return;
+        }
         
         sourceFile.containedScope = {
             parentContainer: null,
@@ -1446,23 +1445,35 @@ export function Binder(options: ProjectOptions) {
     }
 
     function bindDeclarationFile(sourceFile: SourceFile) {
-        sourceFile.containedScope = {
-            parentContainer: null,
-            typeinfo: typeinfo(),
-            __declaration: new Map<string, SymTabEntry>()
-        };
+        sourceFile.containedScope.parentContainer = null;
+        sourceFile.containedScope.__declaration = new Map<string, SymTabEntry>();
 
         for (const node of sourceFile.content) {
             if (node.kind === NodeKind.typeShim) {
-                if (node.type.kind === TypeKind.functionSignature) {
-                    addFreshSymbolToTable(sourceFile.containedScope!.__declaration!, node.type.uiName, node, node.type);
-                }
-                else if (node.type.kind === TypeKind.interface) {
-                    if (!sourceFile.containedScope.typeinfo.interfaces.has(node.type.name)) {
-                        sourceFile.containedScope.typeinfo.interfaces.set(node.type.name, []);
+                switch (node.shimKind) {
+                    case TypeShimKind.annotation:
+                    case TypeShimKind.import: {
+                        break;
                     }
-                    sourceFile.containedScope.typeinfo.interfaces.get(node.type.name)!.push(node.type);
+                    case TypeShimKind.interfacedef: {
+                        if (!sourceFile.containedScope.typeinfo.interfaces.has(node.type.name)) {
+                            sourceFile.containedScope.typeinfo.interfaces.set(node.type.name, []);
+                        }
+                        sourceFile.containedScope.typeinfo.interfaces.get(node.type.name)!.push(node.type);
+                        break;
+                    }
+                    case TypeShimKind.namedAnnotation:
+                    case TypeShimKind.namespace:
+                    case TypeShimKind.nonCompositeFunctionTypeAnnotation:
+                    case TypeShimKind.typedef: {
+                        break;
+                    }
+                    default: exhaustiveCaseGuard(node);
                 }
+                // jun/5/2022 -- do we entirely use interface { ... } for __cfEngine now?...
+                // if (node.type.kind === TypeKind.functionSignature) {
+                //     addFreshSymbolToTable(sourceFile.containedScope!.__declaration!, node.type.uiName, node, node.type);
+                // }
             }
             else {
                 issueDiagnosticAtRange(node.range, "Illegal non-declaration in declaration file.");

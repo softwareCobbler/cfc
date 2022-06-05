@@ -24,7 +24,7 @@ import {
     New,
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
-    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess, Namespace } from "./node";
+    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess, Namespace, TypeImport } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard, Mutable } from "./utils";
 import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature, cfConditionalType, cfInterpolatedString, cfInferenceTarget, cfTuple } from "./types";
@@ -143,7 +143,7 @@ export function Parser(config: ProjectOptions) {
     let typedefContainer! : Node;
     let lastDocBlock : {
         typeAnnotation: TypeAnnotation | null,
-        typedefs: (Typedef | Interfacedef | Namespace)[],
+        typedefs: (Typedef | Interfacedef | Namespace | TypeImport)[],
         argumentAnnotations: NamedAnnotation[] | null,
         docBlockAttrs: TagAttribute[],
         treatAsConstructor: boolean 
@@ -1045,6 +1045,10 @@ export function Parser(config: ProjectOptions) {
                                 sourceFile.containedScope.typeinfo.namespaces.set(typeshim.name, typeshim);
                                 break;
                             }
+                            case TypeShimKind.import: {
+                                sourceFile.containedScope.typeinfo.imports.set(typeshim.qualifiedName, typeshim);
+                                break;
+                            }
                             default: exhaustiveCaseGuard(typeshim);
                         }
                         // @decorator -- not supporting decorators
@@ -1064,7 +1068,13 @@ export function Parser(config: ProjectOptions) {
                 break;
             }
             case CfFileType.dCfm: {
-                sourceFile.content = parseTypeAnnotations().typedefs;
+                const typedefs = parseTypeAnnotations().typedefs;
+
+                sourceFile.content = typedefs;
+
+                typedefContainer = sourceFile;
+                maybePushTypedefsToCurrentTypedefContainer(typedefs);
+
                 break;
             }
         }
@@ -3425,30 +3435,47 @@ export function Parser(config: ProjectOptions) {
         return Script.FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body, null);
     }
 
-    function maybePushTypedefsToCurrentTypedefContainer(typedefs: (Typedef|Interfacedef|Namespace)[] | undefined) : void {
-        if (!typedefs) {
+    /**
+     * fixme: this pattern repeats here and in the cfc preamble when parsing a cfc
+     */
+    function maybePushTypedefsToCurrentTypedefContainer(typedefs: (Typedef|Interfacedef|Namespace|TypeImport)[] | undefined) : void {
+        // why would the container not have a contained scope? it's the target typedef container ... ?
+        if (!typedefs || !typedefContainer.containedScope) {
             return;
         }
+
+        // we still will have parsed them but we might discard
+        const allowNamespacesAndTypeImports = typedefContainer === sourceFile
+            && (sourceFile.cfFileType === CfFileType.cfc || sourceFile.cfFileType === CfFileType.dCfm);
+
         for (const typeshim of typedefs) {
             switch (typeshim.shimKind) {
                 case TypeShimKind.interfacedef: {
-                    // fixme: this pattern repeats here and in the top-level parser when parsing a cfc
-                    // the idea is "push typedefs into some owning container"
-                    if (sourceFile.containedScope.typeinfo.interfaces.has((typeshim.type as Interface).name)) {
-                        sourceFile.containedScope.typeinfo.interfaces.get((typeshim.type as Interface).name)!.push(typeshim.type as Interface);
+                    if (typedefContainer.containedScope.typeinfo.interfaces.has((typeshim.type as Interface).name)) {
+                        typedefContainer.containedScope.typeinfo.interfaces.get((typeshim.type as Interface).name)!.push(typeshim.type as Interface);
                     }
                     else {
-                        sourceFile.containedScope.typeinfo.interfaces.set((typeshim.type as Interface).name, [typeshim.type as Interface]);
+                        typedefContainer.containedScope.typeinfo.interfaces.set((typeshim.type as Interface).name, [typeshim.type as Interface]);
                     }
                     break;
                 }
                 case TypeShimKind.typedef: {
-                    typedefContainer.containedScope?.typeinfo.aliases.set(typeshim.name, typeshim.type);
+                    typedefContainer.containedScope.typeinfo.aliases.set(typeshim.name, typeshim.type);
+                    break;
                 }
                 case TypeShimKind.namespace: {
-                    // no-op, the only place we do anything with this (although we do parse them everywhere we parse interfaces/typedefs)
-                    // is in a cfc preamble
-                    continue;
+                    if (!allowNamespacesAndTypeImports) {
+                        break;
+                    }
+                    typedefContainer.containedScope.typeinfo.namespaces.set(typeshim.name, typeshim);
+                    break;
+                }
+                case TypeShimKind.import: {
+                    if (!allowNamespacesAndTypeImports) {
+                        break;
+                    }
+                    typedefContainer.containedScope.typeinfo.imports.set(typeshim.qualifiedName, typeshim);
+                    break;
                 }
                 default: exhaustiveCaseGuard(typeshim);
             }
@@ -4071,7 +4098,7 @@ export function Parser(config: ProjectOptions) {
 
         let workingAttributeUiName : Terminal = NilTerminal(pos(), "hint");
         const docBlockAttrs : TagAttribute[] = [];
-        const typedefs : (Typedef | Interfacedef | Namespace)[] = [];
+        const typedefs : (Typedef | Interfacedef | Namespace | TypeImport)[] = [];
         const argumentAnnotations : NamedAnnotation[] = [];
         let typeAnnotation : TypeAnnotation | null = null;
         let treatAsConstructor = false;
@@ -4115,16 +4142,16 @@ export function Parser(config: ProjectOptions) {
                         typedefs.push(parseTypeDef());
                         continue;
                     }
-                    else if (parseTypes && name == "!type") {
+                    else if (parseTypes && name === "!type") {
                         eatWhitespace();
                         typeAnnotation = TypeAnnotation(parseType());
                         continue;
                     }
-                    else if (parseTypes && name == "!init") {
+                    else if (parseTypes && name === "!init") {
                         treatAsConstructor = true;
                         continue;
                     }
-                    else if (parseTypes && name == "!arg") {
+                    else if (parseTypes && name === "!arg") {
                         //
                         // @!arg <identifier> : <type>
                         //
@@ -4145,29 +4172,15 @@ export function Parser(config: ProjectOptions) {
                             argumentAnnotations.push(NamedAnnotation(name, type));
                         }
                     }
-                    else if (parseTypes && name == "!cfc-transform") {
+                    else if (parseTypes && name === "!cfc-transform") {
                         eatWhitespace();
                         const namespace = parseNamespaceBody("cf_CfcTransform");
                         typedefs.push(namespace);
-
-                        /**
-                         * should be recursive, namespaces in namespaces, support all sorts of decls in the body
-                         * but, we just want to support single-level namespaces that contain typedefs, at the moment
-                         * with the goal of support cfc-transform experiments
-                         */
-                        function parseNamespaceBody(name: string) : Namespace {
-                            parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
-                            const body = parseTypeAnnotations();
-                            return Namespace(name, body.typedefs.filter((v) : v is Typedef => v.shimKind === TypeShimKind.typedef));
-                        }
                     }
-                    // 1/21/22 -- not supporting decorators, the idea is/was to allow some kind of hook into the binder, to add/remove cfc member functions or properties or etc.
-                    // else if (parseTypes && name === "!decorate") {
-                    //     eatWhitespace();
-                    //     const decoratorName = stringifyDottedPath(parseDottedPath());
-                    //     typedefs.push(TypeShim("decorator", Decorator(decoratorName.ui)));
-                    //     continue;
-                    // }
+                    else if (parseTypes && name === "!import") {
+                        eatWhitespace();
+                        typedefs.push(parseTypeImport());
+                    }
                     else {
                         parseErrorAtRange(start, pos(), "Invalid extended type syntax - only '@!interface', '@!typedef', '@!type' and '@!decorate' are supported.");
                         scanDocBlockAttrText(); // discard text until next attribute
@@ -4279,7 +4292,7 @@ export function Parser(config: ProjectOptions) {
         parseTrivia();
         
         const result = {
-            defs: <(Typedef | Interfacedef)[]>[],
+            defs: <(Typedef | Interfacedef | Namespace | TypeImport)[]>[],
             typeAnnotations: <TypeAnnotation[]>[], // should only be on per docblock or comment right? (T | null) not (T[])
             argumentAnnotations: <NamedAnnotation[]>[]
         }
@@ -4325,6 +4338,18 @@ export function Parser(config: ProjectOptions) {
                         result.argumentAnnotations.push(NamedAnnotation(name, type));
                     }
                 }
+                else if (contextualKeyword.text === "import") {
+                    advance("import".length);
+                    parseTrivia();
+                    result.defs.push(parseTypeImport());
+                }
+                else if (contextualKeyword.text === "namespace") {
+                    advance("namespace".length);
+                    parseTrivia();
+                    const name = parseExpectedLexemeLikeTerminal_alwaysAdvanceOnFaliure(ParseOptions.withTrivia);
+                    const namespace = parseNamespaceBody(name.token.text);
+                    result.defs.push(namespace);
+                }
                 else {
                     next(), parseTrivia();
                     // parse error ? if skipUnrecognized === false?
@@ -4344,6 +4369,47 @@ export function Parser(config: ProjectOptions) {
             argumentAnnotations: result.argumentAnnotations.length > 0 ? result.argumentAnnotations : null,
             treatAsConstructor
         }
+    }
+
+    /**
+     * should be recursive, namespaces in namespaces, support all sorts of decls in the body
+     * but, we just want to support single-level namespaces that contain typedefs, at the moment
+     * with the goal of support cfc-transform experiments
+     */
+         function parseNamespaceBody(name: string) : Namespace {
+            parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
+            const body = parseTypeAnnotations();
+            return Namespace(name, body.typedefs.filter((v) : v is Typedef => v.shimKind === TypeShimKind.typedef));
+        }
+    
+    /**
+     * the syntax currently must be exactly
+     * @!import "..some-path-as-a-simple-string-literal" qualified <name>
+     * and we only support importing ".d.cfm" files (though this happens later in the checker)
+     * 
+     * later use is qualified by <name>.<something-declared-at-top-level-of-d.cfm-file>
+     */
+    function parseTypeImport() {
+        const path = (() => {
+            if (lookahead() !== TokenType.QUOTE_SINGLE && lookahead() !== TokenType.QUOTE_DOUBLE) {
+                return "";
+            }
+            const path = parseStringLiteral();
+            if (path.kind === NodeKind.interpolatedStringLiteral) {
+                parseErrorAtRange(path.range, "An import path string cannot contain interpolations. This import will be ignored.");
+                return ""; // pretend we got an empty string
+            }
+            else {
+                return path.textSpan.text;
+            }
+        })();
+
+        const qualified = parseExpectedLexemeLikeTerminal_alwaysAdvanceOnFaliure(ParseOptions.withTrivia);
+        if (qualified.token.text !== "qualified") {
+            parseErrorAtRange(qualified.range, "Expected 'qualified'.");
+        }
+        const name = parseExpectedLexemeLikeTerminal_alwaysAdvanceOnFaliure(ParseOptions.withTrivia);
+        return TypeImport(path, name.token.text);
     }
 
     function parseTypeDef() : Typedef {
@@ -4923,8 +4989,7 @@ export function Parser(config: ProjectOptions) {
             if (lookahead() === TokenType.DOT) {
                 parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
                 const propertyName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/true, /*allowNumeric*/false, "Expected an indexed-type property name.");
-                // why to lower case ... ? probably to aid lookup in the toplevel of a symbol table where keynames have been canonicalized?...
-                result.push(cfTypeId(propertyName.token.text.toLowerCase()));
+                result.push(cfTypeId(propertyName.token.text));
             }
             else {
                 break;
