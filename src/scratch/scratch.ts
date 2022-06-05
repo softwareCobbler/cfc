@@ -37,7 +37,11 @@ function projectFiddle() {
                          * parse as namespace-ish, some types are magically available, like 'inject'; 'T' or some param must be provided and is
                          * the property being inspected
                          * 
-                         * @!typedef functions<F> = F.cfname extends "scope#infer V#" ? inject<V, (...args: F.cfargs) => F.cfreturn> : 0
+                         * @!typedef Z<F> = F.cfname extends "scope#infer V#" ? inject<V, (...args: F.cfargs) => F.cfreturn> : 0
+                         * 
+                         * @!cfc-transform {
+                         *      @!typedef functions = Z;
+                         * }
                          * 
                          */
                         component {

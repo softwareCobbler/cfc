@@ -941,6 +941,7 @@ export function Scanner(source_: string | Buffer) {
             || isAsciiDigit(codePoint)
             || codePoint === AsciiMap.UNDERSCORE
             || codePoint === AsciiMap.DOLLAR
+            || codePoint === AsciiMap.MINUS
             || codePoint > 128;
     }
 

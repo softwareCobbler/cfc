@@ -2568,12 +2568,27 @@ export function Checker(options: ProjectOptions) {
         return signature;
     }
 
+    function getCfcFunctionMapper() : Type | undefined {
+        const mapper = sourceFile.containedScope.typeinfo.namespaces.get("cf_CfcTransform");
+        if (mapper) {
+            // should cache this on source file once instantiated
+            // also typedefs should be map<string, type>
+            for (const typedef of mapper.typedefs) {
+                if (typedef.name === "functions") {
+                    return evaluateType(sourceFile, typedef.type);
+                }
+            }
+        }
+        return undefined;
+    }
+
     function checkFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition, typeAnnotation = node.typeAnnotation) {
         if (node.flags & NodeFlags.checked) {
             return;
         }
 
-        const functionMapper = sourceFile.containedScope.typeinfo.aliases.get("functions");
+        const functionMapper = getCfcFunctionMapper();
+
         if (functionMapper && node.kind === NodeKind.functionDefinition) {
             tryEvaluateFunctionMapper(functionMapper, node);
 

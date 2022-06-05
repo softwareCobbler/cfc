@@ -174,7 +174,7 @@ export interface SymTabEntry {
     flags: SymbolFlags,
     /**
      * we try this type, and fallback to links.effectivelyDeclared type
-     * this is a poorly thought out approach to "the lexical type is not necessarily the declared type so ... !"
+     * this is a poorly thought out approach to "the lexical type is not necessarily the declared type so (i.e. "T" is not "what T resolves to") ... !"
      * makes it weird to reason about, or at least weird that every use site needs to check both
      */
     firstLexicalType: Type | undefined,
@@ -196,7 +196,7 @@ export function typeinfo() {
         interfaces: new Map<string, Interface[]>(),
         mergedInterfaces: new Map<string, Interface>(),
         aliases: new Map<string, Type>(),
-        namespaces: <Namespace[]>[]
+        namespaces: new Map<string, Namespace>(),
     };
 }
 
@@ -2502,12 +2502,12 @@ export function New(
 }
 
 export const enum TypeShimKind {
-    typedef,                           // `@!typedef Foo = sometype`, declaring the typeid "Foo" to be bound to "sometype"
-    interfacedef,                      // `@!interface XYZ {}`, basically a typedef but different enough to need a separate treatement
-    annotation,                        // `@!type sometype`, annotates the subsequent statement with a type
-    namedAnnotation,             // `@!arg:<argname> <type>` annotates a single function argument
-    nonCompositeFunctionTypeAnnotation // we combine any loose functionArgAnnotations into a type shim of this kind
-    /*, decorator */ // unused
+    typedef,                            // `@!typedef Foo = sometype`, declaring the typeid "Foo" to be bound to "sometype"
+    interfacedef,                       // `@!interface XYZ {}`, basically a typedef but different enough to need a separate treatement
+    annotation,                         // `@!type sometype`, annotates the subsequent statement with a type
+    namedAnnotation,                    // `@!arg:<argname> <type>` annotates a single function argument
+    nonCompositeFunctionTypeAnnotation, // we combine any loose functionArgAnnotations into a type shim of this kind
+    namespace,                          // @!namespace Foo { typedef* }
 };
 
 export type TypeShim = Typedef | Interfacedef | TypeAnnotation | NamedAnnotation ;
@@ -2526,6 +2526,21 @@ export interface Interfacedef extends TypeShimBase {
     shimKind: TypeShimKind.interfacedef,
     type: Interface,
 }
+
+export interface Namespace extends TypeShimBase {
+    shimKind: TypeShimKind.namespace,
+    name: string,
+    typedefs: Typedef[]
+}
+
+export function Namespace(name: string, typedefs: Typedef[]) : Namespace {
+    const v = NodeBase<TypeShimBase>(NodeKind.typeShim, SourceRange.Nil()) as Namespace;
+    v.shimKind = TypeShimKind.namespace;
+    v.name = name;
+    v.typedefs = typedefs;
+    return v;
+}
+
 export interface TypeAnnotation extends TypeShimBase {
     shimKind: TypeShimKind.annotation,
 }
@@ -2698,16 +2713,4 @@ export function ParamStatement(paramToken: Terminal, attrs: TagAttribute[]) {
     v.paramToken = paramToken;
     v.attrs = attrs;
     return v;
-}
-
-export interface Namespace {
-    name: string,
-    typedefs: Typedef[]
-}
-
-export function Namespace(name: string, typedefs: Typedef[]) : Namespace {
-    return {
-        name,
-        typedefs
-    }
 }

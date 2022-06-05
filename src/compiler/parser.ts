@@ -143,7 +143,7 @@ export function Parser(config: ProjectOptions) {
     let typedefContainer! : Node;
     let lastDocBlock : {
         typeAnnotation: TypeAnnotation | null,
-        typedefs: (Typedef | Interfacedef)[],
+        typedefs: (Typedef | Interfacedef | Namespace)[],
         argumentAnnotations: NamedAnnotation[] | null,
         docBlockAttrs: TagAttribute[],
         treatAsConstructor: boolean 
@@ -1039,6 +1039,10 @@ export function Parser(config: ProjectOptions) {
                             }
                             case TypeShimKind.typedef: {
                                 sourceFile.containedScope.typeinfo.aliases.set(typeshim.name, typeshim.type);
+                                break;
+                            }
+                            case TypeShimKind.namespace: {
+                                sourceFile.containedScope.typeinfo.namespaces.set(typeshim.name, typeshim);
                                 break;
                             }
                             default: exhaustiveCaseGuard(typeshim);
@@ -3421,24 +3425,32 @@ export function Parser(config: ProjectOptions) {
         return Script.FunctionDefinition(accessModifier, returnType, functionToken, nameToken, leftParen, params, rightParen, attrs, body, null);
     }
 
-    function maybePushTypedefsToCurrentTypedefContainer(typedefs: (Typedef|Interfacedef)[] | undefined) : void {
+    function maybePushTypedefsToCurrentTypedefContainer(typedefs: (Typedef|Interfacedef|Namespace)[] | undefined) : void {
         if (!typedefs) {
             return;
         }
         for (const typeshim of typedefs) {
-            if (typeshim.shimKind === TypeShimKind.interfacedef) {
-                // fixme: this pattern repeats here, and in the top-level parser when parsing a cfc
-                // the idea is "push typedefs into some owning container"
-                if (sourceFile.containedScope.typeinfo.interfaces.has((typeshim.type as Interface).name)) {
-                    sourceFile.containedScope.typeinfo.interfaces.get((typeshim.type as Interface).name)!.push(typeshim.type as Interface);
+            switch (typeshim.shimKind) {
+                case TypeShimKind.interfacedef: {
+                    // fixme: this pattern repeats here and in the top-level parser when parsing a cfc
+                    // the idea is "push typedefs into some owning container"
+                    if (sourceFile.containedScope.typeinfo.interfaces.has((typeshim.type as Interface).name)) {
+                        sourceFile.containedScope.typeinfo.interfaces.get((typeshim.type as Interface).name)!.push(typeshim.type as Interface);
+                    }
+                    else {
+                        sourceFile.containedScope.typeinfo.interfaces.set((typeshim.type as Interface).name, [typeshim.type as Interface]);
+                    }
+                    break;
                 }
-                else {
-                    sourceFile.containedScope.typeinfo.interfaces.set((typeshim.type as Interface).name, [typeshim.type as Interface]);
+                case TypeShimKind.typedef: {
+                    typedefContainer.containedScope?.typeinfo.aliases.set(typeshim.name, typeshim.type);
                 }
-                break;
-            }
-            else {
-                typedefContainer.containedScope?.typeinfo.aliases.set(typeshim.name, typeshim.type);
+                case TypeShimKind.namespace: {
+                    // no-op, the only place we do anything with this (although we do parse them everywhere we parse interfaces/typedefs)
+                    // is in a cfc preamble
+                    continue;
+                }
+                default: exhaustiveCaseGuard(typeshim);
             }
         }
     }
@@ -4059,9 +4071,8 @@ export function Parser(config: ProjectOptions) {
 
         let workingAttributeUiName : Terminal = NilTerminal(pos(), "hint");
         const docBlockAttrs : TagAttribute[] = [];
-        const typedefs : (Typedef | Interfacedef)[] = [];
+        const typedefs : (Typedef | Interfacedef | Namespace)[] = [];
         const argumentAnnotations : NamedAnnotation[] = [];
-        const namespaces : Namespace[] = [];
         let typeAnnotation : TypeAnnotation | null = null;
         let treatAsConstructor = false;
 
@@ -4137,7 +4148,7 @@ export function Parser(config: ProjectOptions) {
                     else if (parseTypes && name == "!cfc-transform") {
                         eatWhitespace();
                         const namespace = parseNamespaceBody("cf_CfcTransform");
-                        namespaces.push(namespace);
+                        typedefs.push(namespace);
 
                         /**
                          * should be recursive, namespaces in namespaces, support all sorts of decls in the body
@@ -4147,8 +4158,7 @@ export function Parser(config: ProjectOptions) {
                         function parseNamespaceBody(name: string) : Namespace {
                             parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
                             const body = parseTypeAnnotations();
-                            const justTypedefs = body.typedefs.filter((v) : v is Typedef => v.shimKind === TypeShimKind.typedef);
-                            return {name, typedefs: justTypedefs};
+                            return Namespace(name, body.typedefs.filter((v) : v is Typedef => v.shimKind === TypeShimKind.typedef));
                         }
                     }
                     // 1/21/22 -- not supporting decorators, the idea is/was to allow some kind of hook into the binder, to add/remove cfc member functions or properties or etc.
