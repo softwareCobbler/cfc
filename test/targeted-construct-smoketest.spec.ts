@@ -471,47 +471,18 @@ describe("general smoke test for particular constructs", () => {
     it("Should offer completions for methods in parent components", () => {
         const files = TestLoader.loadMultiFileTest("./test/sourcefiles/returnTypeCompletions.cfm");
 
-        // for the completions tests, we want to strip the completions marker before adding it to the compiler host
-        const completionsTestTargets = {
-            // ...(() => {
-            //     const name = "/foo/Child.cfc";
-            //     const completionsAt = TestLoader.loadCompletionAtTestFromSource(files[name]);
-            //     const check = (completions: CompletionItem[]) => {
-            //         assert.strictEqual(completions.length, 1, `${name} :: got exactly 1 completion`);
-            //         assert.strictEqual(completions[0].label, "someRootSiblingMethod");            
-            //     }
-            //     return {[name]: {...completionsAt, check}};
-            // })(),
-            // ...(() => {
-            //     const name = "/foo/Child2.cfc";
-            //     const completionsAt = TestLoader.loadCompletionAtTestFromSource(files[name]);
-            //     const check = (completions: CompletionItem[]) => {
-            //         assert.strictEqual(completions.length, 4, `${name} :: got exactly 4 completions`);
-            //         const expectedLabels = [
-            //             "someChildMethod",
-            //             "shouldBeNotExportedBecauseItIsPrivate", // ok, we're a descendant so its visible
-            //             "someBaseMethod",
-            //             "shouldReturnRootSibling"
-            //         ];
-            //         for (const expectedLabel of expectedLabels) {
-            //             assert.strictEqual(!!completions.find((v) => v.label === expectedLabel), true, `completions includes '${expectedLabel}`);
-            //         }
-            //     }
-            //     return {[name]: {...completionsAt, check}};
-            // })(),
-            ...(() => {
-                const name = "/foo/Impl.cfm";
-                const completionsAt = TestLoader.loadCompletionAtTestFromSource(files[name]);
-                const check = (completions: CompletionItem[]) => {
-                    assert.strictEqual(completions.length, 3, `${name} :: got exactly 3 completions`);
-                    const justNames = completions.map(completion => completion.label);
-                    for (const name of ["shouldReturnRootSibling", "someChildMethod", "someBaseMethod"]) {
-                        assert.deepStrictEqual(justNames.includes(name), true, `includes a completion for '${name}'`);
-                    }
+        const completionsTestTargets = (() => {
+            const name = "/foo/Impl.cfm";
+            const completionsAt = TestLoader.loadCompletionAtTestFromSource(files[name]);
+            const check = (completions: CompletionItem[]) => {
+                assert.strictEqual(completions.length, 3, `${name} :: got exactly 3 completions`);
+                const justNames = completions.map(completion => completion.label);
+                for (const name of ["shouldReturnRootSibling", "someChildMethod", "someBaseMethod"]) {
+                    assert.deepStrictEqual(justNames.includes(name), true, `includes a completion for '${name}'`);
                 }
-                return {[name]: {...completionsAt, check}};
-            })()
-        };
+            }
+            return {[name]: {...completionsAt, check}};
+        })()
 
         const fsRoot : FileSystemNode = {"/": {}};
         for (const absPath of Object.keys(files)) {
@@ -525,6 +496,7 @@ describe("general smoke test for particular constructs", () => {
 
         for (const absPath of Object.keys(completionsTestTargets) as (keyof typeof completionsTestTargets)[]) {
             const completions = getCompletions(project, absPath, completionsTestTargets[absPath].index, ".");
+            debugger;
             completionsTestTargets[absPath].check(completions);
         }
     })

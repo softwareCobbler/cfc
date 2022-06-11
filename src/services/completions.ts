@@ -351,7 +351,7 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
 
             const runOne = (symTabEntry: SymTabEntry) => {
                 if (symTabEntry.canonicalName === "init" && currentStructLikeIsCfc) return; // don't need to show init, we can still check its signature though?
-                if ( currentStructLikeIsCfc && symTabEntry.lexicalType?.kind === TypeKind.functionSignature && !isPublicMethod(symTabEntry.lexicalType)) {
+                if ( currentStructLikeIsCfc && symTabEntry.effectivelyDeclaredType?.kind === TypeKind.functionSignature && !isPublicMethod(symTabEntry.effectivelyDeclaredType)) {
                     if (!parsedSourceFileIsDescendantOfTypeinfoCfc) return; // don't offer completions for non-public members for non-descendants
                 }
                 const effectiveType = symTabEntry.effectivelyDeclaredType ?? symTabEntry.lexicalType;
