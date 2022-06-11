@@ -67,7 +67,7 @@
 			"request": "launch",
 			"preLaunchTask": "build-current-test-as-debuggable-test",
 			"program": "${workspaceFolder}/node_modules/mocha/bin/_mocha",
-			"args": ["--spec=${workspaceFolder}/test/out/debug-test.js"],
+			"args": ["--spec=${workspaceFolder}/test/out/debug-test.js", "--nolazy"],
 			"sourceMaps": true,
 			"outFiles": [
 				"${workspaceFolder}/test/out/**/*.js",

@@ -562,7 +562,6 @@ describe("general smoke test for particular constructs", () => {
         const luceeProject = Project("/", DebugFileSystem(fsRoot), {...commonProjectOptions, parseTypes: true, engineVersion: EngineVersions["lucee.5"]});
 
         luceeProject.addEngineLib("/lib.d.cfm");
-        debugger;
         luceeProject.addFile("/a.cfc");
 
         const completions = getCompletions(luceeProject, "/a.cfc", completionsAt.index, ".");
@@ -571,5 +570,26 @@ describe("general smoke test for particular constructs", () => {
 
         assert.strictEqual(completions[0].label, "aMember", "completion is as expected");
         assert.strictEqual(completions[1].label, "bar", "completion is as expected");
+    })
+    it("doesn't consider an explicit getter a duplicate of an implicit getter", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+        pushFsNode(fsRoot, "/a.cfc", `
+            component accessors=true {
+                property name="foo";
+                function getFoo() {}
+            }`);
+        const dfs = DebugFileSystem(fsRoot);
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0);
+    })
+    it("does consider duplicate explicit getters to be duplicates ", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+        pushFsNode(fsRoot, "/a.cfc", `
+            component accessors=true {
+                property name="foo";
+                function getFoo() {}
+                function getFoo() {}
+            }`);
+        const dfs = DebugFileSystem(fsRoot);
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 2);
     })
 });

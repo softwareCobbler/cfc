@@ -164,7 +164,8 @@ export type Node =
 // during the refinement is when we'd make sure that the annotated type is a subtype of the original "effectively declared type"
 //
 export const enum SymbolFlags {
-    synthesizedInjection = 1 << 0
+    synthesizedInjection = 1 << 0, // for cfc-transform injected things
+    syntheticGetterSetter = 1 << 1, // auto-generated getter / setter when cfc accesors=true
 }
 
 export interface SymTabEntry {

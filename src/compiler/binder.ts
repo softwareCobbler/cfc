@@ -1,4 +1,4 @@
-import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, UnreachableFlow, FlowType, ConditionalSubtype, SymbolTable, Property, ParamStatement, ParamStatementSubType, typeinfo, DiagnosticKind, StaticallyKnownScopeName, SwitchCaseType, TypeShimKind } from "./node";
+import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, UnreachableFlow, FlowType, ConditionalSubtype, SymbolTable, Property, ParamStatement, ParamStatementSubType, typeinfo, DiagnosticKind, StaticallyKnownScopeName, SwitchCaseType, TypeShimKind, SymbolFlags } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol, findAncestor, TupleKeyedMap, isNamedFunction, isInEffectiveConstructorMethod } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { BuiltinType, Type, Interface, cfTypeId } from "./types";
@@ -444,7 +444,7 @@ export function Binder(options: ProjectOptions) {
         else symbol.declarations = [decl];
     }
 
-    function addFreshSymbolToTable(symTab: SymbolTable, uiName: string, declaringNode: Node, type?: Type) : SymTabEntry {
+    function addFreshSymbolToTable(symTab: SymbolTable, uiName: string, declaringNode: Node, type?: Type, symbolFlags : SymbolFlags = 0) : SymTabEntry {
         const canonicalName = uiName.toLowerCase();
         let symTabEntry : SymTabEntry;
 
@@ -470,7 +470,7 @@ export function Binder(options: ProjectOptions) {
             symTabEntry = {
                 uiName,
                 canonicalName,
-                flags: 0,
+                flags: symbolFlags,
                 declarations: [declaringNode],
                 firstLexicalType: type,
                 symbolId: symbolId++,
@@ -1098,12 +1098,23 @@ export function Binder(options: ProjectOptions) {
                 scopeTargets = [sourceFile.containedScope.this!, sourceFile.containedScope.variables!];
                 const maybeAlreadyDefined = sourceFile.containedScope.this!.get(node.name.canonical);
                 if (maybeAlreadyDefined && maybeAlreadyDefined.declarations) {
-                    for (const decl of [...maybeAlreadyDefined.declarations, node]) {
-                        if (decl.kind === NodeKind.functionDefinition) {
-                            const range = decl.fromTag
-                                ? decl.tagOrigin.startTag!.range
-                                : mergeRanges(decl.accessModifier, decl.returnType, decl.functionToken, decl.nameToken);
-                            issueDiagnosticAtRange(range, "Duplicate component method declaration.", DiagnosticKind.warning);
+                    const hasSyntheticGetterOrSetter = maybeAlreadyDefined.flags & SymbolFlags.syntheticGetterSetter;
+                    // if there is a synthetic getter/setter,
+                    //   - with only 1 declaration, it is exactly the synthetic getter / setter (but, we wouldn't be here binding a new function def)
+                    //   - with exactly 2 declarations, one is the synthetic getter / setter, one is this function def, and that's OK, it is an explicit getter / setter
+                    //   - if there are N (where N > 2) or more declarations, the user has written at least 1 duplicate
+                    // note that at this position, we haven't yet pushed this declartion,
+                    // so declarations.length is here "how many declarations exist without this current binding"
+                    if (!hasSyntheticGetterOrSetter || (hasSyntheticGetterOrSetter && maybeAlreadyDefined.declarations.length >= 2)) {
+                        for (const decl of [...maybeAlreadyDefined.declarations, node]) {
+                            // need to dedupe later, but it is good to issue a diagnostic on all the functions
+                            // to show "these N function defs are duplicates"
+                            if (decl.kind === NodeKind.functionDefinition) {
+                                const range = decl.fromTag
+                                    ? decl.tagOrigin.startTag!.range
+                                    : mergeRanges(decl.accessModifier, decl.returnType, decl.functionToken, decl.nameToken);
+                                issueDiagnosticAtRange(range, "Duplicate component method declaration.", DiagnosticKind.warning);
+                            }
                         }
                     }
                 }
@@ -1393,8 +1404,8 @@ export function Binder(options: ProjectOptions) {
                 // uppercase the first letter of the propertyname, so that
                 // "somePropertyName" becomes "setSomePropertyName" and "getSomePropertyName"
                 const camelCasedUiName = uiName[0].toUpperCase() + uiName.slice(1);
-                const getter = addFreshSymbolToTable(sourceFile.containedScope.variables!, "get" + camelCasedUiName, node, BuiltinType.anyFunction);
-                const setter = addFreshSymbolToTable(sourceFile.containedScope.variables!, "set" + camelCasedUiName, node, BuiltinType.anyFunction);
+                const getter = addFreshSymbolToTable(sourceFile.containedScope.variables!, "get" + camelCasedUiName, node, BuiltinType.anyFunction, SymbolFlags.syntheticGetterSetter);
+                const setter = addFreshSymbolToTable(sourceFile.containedScope.variables!, "set" + camelCasedUiName, node, BuiltinType.anyFunction, SymbolFlags.syntheticGetterSetter);
 
                 addExistingSymbolToTable(sourceFile.containedScope.this!, getter);
                 addExistingSymbolToTable(sourceFile.containedScope.this!, setter);

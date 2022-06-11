@@ -2652,7 +2652,7 @@ export function Checker(options: ProjectOptions) {
                     uiName: "cfreturns",
                     flags: 0,
                     declarations: null,
-                    firstLexicalType: BuiltinType.any, // evaluateType(f.returns) from context ... decl site (i.e. f), if there is an annotation or explicit return
+                    firstLexicalType: BuiltinType.any, // probably have to require function has explicit return type, or we fallback to any
                     symbolId: -1
                 });
 
@@ -2683,6 +2683,7 @@ export function Checker(options: ProjectOptions) {
 
         // for cfc member functions, some work was already done in the binder to extract the signature, but we didn't have visibility into CFC resolution there;
         // so here we can try to resolve CFC return types / param types
+        // fixme -- binder doesn't need to do that? ...
 
         const isMemberFunction = isCfcMemberFunctionDefinition(node);
         let memberFunctionSignature : cfFunctionSignature | undefined;
