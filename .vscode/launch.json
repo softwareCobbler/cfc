@@ -47,18 +47,6 @@
 			]
 		},
 		{
-			"name": "Debug current test",
-			"type": "node",
-			"request": "launch",
-			"program": "${workspaceFolder}/node_modules/mocha/bin/_mocha",
-			"stopOnEntry": false,
-			"args": ["--spec=${file}", "--extension=ts", "--require=ts-node/register", "--no-timeouts"],
-			"cwd": "${workspaceFolder}",
-			"runtimeExecutable": null,
-			"sourceMaps": true,
-			"env": { "NODE_ENV": "testing"}
-		},
-		{
 			"name": "Debug build system",
 			"autoAttachChildProcesses": false,
 			"type": "node",
@@ -71,6 +59,20 @@
 			],
 			"outFiles": [
 				"${workspaceFolder}/out/**/*.js",
+			]
+		},
+		{
+			"name": "debug current test w/ precompile",
+			"type": "node",
+			"request": "launch",
+			"preLaunchTask": "build-current-test-as-debuggable-test",
+			"program": "${workspaceFolder}/node_modules/mocha/bin/_mocha",
+			"args": ["--spec=${workspaceFolder}/test/out/debug-test.js"],
+			"sourceMaps": true,
+			"outFiles": [
+				"${workspaceFolder}/test/out/**/*.js",
+				"${workspaceFolder}/out/**/*.js",
+				"!**/node_modules/**"
 			]
 		}
     ],

@@ -1,0 +1,17 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks": [
+      {
+        // build some test (assuming it is the currently focused text editor) so that we can debug it with mocha
+        // had zero success using mocha with ts-node and getting breakpoints to bind
+        // This fails to bind breakpoints in the test file itself when run with mocha,
+        // but breakpoints in our code under test seem to bind fine
+        // To stop in the test file itself you have to use 'debugger' statements
+        "label": "build-current-test-as-debuggable-test",
+        "type": "shell",
+        "command": "cd test && rm -rf out && npx esbuild --bundle ${file} --outfile=out/debug-test.js --platform=node --sourcemap",
+      }
+    ]
+  }
