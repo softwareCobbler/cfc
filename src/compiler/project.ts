@@ -471,8 +471,9 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
                 canonicalName,
                 uiName: name,
                 flags: 0,
-                firstLexicalType: cfcRefType,
                 declarations: null,
+                lexicalType: undefined,
+                effectivelyDeclaredType: cfcRefType,
                 symbolId: -1,
             });
         }
@@ -516,7 +517,8 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             canonicalName: "getinstance",
             flags: 0,
             declarations: null,
-            firstLexicalType: cfGenericFunctionSignature("getInstance", [typeParam], [nameParam, initArgsParam, dslParam], wireboxLookup, []),
+            lexicalType: undefined,
+            effectivelyDeclaredType: cfGenericFunctionSignature("getInstance", [typeParam], [nameParam, initArgsParam, dslParam], wireboxLookup, []),
             symbolId: -1,
         };
 

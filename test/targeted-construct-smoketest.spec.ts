@@ -551,6 +551,7 @@ describe("general smoke test for particular constructs", () => {
         luceeProject.addFile("/a.cfc");
 
         const completions = getCompletions(luceeProject, "/a.cfc", completionsAt.index, ".");
+        debugger;
         assert.strictEqual(completions.length, 1, "got one completion");
         assert.strictEqual(completions[0].label, "innerB", "completion is as expected");
     })

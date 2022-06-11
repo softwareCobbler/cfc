@@ -1,4 +1,4 @@
-import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, UnreachableFlow, FlowType, ConditionalSubtype, SymbolTable, Property, ParamStatement, ParamStatementSubType, typeinfo, DiagnosticKind, StaticallyKnownScopeName, SwitchCaseType, TypeShimKind, SymbolFlags } from "./node";
+import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, UnreachableFlow, FlowType, ConditionalSubtype, SymbolTable, Property, ParamStatement, ParamStatementSubType, typeinfo, DiagnosticKind, StaticallyKnownScopeName, SwitchCaseType, SymbolFlags } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol, findAncestor, TupleKeyedMap, isNamedFunction, isInEffectiveConstructorMethod } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { BuiltinType, Type, Interface, cfTypeId } from "./types";
@@ -294,12 +294,18 @@ export function Binder(options: ProjectOptions) {
         }
         if (node === sourceFile) {
             for (const name of scopeInterfaceNames) {
+                const mergeable = node.containedScope.typeinfo.mergedInterfaces.get(name);
+                if (!mergeable) {
+                    continue;
+                }
                 node.containedScope.typeinfo.mergedInterfaces.set(
-                    name, mergeInterfaceWithParent(node, name, node.containedScope.typeinfo.mergedInterfaces.get(name)) )
+                    name, mergeInterfaceWithParent(node, name, mergeable)
+                );
             }
         }
     }
     
+    // fixme: check that type params match exactly, don't discard type params, issue diagnostic if type params don't match exactly
     function mergeInterfaces(name: string, interfaces: readonly Readonly<Interface>[]) : Interface {
         const mergedMembers = new Map<string, SymTabEntry>();
         for (const iface of interfaces) {
@@ -307,18 +313,21 @@ export function Binder(options: ProjectOptions) {
                 mergedMembers.set(name, symTabEntry);
             }
         }
-        return Interface(name, mergedMembers);
+        // typeParams must be the same across all merge targets
+        // so interface Foo<T> {} doesn't make sense with interface Foo<U> {}
+        // if they're not, we should issue a diagnostic
+        // but we always just pass interfaces[0].typeParams as the type params of the merge result
+        return Interface(name, mergedMembers, interfaces[0].typeParams);
     }
 
-    function mergeInterfaceWithParent(base: Node, name: string, iface: Readonly<Interface> | undefined) : Interface {
+    function mergeInterfaceWithParent(base: Node, name: string, iface: Readonly<Interface>) : Interface {
         if (base === sourceFile) {
-            const mergeable : Readonly<Interface>[] = [];
+            const mergeable : Readonly<Interface>[] = [iface];
             for (const lib of sourceFile.libRefs.values()) {
                 if (lib.containedScope.typeinfo.mergedInterfaces.has(name)) {
                     mergeable.push(lib.containedScope.typeinfo.mergedInterfaces.get(name)!);
                 }
             }
-            if (iface) mergeable.push(iface);
             return mergeInterfaces(name, mergeable);
         }
 
@@ -472,7 +481,8 @@ export function Binder(options: ProjectOptions) {
                 canonicalName,
                 flags: symbolFlags,
                 declarations: [declaringNode],
-                firstLexicalType: type,
+                lexicalType: type,
+                effectivelyDeclaredType: undefined,
                 symbolId: symbolId++,
             }
 
@@ -1459,38 +1469,6 @@ export function Binder(options: ProjectOptions) {
         sourceFile.containedScope.parentContainer = null;
         sourceFile.containedScope.__declaration = new Map<string, SymTabEntry>();
 
-        for (const node of sourceFile.content) {
-            if (node.kind === NodeKind.typeShim) {
-                switch (node.shimKind) {
-                    case TypeShimKind.annotation:
-                    case TypeShimKind.import: {
-                        break;
-                    }
-                    case TypeShimKind.interfacedef: {
-                        if (!sourceFile.containedScope.typeinfo.interfaces.has(node.type.name)) {
-                            sourceFile.containedScope.typeinfo.interfaces.set(node.type.name, []);
-                        }
-                        sourceFile.containedScope.typeinfo.interfaces.get(node.type.name)!.push(node.type);
-                        break;
-                    }
-                    case TypeShimKind.namedAnnotation:
-                    case TypeShimKind.namespace:
-                    case TypeShimKind.nonCompositeFunctionTypeAnnotation:
-                    case TypeShimKind.typedef: {
-                        break;
-                    }
-                    default: exhaustiveCaseGuard(node);
-                }
-                // jun/5/2022 -- do we entirely use interface { ... } for __cfEngine now?...
-                // if (node.type.kind === TypeKind.functionSignature) {
-                //     addFreshSymbolToTable(sourceFile.containedScope!.__declaration!, node.type.uiName, node, node.type);
-                // }
-            }
-            else {
-                issueDiagnosticAtRange(node.range, "Illegal non-declaration in declaration file.");
-                continue;
-            }
-        }
 
         bindTypeAndInterfacedefsForContainer(sourceFile);
     }

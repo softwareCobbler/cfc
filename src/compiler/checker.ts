@@ -20,7 +20,8 @@ const builtin_inject = (() => {
         uiName: name,
         flags: 0,
         declarations: null,
-        firstLexicalType: cfTypeId(name),
+        lexicalType: undefined,
+        effectivelyDeclaredType: cfTypeId(name),
         symbolId: -1
     });
     members.set(type, {
@@ -28,7 +29,8 @@ const builtin_inject = (() => {
         uiName: type,
         flags: 0,
         declarations: null,
-        firstLexicalType: cfTypeId(type),
+        lexicalType: undefined,
+        effectivelyDeclaredType: cfTypeId(type),
         symbolId: -1
     });
 
@@ -417,7 +419,8 @@ export function Checker(options: ProjectOptions) {
                             uiName: "cfname",
                             flags: 0,
                             declarations: null,
-                            firstLexicalType: createLiteralType(property.name),
+                            lexicalType: undefined,
+                            effectivelyDeclaredType: createLiteralType(property.name),
                             symbolId: -1
                         })
 
@@ -436,7 +439,8 @@ export function Checker(options: ProjectOptions) {
                                 uiName: name,
                                 flags: 0,
                                 declarations: null,
-                                firstLexicalType: createLiteralType(value),
+                                lexicalType: undefined,
+                                effectivelyDeclaredType: createLiteralType(value),
                                 symbolId: -1
                             })  
                         }
@@ -476,7 +480,7 @@ export function Checker(options: ProjectOptions) {
                     const targetSymbol = sourceFile.containedScope.variables!.get(nameStringVal);
                     if (!mappings || !targetSymbol || mappings.kind !== TypeKind.interface) return;
 
-                    const cfcLookup = mappings.members.get(injectStringVal)?.firstLexicalType;
+                    const cfcLookup = mappings.members.get(injectStringVal)?.lexicalType;
                     if (!cfcLookup) return;
                     const cfc = evaluateType(node, cfcLookup);
 
@@ -615,8 +619,8 @@ export function Checker(options: ProjectOptions) {
      */
     function runMappedComponentMembersInjectionResult(injectionResultType: Type) {
         if (injectionResultType.kind === TypeKind.struct) {
-            const nameType = injectionResultType.members.get("name")?.firstLexicalType;
-            const type = injectionResultType.members.get("type")?.firstLexicalType;
+            const nameType = injectionResultType.members.get("name")?.lexicalType;
+            const type = injectionResultType.members.get("type")?.lexicalType;
             const hasValidName = nameType?.kind === TypeKind.literal && typeof nameType.literalValue === "string";
             const hasValidType = !!type;
             if (hasValidName && hasValidType) {
@@ -627,7 +631,8 @@ export function Checker(options: ProjectOptions) {
                     uiName: name,
                     flags: SymbolFlags.synthesizedInjection,
                     declarations: null,
-                    firstLexicalType: type,
+                    lexicalType: undefined,
+                    effectivelyDeclaredType: type,
                     symbolId: -1
                 };
 
@@ -699,14 +704,15 @@ export function Checker(options: ProjectOptions) {
                 const mergedMembers = new Map<string, SymTabEntry>();
                 for (const key of keys) {
                     if (l.members.has(key) && r.members.has(key)) {
-                        const mergedType = mergeTypes(l.members.get(key)!.firstLexicalType!, r.members.get(key)!.firstLexicalType!);
+                        const mergedType = mergeTypes(l.members.get(key)!.lexicalType!, r.members.get(key)!.lexicalType!);
                         // doesn't copy links?
                         mergedMembers.set(key, {
                             canonicalName: key,
                             uiName: l.members.get(key)!.uiName,
                             flags: 0,
                             declarations: [],
-                            firstLexicalType: mergedType,
+                            lexicalType: undefined,
+                            effectivelyDeclaredType: mergedType,
                             symbolId: -1,
                         })
                     }
@@ -1047,8 +1053,8 @@ export function Checker(options: ProjectOptions) {
                         // check for optional property of R -- if left doesn't exist, OK; if left does exist, check for subtype-ness
                         if (rightVal.links?.optional) {
                             if (!leftVal) continue;
-                            const x = leftVal.links?.effectiveDeclaredType ?? leftVal.firstLexicalType;
-                            const y = rightVal.links?.effectiveDeclaredType ?? rightVal.firstLexicalType;
+                            const x = leftVal.effectivelyDeclaredType ?? leftVal.lexicalType;
+                            const y = rightVal.effectivelyDeclaredType ?? rightVal.lexicalType;
                             if (!x || !y || !worker(x, y)) {
                                 runningComparisonMap.get(l)!.delete(r);
                                 return false;
@@ -1061,8 +1067,8 @@ export function Checker(options: ProjectOptions) {
                                 return false;
                             }
                             else {
-                                const x = leftVal?.links?.effectiveDeclaredType ?? leftVal.firstLexicalType;
-                                const y = rightVal?.links?.effectiveDeclaredType ?? rightVal.firstLexicalType;
+                                const x = leftVal?.effectivelyDeclaredType ?? leftVal.lexicalType;
+                                const y = rightVal?.effectivelyDeclaredType ?? rightVal.lexicalType;
                                 if (!x || !y || !worker(x,y)) {
                                     runningComparisonMap.get(l)!.delete(r);
                                     return false;
@@ -1378,7 +1384,7 @@ export function Checker(options: ProjectOptions) {
         if (shadowsBuiltinSymbol || isBuiltinSymbol) {
             let sig = getEffectivelyDeclaredType(symbol.symTabEntry); // builtin symbols we just use the first lexical type
             if (!sig) {
-                sig = setEffectivelyDeclaredType(symbol.symTabEntry, evaluateType(DUMMY_CONTAINER, symbol.symTabEntry.firstLexicalType!));
+                sig = setEffectivelyDeclaredType(symbol.symTabEntry, evaluateType(DUMMY_CONTAINER, symbol.symTabEntry.lexicalType!));
             }
             if (sig.kind === TypeKind.functionSignature) {
                 setCachedEvaluatedNodeType(node.left, sig);
@@ -1492,7 +1498,7 @@ export function Checker(options: ProjectOptions) {
                             const argScopeSymTabEntry = callSiteArg.expr.containedScope!.arguments!.get(callSiteArg.expr.params[j].canonicalName)!;
                             const type = evaluateType(callSiteArg, sigParamType.params[j].paramType, definitelyResolvedTypeParamMap);
                             effectiveParamTypes.push({...sigParamType.params[j], uiName: callSiteArg.expr.params[j].uiName, canonicalName: callSiteArg.expr.params[j].canonicalName});
-                            argScopeSymTabEntry.firstLexicalType = type;
+                            argScopeSymTabEntry.lexicalType = type;
                         }
 
                         if (callSiteArg.expr.fromTag) {
@@ -1586,9 +1592,9 @@ export function Checker(options: ProjectOptions) {
                     }
                     const freshResolutions = new Map<string, Type | undefined>([...unifiees]);
                     for (const [name, symTabEntry] of target.members) {
-                        const targetType = symTabEntry.firstLexicalType!;
+                        const targetType = symTabEntry.lexicalType!;
                         if (!source.members.has(name)) return;
-                        const result = resolveGenericFunctionTypeParams(freshResolutions, constraintMap, targetType, source.members.get(name)!.firstLexicalType!);
+                        const result = resolveGenericFunctionTypeParams(freshResolutions, constraintMap, targetType, source.members.get(name)!.lexicalType!);
                         if (result) {
                             for (const [k,v] of result) freshResolutions.set(k,v);
                         }
@@ -1974,21 +1980,14 @@ export function Checker(options: ProjectOptions) {
             return;
         }
 
-        if (CHECK_FLOW_TYPES) {
-            if (!sourceFile.cachedFlowTypes.has(flow.flowId)) {
-                sourceFile.cachedFlowTypes.set(flow.flowId, new Map());
-            }
-            sourceFile.cachedFlowTypes.get(flow.flowId)!.set(symbolId, type);
+        if (!sourceFile.cachedFlowTypes.has(flow.flowId)) {
+            sourceFile.cachedFlowTypes.set(flow.flowId, new Map());
         }
+        sourceFile.cachedFlowTypes.get(flow.flowId)!.set(symbolId, type);
     }
 
     function getCachedEvaluatedFlowType(flow: Flow, symbolId: SymbolId) : Type | undefined {
-        if (CHECK_FLOW_TYPES) {
-            return sourceFile.cachedFlowTypes.get(flow.flowId)?.get(symbolId);
-        }
-        else {
-            return BuiltinType.any;
-        }
+        return sourceFile.cachedFlowTypes.get(flow.flowId)?.get(symbolId);
     }
 
     function checkReturnStatement(node: ReturnStatement) {
@@ -2155,11 +2154,11 @@ export function Checker(options: ProjectOptions) {
     }
 
     function setEffectivelyDeclaredType(symbol: SymTabEntry, type: Type) : Type {
-        return (symbol.links ?? (symbol.links = {})).effectiveDeclaredType = type;
+        return symbol.effectivelyDeclaredType = type;
     }
 
     function getEffectivelyDeclaredType(symbol: SymTabEntry) : Type | undefined {
-        return symbol.links?.effectiveDeclaredType ?? symbol.firstLexicalType;
+        return symbol.effectivelyDeclaredType;
     }
 
     function checkTag(tag: CfTag.Common) {
@@ -2351,8 +2350,7 @@ export function Checker(options: ProjectOptions) {
 
             const FIXME_CURRENT_CONTAINER = findAncestor(node, (node) => !!node.containedScope); // should be a "currentContainer" member var
             const isOuterVar = resolvedSymbol.container !== FIXME_CURRENT_CONTAINER;
-            const flowType = !CHECK_FLOW_TYPES ? undefined
-                : isOuterVar ? undefined
+            const flowType = isOuterVar ? undefined
                 : node.flow ? determineFlowType(node.flow, resolvedSymbol.symTabEntry.symbolId)
                 : undefined;
 
@@ -2459,7 +2457,7 @@ export function Checker(options: ProjectOptions) {
                             ? walkupThisToResolveSymbol(propertyName)
                             : walkupSuperToResolveSymbol(propertyName);
                         if (symbol) {
-                            type = evaluateType(node, symbol.symTabEntry.firstLexicalType!);
+                            type = evaluateType(node, symbol.symTabEntry.lexicalType!);
                             setResolvedSymbol(element, symbol);
                             setEffectivelyDeclaredType(symbol.symTabEntry, type);
                         }
@@ -2602,7 +2600,8 @@ export function Checker(options: ProjectOptions) {
                     uiName: "cfname",
                     flags: 0,
                     declarations: null,
-                    firstLexicalType: createLiteralType(f.name?.ui ?? "<<missing-name>>"),
+                    lexicalType: undefined,
+                    effectivelyDeclaredType: createLiteralType(f.name?.ui ?? "<<missing-name>>"),
                     symbolId: -1
                 })
 
@@ -2621,7 +2620,8 @@ export function Checker(options: ProjectOptions) {
                         uiName: name,
                         flags: 0,
                         declarations: null,
-                        firstLexicalType: createLiteralType(value),
+                        lexicalType: undefined,
+                        effectivelyDeclaredType: createLiteralType(value),
                         symbolId: -1
                     })  
                 }
@@ -2631,13 +2631,15 @@ export function Checker(options: ProjectOptions) {
                     uiName: "cfargs",
                     flags: 0,
                     declarations: null,
-                    firstLexicalType: cfTuple(f.params.map((v) : SymTabEntry => {
+                    lexicalType: undefined,
+                    effectivelyDeclaredType: cfTuple(f.params.map((v) : SymTabEntry => {
                         return {
                             canonicalName: v.canonicalName,
                             uiName: v.uiName,
                             flags: 0,
                             declarations: null,
-                            firstLexicalType: BuiltinType.any, // need to pull type info
+                            lexicalType: undefined,
+                            effectivelyDeclaredType: BuiltinType.any, // need to pull type info
                             symbolId: -1,
                             links: {
                                 optional: !v.required
@@ -2652,7 +2654,8 @@ export function Checker(options: ProjectOptions) {
                     uiName: "cfreturns",
                     flags: 0,
                     declarations: null,
-                    firstLexicalType: BuiltinType.any, // probably have to require function has explicit return type, or we fallback to any
+                    lexicalType: undefined,
+                    effectivelyDeclaredType: BuiltinType.any, // probably have to require function has explicit return type, or we fallback to any
                     symbolId: -1
                 });
 
@@ -2743,14 +2746,14 @@ export function Checker(options: ProjectOptions) {
 
                 finalType = evaluatedSignature;
                 if (isMemberFunction && sourceFile.containedScope.variables!.has(node.name.canonical)) {
-                    sourceFile.containedScope.variables!.get(node.name.canonical)!.firstLexicalType = finalType; // updates the 'this' copy of the symbol too, the refs are the same
+                    sourceFile.containedScope.variables!.get(node.name.canonical)!.lexicalType = finalType; // updates the 'this' copy of the symbol too, the refs are the same
                 }
             }
             else if (evaluatedSignature.kind === TypeKind.genericFunctionSignature) {
                 // to see if we can get interesting behavior, we do not do any checking here right now
                 finalType = evaluatedSignature;
                 if (isMemberFunction && sourceFile.containedScope.variables!.has(node.name.canonical)) {
-                    sourceFile.containedScope.variables!.get(node.name.canonical)!.firstLexicalType = finalType; // updates the 'this' copy of the symbol too, the refs are the same
+                    sourceFile.containedScope.variables!.get(node.name.canonical)!.lexicalType = finalType; // updates the 'this' copy of the symbol too, the refs are the same
                 }
             }
             else if (evaluatedSignature.kind === TypeKind.functionOverloadSet) {
@@ -2762,7 +2765,7 @@ export function Checker(options: ProjectOptions) {
                 }
                 finalType = evaluatedSignature;
                 if (isMemberFunction && sourceFile.containedScope.variables!.has(node.name.canonical)) {
-                    sourceFile.containedScope.variables!.get(node.name.canonical)!.firstLexicalType = finalType; // updates the 'this' copy of the symbol too, the refs are the same
+                    sourceFile.containedScope.variables!.get(node.name.canonical)!.lexicalType = finalType; // updates the 'this' copy of the symbol too, the refs are the same
                 }
             }
             else if (evaluatedSignature !== BuiltinType.any) {
@@ -2804,7 +2807,7 @@ export function Checker(options: ProjectOptions) {
                 if (!argSymbol) { // weird error case?:  we have a param but did not set it in arguments scope?
                     continue;
                 }
-                argSymbol.firstLexicalType = param.paramType;
+                argSymbol.lexicalType = param.paramType;
             }
 
             const inferredReturnType = checkFunctionBody(node, finalType.params);
@@ -2872,7 +2875,7 @@ export function Checker(options: ProjectOptions) {
             //   - probably we just care about return type
             //
 
-            symbol.symTabEntry.firstLexicalType = finalType;
+            setEffectivelyDeclaredType(symbol.symTabEntry, finalType);
 
             if (node.flow) { // fixme: should always have this?
                 // having a symbol implies that we intended to have set an assignment flow on this node,
@@ -3008,7 +3011,7 @@ export function Checker(options: ProjectOptions) {
     function tryGetTagCallSignature(tagName: string) : Type | undefined {
         const taglib = libTypeResolver("__cfTags")
         if (taglib && taglib.kind === TypeKind.interface) {
-            return taglib.members.get(tagName)?.firstLexicalType;
+            return taglib.members.get(tagName)?.lexicalType;
         }
         else {
             return undefined;
@@ -3177,10 +3180,8 @@ export function Checker(options: ProjectOptions) {
                         flags: 0,
                         canonicalName,
                         declarations: [member],
-                        firstLexicalType: undefined,
-                        links: {
-                            effectiveDeclaredType: memberType
-                        }
+                        lexicalType: undefined,
+                        effectivelyDeclaredType: memberType,
                     });
 
                     break;
@@ -3313,9 +3314,9 @@ export function Checker(options: ProjectOptions) {
         setCachedEvaluatedNodeType(node, cfcThis);
         
         const initSig = cfcThis.members.get("init");
-        if (initSig && initSig.firstLexicalType?.kind === TypeKind.functionSignature) {
-            setCachedEvaluatedNodeType(node.callExpr.left, initSig.firstLexicalType);
-            checkCallLikeArguments(initSig.firstLexicalType, node.callExpr.args, node.callExpr.left.range, /*isNewExpr*/ true);
+        if (initSig && initSig.lexicalType?.kind === TypeKind.functionSignature) {
+            setCachedEvaluatedNodeType(node.callExpr.left, initSig.lexicalType);
+            checkCallLikeArguments(initSig.lexicalType, node.callExpr.args, node.callExpr.left.range, /*isNewExpr*/ true);
         }
     }
 
@@ -3404,11 +3405,11 @@ export function Checker(options: ProjectOptions) {
             case TypeKind.struct: {
                 const widenedMembers = new Map<string, SymTabEntry>();
                 for (const [name,symtabEntry] of type.members) {
-                    const links : SymTabEntry["links"] = {
-                        ...symtabEntry.links,
-                        effectiveDeclaredType: recursiveWidenTypeByDiscardingLiteralTypes(symtabEntry.links?.effectiveDeclaredType ?? symtabEntry.firstLexicalType ?? BuiltinType.any)
-                    };
-                    widenedMembers.set(name, {...symtabEntry, links});
+                    widenedMembers.set(name, {
+                        ...symtabEntry,
+                        effectivelyDeclaredType: recursiveWidenTypeByDiscardingLiteralTypes(
+                            symtabEntry.effectivelyDeclaredType ?? symtabEntry.lexicalType ?? BuiltinType.any)
+                    });
                 }
                 return Struct(widenedMembers);
             }
@@ -3592,11 +3593,11 @@ export function Checker(options: ProjectOptions) {
                         const evaluatedStructContents = new Map<string, SymTabEntry>();
                         let concrete = true;
                         for (const [canonicalName, symTabEntry] of type.members.entries()) {
-                            const evaluatableType = (symTabEntry.links?.effectiveDeclaredType ?? symTabEntry.firstLexicalType)!;
+                            const evaluatableType = symTabEntry.effectivelyDeclaredType ?? symTabEntry.lexicalType ?? BuiltinType.any;
                             const evaluatedType = typeWorker(evaluatableType);
                             if (!evaluatedType) return null;
 
-                            if (evaluatableType !== evaluatedType) { // fixme: merely expanding a non-generic alias will trigger this, since (alias !== *alias)
+                            if (evaluatableType !== evaluatedType) { // fixme: merely expanding a non-generic alias will trigger this, since (alias !== *alias) (also consider Array after instantiation to be concrete...) )
                                 concrete = false;
                             }
                             evaluatedStructContents.set(canonicalName, {
@@ -3604,10 +3605,8 @@ export function Checker(options: ProjectOptions) {
                                 flags: 0,
                                 declarations: null,
                                 canonicalName,
-                                firstLexicalType: undefined,
-                                links: {
-                                    effectiveDeclaredType: evaluatedType
-                                },
+                                lexicalType: undefined,
+                                effectivelyDeclaredType: evaluatedType,
                                 symbolId: -1,
                             });
                         }
@@ -3618,7 +3617,7 @@ export function Checker(options: ProjectOptions) {
                             (result as Mutable<Type>).concrete = true;
                         }
 
-                        return type;
+                        return result;
                     }
                     else if (type.kind === TypeKind.functionSignature || (type.kind === TypeKind.genericFunctionSignature && partiallyApplyGenericFunctionSigs)) {
                         const sig = type;
@@ -3647,11 +3646,11 @@ export function Checker(options: ProjectOptions) {
                             if (sig.params[i].flags & TypeFlags.spread && freshType.kind === TypeKind.tuple) {
                                 originalTypeWasConcrete = false;
                                 for (const tupleElement of freshType.elements) {
-                                    if (!tupleElement.firstLexicalType) {
+                                    if (!tupleElement.lexicalType) {
                                         return null;
                                     }
                                     const freshType = typeWorker(
-                                        tupleElement.firstLexicalType,
+                                        tupleElement.lexicalType,
                                         typeParamMap,
                                         partiallyApplyGenericFunctionSigs,
                                         updatedLookupDeferrals
@@ -3773,7 +3772,7 @@ export function Checker(options: ProjectOptions) {
                         return fallbackToAny ? BuiltinType.any : null;
                         
                     }
-                    else if (type.kind === TypeKind.typeId && !lookupDeferrals?.has(type.name)) {
+                    else if (type.kind === TypeKind.typeId && !lookupDeferrals?.has(type.name)) { // if we get a non-generic alias we should probably cache it's full instantiation?
                         // @fixme: should error if we can't find it; and return never ?
                         const __FIXME__outparam_remaining_index_chain = {value: <(cfTypeId|cfLiteralType)[]> [...(type.indexChain ?? [])]}  
                         let result = typeParamMap?.get(type.name) || walkUpContainersToResolveType(context, type, __FIXME__outparam_remaining_index_chain) || null;
@@ -3817,8 +3816,8 @@ export function Checker(options: ProjectOptions) {
                                 }
 
                                 // when have we been guaranteed to have evaluated this member?
-                                const nextType = result.members.get(indexAsString.toLowerCase())?.links?.effectiveDeclaredType
-                                    ?? result.members.get(indexAsString.toLowerCase())?.firstLexicalType;
+                                const nextType = result.members.get(indexAsString.toLowerCase())?.effectivelyDeclaredType
+                                    ?? result.members.get(indexAsString.toLowerCase())?.lexicalType;
 
                                 if (nextType) result = typeWorker(nextType);
                                 if (!result) return null;
@@ -3979,11 +3978,11 @@ export function Checker(options: ProjectOptions) {
 
                     const instantiatedMembers = new Map<string, SymTabEntry>();
                     for (const [name, symTabEntry] of iface.members) {
-                        const freshType = typeWorker(symTabEntry.firstLexicalType!, preInstantiatedArgMap, true);
+                        const freshType = typeWorker(symTabEntry.lexicalType!, preInstantiatedArgMap, true);
                         if (!freshType) {
                             return {status: TypeCache_Status.failure};
                         }
-                        instantiatedMembers.set(name, {...symTabEntry, firstLexicalType: freshType});
+                        instantiatedMembers.set(name, {...symTabEntry, lexicalType: freshType});
                     }
 
                     let result : Type;

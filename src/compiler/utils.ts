@@ -1223,8 +1223,8 @@ export function getScopeDisplayMember(scope: ScopeDisplay,
         if (!scope.hasOwnProperty(scopeName) || !scope[scopeName as StaticallyKnownScopeName]!.get(path[1])) return undefined;
         let current = scope[scopeName as StaticallyKnownScopeName]!.get(path[1])!;
         for (let i = 2; i < path.length; i++) {
-            if (!isStructLike(current.firstLexicalType!)) return undefined;
-            let maybeNext = current.firstLexicalType.members.get(path[i]);
+            if (!isStructLike(current.lexicalType!)) return undefined;
+            let maybeNext = current.lexicalType.members.get(path[i]);
             if (!maybeNext) return undefined;
             current = maybeNext;
         }

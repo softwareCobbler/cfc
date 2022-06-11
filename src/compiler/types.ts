@@ -192,9 +192,8 @@ export function getCanonicalType(type: TypeBase) {
     return BuiltinType.any;
 }
 
-const arrayTypeID = cfTypeId("Array");
 export function UninstantiatedArray(memberType: Type) : cfTypeConstructorInvocation {
-    return TypeConstructorInvocation(arrayTypeID, [memberType]);
+    return TypeConstructorInvocation(BuiltinType.arrayInterfaceName, [memberType]);
 }
 
 export function isUninstantiatedArray(type: Type) : type is cfTypeConstructorInvocation {
@@ -807,7 +806,7 @@ export const BuiltinType = (function() {
     //     [TypeConstructorParam("T", any)],
     //     {name: "index", indexType: numeric, type: any});
 
-    // we need an instantiated any[]
+    const arrayInterfaceName = cfTypeId("Array");
 
     const anyFunction = (() => {
         const spreadParam = cfFunctionSignatureParam(false, /*should be the builtin instantiated any[]*/ any, "args");
@@ -852,6 +851,7 @@ export const BuiltinType = (function() {
         never: createType(never),
         EmptyInterface: Interface("", new Map()),
         anyFunction: anyFunction, // already created via call to cfFunctionSignature
+        arrayInterfaceName: createType(arrayInterfaceName),
     } as const;
 
     return results;
@@ -1056,7 +1056,7 @@ export function stringifyType(type: Type) : string {
             case TypeKind.struct: {
                 const builder = [];
                 for (const [propName, member] of type.members) {
-                    const type = member.links?.effectiveDeclaredType ?? member.firstLexicalType;
+                    const type = member.effectivelyDeclaredType ?? member.lexicalType;
                     const colon = member.links?.optional ? "?: " : ": ";
                     if (!type) {
                         console.log(`[dev] no type for struct memmber ${propName}`);
@@ -1213,8 +1213,8 @@ export function structurallyCompareTypes(l: Type, r: Type) : -1 | 0 | 1 {
         const rmembers = [...r.members.entries()].sort(sortStructMembersByName);
 
         for (let i = 0; i < lmembers.length; i++) {
-            const [lname, {firstLexicalType: ltype}] = lmembers[i];
-            const [rname, {firstLexicalType: rtype}] = rmembers[i];
+            const [lname, {lexicalType: ltype}] = lmembers[i];
+            const [rname, {lexicalType: rtype}] = rmembers[i];
 
             if (lname < rname) return -1;
             if (lname > rname) return 1;

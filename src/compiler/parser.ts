@@ -1069,12 +1069,8 @@ export function Parser(config: ProjectOptions) {
             }
             case CfFileType.dCfm: {
                 const typedefs = parseTypeAnnotations().typedefs;
-
-                sourceFile.content = typedefs;
-
                 typedefContainer = sourceFile;
                 maybePushTypedefsToCurrentTypedefContainer(typedefs);
-
                 break;
             }
         }
@@ -4807,7 +4803,8 @@ export function Parser(config: ProjectOptions) {
                                     flags: 0,
                                     canonicalName: member.name.token.text.toLowerCase(),
                                     declarations: null,
-                                    firstLexicalType: member.type,
+                                    lexicalType: member.type,
+                                    effectivelyDeclaredType: undefined,
                                     links: {
                                         optional: member.optional,
                                     },
@@ -4848,7 +4845,8 @@ export function Parser(config: ProjectOptions) {
                                 uiName: nameOrElement.token.text,
                                 flags: 0,
                                 declarations: null,
-                                firstLexicalType: type,
+                                lexicalType: type,
+                                effectivelyDeclaredType: undefined,
                                 symbolId: -1
                             })
                         }
@@ -4859,7 +4857,8 @@ export function Parser(config: ProjectOptions) {
                                 uiName: "",
                                 flags: 0,
                                 declarations: null,
-                                firstLexicalType: type,
+                                lexicalType: type,
+                                effectivelyDeclaredType: undefined,
                                 symbolId: -1
                             })
                         }

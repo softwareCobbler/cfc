@@ -174,19 +174,17 @@ export interface SymTabEntry {
     declarations: Node[] | null,
     flags: SymbolFlags,
     /**
-     * we try this type, and fallback to links.effectivelyDeclared type
-     * this is a poorly thought out approach to "the lexical type is not necessarily the declared type so (i.e. "T" is not "what T resolves to") ... !"
-     * makes it weird to reason about, or at least weird that every use site needs to check both
+     * lexicalType is the type a user wrote
+     * effectively declared type is the instantiated lexical-or-inferred type
      */
-    firstLexicalType: Type | undefined,
+    lexicalType: Type | undefined,
+    effectivelyDeclaredType: Type | undefined,
     /**
      * this can be -1 for cases where it's irrelevant, otherwise should be a unique id for lookup purposes in other maps
      */
     symbolId: SymbolId,
     links?: {
-        effectiveDeclaredType?: Type,
         optional?: boolean,
-
     }
 }
 
