@@ -1110,6 +1110,10 @@ export function Checker(options: ProjectOptions) {
                 }
                 
                 if (l.kind === TypeKind.functionSignature && r.kind === TypeKind.functionSignature) {
+                    if (r === BuiltinType.anyFunction) {
+                        return true;
+                    }
+
                     // covariant in return type
                     if (!worker(l.returns, r.returns)) {
                         runningComparisonMap.get(l)!.delete(r);

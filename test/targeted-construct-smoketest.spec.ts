@@ -11,23 +11,25 @@ import { setDebug as setNodeModuleDebug } from "../src/compiler/node";
 
 setNodeModuleDebug();
 
-const options : ProjectOptions = {
-    debug: true,
-    parseTypes: false,
-    withWireboxResolution: false,
-    cfConfigProjectRelativePath: null,
-    engineVersion: EngineVersions["acf.2018"],
-    genericFunctionInference: false,
-    checkReturnTypes: false,
-    checkFlowTypes: false,
-    cancellationToken: {
-        cancellationRequested: () => false,
-        throwIfCancellationRequested: () => void 0,
+const options = () : ProjectOptions => {
+    return {
+        debug: true,
+        parseTypes: false,
+        withWireboxResolution: false,
+        cfConfigProjectRelativePath: null,
+        engineVersion: EngineVersions["acf.2018"],
+        genericFunctionInference: false,
+        checkReturnTypes: false,
+        checkFlowTypes: false,
+        cancellationToken: {
+            cancellationRequested: () => false,
+            throwIfCancellationRequested: () => void 0,
+        }
     }
 }
 
-const parser = Parser(options);
-const binder = Binder(options);
+const parser = Parser(options());
+const binder = Binder(options());
 
 function assertDiagnosticsCount(text: string, cfFileType: CfFileType, count: number) {
     const sourceFile = SourceFile("", cfFileType, text);
@@ -37,14 +39,15 @@ function assertDiagnosticsCount(text: string, cfFileType: CfFileType, count: num
     assert.strictEqual(sourceFile.diagnostics.length, count, `${count} diagnostics emitted`);
 }
 
-function assertDiagnosticsCountWithProject(fs: FileSystem, diagnosticsTargetFile: string, count: number, engineVersion : EngineVersion = EngineVersions["acf.2018"]) {
-    const project = Project("/", fs, {...options, engineVersion});
+function assertDiagnosticsCountWithProject(fs: FileSystem, diagnosticsTargetFile: string, count: number, engineVersion : EngineVersion = EngineVersions["acf.2018"], optionsOverride: Partial<ProjectOptions> = {}) {
+    const project = Project("/", fs, {...options(), engineVersion, ...optionsOverride});
     project.addFile(diagnosticsTargetFile);
-    assert.strictEqual(project.getDiagnostics(diagnosticsTargetFile).length, count, `Expected ${count} errors.`);
+    const diagnostics = project.getDiagnostics(diagnosticsTargetFile);
+    assert.strictEqual(diagnostics.length, count, `Expected ${count} errors.`);
 }
 
 describe("general smoke test for particular constructs", () => {
-    const commonProjectOptions : ProjectOptions = {...options};
+    const commonProjectOptions : ProjectOptions = options();
 
     it("Should accept `new` expression in an expression context", () => {
         assertDiagnosticsCount(`<cfset x = {v: new foo.bar().someMethod()}>`, CfFileType.cfm, 0);
@@ -564,5 +567,31 @@ describe("general smoke test for particular constructs", () => {
             }`);
         const dfs = DebugFileSystem(fsRoot);
         assertDiagnosticsCountWithProject(dfs, "/a.cfc", 2);
+    })
+    it("widens to non-literal type the member types of object literal expressions", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+        pushFsNode(fsRoot, "/a.cfc", `
+            component accessors=true {
+                function bar() {
+                    var x = {
+                        a: 0
+                    };
+                    x.a = 42; // should be "assign numeric to numeric" (ok!), not "assign numeric to type '0'" (would fail)
+                }
+            }`);
+        const dfs = DebugFileSystem(fsRoot);
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0, EngineVersions["lucee.5"], {checkFlowTypes: true});
+    })
+    it("does not reject a valid function passed as a function argument to a function that accepts functions as parameters", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+        pushFsNode(fsRoot, "/a.cfc", `
+            component {
+                function bar() {
+                    var foo = (required function f) => {}
+                    foo((a) => 0);
+                }
+            }`);
+        const dfs = DebugFileSystem(fsRoot);
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0, EngineVersions["lucee.5"], {checkFlowTypes: true});
     })
 });

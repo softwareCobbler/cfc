@@ -809,7 +809,11 @@ export const BuiltinType = (function() {
     const arrayInterfaceName = cfTypeId("Array");
 
     const anyFunction = (() => {
-        const spreadParam = cfFunctionSignatureParam(false, /*should be the builtin instantiated any[]*/ any, "args");
+        // the spread param type should be ...any[], 
+        // but it's unclear when we should instantiate the array type
+        // instead, we'll treat it as a primitive, and "any function"
+        // has assignability rules dictated in a manner similar to other primitives
+        const spreadParam = cfFunctionSignatureParam(false, any, "args");
         (spreadParam as Mutable<TypeBase>).flags |= TypeFlags.spread;
         return cfFunctionSignature("", [spreadParam], any, []);
     })();
