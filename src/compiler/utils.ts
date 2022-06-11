@@ -1199,7 +1199,6 @@ const defaultScopeLookupOrder : readonly StaticallyKnownScopeName[] = [
     "local",
     "arguments",
     "__query", // magic inaccessible scope inside a <cfloop query=#q#>...</cfquery> body
-    // @useless-transient "__transient", // found a quasi-declaration (raw assignment) which we can possibly use; keep climbing for an actual decl, but use this if we find no other
     "thread",
     "variables",
     "cgi",
