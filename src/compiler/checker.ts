@@ -619,8 +619,8 @@ export function Checker(options: ProjectOptions) {
      */
     function runMappedComponentMembersInjectionResult(injectionResultType: Type) {
         if (injectionResultType.kind === TypeKind.struct) {
-            const nameType = injectionResultType.members.get("name")?.lexicalType;
-            const type = injectionResultType.members.get("type")?.lexicalType;
+            const nameType = injectionResultType.members.get("name")?.effectivelyDeclaredType;
+            const type = injectionResultType.members.get("type")?.effectivelyDeclaredType;
             const hasValidName = nameType?.kind === TypeKind.literal && typeof nameType.literalValue === "string";
             const hasValidType = !!type;
             if (hasValidName && hasValidType) {
@@ -704,7 +704,7 @@ export function Checker(options: ProjectOptions) {
                 const mergedMembers = new Map<string, SymTabEntry>();
                 for (const key of keys) {
                     if (l.members.has(key) && r.members.has(key)) {
-                        const mergedType = mergeTypes(l.members.get(key)!.lexicalType!, r.members.get(key)!.lexicalType!);
+                        const mergedType = mergeTypes(l.members.get(key)!.effectivelyDeclaredType ?? BuiltinType.any, r.members.get(key)!.effectivelyDeclaredType ?? BuiltinType.any);
                         // doesn't copy links?
                         mergedMembers.set(key, {
                             canonicalName: key,
@@ -3646,11 +3646,11 @@ export function Checker(options: ProjectOptions) {
                             if (sig.params[i].flags & TypeFlags.spread && freshType.kind === TypeKind.tuple) {
                                 originalTypeWasConcrete = false;
                                 for (const tupleElement of freshType.elements) {
-                                    if (!tupleElement.lexicalType) {
+                                    if (!tupleElement.effectivelyDeclaredType) {
                                         return null;
                                     }
                                     const freshType = typeWorker(
-                                        tupleElement.lexicalType,
+                                        tupleElement.effectivelyDeclaredType,
                                         typeParamMap,
                                         partiallyApplyGenericFunctionSigs,
                                         updatedLookupDeferrals
@@ -3887,7 +3887,7 @@ export function Checker(options: ProjectOptions) {
                                 result.push({node: element});
                             }
                             else {
-                                // fixme: heavy reliance on how not very strictly  typed structure here
+                                // fixme: heavy reliance on not very strictly typed structure here
                                 const typeExpr = ((element.expr as TypeAnnotation | undefined)?.type as cfTypeId | undefined);
                                 if (!typeExpr) {
                                     continue; // effectively push ""
@@ -3978,11 +3978,11 @@ export function Checker(options: ProjectOptions) {
 
                     const instantiatedMembers = new Map<string, SymTabEntry>();
                     for (const [name, symTabEntry] of iface.members) {
-                        const freshType = typeWorker(symTabEntry.lexicalType!, preInstantiatedArgMap, true);
+                        const freshType = typeWorker(symTabEntry.effectivelyDeclaredType ?? symTabEntry.lexicalType ?? BuiltinType.any, preInstantiatedArgMap, true);
                         if (!freshType) {
                             return {status: TypeCache_Status.failure};
                         }
-                        instantiatedMembers.set(name, {...symTabEntry, lexicalType: freshType});
+                        instantiatedMembers.set(name, {...symTabEntry, effectivelyDeclaredType: freshType});
                     }
 
                     let result : Type;

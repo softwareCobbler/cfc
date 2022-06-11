@@ -149,20 +149,6 @@ export type Node =
     | ParamStatement
     | StaticAccess
 
-//
-// wip:
-// cf-declared-initial-type (really only relevant for function args)
-// declaredInitialType is always any?
-// inferredInitialType would be typeof assignment at declartion, if any 
-// annotatedType is for first declaration
-//
-// "first lexical type" and "links.effectivelyDeclaredType" are painful to deal with, have to check 2 things for undefined at every use site
-// do we NEED first lexical type? just have SymtabEntry.effectivelyDeclaredType, where
-// // @! arg v : "A" | "B"
-// function foo(string v) {}
-// on binding, symtab entry gets effectively declared type of string; then is refined in checker to "A" | "B"
-// during the refinement is when we'd make sure that the annotated type is a subtype of the original "effectively declared type"
-//
 export const enum SymbolFlags {
     synthesizedInjection = 1 << 0, // for cfc-transform injected things
     syntheticGetterSetter = 1 << 1, // auto-generated getter / setter when cfc accesors=true
@@ -174,10 +160,12 @@ export interface SymTabEntry {
     declarations: Node[] | null,
     flags: SymbolFlags,
     /**
-     * lexicalType is the type a user wrote
-     * effectively declared type is the instantiated lexical-or-inferred type
+     * The type a user wrote
      */
     lexicalType: Type | undefined,
+    /**
+     * The instantiated lexical-or-inferred type
+     */
     effectivelyDeclaredType: Type | undefined,
     /**
      * this can be -1 for cases where it's irrelevant, otherwise should be a unique id for lookup purposes in other maps
