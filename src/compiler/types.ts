@@ -1,4 +1,4 @@
-import type { ArrowFunctionDefinition, CfTag, DottedPath, FunctionDefinition, InterpolatedStringLiteral, Script, SourceFile, SymbolTable, SymTabEntry, Tag, TagAttribute } from "./node";
+import type { ArrowFunctionDefinition, CfTag, DottedPath, FunctionDefinition, InterpolatedStringLiteral, Node, Script, SourceFile, SymbolTable, SymTabEntry, Tag, TagAttribute } from "./node";
 import { NodeKind } from "./node";
 import { exhaustiveCaseGuard, getAttributeValue, getTriviallyComputableString, Mutable } from "./utils";
 import * as path from "path"; // !! for stringifying CFC types...do we really want this dependency here?
@@ -167,10 +167,11 @@ function addDebugTypeInfo(type: Type) {
 export interface TypeBase {
     readonly kind: TypeKind,
     readonly flags: TypeFlags,
-
+    
     readonly underlyingType?: Type,
     readonly capturedContext?: ReadonlyMap<string, Type>, // for type evaluation of typeconstructors, is this necessary?
-    readonly concrete?: boolean
+    readonly concrete?: boolean,
+    readonly context?: Node,
 }
 
 // readonly name?: string,
@@ -531,18 +532,21 @@ export function TypeConstructorParam(name: string, defaultType?: Type, extends_?
 export interface cfTypeId extends TypeBase {
     readonly kind: TypeKind.typeId,
     readonly name: string,
-    readonly indexChain?: readonly (cfLiteralType | cfTypeId)[]
+    readonly next?: cfTypeId
 }
 
-export function cfTypeId(name: string, indexChain?: (cfLiteralType | cfTypeId)[]) : cfTypeId {
+export function cfTypeId(head: string, rest?: cfTypeId[]) : cfTypeId {
     const type : cfTypeId = {
         kind: TypeKind.typeId,
         flags: TypeFlags.none,
-        name
+        name: head
     } as const;
 
-    if (indexChain?.length) {
-        (type as Mutable<cfTypeId>).indexChain = indexChain;
+    if (rest?.length) {
+        let working = type;
+        for (let i = 0; i < rest.length; ++i) {
+            working = (working as Mutable<cfTypeId>).next = rest[i];
+        }
     }
 
     return createType(type);

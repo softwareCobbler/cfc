@@ -594,4 +594,27 @@ describe("general smoke test for particular constructs", () => {
         const dfs = DebugFileSystem(fsRoot);
         assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0, EngineVersions["lucee.5"], {checkFlowTypes: true});
     })
+    it("parses and applies a cfc-transform in a cfc file and performs lookup into imported namespace for the transformer", () => {
+        const files = TestLoader.loadMultiFileTest("./test/sourcefiles/cfc-transform.cfm");
+        const fsRoot : FileSystemNode = {"/": {}};
+
+        pushFsNode(fsRoot, "/SomeLib.d.cfm", files["/SomeLib.d.cfm"]);
+        pushFsNode(fsRoot, "/A.cfc", files["/A.cfc"]);
+
+        const completionsAtMeta = TestLoader.loadCompletionAtTestFromSource(files["/B.cfc"]);
+        pushFsNode(fsRoot, "/B.cfc", completionsAtMeta.sourceText);
+
+        const dfs = DebugFileSystem(fsRoot);
+        const project = Project("/", dfs, {...options(), parseTypes: true})
+
+        project.addFile("SomeLib.d.cfm");
+        project.addFile("A.cfc");
+        project.addFile("B.cfc");
+
+        const completions = getCompletions(project, "B.cfc", completionsAtMeta.index, null);
+        assert.strictEqual(!!completions.find(v => v.label === "scopeWithBar"), true);
+        assert.strictEqual(!!completions.find(v => v.label === "scopeWithBar"), true);
+        assert.strictEqual(!!completions.find(v => v.label === "WithFoo"), true);
+        assert.strictEqual(!!completions.find(v => v.label === "WithBar"), true);
+    })
 });

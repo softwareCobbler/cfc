@@ -24,7 +24,7 @@ import {
     New,
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
-    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess, Namespace, TypeImport } from "./node";
+    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess, Namespace, TypeImport, TypeInfo } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard, Mutable } from "./utils";
 import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature, cfConditionalType, cfInterpolatedString, cfInferenceTarget, cfTuple } from "./types";
@@ -65,6 +65,7 @@ const enum ParseContext {
     cfcPsuedoConstructor, // inside the top-level of a cfc
     typeExtends,
     typeString,
+    typeNamespace,
     END                 // sentinel for looping over ParseContexts
 }
 
@@ -138,7 +139,7 @@ export function Parser(config: ProjectOptions) {
     let lookahead_ : TokenType;
     let token_ : Token;
     let peek0Cache_ : {mode: ScannerMode, value: Token} | null = null;
-    let lastNonTriviaToken : Token;
+    let lastNonTriviaToken : Token | undefined;
     let diagnostics : Diagnostic[] = [];
     let typedefContainer! : Node;
     let lastDocBlock : {
@@ -503,7 +504,8 @@ export function Parser(config: ProjectOptions) {
         }
         else {
             const actualError = errorMsg ?? "Expected '" + TokenTypeUiString[type] + "'";
-            parseErrorAtPos(lastNonTriviaToken.range.toExclusive, actualError);
+            const errPos = lastNonTriviaToken?.range.toExclusive ?? 0;
+            parseErrorAtPos(errPos, actualError);
             return phonyTerminalFromCurrentPos(type);
         }
     }
@@ -1070,7 +1072,7 @@ export function Parser(config: ProjectOptions) {
             case CfFileType.dCfm: {
                 const typedefs = parseTypeAnnotations().typedefs;
                 typedefContainer = sourceFile;
-                maybePushTypedefsToCurrentTypedefContainer(typedefs);
+                maybePushTypeinfoIntoToCurrentTypeinfoContainer(typedefs);
                 break;
             }
         }
@@ -2769,6 +2771,12 @@ export function Parser(config: ProjectOptions) {
 
     function startsParseInContext(what: ParseContext) : boolean {
         switch (what) {
+            case ParseContext.typeNamespace:
+                // in a namespace, we can parse if it starts with "@!"
+                // how we deal with comments in this context needs work, especially
+                // since we are probably already in a comment to declare the namespace,
+                // because `/* @!namespace Foo { ... } */` is intended to be valid
+                return peek().text === "@" && peek(1).text === "!";
             case ParseContext.arrayLiteralBody:
             case ParseContext.structLiteralBody:
             case ParseContext.argOrParamList:
@@ -2804,6 +2812,7 @@ export function Parser(config: ProjectOptions) {
             case ParseContext.structLiteralBody:
             case ParseContext.typeStruct:
             case ParseContext.blockStatements:
+            case ParseContext.typeNamespace:
                 return lookahead() === TokenType.RIGHT_BRACE;
             case ParseContext.switchClause:
                 return lookahead() === TokenType.KW_CASE
@@ -2961,7 +2970,7 @@ export function Parser(config: ProjectOptions) {
         let name : string;
 
         if (!isIdentifier()) {
-            parseErrorAtPos(lastNonTriviaToken.range.toExclusive, parseErrorMsg ?? "Expected an identifier.");
+            parseErrorAtPos(lastNonTriviaToken?.range.toExclusive ?? 0, parseErrorMsg ?? "Expected an identifier.");
 
             terminal = NilTerminal(pos());
             name = "";
@@ -3434,43 +3443,28 @@ export function Parser(config: ProjectOptions) {
     /**
      * fixme: this pattern repeats here and in the cfc preamble when parsing a cfc
      */
-    function maybePushTypedefsToCurrentTypedefContainer(typedefs: (Typedef|Interfacedef|Namespace|TypeImport)[] | undefined) : void {
-        // why would the container not have a contained scope? it's the target typedef container ... ?
-        if (!typedefs || !typedefContainer.containedScope) {
-            return;
-        }
-
-        // we still will have parsed them but we might discard
-        const allowNamespacesAndTypeImports = typedefContainer === sourceFile
-            && (sourceFile.cfFileType === CfFileType.cfc || sourceFile.cfFileType === CfFileType.dCfm);
-
+    function pushTypeinfoIntoTypeinfoContainer(typedefs: (Typedef|Interfacedef|Namespace|TypeImport)[], typeinfo: TypeInfo) : void {
         for (const typeshim of typedefs) {
             switch (typeshim.shimKind) {
                 case TypeShimKind.interfacedef: {
-                    if (typedefContainer.containedScope.typeinfo.interfaces.has((typeshim.type as Interface).name)) {
-                        typedefContainer.containedScope.typeinfo.interfaces.get((typeshim.type as Interface).name)!.push(typeshim.type as Interface);
+                    if (typeinfo.interfaces.has((typeshim.type as Interface).name)) {
+                        typeinfo.interfaces.get((typeshim.type as Interface).name)!.push(typeshim.type as Interface);
                     }
                     else {
-                        typedefContainer.containedScope.typeinfo.interfaces.set((typeshim.type as Interface).name, [typeshim.type as Interface]);
+                        typeinfo.interfaces.set((typeshim.type as Interface).name, [typeshim.type as Interface]);
                     }
                     break;
                 }
                 case TypeShimKind.typedef: {
-                    typedefContainer.containedScope.typeinfo.aliases.set(typeshim.name, typeshim.type);
+                    typeinfo.aliases.set(typeshim.name, typeshim.type);
                     break;
                 }
                 case TypeShimKind.namespace: {
-                    if (!allowNamespacesAndTypeImports) {
-                        break;
-                    }
-                    typedefContainer.containedScope.typeinfo.namespaces.set(typeshim.name, typeshim);
+                    typeinfo.namespaces.set(typeshim.name, typeshim);
                     break;
                 }
                 case TypeShimKind.import: {
-                    if (!allowNamespacesAndTypeImports) {
-                        break;
-                    }
-                    typedefContainer.containedScope.typeinfo.imports.set(typeshim.qualifiedName, typeshim);
+                    typeinfo.imports.set(typeshim.qualifiedName, typeshim);
                     break;
                 }
                 default: exhaustiveCaseGuard(typeshim);
@@ -3478,10 +3472,32 @@ export function Parser(config: ProjectOptions) {
         }
     }
 
+    function maybePushTypeinfoIntoToCurrentTypeinfoContainer(typeinfo: (Typedef|Interfacedef|Namespace|TypeImport)[] | undefined) : void {
+        // why would the container not have a contained scope? it's the target typedef container ... ?
+        if (!typeinfo || !typedefContainer.containedScope) {
+            return;
+        }
+
+        // we still will have parsed them but we might discard
+        const allowNamespacesAndTypeImports = typedefContainer === sourceFile
+            && (sourceFile.cfFileType === CfFileType.cfc || sourceFile.cfFileType === CfFileType.dCfm);
+
+        if (!allowNamespacesAndTypeImports) {
+            pushTypeinfoIntoTypeinfoContainer(
+                typeinfo.filter(v => v.shimKind !== TypeShimKind.import && v.shimKind !== TypeShimKind.namespace),
+                typedefContainer.containedScope.typeinfo);
+        }
+        else {
+            pushTypeinfoIntoTypeinfoContainer(
+                typeinfo,
+                typedefContainer.containedScope.typeinfo);
+        }
+    }
+
     function tryParseNamedFunctionDefinition(speculative: false, asDeclaration: boolean) : Script.FunctionDefinition;
     function tryParseNamedFunctionDefinition(speculative: true) : Script.FunctionDefinition | null;
     function tryParseNamedFunctionDefinition(speculative: boolean, asDeclaration = false) : Script.FunctionDefinition | null {
-        maybePushTypedefsToCurrentTypedefContainer(lastDocBlock?.typedefs);
+        maybePushTypeinfoIntoToCurrentTypeinfoContainer(lastDocBlock?.typedefs);
 
         const savedLastDocBlock = lastDocBlock;
         const savedTypedefContainer = typedefContainer;
@@ -3703,7 +3719,7 @@ export function Parser(config: ProjectOptions) {
                 parseErrorAtCurrentToken("Type-level struct member definition expected.");
                 return;
             case ParseContext.argOrParamList:
-                parseErrorAtPos(lastNonTriviaToken.range.toExclusive, "Expression expected.");
+                parseErrorAtPos(lastNonTriviaToken?.range.toExclusive ?? 0, "Expression expected.");
                 return;
             case ParseContext.structLiteralBody:
                 parseErrorAtPos(pos(), "Struct literal key expected.");
@@ -4273,6 +4289,17 @@ export function Parser(config: ProjectOptions) {
         parseContext = savedParseContext;
     }
 
+    // this helps bolt on parsing type statements, which need to "emit" parse results into some collector
+    function TypeStatementCollector() {
+        return {
+            defs: [] as (Typedef | Interfacedef | Namespace | TypeImport)[],
+            typeAnnotations: [] as TypeAnnotation[], // should only be one per docblock or comment right? (T | null) not (T[])
+            argumentAnnotations: [] as NamedAnnotation[],
+            treatAsConstructor: false,
+        }
+    }
+    type TypeStatementCollector = ReturnType<typeof TypeStatementCollector>;
+
     /**
      * fixme: this is duplicate work along w/ doing the same in a docblock
      * parse type annotations
@@ -4287,72 +4314,15 @@ export function Parser(config: ProjectOptions) {
         parseContext = 1 << ParseContext.typeAnnotation;
         parseTrivia();
         
-        const result = {
-            defs: <(Typedef | Interfacedef | Namespace | TypeImport)[]>[],
-            typeAnnotations: <TypeAnnotation[]>[], // should only be on per docblock or comment right? (T | null) not (T[])
-            argumentAnnotations: <NamedAnnotation[]>[]
-        }
-
-        let treatAsConstructor = false;
+        const result = TypeStatementCollector();
 
         while (lookahead() !== TokenType.EOF) {
-            if (peek().text === "@" && peek(1).text === "!") { // expensive to peek(1) and next(), next()
-                next(), next();
-                const contextualKeyword = peek();
-                if (contextualKeyword.text === "interface") {
-                    // leave scanner alone, type parser needs "interface"
-                    const ifaceDef = parseType();
-                    if (ifaceDef.kind === TypeKind.interface) {
-                        result.defs.push(Interfacedef(ifaceDef));
-                    }
-                }
-                else if (contextualKeyword.text === "type") {
-                    next(), parseTrivia();
-                    result.typeAnnotations.push(TypeAnnotation(parseType()));
-                }
-                else if (contextualKeyword.text === "typedef") {
-                    next(), parseTrivia();
-                    const typeDef = parseTypeDef();
-                    result.defs.push(typeDef);
-                }
-                else if (contextualKeyword.text === "init") {
-                    advance(5);
-                    treatAsConstructor = true;
-                }
-                else if (contextualKeyword.text === "arg") {
-                    advance(3);
-                    parseTrivia();
-                    const name = scanIdentifier();
-                    if (!name) {
-                        parseErrorAtRange(new SourceRange(pos(), pos() + 1), "Expected an identifier");
-                        next(); // some kind of error...
-                    }
-                    else {
-                        parseTrivia();
-                        parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
-                        const type = parseType();
-                        result.argumentAnnotations.push(NamedAnnotation(name, type));
-                    }
-                }
-                else if (contextualKeyword.text === "import") {
-                    advance("import".length);
-                    parseTrivia();
-                    result.defs.push(parseTypeImport());
-                }
-                else if (contextualKeyword.text === "namespace") {
-                    advance("namespace".length);
-                    parseTrivia();
-                    const name = parseExpectedLexemeLikeTerminal_alwaysAdvanceOnFaliure(ParseOptions.withTrivia);
-                    const namespace = parseNamespaceBody(name.token.text);
-                    result.defs.push(namespace);
-                }
-                else {
-                    next(), parseTrivia();
-                    // parse error ? if skipUnrecognized === false?
-                }
+            if (peek().text === "@" && peek(1).text === "!") {
+                parseTypeStatement(result);
             }
             else {
-                next(), parseTrivia();
+                next();
+                parseTrivia();
             }
         }
         
@@ -4363,7 +4333,66 @@ export function Parser(config: ProjectOptions) {
             typedefs:result.defs,
             typeAnnotations: result.typeAnnotations,
             argumentAnnotations: result.argumentAnnotations.length > 0 ? result.argumentAnnotations : null,
-            treatAsConstructor
+            treatAsConstructor: result.treatAsConstructor
+        }
+    }
+
+    /**
+     */
+    function parseTypeStatement(out: TypeStatementCollector) {
+        // parse "@"
+        parseExpectedTerminal(TokenType.CHAR, ParseOptions.noTrivia);
+        // parse "!"
+        parseExpectedTerminal(TokenType.EXCLAMATION, ParseOptions.noTrivia);
+        // peek <type-kind>, we may or may not need to advance before we parse the subsequent type
+        const token = peek();
+
+        if (token.text === "interface") {
+            // leave scanner alone, type parser needs "interface"
+            const ifaceDef = parseType();
+            if (ifaceDef.kind === TypeKind.interface) {
+                out.defs.push(Interfacedef(ifaceDef));
+            }
+        }
+        else if (token.text === "type") {
+            next(), parseTrivia();
+            out.typeAnnotations.push(TypeAnnotation(parseType()));
+        }
+        else if (token.text === "typedef") {
+            next(), parseTrivia();
+            const typeDef = parseTypeDef();
+            out.defs.push(typeDef);
+        }
+        else if (token.text === "init") {
+            advance(5);
+            out.treatAsConstructor = true;
+        }
+        else if (token.text === "arg") {
+            advance(3);
+            parseTrivia();
+            const name = scanIdentifier();
+            if (!name) {
+                parseErrorAtRange(new SourceRange(pos(), pos() + 1), "Expected an identifier");
+                next(); // some kind of error...
+            }
+            else {
+                parseTrivia();
+                parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
+                const type = parseType();
+                out.argumentAnnotations.push(NamedAnnotation(name, type));
+            }
+        }
+        else if (token.text === "import") {
+            advance("import".length);
+            parseTrivia();
+            out.defs.push(parseTypeImport());
+        }
+        else if (token.text === "namespace") {
+            advance("namespace".length);
+            parseTrivia();
+            const name = parseExpectedLexemeLikeTerminal_alwaysAdvanceOnFaliure(ParseOptions.withTrivia);
+            const namespace = parseNamespaceBody(name.token.text);
+            out.defs.push(namespace);
         }
     }
 
@@ -4374,8 +4403,13 @@ export function Parser(config: ProjectOptions) {
      */
          function parseNamespaceBody(name: string) : Namespace {
             parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
-            const body = parseTypeAnnotations();
-            return Namespace(name, body.typedefs.filter((v) : v is Typedef => v.shimKind === TypeShimKind.typedef));
+            const collector = TypeStatementCollector();
+            parseList(ParseContext.typeNamespace, () => parseTypeStatement(collector));
+            parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
+            const namespace = Namespace(name);
+            pushTypeinfoIntoTypeinfoContainer(
+                collector.defs.filter(v => v.shimKind !== TypeShimKind.import), namespace.containedScope.typeinfo);
+            return namespace;
         }
     
     /**

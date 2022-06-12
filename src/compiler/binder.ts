@@ -1,7 +1,7 @@
-import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, UnreachableFlow, FlowType, ConditionalSubtype, SymbolTable, Property, ParamStatement, ParamStatementSubType, typeinfo, DiagnosticKind, StaticallyKnownScopeName, SwitchCaseType, SymbolFlags } from "./node";
-import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol, findAncestor, TupleKeyedMap, isNamedFunction, isInEffectiveConstructorMethod } from "./utils";
+import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, UnreachableFlow, FlowType, ConditionalSubtype, SymbolTable, Property, ParamStatement, ParamStatementSubType, typeinfo, DiagnosticKind, StaticallyKnownScopeName, SwitchCaseType, SymbolFlags, TypeShimKind } from "./node";
+import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol, findAncestor, TupleKeyedMap, isNamedFunction, isInEffectiveConstructorMethod, Mutable } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
-import { BuiltinType, Type, Interface, cfTypeId } from "./types";
+import { BuiltinType, Type, Interface, cfTypeId, TypeKind } from "./types";
 import { Engine, supports } from "./engines";
 import { ProjectOptions } from "./project";
 
@@ -69,7 +69,7 @@ export function Binder(options: ProjectOptions) {
             sourceFile.containedScope.this = new Map<string, SymTabEntry>();
         }
 
-        bindTypeAndInterfacedefsForContainer(sourceFile);
+        bindTypeinfoForContainer(sourceFile, sourceFile);
         bindList(sourceFile.content, sourceFile);
 
         (sourceFile as any) = undefined;
@@ -278,16 +278,49 @@ export function Binder(options: ProjectOptions) {
 
     const scopeInterfaceNames : StaticallyKnownScopeName[] = ["variables", "application"];
 
-    function bindTypeAndInterfacedefsForContainer(node: Node) {
+    function bindType(type: Type | undefined, context: Node) : void {
+        if (!type) {
+            return;
+        }
+
+        (type as Mutable<Type>).context = context;
+
+        switch (type.kind) {
+            case TypeKind.typeId: {
+                // no-op
+                break;
+            }
+            case TypeKind.interface: // fallthrough
+            case TypeKind.struct: {
+                for (const member of type.members.values()) {
+                    bindType(member.lexicalType, context);
+                }
+                break;
+            }
+            case TypeKind.conditional: {
+                bindType(type.typeId, context);
+                bindType(type.extends, context);
+                bindType(type.consequent, context);
+                bindType(type.alternative, context);
+                return;
+            }
+        }
+    }
+
+    function bindTypeinfoForContainer(node: Node, owningContainer: Node) {
         if (!node.containedScope) {
             return;
         }
         for (const [name, defs] of node.containedScope.typeinfo.interfaces) {
+            for (const def of defs) {
+                bindType(def, node);
+            }
             const localMergedDef = defs.length === 1 ? defs[0] : mergeInterfaces(name, defs);
             const parentMergedDef = mergeInterfaceWithParent(node, name, localMergedDef);
             node.containedScope.typeinfo.mergedInterfaces.set(name, parentMergedDef);
         }
         for (const [name, type] of node.containedScope.typeinfo.aliases) {
+            bindType(type, node);
             currentContainer.containedScope.typeinfo.aliases.set(name, type);
         }
         if (node === sourceFile) {
@@ -300,6 +333,13 @@ export function Binder(options: ProjectOptions) {
                     name, mergeInterfaceWithParent(node, name, mergeable)
                 );
             }
+        }
+        if (node.kind === NodeKind.typeShim && node.shimKind === TypeShimKind.namespace) {
+            node.parent = owningContainer;
+            node.containedScope.parentContainer = owningContainer;
+        }
+        for (const namespace of node.containedScope.typeinfo.namespaces.values()) {
+            bindTypeinfoForContainer(namespace, node);
         }
     }
     
@@ -326,7 +366,9 @@ export function Binder(options: ProjectOptions) {
                     mergeable.push(lib.containedScope.typeinfo.mergedInterfaces.get(name)!);
                 }
             }
-            return mergeInterfaces(name, mergeable);
+            const result = mergeInterfaces(name, mergeable);
+            bindType(result, base);
+            return result;
         }
 
         let working : Node | null = base;
@@ -336,7 +378,9 @@ export function Binder(options: ProjectOptions) {
                 if (working.containedScope.typeinfo.mergedInterfaces.has(name)) {
                     const mergeable = [working.containedScope.typeinfo.mergedInterfaces.get(name)!];
                     if (iface) mergeable.push(iface);
-                    return mergeInterfaces(name, mergeable);
+                    const result = mergeInterfaces(name, mergeable);
+                    bindType(result, base);
+                    return result;
                 }
                 else {
                     working = working.containedScope.parentContainer;
@@ -1064,7 +1108,7 @@ export function Binder(options: ProjectOptions) {
             arguments: new Map<string, SymTabEntry>(),
         };
 
-        bindTypeAndInterfacedefsForContainer(node);
+        bindTypeinfoForContainer(node, currentContainer);
 
         // fixme: we also do this in bindFunctionParameter, so we get duplicate nodes in each param's symbol decl list
         for (let i = 0; i < node.params.length; i++) {
@@ -1376,9 +1420,7 @@ export function Binder(options: ProjectOptions) {
     function bindDeclarationFile(sourceFile: SourceFile) {
         sourceFile.containedScope.parentContainer = null;
         sourceFile.containedScope.__declaration = new Map<string, SymTabEntry>();
-
-
-        bindTypeAndInterfacedefsForContainer(sourceFile);
+        bindTypeinfoForContainer(sourceFile, sourceFile);
     }
 
 

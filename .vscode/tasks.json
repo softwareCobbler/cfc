@@ -11,7 +11,7 @@
         // To stop in the test file itself you have to use 'debugger' statements
         "label": "build-current-test-as-debuggable-test",
         "type": "shell",
-        "command": "cd test && rm -rf out && npx esbuild --bundle ${file} --outfile=out/debug-test.js --platform=node --sourcemap",
+        "command": "cd test && rm -rf out && npx esbuild --bundle ${workspaceFolder}/test/targeted-construct-smoketest.spec.ts --outfile=out/debug-test.js --platform=node --sourcemap",
       }
     ]
   }

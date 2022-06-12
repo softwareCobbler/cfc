@@ -192,9 +192,11 @@ export function typeinfo() {
     };
 }
 
+export type TypeInfo = ReturnType<typeof typeinfo>;
+
 export type ScopeDisplay = {
     parentContainer: Node | null,
-    typeinfo: ReturnType<typeof typeinfo>,
+    typeinfo: TypeInfo,
 } & {[name in StaticallyKnownScopeName]?: Map<string, SymTabEntry>}
 
 const staticallyKnownScopeName = [
@@ -2522,14 +2524,17 @@ export interface Interfacedef extends TypeShimBase {
 export interface Namespace extends TypeShimBase {
     shimKind: TypeShimKind.namespace,
     name: string,
-    typedefs: Typedef[]
+    containedScope: ScopeDisplay,
 }
 
-export function Namespace(name: string, typedefs: Typedef[]) : Namespace {
+export function Namespace(name: string) : Namespace {
     const v = NodeBase<TypeShimBase>(NodeKind.typeShim, SourceRange.Nil()) as Namespace;
     v.shimKind = TypeShimKind.namespace;
     v.name = name;
-    v.typedefs = typedefs;
+    v.containedScope = {
+        parentContainer: null,
+        typeinfo: typeinfo()
+    }
     return v;
 }
 

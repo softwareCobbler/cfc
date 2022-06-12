@@ -62,7 +62,7 @@
 			]
 		},
 		{
-			"name": "debug current test w/ precompile",
+			"name": "debug target test w/ precompile",
 			"type": "node",
 			"request": "launch",
 			"preLaunchTask": "build-current-test-as-debuggable-test",
