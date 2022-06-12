@@ -1163,6 +1163,11 @@ export function structurallyCompareTypes(l: Type, r: Type) : -1 | 0 | 1 {
         return 0;
     }
 
+    if (l?.kind === undefined || r?.kind === undefined) {
+        debugger;
+    }
+
+    try {
     // we don't know what two "T"'s here represent, so they are not equal
     // which makes some sense, since T in context<0> and T in context<1> could be totally different
     // but after instantiation, we will know if (context<0>, instantiated<T>) === (context<1>, instantiated<T>)
@@ -1184,6 +1189,11 @@ export function structurallyCompareTypes(l: Type, r: Type) : -1 | 0 | 1 {
         }
         else return -1;
     }
+}
+catch (e) {
+    debugger;
+    throw e;
+}
 
     if (isPrimitiveType(l) && isPrimitiveType(r)) {
         return comparePrimitiveTypes(l, r);
@@ -1221,11 +1231,15 @@ export function structurallyCompareTypes(l: Type, r: Type) : -1 | 0 | 1 {
         const rmembers = [...r.members.entries()].sort(sortStructMembersByName);
 
         for (let i = 0; i < lmembers.length; i++) {
-            const [lname, {lexicalType: ltype}] = lmembers[i];
-            const [rname, {lexicalType: rtype}] = rmembers[i];
+            const lname = lmembers[i][0];
+            const rname = rmembers[i][0];
 
             if (lname < rname) return -1;
             if (lname > rname) return 1;
+
+            // shouldn't have to lookup into lexicalType but we don't 100% correctly configure types to always have an effectively declared type
+            const ltype = lmembers[i][1].effectivelyDeclaredType ?? lmembers[i][1].lexicalType ?? BuiltinType.any;
+            const rtype = rmembers[i][1].effectivelyDeclaredType ?? rmembers[i][1].lexicalType ?? BuiltinType.any;
 
             const recursiveCompare = structurallyCompareTypes(ltype!, rtype!);
             if (recursiveCompare !== 0) return recursiveCompare;
@@ -1296,6 +1310,8 @@ export function structurallyCompareTypes(l: Type, r: Type) : -1 | 0 | 1 {
     if (debugTypeModule) {
         debugger;
     }
+
+    debugger;
 
     throw "unhandled types in structurallyCompareTypes";
 }

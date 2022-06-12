@@ -34,7 +34,7 @@ export function LanguageService<T extends ClientAdapter>() {
     const forkInfo = {
         languageToolFilePath: path.join(__dirname, REPLACED_AT_BUILD.runtimeLanguageToolPath),
         forkArgs: REPLACED_AT_BUILD.debug
-            ? {execArgv: ["--nolazy", "--inspect=6012", /*"--inspect-brk"*/]}
+            ? {execArgv: ["--nolazy", "--inspect=6012", "--inspect-brk"]}
             : {}
     } as const;
 

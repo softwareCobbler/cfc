@@ -2,7 +2,7 @@ import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, State
 import { CfcResolution, CfcResolver, ComponentResolutionArgs, EngineSymbolResolver, LibTypeResolver, ProjectOptions, ProjectRelativeImportLookup } from "./project";
 import { Scanner, CfFileType, SourceRange, TokenType } from "./scanner";
 import { cfFunctionSignature, Struct, cfUnion, BuiltinType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, Type, stringifyType, cfFunctionSignatureParam, cfFunctionOverloadSet, cfTypeId, SymbolTableTypeWrapper, Cfc, Interface, createType, createLiteralType, typeFromJavaLikeTypename, structurallyCompareTypes, TypeKind, isStructLike, cfArray, cfStructLike, isStructLikeOrArray, cfGenericFunctionSignature, cfKeyof, cfTypeConstructorParam, TypeConstructorParam, cfInterpolatedString, cfTuple } from "./types";
-import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, getUserSpecifiedReturnTypeType, getAttributeValue, getCallExpressionNameErrorRange, getComponentAttrs, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionNameTerminalErrorNode, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isInCfcPsuedoConstructor, isInEffectiveConstructorMethod, isLiteralExpr, isNamedFunction, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue, tryGetCfcMemberFunctionDefinition } from "./utils";
+import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, getUserSpecifiedReturnTypeType, getAttributeValue, getCallExpressionNameErrorRange, getComponentAttrs, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionNameTerminalErrorNode, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isInCfcPsuedoConstructor, isInEffectiveConstructorMethod, isLiteralExpr, isNamedFunction, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue, tryGetCfcMemberFunctionDefinition, visit } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol, TupleKeyedWeakMap } from "./utils";
 import { Engine, supports } from "./engines";
 import { NilTerminal } from "./node";
@@ -105,16 +105,47 @@ export function Checker(options: ProjectOptions) {
             if (sourceFile.cfc?.extends && sourceFile.cfc?.extends.containedScope.this) {
                 sourceFile.containedScope.super = sourceFile.cfc.extends.containedScope.this;
             }
+
+            instantiateInterfaces(sourceFile);
+
+            // in a cfc, need to do in order probably like:
+            // 1. properites
+            // 2. static blocks
+            // 3. functions
+            // 4. everything else
+            // also this helps with cfc mappers injecting property/function mappings
+            // might need to a "pre-pass" that just runs the injection mappings and then does actual checks
+
+            const properties : Property[] = [];
+            const functions: Node[] = [];
+
+            const extract = (node: Node | null | undefined) => {
+                if (!node) {
+                    return undefined;
+                }
+                else if (node.kind === NodeKind.functionDefinition) {
+                    functions.push(node);
+                    return undefined; // don't descend but keep visiting
+                }
+                else if (node.kind === NodeKind.property) {
+                    properties.push(node);
+                    return undefined; // don't descend but keep visiting
+                }
+                else {
+                    return visit(node, extract); // descend into a block that maybe holds functions or properties that will be hoisted
+                }
+            }
+
+            visit(sourceFile.content, extract);
+
+            checkList(properties);
+            checkList(functions);
+            // nodes already checked will have been marked with the checked flag, so they won't get checked twice
+            checkList(sourceFile.content);
         }
-
-        instantiateInterfaces(sourceFile);
-
-        // in a cfc, need to do in order like:
-        // 1. properites
-        // 2. static blocks, top-level declarations
-        // 3. functions
-
-        checkList(sourceFile.content);
+        else {
+            checkList(sourceFile.content);
+        }
 
         sourceFile = savedSourceFile;
         scanner = savedScanner;
@@ -221,8 +252,14 @@ export function Checker(options: ProjectOptions) {
     }
 
     function checkNode(node: Node | null) {
-        if (!node) return;
+        if (!node || (node.flags & NodeFlags.checked)) {
+            return;
+        }
+        checkNodeWorker(node);
+        node.flags |= NodeFlags.checked;
+    }
 
+    function checkNodeWorker(node: Node) {
         if (flowBecameUnreachable) {
             node.flags |= NodeFlags.unreachable;
             if (sourceFile.endOfNodeFlowMap.has(node.nodeId)) {
@@ -406,7 +443,7 @@ export function Checker(options: ProjectOptions) {
             case NodeKind.typeShim:
                 return;
             case NodeKind.property: {
-                const propertyMapper = sourceFile.containedScope.typeinfo.aliases.get("properties");
+                const propertyMapper = getCfcMapper("properties");
                 if (propertyMapper) {
                     tryEvaluatePropertyMapper(propertyMapper, node);
 
@@ -1806,14 +1843,10 @@ export function Checker(options: ProjectOptions) {
 
                         const effectivelyDeclaredType = getEffectivelyDeclaredType(lhsSymbol.symTabEntry);
                         if (effectivelyDeclaredType) {
-                            if (isAssignable(rhsType, effectivelyDeclaredType)) {
-                                setCachedEvaluatedFlowType(node.left.flow!, lhsSymbol.symTabEntry.symbolId, rhsType);
-                            }
-                            else {
-                                setCachedEvaluatedFlowType(node.left.flow!, lhsSymbol.symTabEntry.symbolId, effectivelyDeclaredType);
-                                const r = stringifyType(rhsType);
-                                const l = stringifyType(effectivelyDeclaredType);
+                            if (!isAssignable(rhsType, effectivelyDeclaredType)) {
                                 if (CHECK_FLOW_TYPES) {
+                                    const r = stringifyType(rhsType);
+                                    const l = stringifyType(effectivelyDeclaredType);
                                     issueDiagnosticAtNode(node.right, `Type '${r}' is not assignable to type '${l}'`, DiagnosticKind.error);
                                 }
                             }
@@ -2571,10 +2604,10 @@ export function Checker(options: ProjectOptions) {
         return signature;
     }
 
-    function getCfcFunctionMapper() : Type | undefined {
+    function getCfcMapper(name: string) : Type | undefined {
         const mapper = sourceFile
             .containedScope.typeinfo.namespaces.get("cf_CfcTransform")
-            ?.containedScope.typeinfo.aliases.get("functions");
+            ?.containedScope.typeinfo.aliases.get(name);
         return mapper ? evaluateType(mapper) : undefined;
     }
 
@@ -2583,100 +2616,107 @@ export function Checker(options: ProjectOptions) {
             return;
         }
 
-        const functionMapper = getCfcFunctionMapper();
+        const isMemberFunction = isCfcMemberFunctionDefinition(node);
 
-        if (functionMapper && node.kind === NodeKind.functionDefinition) {
-            tryEvaluateFunctionMapper(functionMapper, node);
+        if (isMemberFunction) {
+            const functionMapper = getCfcMapper("functions");
 
-            function functionAsTypeForFunctionMappingContext(f: FunctionDefinition) {
-                const members = new Map<string, SymTabEntry>();
+            if (functionMapper && node.kind === NodeKind.functionDefinition) {
+                tryEvaluateFunctionMapper(functionMapper, node);
 
-                members.set("cfname", {
-                    canonicalName: "cfname", 
-                    uiName: "cfname",
-                    flags: 0,
-                    declarations: null,
-                    lexicalType: undefined,
-                    effectivelyDeclaredType: createLiteralType(f.name?.ui ?? "<<missing-name>>"),
-                    symbolId: -1
-                })
+                function functionAsTypeForFunctionMappingContext(f: FunctionDefinition) {
+                    const members = new Map<string, SymTabEntry>();
+                    if ((f.name?.ui ?? "<<missing-name>>") === "<<missing-name>>") {
+                        debugger;
+                    }
 
-                for (const attr of f.attrs) {
-                    // for an attr without a right hand side like
-                    // foo=bar baz
-                    //         ^^^
-                    // we want `baz extend string` to be true
-                    const value = getTriviallyComputableString(attr.expr) ?? "";
-
-                    const name = attr.name.token.text;
-                    const lcName = name.toLowerCase();
-
-                    members.set(lcName, {
-                        canonicalName: lcName,
-                        uiName: name,
+                    members.set("cfname", {
+                        canonicalName: "cfname",
+                        uiName: "cfname",
                         flags: 0,
                         declarations: null,
                         lexicalType: undefined,
-                        effectivelyDeclaredType: createLiteralType(value),
+                        effectivelyDeclaredType: createLiteralType(f.name?.ui ?? "<<missing-name>>"),
                         symbolId: -1
-                    })  
-                }
+                    })
 
-                members.set("cfargs", {
-                    canonicalName: "cfargs",
-                    uiName: "cfargs",
-                    flags: 0,
-                    declarations: null,
-                    lexicalType: undefined,
-                    effectivelyDeclaredType: cfTuple(f.params.map((v) : SymTabEntry => {
-                        return {
-                            canonicalName: v.canonicalName,
-                            uiName: v.uiName,
+                    for (const attr of f.attrs) {
+                        // for an attr without a right hand side like
+                        // foo=bar baz
+                        //         ^^^
+                        // we want `baz extend string` to be true
+                        const value = getTriviallyComputableString(attr.expr) ?? "";
+
+                        const name = attr.name.token.text;
+                        const lcName = name.toLowerCase();
+
+                        members.set(lcName, {
+                            canonicalName: lcName,
+                            uiName: name,
                             flags: 0,
                             declarations: null,
                             lexicalType: undefined,
-                            effectivelyDeclaredType: BuiltinType.any, // need to pull type info
-                            symbolId: -1,
-                            links: {
-                                optional: !v.required
+                            effectivelyDeclaredType: createLiteralType(value),
+                            symbolId: -1
+                        })
+                    }
+
+                    members.set("cfargs", {
+                        canonicalName: "cfargs",
+                        uiName: "cfargs",
+                        flags: 0,
+                        declarations: null,
+                        lexicalType: undefined,
+                        effectivelyDeclaredType: cfTuple(f.params.map((v) : SymTabEntry => {
+                            return {
+                                canonicalName: v.canonicalName,
+                                uiName: v.uiName,
+                                flags: 0,
+                                declarations: null,
+                                lexicalType: undefined,
+                                effectivelyDeclaredType: BuiltinType.any, // need to pull type info
+                                symbolId: -1,
+                                links: {
+                                    optional: !v.required
+                                }
                             }
-                        }
-                    })),
-                    symbolId: -1
-                });
+                        })),
+                        symbolId: -1
+                    });
 
-                members.set("cfreturns", {
-                    canonicalName: "cfreturns",
-                    uiName: "cfreturns",
-                    flags: 0,
-                    declarations: null,
-                    lexicalType: undefined,
-                    effectivelyDeclaredType: BuiltinType.any, // probably have to require function has explicit return type, or we fallback to any
-                    symbolId: -1
-                });
+                    members.set("cfreturns", {
+                        canonicalName: "cfreturns",
+                        uiName: "cfreturns",
+                        flags: 0,
+                        declarations: null,
+                        lexicalType: undefined,
+                        effectivelyDeclaredType: BuiltinType.any, // probably have to require function has explicit return type, or we fallback to any
+                        symbolId: -1
+                    });
 
-                return Interface("", members);
-            }
-
-            function tryEvaluateFunctionMapper(mapper: Type, f: FunctionDefinition) {
-                // must be exactly @!typedef function<F> = (conditional-type)
-                if (
-                    mapper.kind !== TypeKind.typeConstructor
-                    || mapper.params.length !== 1
-                    || mapper.params[0].defaultType
-                    || mapper.params[0].extends
-                    || mapper.body.kind !== TypeKind.conditional
-                ) {
-                    return;
+                    return Interface("", members);
                 }
 
-                const evalContext = new Map<string, Type>();
-                // @!typedef functions<F> = ... [inject<name, type>] ---> `inject` is provided by compiler in this context
-                evalContext.set("inject", builtin_inject);
-                // @!typedef functions<F> = ... ----> F maps to a compiler provided interface containing property information
-                evalContext.set(mapper.params[0].name,  functionAsTypeForFunctionMappingContext(f));
-                const resultType = evaluateType(mapper.body, evalContext);
-                runMappedComponentMembersInjectionResult(resultType);
+                function tryEvaluateFunctionMapper(mapper: Type, f: FunctionDefinition) {
+                    // must be exactly @!typedef function<F> = (conditional-type)
+                    if (
+                        mapper.kind !== TypeKind.typeConstructor
+                        || mapper.params.length !== 1
+                        || mapper.params[0].defaultType
+                        || mapper.params[0].extends
+                        || mapper.body.kind !== TypeKind.conditional
+                    ) {
+                        return;
+                    }
+
+                    const evalContext = new Map<string, Type>();
+                    // @!typedef functions<F> = ... [inject<name, type>] ---> `inject` is provided by compiler in this context
+                    evalContext.set("inject", builtin_inject);
+                    // @!typedef functions<F> = ... ----> F maps to a compiler provided interface containing property information
+                    evalContext.set(mapper.params[0].name,  functionAsTypeForFunctionMappingContext(f));
+                    const resultType = evaluateType(mapper.body, evalContext);
+                    runMappedComponentMembersInjectionResult(resultType);
+                }
             }
         }
 
@@ -2684,9 +2724,8 @@ export function Checker(options: ProjectOptions) {
         // so here we can try to resolve CFC return types / param types
         // fixme -- binder doesn't need to do that? ...
 
-        const isMemberFunction = isCfcMemberFunctionDefinition(node);
         let memberFunctionSignature : cfFunctionSignature | undefined;
-        
+
         let symbol = isNamedFunction(node)
             ? walkupScopesToResolveSymbol(sourceFile, node.name.canonical)
             : undefined;
@@ -3547,23 +3586,23 @@ export function Checker(options: ProjectOptions) {
             type: Type | null,
             typeParamMap?: ReadonlyMap<string, Type>,
             partiallyApplyGenericFunctionSigs?: boolean,
-            falbackToAny?: true
+            initialFallbackToAny?: true
         ) : Type;
         function evaluateType(
             type: Type | null,
             typeParamMap?: ReadonlyMap<string, Type>,
             partiallyApplyGenericFunctionSigs?: boolean,
-            falbackToAny?: false
+            initialFallbackToAny?: false
         ) : Type | null;
         function evaluateType(
             type: Type | null,
             typeParamMap: ReadonlyMap<string, Type> = type?.capturedContext ?? new Map(),
             partiallyApplyGenericFunctionSigs = false,
-            fallbackToAny = true
+            initialFallbackToAny = true
         ) : Type | null {
             let depth = 0;
 
-            const result = typeWorker(type, typeParamMap, partiallyApplyGenericFunctionSigs);
+            const result = typeWorker(type, typeParamMap, partiallyApplyGenericFunctionSigs, undefined, initialFallbackToAny);
 
             typeConstructorInvocationCacheTrie = new Map();
 
@@ -3573,6 +3612,7 @@ export function Checker(options: ProjectOptions) {
                                 typeParamMap: ReadonlyMap<string, Type> | undefined = type?.capturedContext,
                                 partiallyApplyGenericFunctionSigs = false,
                                 lookupDeferrals?: ReadonlySet<string>,
+                                fallbackToAny = initialFallbackToAny,
                                 ) : Type | null {
                 if (depth > 64) {
                     return BuiltinType.never;
@@ -3851,10 +3891,14 @@ export function Checker(options: ProjectOptions) {
                         // return typeWorker(result, context);
                     }
                     else if (type.kind === TypeKind.conditional) {
-                        const what = typeWorker(type.typeId, typeParamMap);
-                        const extends_ = typeWorker(type.extends, typeParamMap);
+                        // even if current evaluation is fallbackToAny=true,
+                        // we want to return null here if we can't resolve the A or B in "B extends A ? t : f"
+                        // if B or A fails to resolve, we take the false branch
+                        const what = typeWorker(type.typeId, typeParamMap, partiallyApplyGenericFunctionSigs, lookupDeferrals, /*fallbackToAny*/ false);
+                        const extends_ = typeWorker(type.extends, typeParamMap, partiallyApplyGenericFunctionSigs, lookupDeferrals, /*fallbackToAny*/false);
+
                         if (!what || !extends_) {
-                            return null;
+                            return typeWorker(type.alternative, typeParamMap);
                         }
 
                         // we are in an inferrable position, so we might get inference results in this out param
