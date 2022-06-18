@@ -41,11 +41,47 @@ function projectFiddle() {
                 "someFolder": {
                     "someFile.cfc": `
                         /**
-                         * @!typedef X<T> = "foo#Uppercase<T>#"
-                         * @!typedef Y = X<"bar">
-                         */
+                         @!namespace CbOrm {
+                            @!namespace method_expression_intellisense_provider {
+                                @!typedef start_token = "findBy" | "findAllBy" | "countBy"
+                                @!typedef conditional =
+                                    | ""
+                                    | "LessThanEquals"
+                                    | "LessThan"
+                                    | "GreaterThanEquals"
+                                    | "GreaterThan"
+                                    | "Like"
+                                    | "NotEqual"
+                                    | "isNull"
+                                    | "isNotNull"
+                                    | "NotBetween"
+                                    | "Between"
+                                    | "NotInList"
+                                    | "inList"
+                                @!typedef operator = "And" | "Or"
+
+                                @!typedef pc<Result, S, Fs, Ps> = S extends "#infer p extends Ps.cfname##infer c extends conditional##infer rest#"
+                                    ? maybe_chain<"#Result##p##c#", rest, Fs, Ps>
+                                    : "#Result##Ps.cfname#" | "#Result##Ps.cfname##conditional#"
+
+                                @!typedef maybe_chain<Result, S, Fs, Ps> = S extends "#infer op extends operator##infer rest#"
+                                    ? pc<"#Result##op#", rest, Fs, Ps>
+                                    : "Result#operator##Ps.cfname#"
+
+                                @!typedef main<UserText, Fs, Ps> = "#Ps["cfname"]##Ps["cfname"]#";
+
+                                @!typedef xmain<UserText, Fs, Ps> = UserText extends "#infer head extends start_token##infer rest#"
+                                    ? pc<head, rest, Fs, Ps>
+                                    : "#start_token##Ps.cfname#"
+                            }
+                        }
+                        */
                         component {
-                            // @!arg foo : Y
+                            /**
+                             * @!arg foo : CbOrm.method_expression_intellisense_provider.main<"findAllByprop1", Fs, Ps>
+                             * @!typedef Ps = {cfname: "prop1"} | {cfname: "prop2"}
+                             * @!typedef Fs = never
+                             **/
                             function scopeWithFoo(required string foo, string baz) {}
                         }
                     `

@@ -1,8 +1,8 @@
 import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, UnreachableFlow, DiagnosticKind, TagAttribute, SymbolId, TypeShimKind, NonCompositeFunctionTypeAnnotation, Property, TypeAnnotation, InterpolatedStringLiteral, TextSpan, HashWrappedExpr, SymbolFlags } from "./node";
 import { CfcResolution, CfcResolver, ComponentResolutionArgs, EngineSymbolResolver, LibTypeResolver, ProjectOptions, ProjectRelativeImportLookup } from "./project";
 import { Scanner, CfFileType, SourceRange, TokenType } from "./scanner";
-import { cfFunctionSignature, Struct, cfUnion, BuiltinType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, Type, stringifyType, cfFunctionSignatureParam, cfFunctionOverloadSet, cfTypeId, SymbolTableTypeWrapper, Cfc, Interface, createType, createLiteralType, typeFromJavaLikeTypename, structurallyCompareTypes, TypeKind, isStructLike, cfArray, cfStructLike, isStructLikeOrArray, cfGenericFunctionSignature, cfKeyof, cfTypeConstructorParam, TypeConstructorParam, cfInterpolatedString, cfTuple, TypeConstructor } from "./types";
-import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, getUserSpecifiedReturnTypeType, getAttributeValue, getCallExpressionNameErrorRange, getComponentAttrs, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionNameTerminalErrorNode, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isInCfcPsuedoConstructor, isInEffectiveConstructorMethod, isLiteralExpr, isNamedFunction, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue, tryGetCfcMemberFunctionDefinition, visit } from "./utils";
+import { cfFunctionSignature, Struct, cfUnion, BuiltinType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, Type, stringifyType, cfFunctionSignatureParam, cfFunctionOverloadSet, cfTypeId, SymbolTableTypeWrapper, Cfc, Interface, createType, createLiteralType, typeFromJavaLikeTypename, structurallyCompareTypes, TypeKind, isStructLike, cfArray, cfStructLike, isStructLikeOrArray, cfGenericFunctionSignature, cfKeyof, cfTypeConstructorParam, TypeConstructorParam, cfInterpolatedString, cfTuple, TypeConstructor, cfLiteralType, TypeIndexedAccessType } from "./types";
+import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, getUserSpecifiedReturnTypeType, getAttributeValue, getCallExpressionNameErrorRange, getComponentAttrs, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionNameTerminalErrorNode, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isInCfcPsuedoConstructor, isInEffectiveConstructorMethod, isLiteralExpr, isNamedFunction, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue, tryGetCfcMemberFunctionDefinition, visit, escapeRegExp } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol, TupleKeyedWeakMap } from "./utils";
 import { Engine, supports } from "./engines";
 import { NilTerminal } from "./node";
@@ -20,7 +20,7 @@ const builtin_inject = (() => {
         flags: 0,
         declarations: null,
         lexicalType: undefined,
-        effectivelyDeclaredType: cfTypeId(name),
+        effectivelyDeclaredType: cfTypeId(name, TypeIndexedAccessType.head),
         symbolId: -1
     });
     members.set(type, {
@@ -29,7 +29,7 @@ const builtin_inject = (() => {
         flags: 0,
         declarations: null,
         lexicalType: undefined,
-        effectivelyDeclaredType: cfTypeId(type),
+        effectivelyDeclaredType: cfTypeId(type, TypeIndexedAccessType.head),
         symbolId: -1
     });
 
@@ -42,16 +42,16 @@ const builtin_inject = (() => {
 
 // magic builtin string utility types
 const builtin_capitalize = (() => {
-    return {name: "Capitalize", type: TypeConstructor([], cfTypeId("<<builtin-capitalize>>"))};
+    return {name: "Capitalize", type: TypeConstructor([], cfTypeId("<<builtin-capitalize>>", TypeIndexedAccessType.head))};
 })();
 const builtin_uncapitalize = (() => {
-    return {name: "Uncapitalize", type: TypeConstructor([], cfTypeId("<<builtin-uncapitalized>>"))};
+    return {name: "Uncapitalize", type: TypeConstructor([], cfTypeId("<<builtin-uncapitalized>>", TypeIndexedAccessType.head))};
 })();
 const builtin_uppercase = (() => {
-    return {name: "Uppercase", type: TypeConstructor([], cfTypeId("<<builtin-uppercase>>"))};
+    return {name: "Uppercase", type: TypeConstructor([], cfTypeId("<<builtin-uppercase>>", TypeIndexedAccessType.head))};
 })();
 const builtin_lowercase = (() => {
-    return {name: "Lowercase", type: TypeConstructor([], cfTypeId("<<builtin-lowercase>>"))};
+    return {name: "Lowercase", type: TypeConstructor([], cfTypeId("<<builtin-lowercase>>", TypeIndexedAccessType.head))};
 })();
 
 // the "debug" object should be moved into the Project object, and passed into the checker
@@ -931,8 +931,10 @@ export function Checker(options: ProjectOptions) {
     // `l !<: r` means "left is NOT a subtype of right"
     // it is maybe helpful to note that "sub" means "substitutable" in addition to "a descendant in a heirarchy"
     // i.e. `l <: r` means l is substitutable for r (you can safely use an l in r's place)
-    //
-    function isLeftSubtypeOfRight(l: Type, r: Type, sourceIsLiteralExpr = false, forReturnType = false, widenLiterals = false, inferenceResults?: Map<string, Type>) : boolean {
+    /**
+     * if called for types that might perform explicit inference (like "a#infer v#") then the caller must provide a typeParamMap and an inferenceResults out param
+     */
+    function isLeftSubtypeOfRight(l: Type, r: Type, sourceIsLiteralExpr = false, forReturnType = false, widenLiterals = false, typeParamMap?: ReadonlyMap<string, Type>, inferenceResults?: Map<string, Type>) : boolean {
         let depth = 0;
         let tooDeep = false;
         tooDeep ? 0 : 1; // yes compiler this is used
@@ -1035,7 +1037,8 @@ export function Checker(options: ProjectOptions) {
                 }
 
                 if (l.kind === TypeKind.literal && (typeof l.literalValue === "string") && r.kind === TypeKind.interpolatedString && r.flags & TypeFlags.inferenceTarget) {
-                    return checkAndInferInterpolatedStringTypes(l.literalValue, r, inferenceResults ?? new Map());
+                    // if we're called as inference target we MUST have been passed a typeParamMap and an inferenceResults map
+                    return checkAndInferInterpolatedStringTypes(l.literalValue, r, typeParamMap!, inferenceResults!);
                 }
 
                 function propertyCounts(structLike: cfStructLike) {
@@ -1311,7 +1314,7 @@ export function Checker(options: ProjectOptions) {
         }
     }
 
-    function checkAndInferInterpolatedStringTypes(target: string, r: cfInterpolatedString, inferenceResults: Map<string, Type>) : boolean {
+    function checkAndInferInterpolatedStringTypes(target: string, r: cfInterpolatedString, typeParamMap: ReadonlyMap<string, Type>, inferenceResults: Map<string, Type>) : boolean {
         const regexBuilder : string[] = ["^"];
         const matchGroupToInferenceNameMap : string[] = [/*note regexp match groups start at index 1, but we start at 0*/];
         for (const each of r.expr.elements) {
@@ -1319,10 +1322,38 @@ export function Checker(options: ProjectOptions) {
                 regexBuilder.push(each.text);
             }
             else {
-                regexBuilder.push(`(.*)`);
-                matchGroupToInferenceNameMap.push(((each.expr as TypeAnnotation).type as cfTypeId).name);
+                const wrappedType = (each.expr as TypeAnnotation).type as cfTypeId;
+                const constraintType = wrappedType.next ? evaluateType(wrappedType.next, typeParamMap) : null;
+                const inferedAsName = ((each.expr as TypeAnnotation).type as cfTypeId).name;
+
+                if (constraintType) {
+                    if (constraintType.kind === TypeKind.literal && typeof constraintType.literalValue === "string") {
+                        regexBuilder.push("(" + constraintType.literalValue + ")");
+                        matchGroupToInferenceNameMap.push(inferedAsName);
+                    }
+                    else if (constraintType.kind === TypeKind.union && constraintType.types.every(type => type.kind === TypeKind.literal && typeof type.literalValue === "string")) {
+                        const elems = constraintType.types.map(type => {
+                            return escapeRegExp((type as cfLiteralType).literalValue as string);
+                        });
+                        regexBuilder.push("(" + elems.join("|") + ")");
+                        matchGroupToInferenceNameMap.push(inferedAsName);
+                    }
+                    else if (constraintType === BuiltinType.string) {
+                        regexBuilder.push(`(.*)`);
+                        matchGroupToInferenceNameMap.push(inferedAsName);
+                    }
+                    else {
+                        // constraint `wrappedType.next.name` does not extend string
+                        return false;
+                    }
+                }
+                else {
+                    regexBuilder.push(`(.*)`);
+                    matchGroupToInferenceNameMap.push(inferedAsName);
+                }
             }
         }
+
         regexBuilder.push("$");
 
         const result = new RegExp(regexBuilder.join("")).exec(target);
@@ -3062,6 +3093,63 @@ export function Checker(options: ProjectOptions) {
         }
     }
 
+    function discardDotPrefixAccesses(typeId: cfTypeId) : cfTypeId | undefined {
+        let working : cfTypeId | undefined = typeId;
+        while (working) {
+            if (working.accessType === TypeIndexedAccessType.bracket) {
+                return working;
+            }
+            else {
+                working = working.next;
+            }
+        }
+        return undefined;
+    }
+
+    /**
+     * Given a cfTypeId representing a bracket access (a.b["c"]["d"]), index into some type
+     * A cfTypeId that is a bracket access should contain only `next` descendants of bracket access type (i.e. a.b.["c"].d is not valid)
+     */
+    function bracketAccessIntoType(typeId: cfTypeId | undefined, indexable: Type) : Type | undefined {
+        if (!typeId) {
+            return indexable;
+        }
+
+        let working_type : Type | undefined = indexable;
+        let working_name : cfTypeId | undefined = typeId;
+
+        // index into interface/structs
+        while (working_type && working_name) {
+            if (working_type.kind === TypeKind.union) {
+                const types : Type[] = (() => {
+                    const result : Type[] = [];
+                    for (const type of working_type.types) {
+                        const constituentType = bracketAccessIntoType(working_name, type);
+                        if (constituentType) {
+                            result.push(constituentType);
+                        }
+                    }
+                    return result;
+                })();
+                return unionify(types);
+            }
+
+            if (!isStructLike(working_type)) {
+                return undefined;
+            }
+
+            working_type = working_type.members.get(working_name.name)?.effectivelyDeclaredType;
+
+            if (!working_type) {
+                return undefined;
+            }
+
+            working_name = working_name.next;
+        }
+
+        return working_type;
+    }
+
     /**
      * we walkup into parent components to resolve their types, too
      * which almost certainly not The Right Thing, but was easier to get running than an import syntax
@@ -3080,29 +3168,37 @@ export function Checker(options: ProjectOptions) {
 
         const maybeInTypeParamMap = typeParamMap?.get(typeId.name);
         if (maybeInTypeParamMap) {
-            let working_type : Type | undefined = maybeInTypeParamMap;
-            let working_name : cfTypeId | undefined = typeId.next;
-
-            // index into interface/structs
-            while (working_type && working_name) {
-                if (!isStructLike(working_type)) {
-                    return undefined;
-                }
-                working_type = working_type.members.get(working_name.name)?.effectivelyDeclaredType;
-                working_name = working_name.next;
-            }
-
-            return working_type;
+            return maybeInTypeParamMap;
         }
         else if (!context) {
-            return walkUpContainersToResolveType(sourceFile, typeId);
+            return walkUpContainersToResolveFirstType(sourceFile, typeId);
         }
         else {
-            return walkUpContainersToResolveType(context, typeId);
+            return walkUpContainersToResolveFirstType(context, typeId);
         }
     }
 
-    function walkUpContainersToResolveType(context: Node, type: cfTypeId) : Type | undefined {
+    /**
+     * first type is `A` in `Foo.A["B"]` with context `@!namespace Foo { @!interface A { B: string } }`
+     * deep resolve finds "B" in A["B"]
+     * there are probably issues here with recursively dealing with unions?
+     */
+    function deepResolveTypenameFromTypeParamMapOrContainerWalk(context: Node | undefined, typeParamMap: ReadonlyMap<string, Type> | undefined, typeId: cfTypeId) : Type | undefined {
+        const firstType = resolveTypenameFromTypeParamMapOrContainerWalk(context, typeParamMap, typeId);
+        if (!firstType) {
+            return undefined;
+        }
+
+        const remainingIndexAccesses = discardDotPrefixAccesses(typeId);
+
+        if (!remainingIndexAccesses) {
+            return firstType;
+        }
+
+        return bracketAccessIntoType(remainingIndexAccesses, firstType);
+    }
+
+    function walkUpContainersToResolveFirstType(context: Node, type: cfTypeId) : Type | undefined {
         let node : Node | null = context;
         const typeName = type.name;
 
@@ -3116,7 +3212,7 @@ export function Checker(options: ProjectOptions) {
                         return node.containedScope.typeinfo.mergedInterfaces.get(typeName)!;
                     }
                     if (node.containedScope.typeinfo.namespaces.has(typeName)) {
-                        return descendNamespaceLikeContextToFindType(node, type);
+                        return descendNamespaceLikeContextToFindFirstType(node, type);
                     }
                 }
 
@@ -3130,7 +3226,7 @@ export function Checker(options: ProjectOptions) {
 
                     if (maybeImport && maybeImport.sourceFile.cfFileType === CfFileType.dCfm) {
                         const nameWithoutImportQualifier = type.next;
-                        const result = descendNamespaceLikeContextToFindType(maybeImport.sourceFile, nameWithoutImportQualifier);
+                        const result = descendNamespaceLikeContextToFindFirstType(maybeImport.sourceFile, nameWithoutImportQualifier);
                         if (result) {
                             return result;
                         }
@@ -3169,7 +3265,7 @@ export function Checker(options: ProjectOptions) {
 
         return undefined;
 
-        function descendNamespaceLikeContextToFindType(context: Node, pathElements: cfTypeId | undefined) : Type | undefined {
+        function descendNamespaceLikeContextToFindFirstType(context: Node, pathElements: cfTypeId | undefined) : Type | undefined {
             let working_context : Node | undefined = context;
             let working_pathname : cfTypeId | undefined = pathElements;
 
@@ -3810,7 +3906,7 @@ export function Checker(options: ProjectOptions) {
                             }
                         }
                         else if (type.left.kind === TypeKind.typeId) {
-                            const constructor = resolveTypenameFromTypeParamMapOrContainerWalk(type.context, typeParamMap, type.left);
+                            const constructor = deepResolveTypenameFromTypeParamMapOrContainerWalk(type.context, typeParamMap, type.left);
 
                             if (!constructor || (constructor.kind !== TypeKind.typeConstructor && constructor.kind !== TypeKind.interface)) {
                                 return fallbackToAny ? BuiltinType.any : null;
@@ -3888,10 +3984,10 @@ export function Checker(options: ProjectOptions) {
                         }
 
                         return fallbackToAny ? BuiltinType.any : null;
-                        
+
                     }
                     else if (type.kind === TypeKind.typeId && !lookupDeferrals?.has(type.name)) { // if we get a non-generic alias we should probably cache it's full instantiation?
-                        let result = resolveTypenameFromTypeParamMapOrContainerWalk(type.context, typeParamMap, type);
+                        let result = deepResolveTypenameFromTypeParamMapOrContainerWalk(type.context, typeParamMap, type);
                         if (!result) {
                             return fallbackToAny ? BuiltinType.any : null;
                         }
@@ -3917,6 +4013,7 @@ export function Checker(options: ProjectOptions) {
                             /*sourceIsLiteralExpr*/ false,
                             /*forReturnType*/ false,
                             /*widenLiterals*/false,
+                            typeParamMap,
                             inferenceResults
                         )) {
                             const freshTypeParamMap = mapMerge(typeParamMap, inferenceResults);
@@ -3940,16 +4037,18 @@ export function Checker(options: ProjectOptions) {
                     // might collapse to a string literal, and might be an inference target for a template string literal
                     else if (type.kind === TypeKind.interpolatedString) {
                         // fixme, this is because we jammed inference targets into interpolated string literal node types
-                        type JoiningThreeWorlds =
-                            | {value:  string, node?: never,    inferenceTarget?: never}
-                            | {value?: never,  node:  TextSpan, inferenceTarget?: never}
-                            | {value?: never,  node?: never,    inferenceTarget:  HashWrappedExpr}
+                        type JoiningFourWorlds =
+                            | {union: cfLiteralType[], value?: never , node?: never,    inferenceTarget?: never}
+                            | {union?: never,          value:  string, node?: never,    inferenceTarget?: never}
+                            | {union?: never,          value?: never,  node:  TextSpan, inferenceTarget?: never}
+                            | {union?: never,          value?: never,  node?: never,    inferenceTarget:  cfInterpolatedString }
 
-                        const result : JoiningThreeWorlds[] = [];
-                        let containsInferenceTargets = false;
+
+                        const builder : JoiningFourWorlds[] = [];
+
                         for (const element of type.expr.elements) {
                             if (element.kind === NodeKind.textSpan) {
-                                result.push({node: element});
+                                builder.push({node: element});
                             }
                             else {
                                 // fixme: heavy reliance on not very strictly typed structure here
@@ -3958,50 +4057,84 @@ export function Checker(options: ProjectOptions) {
                                     continue; // effectively push ""
                                 }
                                 else if (typeExpr.flags & TypeFlags.inferenceTarget) {
-                                    containsInferenceTargets = true;
-                                    result.push({inferenceTarget: element})
+                                    builder.push(
+                                        {inferenceTarget: cfInterpolatedString(__FIXME__synthesizeAWholeInterpolatedStringLiteral([element]), true)}
+                                    )
                                 }
                                 else {
-                                    const resultingString = typeWorker(typeExpr, typeParamMap);
-                                    if (resultingString?.kind === TypeKind.literal && typeof resultingString.literalValue === "string") {
-                                        result.push({value: resultingString.literalValue})
+                                    const resultingStringLike = typeWorker(typeExpr, typeParamMap);
+                                    if (resultingStringLike) {
+                                        if (resultingStringLike.kind === TypeKind.literal && typeof resultingStringLike.literalValue === "string") {
+                                            builder.push({value: resultingStringLike.literalValue})
+                                        }
+                                        else if (resultingStringLike.kind === TypeKind.union && resultingStringLike.types.every(type => type.kind === TypeKind.literal && typeof type.literalValue === "string")) {
+                                            builder.push({union: resultingStringLike.types as cfLiteralType[]})
+                                        }
+                                    }
+                                    else {
+                                        return fallbackToAny ? BuiltinType.any : null;
                                     }
                                 }
                             }
                         }
 
-                        if (containsInferenceTargets) {
-                            // here, interpolations have been replaced with literal values (or "" if we couldn't resolve them)
-                            // but, inference targets remain
-                            const s = InterpolatedStringLiteral(
+                        // needs to contain a single empty element so cross product is initially (N x 1) instead of (N x 0)
+                        let crossProduct : (cfLiteralType | cfInterpolatedString)[] = [createLiteralType("")];
+
+                        for (const world of builder) {
+                            if (world.union) {
+                                // crossProduct = union x crossProduct
+                                crossProduct = world.union.flatMap(
+                                    unionConstituent => crossProduct.map(
+                                        base => typeStringJoin(base, unionConstituent)));
+                            }
+                            else if (world.value) {
+                                crossProduct = crossProduct.map(base => typeStringJoin(base, createLiteralType(world.value)));
+                            }
+                            else if (world.node) {
+                                crossProduct = crossProduct.map(base => typeStringJoin(base, createLiteralType(world.node.text)));
+                            }
+                            else if (world.inferenceTarget) {
+                                crossProduct = crossProduct.map(base => typeStringJoin(base, world.inferenceTarget))
+                            }
+                        }
+
+                        return unionify(crossProduct);
+
+                        function typeStringJoin(l: cfLiteralType | cfInterpolatedString, r: cfLiteralType | cfInterpolatedString) : cfLiteralType | cfInterpolatedString {
+                            if (l.kind === TypeKind.literal && r.kind === TypeKind.literal) {
+                                return createLiteralType(l.literalValue as string + r.literalValue as string)
+                            }
+                            else if (l.kind === TypeKind.literal && r.kind === TypeKind.interpolatedString) {
+                                const mergedElements = [__FIXME__synthesizeTextSpan(l.literalValue as string), ...r.expr.elements];
+                                const underlying = __FIXME__synthesizeAWholeInterpolatedStringLiteral(mergedElements);
+                                return cfInterpolatedString(underlying, !!(r.flags & TypeFlags.inferenceTarget));
+                            }
+                            else if (l.kind === TypeKind.interpolatedString && r.kind === TypeKind.literal) {
+                                const mergedElements = [...l.expr.elements, __FIXME__synthesizeTextSpan(r.literalValue as string)];
+                                const underlying = __FIXME__synthesizeAWholeInterpolatedStringLiteral(mergedElements);
+                                return cfInterpolatedString(underlying, !!(l.flags & TypeFlags.inferenceTarget));
+                            }
+                            else if (l.kind === TypeKind.interpolatedString && r.kind === TypeKind.interpolatedString) {
+                                const mergedElements = [...l.expr.elements, ...r.expr.elements];
+                                const underlying = __FIXME__synthesizeAWholeInterpolatedStringLiteral(mergedElements);
+                                return cfInterpolatedString(underlying, !!(l.flags & TypeFlags.inferenceTarget) || !!(r.flags & TypeFlags.inferenceTarget));
+                            }
+                            else {
+                                throw "unreachable (in join interpolated string type)"
+                            }
+                        }
+
+                        function __FIXME__synthesizeTextSpan(s: string) {
+                            return TextSpan(SourceRange.Nil(), s);
+                        }
+                        function __FIXME__synthesizeAWholeInterpolatedStringLiteral(es: (TextSpan | HashWrappedExpr)[]) {
+                            return InterpolatedStringLiteral(
                                 TokenType.QUOTE_SINGLE,
                                 NilTerminal(-1),
-                                result.map((v) => {
-                                    if (v.node) {
-                                        return v.node;
-                                    }
-                                    else if (typeof v.value === "string") { 
-                                        return TextSpan(SourceRange.Nil(), v.value);
-                                    }
-                                    else if (v.inferenceTarget) {
-                                        return v.inferenceTarget;
-                                    }
-                                    else {
-                                        throw "unreachable";
-                                    }
-                                }),
+                                es,
                                 NilTerminal(-1)
                             );
-                            return cfInterpolatedString(s, /*isInferenceTarget*/ true);
-                        }
-                        else {
-                            const literalString = result.map((v) : string => {
-                                return v.node ? v.node.text
-                                    : v.value ? v.value
-                                    : v.inferenceTarget ? "" // will never happen, when there are no inference targets
-                                    : "";
-                            }).join("");
-                            return createLiteralType(literalString);
                         }
                     }
                     else {

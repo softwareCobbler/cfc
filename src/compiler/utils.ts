@@ -1539,3 +1539,13 @@ export function TupleKeyedWeakMap<Ks extends any[], V>() {
 export function TupleKeyedMap<Ks extends any[], V>() {
     return new _TupleKeyedMap<Ks, V>().make(MapType.normal);
 }
+
+const escapeEverythingPattern = /[.*+?^${}()|[\]\\]/g
+/**
+ * https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_Expressions
+ *
+ * escape regex metachars to support compiling a user-provided string as a regex
+ */
+export function escapeRegExp(s: string) {
+    return s.replace(escapeEverythingPattern, '\\$&'); // $& means the whole matched string
+}

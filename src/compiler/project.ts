@@ -7,7 +7,7 @@ import { EngineVersion } from "./engines";
 import { BlockType, mergeRanges, Node, NodeKind, SourceFile, SymTabEntry, DiagnosticKind, resetSourceFileInPlace, NodeFlags } from "./node";
 import { Parser } from "./parser";
 import { CfFileType, SourceRange } from "./scanner";
-import { cfFunctionSignatureParam, Interface, Type, CfcLookup, BuiltinType, cfTypeId, cfGenericFunctionSignature, TypeConstructorParam, freshKeyof } from "./types";
+import { cfFunctionSignatureParam, Interface, Type, CfcLookup, BuiltinType, cfTypeId, cfGenericFunctionSignature, TypeConstructorParam, freshKeyof, TypeIndexedAccessType } from "./types";
 
 import { cfmOrCfc, findNodeInFlatSourceMap, flattenTree, getAttributeValue, getComponentAttrs, getComponentBlock, getTriviallyComputableString } from "./utils";
 
@@ -620,10 +620,10 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         */
 
         const wireboxMappingInterface = Interface("__INTERNAL__WireboxMappings", wireboxNamesToCfcMappings);
-        const wireboxLookup = cfTypeId("__INTERNAL__WireboxMappings", [cfTypeId("T")]);
+        const wireboxLookup = cfTypeId("__INTERNAL__WireboxMappings", TypeIndexedAccessType.head, [cfTypeId("T", TypeIndexedAccessType.dot)]);
 
         const typeParam = TypeConstructorParam("T", undefined, freshKeyof(wireboxMappingInterface));
-        const nameParam = cfFunctionSignatureParam(true, cfTypeId("T"), "name");
+        const nameParam = cfFunctionSignatureParam(true, cfTypeId("T", TypeIndexedAccessType.head), "name");
         const initArgsParam = cfFunctionSignatureParam(false, BuiltinType.EmptyInterface, "initArgs");
         const dslParam = cfFunctionSignatureParam(false, BuiltinType.string, "dsl");
 

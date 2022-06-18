@@ -27,7 +27,7 @@ import {
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess, Namespace, TypeImport, TypeInfo } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard, Mutable } from "./utils";
-import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature, cfConditionalType, cfInterpolatedString, cfInferenceTarget, cfTuple, cfTypeConstructorInvocation } from "./types";
+import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature, cfConditionalType, cfInterpolatedString, cfInferenceTarget, cfTuple, cfTypeConstructorInvocation, TypeIndexedAccessType } from "./types";
 import { Type, UninstantiatedArray, Struct, cfFunctionSignature, cfTypeId, cfUnion, BuiltinType, cfFunctionSignatureParam } from "./types";
 import { Engine } from "./engines";
 import { ProjectOptions } from "./project";
@@ -4192,6 +4192,12 @@ export function Parser(config: ProjectOptions) {
                         const namespace = parseNamespaceBody("cf_CfcTransform");
                         typedefs.push(namespace);
                     }
+                    else if (parseTypes && name === "!namespace") {
+                        eatWhitespace();
+                        const name = parseExpectedLexemeLikeTerminal_alwaysAdvanceOnFaliure(ParseOptions.withTrivia);
+                        const namespace = parseNamespaceBody(name.token.text);
+                        typedefs.push(namespace);
+                    }
                     else if (parseTypes && name === "!import") {
                         eatWhitespace();
                         typedefs.push(parseTypeImport());
@@ -4399,22 +4405,17 @@ export function Parser(config: ProjectOptions) {
         }
     }
 
-    /**
-     * should be recursive, namespaces in namespaces, support all sorts of decls in the body
-     * but, we just want to support single-level namespaces that contain typedefs, at the moment
-     * with the goal of support cfc-transform experiments
-     */
-         function parseNamespaceBody(name: string) : Namespace {
-            parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
-            const collector = TypeStatementCollector();
-            parseList(ParseContext.typeNamespace, () => parseTypeStatement(collector));
-            parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
-            const namespace = Namespace(name);
-            pushTypeinfoIntoTypeinfoContainer(
-                collector.defs.filter(v => v.shimKind !== TypeShimKind.import), namespace.containedScope.typeinfo);
-            return namespace;
-        }
-    
+    function parseNamespaceBody(name: string) : Namespace {
+        parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
+        const collector = TypeStatementCollector();
+        parseList(ParseContext.typeNamespace, () => parseTypeStatement(collector));
+        parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
+        const namespace = Namespace(name);
+        pushTypeinfoIntoTypeinfoContainer(
+            collector.defs.filter(v => v.shimKind !== TypeShimKind.import), namespace.containedScope.typeinfo);
+        return namespace;
+    }
+
     /**
      * the syntax currently must be exactly
      * @!import "..some-path-as-a-simple-string-literal" qualified <name>
@@ -4451,11 +4452,12 @@ export function Parser(config: ProjectOptions) {
             next();
             function parseTypeId() : cfTypeId {
                 const start = pos();
-                let element = parseType();
+                const element = parseType();
+                parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
                 const end = pos();
                 if (element.kind !== TypeKind.typeId) {
                     parseErrorAtRange(new SourceRange(start, end), "A generic type alias parameter's names must be identifiers.");
-                    return cfTypeId("<<ERROR-TYPE>>");
+                    return cfTypeId("<<ERROR-TYPE>>", TypeIndexedAccessType.head);
                 }
                 return element;
             }
@@ -4469,7 +4471,7 @@ export function Parser(config: ProjectOptions) {
                     parseTrivia();
                     break;
                 }
-                // fixme: types don't have ranges
+                // fixme: types need have ranges
                 const typeId = parseTypeId();
                 if (lookahead() === TokenType.EQUAL) {
                     parseExpectedTerminal(TokenType.EQUAL, ParseOptions.withTrivia);
@@ -4517,7 +4519,7 @@ export function Parser(config: ProjectOptions) {
                 case "null":
                     return BuiltinType.null;
                 default:
-                    return cfTypeId(lexeme.text);
+                    return cfTypeId(lexeme.text, TypeIndexedAccessType.head);
             }
         }
 
@@ -4537,7 +4539,7 @@ export function Parser(config: ProjectOptions) {
                             if (typeId.kind !== TypeKind.typeId) {
                                 typeId = null;
                             }
-                            type = cfIndexedType(type, typeId ?? cfTypeId("<<ERROR>>"));
+                            type = cfIndexedType(type, typeId ?? cfTypeId("<<ERROR>>", TypeIndexedAccessType.head));
                             parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
                             continue outer;
                         }
@@ -4709,7 +4711,7 @@ export function Parser(config: ProjectOptions) {
                         else if (result.kind === TypeKind.typeId) {
                             result = (() => {
                                 const rest = parseTypeIdRest();
-                                return rest.length === 0 ? result : cfTypeId(result.name, rest);
+                                return rest.length === 0 ? result : cfTypeId(result.name, TypeIndexedAccessType.head, rest);
                             })();
 
                             if (peek().type === TokenType.LEXEME && peek().text === "extends") {
@@ -4840,8 +4842,8 @@ export function Parser(config: ProjectOptions) {
                                     flags: 0,
                                     canonicalName: member.name.token.text.toLowerCase(),
                                     declarations: null,
-                                    lexicalType: member.type,
-                                    effectivelyDeclaredType: undefined,
+                                    lexicalType: undefined,
+                                    effectivelyDeclaredType: member.type,
                                     links: {
                                         optional: member.optional,
                                     },
@@ -4867,38 +4869,29 @@ export function Parser(config: ProjectOptions) {
                 }
                 case TokenType.LEFT_BRACKET: {
                     parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
+                    if (lookahead() === TokenType.RIGHT_BRACKET) {
+                        parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
+                        return cfTuple([]);
+                    }
+
                     const elements : SymTabEntry[] = [];
                     let first = true;
                     while (true) {
                         if (!first) {
                             parseExpectedTerminal(TokenType.COMMA, ParseOptions.withTrivia);
                         }
-                        const nameOrElement = parseExpectedLexemeLikeTerminal_alwaysAdvanceOnFaliure(ParseOptions.withTrivia);
-                        if (lookahead() === TokenType.COLON) {
-                            parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
-                            const type = parseType();
-                            elements.push({
-                                canonicalName: nameOrElement.token.text.toLowerCase(),
-                                uiName: nameOrElement.token.text,
-                                flags: 0,
-                                declarations: null,
-                                lexicalType: type,
-                                effectivelyDeclaredType: undefined,
-                                symbolId: -1
-                            })
-                        }
-                        else {
-                            const type = tokenToType(nameOrElement.token);
-                            elements.push({
-                                canonicalName: "",
-                                uiName: "",
-                                flags: 0,
-                                declarations: null,
-                                lexicalType: type,
-                                effectivelyDeclaredType: undefined,
-                                symbolId: -1
-                            })
-                        }
+
+                        // we don't parse tuples element names but a lot of the machinery is in place to store them (they just become symbols with {canonical, uiName}s)
+                        const type = parseType();
+                        elements.push({
+                            canonicalName: "",
+                            uiName: "",
+                            flags: 0,
+                            declarations: null,
+                            lexicalType: type,
+                            effectivelyDeclaredType: undefined,
+                            symbolId: -1
+                        })
 
                         if (lookahead() === TokenType.RIGHT_BRACKET || lookahead() === TokenType.EOF) {
                             next();
@@ -5008,22 +5001,35 @@ export function Parser(config: ProjectOptions) {
     }
 
     /**
-     * explicit infer is like "abc#infer rest#", for now only useful in the extends position of a conditional type
+     * explicit infer is like
+     *   - "abc#infer rest#"
+     *   - "abc#infer rest extends V#"
+     *
+     * for now only useful in the extends position of a conditional type
      */
-    function parseTypeIdWithMaybeExplicitInfer(allowExplicitInfer = true) : cfTypeId | cfTypeConstructorInvocation {
+    function parseTypeIdWithMaybeExplicitInfer(allowExplicitInfer?: boolean, withTypeParams?: false) : cfTypeId;
+    function parseTypeIdWithMaybeExplicitInfer(allowExplicitInfer?: boolean, withTypeParams?: true) : cfTypeId | cfTypeConstructorInvocation;
+    function parseTypeIdWithMaybeExplicitInfer(allowExplicitInfer = true, withTypeParams = true) : cfTypeId | cfTypeConstructorInvocation {
         const terminal = parseExpectedLexemeLikeTerminal_alwaysAdvanceOnFaliure(ParseOptions.withTrivia, /*allowNumeric*/ false, "Expected a typename.");
         if (allowExplicitInfer && canParseExplicitInfer() && terminal.token.text === "infer") {
             const name = parseExpectedLexemeLikeTerminal_alwaysAdvanceOnFaliure(ParseOptions.withTrivia, /*allowNumeric*/ false, "Expected a typename.");
-            return cfInferenceTarget(name.token.text);
+            if (peek().text.toLowerCase() === "extends") {
+                parseExpectedLexemeLikeTerminal_alwaysAdvanceOnFaliure(ParseOptions.withTrivia, /*allowNumeric*/ false);
+                const vvv = parseTypeIdWithMaybeExplicitInfer(/*allowExplicitInfer*/false, /*withTypeParams*/false);
+                return cfInferenceTarget(name.token.text, vvv);
+            }
+            else {
+                return cfInferenceTarget(name.token.text);
+            }
         }
         else {
-            const typeId = cfTypeId(terminal.token.text, parseTypeIdRest());
-            if (lookahead() === TokenType.LEFT_ANGLE) {
+            const typeId = cfTypeId(terminal.token.text, TypeIndexedAccessType.head, parseTypeIdRest());
+            if (withTypeParams && lookahead() === TokenType.LEFT_ANGLE) {
                 parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
 
                 const args : Type[] = [];
                 while (lookahead() !== TokenType.RIGHT_ANGLE && lookahead() !== TokenType.EOF) {
-                    args.push(parseTypeIdWithMaybeExplicitInfer(/*allowExplicitInfer*/ false));
+                    args.push(parseTypeIdWithMaybeExplicitInfer(/*allowExplicitInfer*/ false, /*withTypeParams*/true));
                     if (lookahead() !== TokenType.RIGHT_ANGLE) {
                         parseExpectedTerminal(TokenType.COMMA, ParseOptions.withTrivia);
                     }
@@ -5038,13 +5044,33 @@ export function Parser(config: ProjectOptions) {
     }
 
     function parseTypeIdRest() {
+        // after parsing the first bracket-access, we can no longer accept dotted access (namespaces cannot reside within types)
+        let canAcceptDot = true;
         const result : cfTypeId[] = [];
         while (lookahead() !== TokenType.EOF) {
             parseTrivia();
             if (lookahead() === TokenType.DOT) {
-                parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
-                const propertyName = parseExpectedLexemeLikeTerminal_alwaysAdvanceOnFaliure(ParseOptions.withTrivia, /*allowNumeric*/false, "Expected a typename.");
-                result.push(cfTypeId(propertyName.token.text));
+                if (canAcceptDot) {
+                    parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
+                    const propertyName = parseExpectedLexemeLikeTerminal_alwaysAdvanceOnFaliure(ParseOptions.withTrivia, /*allowNumeric*/false, "Expected a typename.");
+                    result.push(cfTypeId(propertyName.token.text, TypeIndexedAccessType.dot));
+                }
+                else {
+                    return result;
+                }
+            }
+            else if (lookahead() === TokenType.LEFT_BRACKET) {
+                parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
+                const s = parseStringLiteral(StringUniverse.type);
+                if (s.kind !== NodeKind.simpleStringLiteral) {
+                    parseErrorAtRange(s.range, "Interpolated string indexed access types are not supported.");
+                    result.push(cfTypeId("<<error-type>>", TypeIndexedAccessType.bracket));
+                }
+                else {
+                    result.push(cfTypeId(s.textSpan.text, TypeIndexedAccessType.bracket));
+                }
+                parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
+                canAcceptDot = false;
             }
             else {
                 break;

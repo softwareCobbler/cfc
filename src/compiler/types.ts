@@ -529,17 +529,25 @@ export function TypeConstructorParam(name: string, defaultType?: Type, extends_?
     return createType(type);
 }
 
+export const enum TypeIndexedAccessType {
+    head,   // the first in a chain of something like A.b["c"]
+    dot,    // `b` in `A.b`
+    bracket // `b` in `A["b"]`
+}
+
 export interface cfTypeId extends TypeBase {
     readonly kind: TypeKind.typeId,
     readonly name: string,
+    readonly accessType: TypeIndexedAccessType,
     readonly next?: cfTypeId
 }
 
-export function cfTypeId(head: string, rest?: cfTypeId[]) : cfTypeId {
+export function cfTypeId(head: string, accessType: TypeIndexedAccessType, rest?: cfTypeId[]) : cfTypeId {
     const type : cfTypeId = {
         kind: TypeKind.typeId,
         flags: TypeFlags.none,
-        name: head
+        name: head,
+        accessType,
     } as const;
 
     if (rest?.length) {
@@ -553,16 +561,36 @@ export function cfTypeId(head: string, rest?: cfTypeId[]) : cfTypeId {
 }
 
 /**
- * an inference target is like `A extends "foo#infer bar#"`
+ * an inference target is like
+ *   - `A extends "foo#infer bar#"`
+ *   - `A extends "foo#infer bar extends baz.qux#"`
+ *
  * it seems that in `infer FOO` foo is always exactly a type id,
  * so this just returns a type id with the inferenceTarget flag set
+ *
+ * If there is a constraint it is put in the "next" field; it can be a fully-fledged typeId to support lookup
+ * We don't support a generic alias in this position
  */
-export function cfInferenceTarget(name: string) : cfTypeId {
-    const type : cfTypeId = {
-        kind: TypeKind.typeId,
-        flags: TypeFlags.inferenceTarget,
-        name
-    } as const;
+export function cfInferenceTarget(name: string, constraint?: cfTypeId) : cfTypeId {
+    let type : cfTypeId;
+
+    if (constraint) {
+        type = {
+            kind: TypeKind.typeId,
+            flags: TypeFlags.inferenceTarget,
+            name,
+            accessType: TypeIndexedAccessType.head, // irrelevant for inference target...?
+            next: constraint
+        } as const;
+    }
+    else {
+        type = {
+            kind: TypeKind.typeId,
+            flags: TypeFlags.inferenceTarget,
+            name,
+            accessType: TypeIndexedAccessType.head
+        } as const;
+    }
 
     return createType(type);
 }
@@ -810,10 +838,10 @@ export const BuiltinType = (function() {
     //     [TypeConstructorParam("T", any)],
     //     {name: "index", indexType: numeric, type: any});
 
-    const arrayInterfaceName = cfTypeId("Array");
+    const arrayInterfaceName = cfTypeId("Array", TypeIndexedAccessType.head);
 
     const anyFunction = (() => {
-        // the spread param type should be ...any[], 
+        // the spread param type should be ...any[],
         // but it's unclear when we should instantiate the array type
         // instead, we'll treat it as a primitive, and "any function"
         // has assignability rules dictated in a manner similar to other primitives
