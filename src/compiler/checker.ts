@@ -829,19 +829,15 @@ export function Checker(options: ProjectOptions) {
                 }
                 else {
                     let thisTypeIsDisjointFromAllTheOthers = true;
-                    outer:
-                    while(true) {
-                        for (const alreadyHaveThisType of membersBuilder) {
-                            if (isLeftSubtypeOfRight(worktype, alreadyHaveThisType, /*sourceIsLiteral*/false, /*forReturn*/false, /*widenLiterals*/false)
-                                || isLeftSubtypeOfRight(alreadyHaveThisType, worktype, /*sourceIsLiteral*/false, /*forReturn*/false, /*widenLiterals*/false)
-                            ) {
-                                membersBuilder.add(mergeTypes(worktype, alreadyHaveThisType));
-                                membersBuilder.delete(alreadyHaveThisType);
-                                thisTypeIsDisjointFromAllTheOthers = false;
-                                continue outer;
-                            }
+                    for (const alreadyHaveThisType of membersBuilder) {
+                        if (isLeftSubtypeOfRight(worktype, alreadyHaveThisType, /*sourceIsLiteral*/false, /*forReturn*/false, /*widenLiterals*/false)
+                            || isLeftSubtypeOfRight(alreadyHaveThisType, worktype, /*sourceIsLiteral*/false, /*forReturn*/false, /*widenLiterals*/false)
+                        ) {
+                            membersBuilder.add(mergeTypes(worktype, alreadyHaveThisType));
+                            membersBuilder.delete(alreadyHaveThisType);
+                            thisTypeIsDisjointFromAllTheOthers = false;
+                            break;
                         }
-                        break outer;
                     }
 
                     if (thisTypeIsDisjointFromAllTheOthers) {
@@ -2671,6 +2667,86 @@ export function Checker(options: ProjectOptions) {
         return mapper ? evaluateType(mapper) : undefined;
     }
 
+    function __experimental__runCompletionsHook(incomingSourceFile: SourceFile, userText: string) : string[] {
+        const savedSourceFile = sourceFile;
+        sourceFile = incomingSourceFile;
+
+        const completionsHook = sourceFile.containedScope.typeinfo.namespaces.get("cf_CfcTransform")?.containedScope.typeinfo.aliases.get("completions_hook");
+        if (!completionsHook) {
+            return [];
+        }
+
+        const properties : Property[] = [];
+        const functions : FunctionDefinition[] = [];
+
+        const extract = (node: Node | null | undefined) => {
+            if (!node) {
+                return undefined;
+            }
+            else if (node.kind === NodeKind.functionDefinition) {
+                functions.push(node);
+                return undefined; // don't descend but keep visiting
+            }
+            else if (node.kind === NodeKind.property) {
+                properties.push(node);
+                return undefined; // don't descend but keep visiting
+            }
+            else {
+                return visit(node, extract); // descend into a block that maybe holds functions or properties that will be hoisted
+            }
+        }
+
+        visit(sourceFile.content, extract);
+
+        // @!typedef completions_hook<UserText, Fs, Ps> = ...
+        const evalContext = new Map<string, Type>();
+
+        evalContext.set("UserText", createLiteralType(userText));
+        // Ps : {cfname: <attrname>, ...otherattrs} | ...
+        evalContext.set(
+            "Ps",
+            cfUnion(
+                new Set(
+                    properties.map((p) => {
+                        const m = new Map<string, SymTabEntry>();
+                        m.set("cfname", {
+                            canonicalName: p.name,
+                            uiName: p.name,
+                            symbolId: -1,
+                            declarations: null,
+                            flags: 0,
+                            lexicalType: undefined,
+                            effectivelyDeclaredType: createLiteralType(p.name),
+                        });
+                        return Struct(m);
+                    })
+                )
+            )
+        );
+
+        let result : string[];
+
+        if (completionsHook.kind !== TypeKind.typeConstructor) {
+            result = [];
+        }
+        else {
+            const hookResult = evaluateType(completionsHook.body, evalContext);
+            if (hookResult.kind === TypeKind.literal && typeof hookResult.literalValue === "string") {
+                result = [hookResult.literalValue];
+            }
+            else if (hookResult.kind === TypeKind.union && hookResult.types.every(type => type.kind === TypeKind.literal && typeof type.literalValue === "string")) {
+                result = hookResult.types.map(type => (type as cfLiteralType).literalValue as string);
+            }
+            else {
+                result = []
+            }
+        }
+
+        sourceFile = savedSourceFile;
+
+        return result;
+    }
+
     function checkFunctionDefinition(node: FunctionDefinition | ArrowFunctionDefinition, typeAnnotation = node.typeAnnotation) {
         if (node.flags & NodeFlags.checked) {
             return;
@@ -4228,6 +4304,7 @@ export function Checker(options: ProjectOptions) {
         getCachedEvaluatedNodeType: getCachedEvaluatedNodeTypeImpl,
         getSymbol: getSymbolImpl,
         install,
+        __experimental__runCompletionsHook,
     }
 }
 

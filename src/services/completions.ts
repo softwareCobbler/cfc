@@ -424,5 +424,15 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
         });
     }
 
+    if (node.kind === NodeKind.terminal) {
+        const hookResults = checker.__experimental__runCompletionsHook(parsedSourceFile, node.token.text);
+        for (const hookResult of hookResults) {
+            result.push({
+                kind: CompletionItemKind.variable,
+                label: hookResult
+            })
+        }
+    }
+
     return result;
 }

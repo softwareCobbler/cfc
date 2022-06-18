@@ -5061,6 +5061,10 @@ export function Parser(config: ProjectOptions) {
             }
             else if (lookahead() === TokenType.LEFT_BRACKET) {
                 parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
+                if (lookahead() !== TokenType.QUOTE_DOUBLE && lookahead() !== TokenType.QUOTE_SINGLE) {
+                    parseErrorAtCurrentToken("Expected a string literal.");
+                    return result;
+                }
                 const s = parseStringLiteral(StringUniverse.type);
                 if (s.kind !== NodeKind.simpleStringLiteral) {
                     parseErrorAtRange(s.range, "Interpolated string indexed access types are not supported.");

@@ -30,6 +30,7 @@ import {
 	ProgressType,
 	HoverParams,
 	Hover,
+	CompletionList,
 } from 'vscode-languageserver/node';
 
 import * as child_process from "child_process"
@@ -209,19 +210,26 @@ documents.onDidChangeContent(change => {
 	}
 });
 
-connection.onCompletion(async (completionParams: CompletionParams): Promise<CompletionItem[]> => {
+connection.onCompletion(async (completionParams: CompletionParams): Promise<CompletionList> => {
 	const document = documents.get(completionParams.textDocument.uri);
-	if (!document) return [];
+	if (!document) {
+		return {isIncomplete: false, items: []};
+	}
 	
 	if (didForkCfls) {
 		const fsPath = URI.parse(document.uri).fsPath;
 		const targetIndex = document.offsetAt(completionParams.position);
 		const triggerCharacter = completionParams.context?.triggerCharacter ?? null;
 
-		return languageService.getCompletions(fsPath, targetIndex, triggerCharacter);
+		const completions = await languageService.getCompletions(fsPath, targetIndex, triggerCharacter);
+		return {
+			// this is to support "completions_hook" where a longer token may change the completions list
+			isIncomplete: true,
+			items: completions
+		}
 	}
 	else {
-		return [];
+		return {isIncomplete: false, items: []};
 	}
 });
 
