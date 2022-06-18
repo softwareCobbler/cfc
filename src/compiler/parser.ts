@@ -27,7 +27,7 @@ import {
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess, Namespace, TypeImport, TypeInfo } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard, Mutable } from "./utils";
-import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature, cfConditionalType, cfInterpolatedString, cfInferenceTarget, cfTuple } from "./types";
+import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature, cfConditionalType, cfInterpolatedString, cfInferenceTarget, cfTuple, cfTypeConstructorInvocation } from "./types";
 import { Type, UninstantiatedArray, Struct, cfFunctionSignature, cfTypeId, cfUnion, BuiltinType, cfFunctionSignatureParam } from "./types";
 import { Engine } from "./engines";
 import { ProjectOptions } from "./project";
@@ -525,7 +525,7 @@ export function Parser(config: ProjectOptions) {
      * the other parseExpectedLexemeLike terminal has a "consumeOnFailure" but it doesn't
      * we shouldn't need two implementations, but need to see what breaks if we get rid of the other one
      */
-    function parseExpectedLexemeLikeTerminal_alwaysAdvanceOnFaliure(parseOptions: ParseOptions, allowLeadingNumeric = false) {
+    function parseExpectedLexemeLikeTerminal_alwaysAdvanceOnFaliure(parseOptions: ParseOptions, allowLeadingNumeric = false, errMsg?: string) {
         if (isLexemeLikeToken(peek(), allowLeadingNumeric)) {
             const result = Terminal(next());
             if (parseOptions === ParseOptions.withTrivia) {
@@ -535,6 +535,9 @@ export function Parser(config: ProjectOptions) {
         }
         else {
             const result = phonyTerminalFromCurrentPos(TokenType.LEXEME);
+            if (errMsg) {
+                parseErrorAtCurrentToken(errMsg);
+            }
             next();
             return result;
         }
@@ -5004,14 +5007,33 @@ export function Parser(config: ProjectOptions) {
         return inStringInExtends;
     }
 
-    function parseTypeIdWithMaybeExplicitInfer() {
-        const terminal = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
-        if (canParseExplicitInfer() && terminal.token.text === "infer") {
-            const name = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
+    /**
+     * explicit infer is like "abc#infer rest#", for now only useful in the extends position of a conditional type
+     */
+    function parseTypeIdWithMaybeExplicitInfer(allowExplicitInfer = true) : cfTypeId | cfTypeConstructorInvocation {
+        const terminal = parseExpectedLexemeLikeTerminal_alwaysAdvanceOnFaliure(ParseOptions.withTrivia, /*allowNumeric*/ false, "Expected a typename.");
+        if (allowExplicitInfer && canParseExplicitInfer() && terminal.token.text === "infer") {
+            const name = parseExpectedLexemeLikeTerminal_alwaysAdvanceOnFaliure(ParseOptions.withTrivia, /*allowNumeric*/ false, "Expected a typename.");
             return cfInferenceTarget(name.token.text);
         }
         else {
-            return cfTypeId(terminal.token.text, parseTypeIdRest());
+            const typeId = cfTypeId(terminal.token.text, parseTypeIdRest());
+            if (lookahead() === TokenType.LEFT_ANGLE) {
+                parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
+
+                const args : Type[] = [];
+                while (lookahead() !== TokenType.RIGHT_ANGLE && lookahead() !== TokenType.EOF) {
+                    args.push(parseTypeIdWithMaybeExplicitInfer(/*allowExplicitInfer*/ false));
+                    if (lookahead() !== TokenType.RIGHT_ANGLE) {
+                        parseExpectedTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+                    }
+                }
+                parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);
+                return TypeConstructorInvocation(typeId, args);
+            }
+            else {
+                return typeId;
+            }
         }
     }
 
@@ -5021,7 +5043,7 @@ export function Parser(config: ProjectOptions) {
             parseTrivia();
             if (lookahead() === TokenType.DOT) {
                 parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
-                const propertyName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/true, /*allowNumeric*/false, "Expected an indexed-type property name.");
+                const propertyName = parseExpectedLexemeLikeTerminal_alwaysAdvanceOnFaliure(ParseOptions.withTrivia, /*allowNumeric*/false, "Expected a typename.");
                 result.push(cfTypeId(propertyName.token.text));
             }
             else {

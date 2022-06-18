@@ -99,6 +99,25 @@ export function Binder(options: ProjectOptions) {
     function bindNode(node: Node | null | undefined, parent: Node) {
         if (!node) return;
 
+        if (node.typeAnnotation) {
+            switch (node.typeAnnotation.shimKind) {
+                case TypeShimKind.nonCompositeFunctionTypeAnnotation: {
+                    for (const param of node.typeAnnotation.params) {
+                        bindType(param.type, currentContainer);
+                    }
+                    if (node.typeAnnotation.returns) {
+                        bindType(node.typeAnnotation.returns.type, currentContainer);
+                    }
+                    break;
+                }
+                case TypeShimKind.annotation: {
+                    bindType(node.typeAnnotation.type, currentContainer);
+                    break;
+                }
+                default: exhaustiveCaseGuard(node.typeAnnotation);
+            }
+        }
+
         node.flow = currentFlow;
         nodeMap.set(node.nodeId, node);
         bindDirectTerminals(node);

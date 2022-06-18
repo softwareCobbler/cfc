@@ -1,7 +1,7 @@
 import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, UnreachableFlow, DiagnosticKind, TagAttribute, SymbolId, TypeShimKind, NonCompositeFunctionTypeAnnotation, Property, TypeAnnotation, InterpolatedStringLiteral, TextSpan, HashWrappedExpr, SymbolFlags } from "./node";
 import { CfcResolution, CfcResolver, ComponentResolutionArgs, EngineSymbolResolver, LibTypeResolver, ProjectOptions, ProjectRelativeImportLookup } from "./project";
 import { Scanner, CfFileType, SourceRange, TokenType } from "./scanner";
-import { cfFunctionSignature, Struct, cfUnion, BuiltinType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, Type, stringifyType, cfFunctionSignatureParam, cfFunctionOverloadSet, cfTypeId, SymbolTableTypeWrapper, Cfc, Interface, createType, createLiteralType, typeFromJavaLikeTypename, structurallyCompareTypes, TypeKind, isStructLike, cfArray, cfStructLike, isStructLikeOrArray, cfGenericFunctionSignature, cfKeyof, cfTypeConstructorParam, TypeConstructorParam, cfInterpolatedString, cfTuple } from "./types";
+import { cfFunctionSignature, Struct, cfUnion, BuiltinType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, Type, stringifyType, cfFunctionSignatureParam, cfFunctionOverloadSet, cfTypeId, SymbolTableTypeWrapper, Cfc, Interface, createType, createLiteralType, typeFromJavaLikeTypename, structurallyCompareTypes, TypeKind, isStructLike, cfArray, cfStructLike, isStructLikeOrArray, cfGenericFunctionSignature, cfKeyof, cfTypeConstructorParam, TypeConstructorParam, cfInterpolatedString, cfTuple, TypeConstructor } from "./types";
 import { CanonicalizedName, exhaustiveCaseGuard, findAncestor, getUserSpecifiedReturnTypeType, getAttributeValue, getCallExpressionNameErrorRange, getComponentAttrs, getContainingFunction, getFunctionDefinitionAccessLiteral, getFunctionDefinitionNameTerminalErrorNode, getSourceFile, getTriviallyComputableString, isCfcMemberFunctionDefinition, isInCfcPsuedoConstructor, isInEffectiveConstructorMethod, isLiteralExpr, isNamedFunction, isSimpleOrInterpolatedStringLiteral, Mutable, stringifyDottedPath, stringifyLValue, stringifyStringAsLValue, tryGetCfcMemberFunctionDefinition, visit } from "./utils";
 import { walkupScopesToResolveSymbol as externWalkupScopesToResolveSymbol, TupleKeyedWeakMap } from "./utils";
 import { Engine, supports } from "./engines";
@@ -39,6 +39,20 @@ const builtin_inject = (() => {
     ]
     return Interface("", members, params);
 })()
+
+// magic builtin string utility types
+const builtin_capitalize = (() => {
+    return {name: "Capitalize", type: TypeConstructor([], cfTypeId("<<builtin-capitalize>>"))};
+})();
+const builtin_uncapitalize = (() => {
+    return {name: "Uncapitalize", type: TypeConstructor([], cfTypeId("<<builtin-uncapitalized>>"))};
+})();
+const builtin_uppercase = (() => {
+    return {name: "Uppercase", type: TypeConstructor([], cfTypeId("<<builtin-uppercase>>"))};
+})();
+const builtin_lowercase = (() => {
+    return {name: "Lowercase", type: TypeConstructor([], cfTypeId("<<builtin-lowercase>>"))};
+})();
 
 // the "debug" object should be moved into the Project object, and passed into the checker
 // but this gets it going
@@ -487,9 +501,9 @@ export function Checker(options: ProjectOptions) {
                         // must be exactly @!typedef properties<T> = (conditional-type)
                         if (
                             mapper.kind !== TypeKind.typeConstructor
-                            || mapper.params.length !== 1
-                            || mapper.params[0].defaultType
-                            || mapper.params[0].extends
+                            || mapper.typeParams.length !== 1
+                            || mapper.typeParams[0].defaultType
+                            || mapper.typeParams[0].extends
                             || mapper.body.kind !== TypeKind.conditional
                         ) {
                             return;
@@ -499,7 +513,7 @@ export function Checker(options: ProjectOptions) {
                         // @!typedef properties<T> = ... [inject<name, type>] ---> `inject` is provided by compiler in this context
                         evalContext.set("inject", builtin_inject);
                         // @!typedef properties<T> = ... ----> T maps to a compiler provided interface containing property information
-                        evalContext.set(mapper.params[0].name,  propertyAsTypeForPropertyMappingContext(property));
+                        evalContext.set(mapper.typeParams[0].name,  propertyAsTypeForPropertyMappingContext(property));
                         const resultType = evaluateType(mapper.body, evalContext);
                         runMappedComponentMembersInjectionResult(resultType);
                     }
@@ -2379,7 +2393,7 @@ export function Checker(options: ProjectOptions) {
                 //     && node.parent.key === node
                 //     && !node.parent.shorthand;
                 if (warnOnUndefined && !isBuiltinScopeName /*&& !isKeyofKVPairStructLiteral*/) {
-                    issueDiagnosticAtNode(node, `Cannot find name '${name}'.`, DiagnosticKind.warning);
+                    issueDiagnosticAtNode(node, `Cannot find name '${node.uiName ?? node.canonicalName ?? "<<error-name>>"}'.`, DiagnosticKind.warning);
                 }
                 return;
             }
@@ -2626,10 +2640,6 @@ export function Checker(options: ProjectOptions) {
 
                 function functionAsTypeForFunctionMappingContext(f: FunctionDefinition) {
                     const members = new Map<string, SymTabEntry>();
-                    if ((f.name?.ui ?? "<<missing-name>>") === "<<missing-name>>") {
-                        debugger;
-                    }
-
                     members.set("cfname", {
                         canonicalName: "cfname",
                         uiName: "cfname",
@@ -2648,10 +2658,9 @@ export function Checker(options: ProjectOptions) {
                         const value = getTriviallyComputableString(attr.expr) ?? "";
 
                         const name = attr.name.token.text;
-                        const lcName = name.toLowerCase();
 
-                        members.set(lcName, {
-                            canonicalName: lcName,
+                        members.set(name, { // case-sensitive match in mapper, so F.fooBar extends string is true if the attr name is exactly "fooBar"
+                            canonicalName: name,
                             uiName: name,
                             flags: 0,
                             declarations: null,
@@ -2701,9 +2710,9 @@ export function Checker(options: ProjectOptions) {
                     // must be exactly @!typedef function<F> = (conditional-type)
                     if (
                         mapper.kind !== TypeKind.typeConstructor
-                        || mapper.params.length !== 1
-                        || mapper.params[0].defaultType
-                        || mapper.params[0].extends
+                        || mapper.typeParams.length !== 1
+                        || mapper.typeParams[0].defaultType
+                        || mapper.typeParams[0].extends
                         || mapper.body.kind !== TypeKind.conditional
                     ) {
                         return;
@@ -2713,7 +2722,7 @@ export function Checker(options: ProjectOptions) {
                     // @!typedef functions<F> = ... [inject<name, type>] ---> `inject` is provided by compiler in this context
                     evalContext.set("inject", builtin_inject);
                     // @!typedef functions<F> = ... ----> F maps to a compiler provided interface containing property information
-                    evalContext.set(mapper.params[0].name,  functionAsTypeForFunctionMappingContext(f));
+                    evalContext.set(mapper.typeParams[0].name,  functionAsTypeForFunctionMappingContext(f));
                     const resultType = evaluateType(mapper.body, evalContext);
                     runMappedComponentMembersInjectionResult(resultType);
                 }
@@ -3059,6 +3068,16 @@ export function Checker(options: ProjectOptions) {
      * eventually we'll need to import types
      */
     function resolveTypenameFromTypeParamMapOrContainerWalk(context: Node | undefined, typeParamMap: ReadonlyMap<string, Type> | undefined, typeId: cfTypeId) : Type | undefined {
+        // first globally available builtins
+        // we should eventually issue diagnostics on users defining these types, since we will always match these
+        // also, indexing into a builtin like Uppercase.Foo.Bar is meaningless, so a diagnostic on that would be nice
+        switch (typeId.name) {
+            case builtin_capitalize.name: return builtin_capitalize.type;
+            case builtin_uncapitalize.name: return builtin_uncapitalize.type;
+            case builtin_uppercase.name: return builtin_uppercase.type;
+            case builtin_lowercase.name: return builtin_lowercase.type;
+        }
+
         const maybeInTypeParamMap = typeParamMap?.get(typeId.name);
         if (maybeInTypeParamMap) {
             let working_type : Type | undefined = maybeInTypeParamMap;
@@ -3792,7 +3811,39 @@ export function Checker(options: ProjectOptions) {
                         }
                         else if (type.left.kind === TypeKind.typeId) {
                             const constructor = resolveTypenameFromTypeParamMapOrContainerWalk(type.context, typeParamMap, type.left);
-                            if (constructor && constructor.kind === TypeKind.interface) {
+
+                            if (!constructor || (constructor.kind !== TypeKind.typeConstructor && constructor.kind !== TypeKind.interface)) {
+                                return fallbackToAny ? BuiltinType.any : null;
+                            }
+
+                            // huh, we don't support user-defined type constructors that aren't interface defs
+                            if (constructor.kind === TypeKind.typeConstructor) {
+                                const maybeStringLiteral = (type.args[0] && typeWorker(type.args[0], typeParamMap)) ?? BuiltinType.any;
+                                if (maybeStringLiteral.kind === TypeKind.literal && typeof maybeStringLiteral.literalValue === "string") {
+                                    if (constructor === builtin_capitalize.type) {
+                                        const result = maybeStringLiteral.literalValue.length > 0
+                                            ? maybeStringLiteral.literalValue[0].toLocaleUpperCase() + maybeStringLiteral.literalValue.slice(1)
+                                            : "";
+                                        return createLiteralType(result);
+                                    }
+                                    else if (constructor === builtin_uncapitalize.type) {
+                                        const result = maybeStringLiteral.literalValue.length > 0
+                                            ? maybeStringLiteral.literalValue[0].toLocaleLowerCase() + maybeStringLiteral.literalValue.slice(1)
+                                            : "";
+                                        return createLiteralType(result);
+                                    }
+                                    else if (constructor === builtin_lowercase.type) {
+                                        const result = maybeStringLiteral.literalValue.toLocaleLowerCase();
+                                        return createLiteralType(result);
+                                    }
+                                    else if (constructor === builtin_uppercase.type) {
+                                        const result = maybeStringLiteral.literalValue.toLocaleUpperCase();
+                                        return createLiteralType(result);
+                                    }
+                                }
+                            }
+
+
                                 for (const arg of type.args) {
                                     if (arg.kind === TypeKind.typeId && lookupDeferrals?.has(arg.name)) {
                                         return type;
@@ -3816,20 +3867,26 @@ export function Checker(options: ProjectOptions) {
                                     instantiableParamMap = mapBuilder;
                                 }
 
-                                const result = instantiateInterfaceWithPreinstantiatedArgs(constructor, instantiableParamMap);
+                                if (constructor.kind === TypeKind.interface) {
+                                    const result = instantiateInterfaceWithPreinstantiatedArgs(constructor, instantiableParamMap);
 
-                                if (result.status === TypeCache_Status.resolving) {
-                                    return createType({...type, capturedContext: instantiableParamMap});
+                                    if (result.status === TypeCache_Status.resolving) {
+                                        return createType({...type, capturedContext: instantiableParamMap});
+                                    }
+                                    else if (result.status === TypeCache_Status.resolved) {
+                                        return result.value;
+                                    }
+                                    else if (result.status === TypeCache_Status.failure) {
+                                        return null;
+                                    }
                                 }
-                                else if (result.status === TypeCache_Status.resolved) {
-                                    return result.value;
+                                else if (constructor.kind === TypeKind.typeConstructor) {
+                                    // need to do the cache thing just like w/ interfaces to support recursive things like @!typedef X<T> = {x: string, y: X<T>}
+                                    const freshParamMap = mapMerge(typeParamMap, instantiableParamMap);
+                                    return typeWorker(constructor.body, freshParamMap, partiallyApplyGenericFunctionSigs, lookupDeferrals, fallbackToAny);
                                 }
-                                else if (result.status === TypeCache_Status.failure) {
-                                    return null;
-                                }
-                            }
                         }
-                        
+
                         return fallbackToAny ? BuiltinType.any : null;
                         
                     }
@@ -3838,57 +3895,7 @@ export function Checker(options: ProjectOptions) {
                         if (!result) {
                             return fallbackToAny ? BuiltinType.any : null;
                         }
-
-                        // indexing into a namespace
-                        // we only parse `a.b.c`, and not `a["b"]["c"]`
-                        // typescript accepts "a.b.c" for lookup into namespaces and `a["b"]["c"]` for lookup into types
-                        // maybe should copy that for some parity
-                        // if (result.context && result.context !== type.context && result.context.kind === NodeKind.typeShim && result.context.shimKind === TypeShimKind.namespace) {
-                        //     if (type.next && result.context) {
-                        //         return typeWorker(result, typeParamMap);
-                        //     }
-                        //     else {
-                        //         return fallbackToAny ? BuiltinType.any : null;
-                        //     }
-                        // }
-
                         return typeWorker(result, typeParamMap);
-
-                        // for (const indexElement of (type.indexChain ?? [])) {
-                        //     if (!isStructLike(result.type)) {
-                        //         // should bubble up an error with "not indexable" or etc.
-                        //         return fallbackToAny ? BuiltinType.any : null;
-                        //     }
-                        //     let indexAsString : string;
-                        //     switch (indexElement.kind) {
-                        //         case TypeKind.typeId: {
-                        //             indexAsString = indexElement.name;
-                        //             break;
-                        //         }
-                        //         case TypeKind.literal: {
-                        //             if (indexElement.underlyingType === BuiltinType.string) {
-                        //                 indexAsString = indexElement.literalValue as string;
-                        //                 break;
-                        //             }
-                        //             else {
-                        //                 // literal type as index should be a string
-                        //                 // e.g. T[1] should be T["1"]
-                        //                 // well, we should support numbers, but not T[true]
-                        //                 return fallbackToAny ? BuiltinType.any : null;
-                        //             }
-                        //         }
-                        //         default: exhaustiveCaseGuard(indexElement);
-                        //     }
-
-                        //     // when have we been guaranteed to have evaluated this member?
-                        //     const nextType = result.members.get(indexAsString.toLowerCase())?.effectivelyDeclaredType
-                        //         ?? result.members.get(indexAsString.toLowerCase())?.lexicalType;
-
-                        //     if (nextType) result = typeWorker(nextType, context);
-                        //     if (!result) return null;
-                        // }
-                        
-                        // return typeWorker(result, context);
                     }
                     else if (type.kind === TypeKind.conditional) {
                         // even if current evaluation is fallbackToAny=true,
@@ -3912,17 +3919,7 @@ export function Checker(options: ProjectOptions) {
                             /*widenLiterals*/false,
                             inferenceResults
                         )) {
-                            const freshTypeParamMap = (() => {
-                                if (inferenceResults.size > 0) {
-                                    return new Map([
-                                        ...(typeParamMap?.entries() ?? []),
-                                        ...inferenceResults.entries()
-                                    ]);
-                                }
-                                else {
-                                    return typeParamMap;
-                                }
-                            })();
+                            const freshTypeParamMap = mapMerge(typeParamMap, inferenceResults);
                             return typeWorker(type.consequent, freshTypeParamMap);
                         }
                         else {
@@ -3956,7 +3953,7 @@ export function Checker(options: ProjectOptions) {
                             }
                             else {
                                 // fixme: heavy reliance on not very strictly typed structure here
-                                const typeExpr = ((element.expr as TypeAnnotation | undefined)?.type as cfTypeId | undefined);
+                                const typeExpr = ((element.expr as TypeAnnotation | undefined)?.type as cfTypeId | undefined); // can be any type here? at least typeID | typeConstructorInvocation
                                 if (!typeExpr) {
                                     continue; // effectively push ""
                                 }
@@ -4079,6 +4076,21 @@ export function Checker(options: ProjectOptions) {
         getSymbol: getSymbolImpl,
         install,
     }
+}
+
+function mapMerge<K,V>(l: undefined | ReadonlyMap<K,V>, r: undefined | ReadonlyMap<K,V>) {
+    const result = new Map<K,V>();
+    if (l) {
+        for (const [k,v] of l.entries()) {
+            result.set(k,v);
+        }
+    }
+    if (r) {
+        for (const [k,v] of r.entries()) {
+            result.set(k,v);
+        }
+    }
+    return result;
 }
 
 export interface CheckerInstallable {

@@ -467,7 +467,7 @@ export function TypeConstructorInvocation(left: Type, args: Type[]) : cfTypeCons
 
 export interface cfTypeConstructor extends TypeBase {
     readonly kind: TypeKind.typeConstructor,
-    readonly params: readonly cfTypeConstructorParam[],
+    readonly typeParams: readonly cfTypeConstructorParam[],
     readonly capturedParams: ReadonlyMap<string, Type>,
     readonly body: Type,
 }
@@ -476,7 +476,7 @@ export function TypeConstructor(params: readonly cfTypeConstructorParam[], body:
     const type : cfTypeConstructor = {
         kind: TypeKind.typeConstructor,
         flags: TypeFlags.none,
-        params,
+        typeParams: params,
         capturedParams: new Map<string, Type>(),
         body
     } as const;

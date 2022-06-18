@@ -41,16 +41,12 @@ function projectFiddle() {
                 "someFolder": {
                     "someFile.cfc": `
                         /**
-                         * @!import "coolFolder/QuickOrmTypedefs.d.cfm" qualified Quick
-                         * @!cfc-transform {
-                         *      @!typedef functions = Quick.transforms.cfcFunctions
-                         * }
-                         * 
+                         * @!typedef X<T> = "foo#Uppercase<T>#"
+                         * @!typedef Y = X<"bar">
                          */
                         component {
-                            function scopeWithFoo(required string foo, string baz) {
-
-                            }
+                            // @!arg foo : Y
+                            function scopeWithFoo(required string foo, string baz) {}
                         }
                     `
                 },
