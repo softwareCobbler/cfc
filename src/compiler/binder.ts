@@ -1,4 +1,4 @@
-import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, UnreachableFlow, FlowType, ConditionalSubtype, SymbolTable, Property, ParamStatement, ParamStatementSubType, typeinfo, DiagnosticKind, StaticallyKnownScopeName, SwitchCaseType, SymbolFlags, TypeShimKind } from "./node";
+import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, UnreachableFlow, FlowType, ConditionalSubtype, SymbolTable, Property, ParamStatement, ParamStatementSubType, typeinfo, DiagnosticKind, StaticallyKnownScopeName, SwitchCaseType, SymbolFlags, TypeShimKind, TypeAnnotation } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol, findAncestor, TupleKeyedMap, isNamedFunction, isInEffectiveConstructorMethod, Mutable } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { BuiltinType, Type, Interface, cfTypeId, TypeKind, TypeIndexedAccessType } from "./types";
@@ -306,15 +306,19 @@ export function Binder(options: ProjectOptions) {
 
         switch (type.kind) {
             case TypeKind.typeId: {
-                // no-op
-                break;
+                let working = type.next;
+                while (working) {
+                    (working as Mutable<Type>).context = context;
+                    working = working.next;
+                }
+                return;
             }
             case TypeKind.interface: // fallthrough
             case TypeKind.struct: {
                 for (const member of type.members.values()) {
                     bindType(member.lexicalType, context);
                 }
-                break;
+                return;
             }
             case TypeKind.conditional: {
                 bindType(type.typeId, context);
@@ -322,6 +326,18 @@ export function Binder(options: ProjectOptions) {
                 bindType(type.consequent, context);
                 bindType(type.alternative, context);
                 return;
+            }
+            case TypeKind.typeConstructor: {
+                bindType(type.body, context);
+                return;
+            }
+            case TypeKind.interpolatedString: {
+                // we jammed type level interpolated strings into hash-wrapped expressions, it can use some cleanup
+                for (const e of type.expr.elements) {
+                    if (e.kind === NodeKind.hashWrappedExpr) {
+                        bindType((e.expr as TypeAnnotation).type, context);
+                    }
+                }
             }
         }
     }

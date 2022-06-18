@@ -4888,8 +4888,8 @@ export function Parser(config: ProjectOptions) {
                             uiName: "",
                             flags: 0,
                             declarations: null,
-                            lexicalType: type,
-                            effectivelyDeclaredType: undefined,
+                            lexicalType: undefined,
+                            effectivelyDeclaredType: type,
                             symbolId: -1
                         })
 

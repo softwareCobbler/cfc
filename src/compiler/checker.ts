@@ -793,48 +793,63 @@ export function Checker(options: ProjectOptions) {
     function unionify(types: Type[]) : Type {
         let flags : TypeFlags = TypeFlags.none;
         const membersBuilder = new Set<Type>();
+        const literals = new Set<string | number | boolean>();
 
-        outer:
         for (const type of types) {
-            if (type === BuiltinType.any || type === BuiltinType.never) {
-                return type;
-            }
-            if (type.flags & TypeFlags.containsUndefined) {
-                flags |= TypeFlags.containsUndefined;
-            }
-
-            // merge types that are subtypes of each others
-            // the check is bivariant
-            // l: {x: 1, y:1, z:1}, r: {x: 1, y:1} -> merge ok
-            // l: {x: 1, y:1}, r: {x: 1, y:1, z: 1} -> merge ok
-            // l: {x:1}, r: {z:1} -> no merge
-            const deletables : Type[] = [];
-            let addedViaMerge = false;
-            for (const existingUnionMember of membersBuilder) {
-                if (existingUnionMember === type) {
-                    continue outer;
-                }
-                if (isLeftSubtypeOfRight(existingUnionMember, type, /*sourceIsLiteralExpression*/false, /*forReturnType*/false, /*widenLiterals*/false)
-                    || isLeftSubtypeOfRight(type, existingUnionMember, /*sourceIsLiteralExpression*/false, /*forReturnType*/false, /*widenLiterals*/false)
-                ) {
-                    deletables.push(existingUnionMember);
-                    const merged = mergeTypes(existingUnionMember, type);
-                    membersBuilder.add(merged);
-                    addedViaMerge = true;
-                    break;
-                }
-            }
-            if (!addedViaMerge) {
-                membersBuilder.add(type);
-            }
-            for (const deleteable of deletables) {
-                membersBuilder.delete(deleteable);
-            }
+            work(type);
         }
 
-        if (membersBuilder.size === 0) return BuiltinType.any; // maybe never?
+        if (membersBuilder.size === 0) {
+            return BuiltinType.any; // maybe never?
+        }
+        if (membersBuilder.has(BuiltinType.any)) {
+            return BuiltinType.any;
+        }
+        if (membersBuilder.has(BuiltinType.never)) {
+            return BuiltinType.never;
+        }
 
         return cfUnion(membersBuilder, flags);
+
+        function work(worktype: Type) {
+            if (worktype.flags & TypeFlags.containsUndefined) {
+                flags |= TypeFlags.containsUndefined;
+            }
+            if (worktype.kind === TypeKind.union) {
+                for (const type of worktype.types) {
+                    work(type);
+                }
+            }
+            else {
+                if (worktype.kind === TypeKind.literal) {
+                    if (!literals.has(worktype.literalValue)) {
+                        literals.add(worktype.literalValue);
+                        membersBuilder.add(worktype);
+                    }
+                }
+                else {
+                    let thisTypeIsDisjointFromAllTheOthers = true;
+                    outer:
+                    while(true) {
+                        for (const alreadyHaveThisType of membersBuilder) {
+                            if (isLeftSubtypeOfRight(worktype, alreadyHaveThisType, /*sourceIsLiteral*/false, /*forReturn*/false, /*widenLiterals*/false)
+                                || isLeftSubtypeOfRight(alreadyHaveThisType, worktype, /*sourceIsLiteral*/false, /*forReturn*/false, /*widenLiterals*/false)
+                            ) {
+                                membersBuilder.add(mergeTypes(worktype, alreadyHaveThisType));
+                                membersBuilder.delete(alreadyHaveThisType);
+                                thisTypeIsDisjointFromAllTheOthers = false;
+                                continue outer;
+                            }
+                        }
+                        break outer;
+                    }
+
+                    if (thisTypeIsDisjointFromAllTheOthers) {
+                        membersBuilder.add(worktype);
+                    }
+                }
+            }
+        }
     }
 
 
@@ -3717,9 +3732,14 @@ export function Checker(options: ProjectOptions) {
         ) : Type | null {
             let depth = 0;
 
+            // can we share "pending" results from nested evaluateType calls? (subtype comparison will sometimes have to call evaluate type...)
+            // i.e they kick off a new `evaluateType` run? ...
+            // maybe we should make it so subtype comparison should never have to call evaluate type?...
+            const saved_typeConstructorInvocationCacheTrie = typeConstructorInvocationCacheTrie;
+
             const result = typeWorker(type, typeParamMap, partiallyApplyGenericFunctionSigs, undefined, initialFallbackToAny);
 
-            typeConstructorInvocationCacheTrie = new Map();
+            typeConstructorInvocationCacheTrie = saved_typeConstructorInvocationCacheTrie;
 
             return result;
 
@@ -4078,7 +4098,7 @@ export function Checker(options: ProjectOptions) {
                             }
                         }
 
-                        // needs to contain a single empty element so cross product is initially (N x 1) instead of (N x 0)
+                        // needs to contain a single empty element so cross product wiht N is initially (N x 1) instead of (N x 0)
                         let crossProduct : (cfLiteralType | cfInterpolatedString)[] = [createLiteralType("")];
 
                         for (const world of builder) {
@@ -4106,12 +4126,12 @@ export function Checker(options: ProjectOptions) {
                                 return createLiteralType(l.literalValue as string + r.literalValue as string)
                             }
                             else if (l.kind === TypeKind.literal && r.kind === TypeKind.interpolatedString) {
-                                const mergedElements = [__FIXME__synthesizeTextSpan(l.literalValue as string), ...r.expr.elements];
+                                const mergedElements = l.literalValue === "" ? r.expr.elements : [__FIXME__synthesizeTextSpan(l.literalValue as string), ...r.expr.elements];
                                 const underlying = __FIXME__synthesizeAWholeInterpolatedStringLiteral(mergedElements);
                                 return cfInterpolatedString(underlying, !!(r.flags & TypeFlags.inferenceTarget));
                             }
                             else if (l.kind === TypeKind.interpolatedString && r.kind === TypeKind.literal) {
-                                const mergedElements = [...l.expr.elements, __FIXME__synthesizeTextSpan(r.literalValue as string)];
+                                const mergedElements = r.literalValue === "" ? l.expr.elements : [...l.expr.elements, __FIXME__synthesizeTextSpan(r.literalValue as string)];
                                 const underlying = __FIXME__synthesizeAWholeInterpolatedStringLiteral(mergedElements);
                                 return cfInterpolatedString(underlying, !!(l.flags & TypeFlags.inferenceTarget));
                             }

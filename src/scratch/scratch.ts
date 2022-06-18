@@ -60,25 +60,23 @@ function projectFiddle() {
                                     | "inList"
                                 @!typedef operator = "And" | "Or"
 
-                                @!typedef pc<Result, S, Fs, Ps> = S extends "#infer p extends Ps.cfname##infer c extends conditional##infer rest#"
-                                    ? maybe_chain<"#Result##p##c#", rest, Fs, Ps>
-                                    : "#Result##Ps.cfname#" | "#Result##Ps.cfname##conditional#"
+                                @!typedef prop_and_maybe_condition<Result, S, Fs, Ps> = S extends "#infer p extends Ps["cfname"]##infer c extends conditional##infer rest#"
+                                    ? maybe_chain_with_operator<"#Result##p##c#", rest, Fs, Ps>
+                                    : "#Result##Ps["cfname"]#" | "#Result##Ps["cfname"]##conditional#"
 
-                                @!typedef maybe_chain<Result, S, Fs, Ps> = S extends "#infer op extends operator##infer rest#"
+                                @!typedef maybe_chain_with_operator<Result, S, Fs, Ps> = S extends "#infer op extends operator##infer rest#"
                                     ? pc<"#Result##op#", rest, Fs, Ps>
                                     : "Result#operator##Ps.cfname#"
 
-                                @!typedef main<UserText, Fs, Ps> = "#Ps["cfname"]##Ps["cfname"]#";
-
-                                @!typedef xmain<UserText, Fs, Ps> = UserText extends "#infer head extends start_token##infer rest#"
-                                    ? pc<head, rest, Fs, Ps>
-                                    : "#start_token##Ps.cfname#"
+                                @!typedef main<UserText, Fs, Ps> = UserText extends "#infer head extends start_token##infer rest#"
+                                    ? prop_and_maybe_condition<head, rest, Fs, Ps>
+                                    : "#start_token##Ps["cfname"]#"
                             }
                         }
                         */
                         component {
                             /**
-                             * @!arg foo : CbOrm.method_expression_intellisense_provider.main<"findAllByprop1", Fs, Ps>
+                             * @!arg foo : CbOrm.method_expression_intellisense_provider.main<"findAllBypr", Fs, Ps>
                              * @!typedef Ps = {cfname: "prop1"} | {cfname: "prop2"}
                              * @!typedef Fs = never
                              **/
