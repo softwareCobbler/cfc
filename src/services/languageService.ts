@@ -14,12 +14,21 @@ import { CflsResponse, CflsResponseType, CflsRequest, CflsRequestType, CflsConfi
 import { ClientAdapter } from "./clientAdapter";
 import type { AbsPath } from "../compiler/utils";
 import type { IREPLACED_AT_BUILD } from "./buildShim";
+import { FileSystem } from "../compiler/project";
 
 declare const REPLACED_AT_BUILD : IREPLACED_AT_BUILD;
 
 interface EventHandlers {
     diagnostics: (fsPath: string, diagnostics: unknown[]) => void
 }
+
+/**
+ * This canonicalization should be the same as the languageTool uses
+ */
+const canonicalizePath = (() => {
+    const filesystem = FileSystem();
+    return (s: string) => filesystem.caseSensitive ? s : s.toLowerCase();
+})();
 
 export function LanguageService<T extends ClientAdapter>() {
     const forkInfo = {
@@ -28,6 +37,14 @@ export function LanguageService<T extends ClientAdapter>() {
             ? {execArgv: ["--nolazy", "--inspect=6012", /*"--inspect-brk"*/]}
             : {}
     } as const;
+
+    const openFiles = new Set<string>();
+    const trackFile = (path: string) => {
+        openFiles.add(canonicalizePath(path));
+    }
+    const untrackFile = (path: string) => {
+        openFiles.delete(canonicalizePath(path));
+    }
 
     let server! : child_process.ChildProcess;
     let config! : InitArgs["config"]; // we keep a copy to diff reset requests against; this is probably unnecessary, a holdover from when we were accidentally registering to receive all client configuration changes
@@ -73,6 +90,11 @@ export function LanguageService<T extends ClientAdapter>() {
                     }
                     case CflsResponseType.diagnostics: {
                         handlerMappings.diagnostics?.(msg.fsPath, msg.diagnostics);
+                        for (const fsPath of msg.affectedDependencies) {
+                            if (openFiles.has(fsPath)) {
+                                emitDiagnostics(fsPath, null);
+                            }
+                        }
                         break;
                     }
                     case CflsResponseType.completions: {
@@ -147,7 +169,7 @@ export function LanguageService<T extends ClientAdapter>() {
         server.send(msg);
     }
 
-    function emitDiagnostics(fsPath: AbsPath, freshText: string) {
+    function emitDiagnostics(fsPath: AbsPath, freshText: string | null) {
         const task = () => {
             const request : CflsRequest = {type: CflsRequestType.diagnostics, id: messageId.bump(), fsPath, freshText};
             send(request);
@@ -258,6 +280,8 @@ export function LanguageService<T extends ClientAdapter>() {
         emitDiagnostics,
         getCompletions,
         getDefinitionLocations,
+        trackFile,
+        untrackFile,
     }
 }
 

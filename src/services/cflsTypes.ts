@@ -37,7 +37,10 @@ export interface InitRequest extends CflsRequestBase {
 export interface DiagnosticsRequest extends CflsRequestBase {
     type: CflsRequestType.diagnostics,
     fsPath: string,
-    freshText: string
+    /**
+     * null means "text was not changed"
+     */
+    freshText: string | null
 }
 
 export interface CompletionsRequest extends CflsRequestBase {
@@ -84,7 +87,8 @@ interface InitializedResponse extends CflsResponseBase {
 interface DiagnosticsResponse extends CflsResponseBase {
     type: CflsResponseType.diagnostics,
     fsPath: AbsPath,
-    diagnostics: unknown[]
+    diagnostics: unknown[],
+    affectedDependencies: AbsPath[],
 }
 
 interface CompletionsResponse extends CflsResponseBase {

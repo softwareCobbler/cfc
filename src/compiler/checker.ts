@@ -3385,7 +3385,13 @@ export function Checker(options: ProjectOptions) {
         for (const key of Object.keys(installables) as (keyof CheckerInstallable)[]) {
             switch (key) {
                 case "CfcResolver":
-                    cfcResolver = installables[key]!;
+                    cfcResolver = (args) => {
+                        const result = installables[key]!(args);
+                        if (result) {
+                            sourceFile.directDependencies.push(result.sourceFile);
+                        }
+                        return result;
+                    };
                     break;
                 case "EngineSymbolResolver":
                     walkupScopesToResolveSymbol = (baseNode: Node, canonicalName: string) => externWalkupScopesToResolveSymbol(baseNode, canonicalName, installables[key]!);

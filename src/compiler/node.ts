@@ -384,6 +384,7 @@ export interface SourceFile extends NodeBase {
         extends: SourceFile | null,
         implements: SourceFile[]
     } | undefined,
+    directDependencies: SourceFile[]
 }
 
 export function resetSourceFileInPlace(target: SourceFile, newSource: string | Buffer) : void {
@@ -399,6 +400,7 @@ export function resetSourceFileInPlace(target: SourceFile, newSource: string | B
     target.nodeToSymbol = new Map();
     target.symbolIdToSymbol = new Map();
     target.endOfNodeFlowMap = new Map<NodeId, Flow>();
+    target.directDependencies = [];
     target.cfc = undefined;
 }
 
@@ -421,6 +423,7 @@ export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: 
     sourceFile.nodeToSymbol = new Map<NodeId, SymbolResolution>();
     sourceFile.symbolIdToSymbol = new Map();
     sourceFile.endOfNodeFlowMap = new Map<NodeId, Flow>();
+    sourceFile.directDependencies = [];
     return sourceFile;
 }
 export const DUMMY_CONTAINER = SourceFile("", CfFileType.cfc, "");

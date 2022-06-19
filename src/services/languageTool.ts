@@ -44,7 +44,7 @@ process.on("message", (msg: CflsRequest) => {
                 response = {type: CflsResponseType.cancelled, id: msg.id};
             }
             else {
-                response = {type: CflsResponseType.diagnostics, id: msg.id, fsPath: diagnostics.fsPath, diagnostics: diagnostics.diagnostics};
+                response = {type: CflsResponseType.diagnostics, id: msg.id, fsPath: diagnostics.fsPath, diagnostics: diagnostics.diagnostics, affectedDependencies: diagnostics.affectedDependencies};
             }
             break;
         }
@@ -121,12 +121,19 @@ function LanguageTool() {
         return undefined;
     }
 
-    function naiveGetDiagnostics(fsPath: AbsPath, freshText: string | Buffer) : Result<{fsPath: AbsPath, diagnostics: unknown[]}> {
+    /**
+     * This method is assumed to be called on every document update event, so we infer "ah this source file changed" by being called
+     * freshText of `null` means the text wasn't updated; there should be a project method to just re-check and update diagnostics
+     */
+    function naiveGetDiagnostics(fsPath: AbsPath, freshText: string | Buffer | null) : Result<{fsPath: AbsPath, diagnostics: unknown[], affectedDependencies: AbsPath[]}> {
         const project = getOwningProjectFromAbsPath(fsPath);
         if (!project) return NO_DATA;
 
-        /*const timing =*/ project.parseBindCheck(fsPath, freshText);
+        // perhaps crytpically, this updates dependency information
+        /*const timing =*/ project.parseBindCheck(fsPath, freshText === null ? project.__unsafe_dev_getFile(fsPath)!.scanner.getSourceText() : freshText);
 
+        // does this leave the sourcefile in a possibly corrupt state? like we cleared it out ("reset in place"), but then hit a cancellation,
+        // so it's half parsed, and not binded or checked? (there's no check cancellation token in binder / checker, only the parser)
         if (cancellationToken.cancellationRequested()) return CANCELLED;
         //connection.console.info(`${fsPath}\n\tparse ${timing.parse} // bind ${timing.bind} // check ${timing.check}`);
 
@@ -136,7 +143,8 @@ function LanguageTool() {
 
         return {
             fsPath,
-            diagnostics: diagnostics.map((diagnostic) => clientAdapter.diagnostic(sourceFile.scanner.getAnnotatedChar, diagnostic))
+            diagnostics: diagnostics.map((diagnostic) => clientAdapter.diagnostic(sourceFile.scanner.getAnnotatedChar, diagnostic)),
+            affectedDependencies: project.getTransitiveDependents(sourceFile).map(sourceFile => sourceFile.absPath)
         }
     }
 

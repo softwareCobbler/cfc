@@ -169,7 +169,10 @@ connection.onInitialized(async (x) => {
 	connection.console.info("cflsp server initialized");
 
 	for (const doc of documents.all()) {
-		runDiagonstics(doc);
+		if (doc.languageId === "cfml") {
+			languageService.trackFile(URI.parse(doc.uri).fsPath);
+			runDiagonstics(doc);
+		}
 	}
 });
 
@@ -189,13 +192,21 @@ connection.onDidChangeConfiguration(async cflsConfig => {
 
 // Only keep settings for open documents
 documents.onDidClose(e => {
-	connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] });
+	if (didForkCfls) {
+		const fsPath = URI.parse(e.document.uri).fsPath;
+		languageService.untrackFile(fsPath);
+		connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] });
+	}
 });
 
 // The content of a text document has changed. This event is emitted
 // when the text document first opened or when its content has changed.
 documents.onDidChangeContent(change => {
-	runDiagonstics(change.document);
+	if (change.document.languageId === "cfml") {
+		const fsPath = URI.parse(change.document.uri).fsPath;
+		languageService.trackFile(fsPath);
+		runDiagonstics(change.document);
+	}
 });
 
 connection.onCompletion(async (completionParams: CompletionParams): Promise<CompletionItem[]> => {

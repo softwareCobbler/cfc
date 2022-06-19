@@ -45,6 +45,9 @@ function swapAsciiCase(s: string) {
     return result.join("");
 }
 
+/**
+ * file system that mostly just wraps `fs`
+ */
 export function FileSystem() : FileSystem {
     return {
         readFileSync: fs.readFileSync,
@@ -221,8 +224,28 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
 
     checker.install({CfcResolver, EngineSymbolResolver, LibTypeResolver});
 
-    type FileCache = Map<AbsPath, SourceFile>;
+    /**
+     * We hold weak refs to files, and assume at most places that a source file doesn't exist (in which case we'll try to load it)
+     * The SourceFiles themselves hold strong refs to their dependencies (in their `extends`/`implements` clauses and in general in their `directDependencies` property,
+     * which holds references to, for example, the sourcefiles for "Foo" and "Bar" after we see `Foo function doThing(Bar arg1) {}`)
+     */
+    type FileCache = Map<AbsPath, WeakRef<SourceFile>>;
     const files : FileCache = new Map();
+
+    /**
+     * dependencies for some sourcefile
+     * so `A imports B`, `B imports C`
+     * directDependencies.get(A).has(B) -> true
+     * directDependencies.get(A).has(C) -> false (not a direct dependency)
+     */
+    const directDependencies = new WeakMap<SourceFile, Set<SourceFile>>(); // need to iterate over values, maybe WeakRef<SourceFile>[] instead?
+    /**
+     * direct dependents of some sourcefile ()
+     * so `A imports B`, `B imports C`
+     * dependents.get(B).has(A) -> true
+     * dependents.get(B).has(C) -> false (C does not depend on B)
+     */
+    const directDependents = new WeakMap<SourceFile, Set<SourceFile>>();
 
     let engineLib : SourceFile | undefined;
 
@@ -295,7 +318,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         return addFile(absPath);
     }
 
-    function parseBindCheckWorker(sourceFile: SourceFile) : DevTimingInfo {
+    function parseBindCheckWorker(sourceFile: SourceFile, oldDirectDependencies: Set<SourceFile>) : DevTimingInfo {
         try {
             const parseStart = new Date().getTime();
             parser.parse(sourceFile);
@@ -313,7 +336,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
 
             // do before checking so resolving a self-referential cfc in the checker works
             // e.g. in foo.cfc `public foo function bar() { return this; }`
-            files.set(canonicalizePath(sourceFile.absPath), sourceFile);
+            files.set(canonicalizePath(sourceFile.absPath), new WeakRef(sourceFile));
 
             maybeFollowParentComponents(sourceFile);
 
@@ -338,8 +361,21 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
                 sourceFile.libRefs.delete("<<magic/wirebox>>");
             }
             
+
             checker.check(sourceFile);
             const checkElapsed = new Date().getTime() - checkStart;
+
+            const newDependencies = new Set(sourceFile.directDependencies);
+
+            const {uniqueInL: depAdded, uniqueInR: depRemoved} = setDiff(newDependencies, oldDirectDependencies);
+            for (const removed of depRemoved) {
+                directDependencies.get(sourceFile)?.delete(removed);
+                directDependents.get(removed)?.delete(sourceFile);
+            }
+            for (const added of depAdded) {
+                addDependencyToWeakMap(directDependencies, sourceFile, added);
+                addDependencyToWeakMap(directDependents, added, sourceFile);
+            }
 
             return { parse: parseElapsed, bind: bindElapsed, check: checkElapsed };
         }
@@ -350,6 +386,68 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             }
             throw error;
         }
+    }
+
+    function addDependencyToWeakMap(v: WeakMap<SourceFile, Set<SourceFile>>, key: SourceFile, value: SourceFile) : void {
+        const freshValue = v.get(key) ?? new Set<SourceFile>();
+        freshValue.add(value);
+        v.set(key, freshValue);
+    }
+
+    function getTransitiveDependencies(sourceFile: SourceFile) : SourceFile[] {
+        const seen = new Set<SourceFile>();
+        const dependencies : SourceFile[] = (() => {
+            const v = directDependencies.get(sourceFile);
+            if (v) {
+                return [...v];
+            }
+            else {
+                return [];
+            }
+        })();
+
+        while (dependencies.length > 0) {
+            const dep = dependencies[0];
+            dependencies.shift();
+            if (seen.has(dep)) {
+                continue;
+            }
+            seen.add(dep);
+            const next = directDependencies.get(dep);
+            if (next) {
+                dependencies.push(...next);
+            }
+        }
+
+        return [...seen];
+    }
+
+    function getTransitiveDependents(sourceFile: SourceFile) : SourceFile[] {
+        const seen = new Set<SourceFile>();
+        const dependents : SourceFile[] = (() => {
+            const v = directDependents.get(sourceFile);
+            if (v) {
+                return [...v];
+            }
+            else {
+                return [];
+            }
+        })();
+
+        while (dependents.length > 0) {
+            const dep = dependents[0];
+            dependents.shift();
+            if (seen.has(dep)) {
+                continue;
+            }
+            seen.add(dep);
+            const next = directDependents.get(dep);
+            if (next) {
+                dependents.push(...next);
+            }
+        }
+
+        return [...seen];
     }
 
     function addFile(absPath: string) : SourceFile | undefined {
@@ -364,13 +462,13 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         const bytes = fileSystem.readFileSync(absPath);
         const sourceFile = SourceFile(absPath, fileType, bytes);
 
-        parseBindCheckWorker(sourceFile);
+        parseBindCheckWorker(sourceFile, new Set());
 
         if (fileType === CfFileType.dCfm) {
             
         }
 
-        return files.get(absPath);
+        return sourceFile;
     }
 
     // function constructWireboxInterface(sourceFile: SourceFile) : Interface | undefined {
@@ -578,7 +676,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     }
 
     function getCachedFile(absPath: string) : SourceFile | undefined {
-        return files.get(canonicalizePath(absPath));
+        return files.get(canonicalizePath(absPath))?.deref();
     }
 
     // fixme: dedup/unify this with the ones in parser/binder/checker
@@ -641,13 +739,14 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             return {parse: -1, bind: -1, check: -1};
         }
 
+        const savedDependencies = new Set(sourceFile.directDependencies);
         resetSourceFileInPlace(sourceFile, newSource);
 
-        return parseBindCheckWorker(sourceFile);
+        return parseBindCheckWorker(sourceFile, savedDependencies);
     }
 
     function getDiagnostics(absPath: string) : Diagnostic[] {
-        return files.get(canonicalizePath(absPath))?.diagnostics || [];
+        return files.get(canonicalizePath(absPath))?.deref()?.diagnostics || [];
     }
 
     /**
@@ -891,8 +990,10 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         getParsedSourceFile: (absPath: string) => getCachedFile(absPath),
         getFileListing: () => [...files.keys()],
         __unsafe_dev_getChecker: () => checker,
-        __unsafe_dev_getFile: (fname: string) => files.get(canonicalizePath(fname)),
-        canonicalizePath
+        __unsafe_dev_getFile: (fname: string) : SourceFile | undefined => files.get(canonicalizePath(fname))?.deref(),
+        canonicalizePath,
+        getTransitiveDependencies,
+        getTransitiveDependents,
     }
 }
 
@@ -940,4 +1041,29 @@ export function ProjectRelativeImportLookup(relPath: string) : ProjectRelativeIm
         type: ComponentResolutionArgType.projectRelative,
         relPath
     }
+}
+
+function setDiff<T>(l: Set<T>, r: Set<T>) {
+    const result = {
+        uniqueInL: new Set<T>(),
+        uniqueInR: new Set<T>(),
+        inBoth: new Set<T>()
+    }
+    for (const e of l) {
+        if (r.has(e)) {
+            result.inBoth.add(e);
+        }
+        else {
+            result.uniqueInL.add(e);
+        }
+    }
+    for (const e of r) {
+        if (l.has(e)) {
+            continue; // if L has it, we found it in L already, no need to re-add
+        }
+        else {
+            result.uniqueInR.add(e);
+        }
+    }
+    return result;
 }
