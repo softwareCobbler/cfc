@@ -62,21 +62,7 @@
 			]
 		},
 		{
-			"name": "debug target test w/ precompile",
-			"type": "node",
-			"request": "launch",
-			"preLaunchTask": "build-current-test-as-debuggable-test",
-			"program": "${workspaceFolder}/node_modules/mocha/bin/_mocha",
-			"args": ["--spec=${workspaceFolder}/test/out/debug-test.js", "--nolazy"],
-			"sourceMaps": true,
-			"outFiles": [
-				"${workspaceFolder}/test/out/**/*.js",
-				"${workspaceFolder}/out/**/*.js",
-				"!**/node_modules/**"
-			]
-		},
-		{
-			"name": "debug target test (works, no precompile weirdness, and breakpoints bind...?)",
+			"name": "debug current test",
 			"type": "node",
 			"request": "launch",
 			"program": "${workspaceFolder}/node_modules/mocha/bin/_mocha",

@@ -7,7 +7,7 @@
 }
 
 @!namespace Baz {
-    @!typedef function_transform<F> = F.cfname extends "scope#infer name#" ? inject<name, () => any> : 0
+    @!typedef function_transform<F> = F["cfname"] extends "scope#infer name#" ? inject<name, () => any> : 0
 }
 
 //// @file="/SomeLib2.d.cfm"
