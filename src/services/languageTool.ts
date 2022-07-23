@@ -123,14 +123,21 @@ function LanguageTool() {
 
     /**
      * This method is assumed to be called on every document update event, so we infer "ah this source file changed" by being called
-     * freshText of `null` means the text wasn't updated; there should be a project method to just re-check and update diagnostics
+     * freshText of `null` means the text wasn't updated
      */
     function naiveGetDiagnostics(fsPath: AbsPath, freshText: string | Buffer | null) : Result<{fsPath: AbsPath, diagnostics: unknown[], affectedDependencies: AbsPath[]}> {
         const project = getOwningProjectFromAbsPath(fsPath);
         if (!project) return NO_DATA;
 
-        // perhaps crytpically, this updates dependency information
-        /*const timing =*/ project.parseBindCheck(fsPath, freshText === null ? project.__unsafe_dev_getFile(fsPath)!.scanner.getSourceText() : freshText);
+        //
+        // perhaps crytpically, `checking` updates sourcefile dependency information
+        //
+        if (freshText !== null) {
+            /*const timing =*/ project.parseBindCheck(fsPath, freshText);
+        }
+        else {
+            project.recheck(fsPath);
+        }
 
         // does this leave the sourcefile in a possibly corrupt state? like we cleared it out ("reset in place"), but then hit a cancellation,
         // so it's half parsed, and not binded or checked? (there's no check cancellation token in binder / checker, only the parser)

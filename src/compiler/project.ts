@@ -4,7 +4,7 @@ import * as path from "path";
 import { Binder } from "./binder";
 import { Checker } from "./checker";
 import { EngineVersion } from "./engines";
-import { BlockType, mergeRanges, Node, NodeKind, SourceFile, SymTabEntry, DiagnosticKind, resetSourceFileInPlace } from "./node";
+import { BlockType, mergeRanges, Node, NodeKind, SourceFile, SymTabEntry, DiagnosticKind, resetSourceFileInPlace, NodeFlags } from "./node";
 import { Parser } from "./parser";
 import { CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignatureParam, Interface, Type, CfcLookup, BuiltinType, cfTypeId, cfGenericFunctionSignature, TypeConstructorParam, freshKeyof } from "./types";
@@ -340,9 +340,6 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
 
             maybeFollowParentComponents(sourceFile);
 
-
-            const checkStart = new Date().getTime();
-
             // if (options.withWireboxResolution && sourceFile.absPath === options.wireboxConfigFileCanonicalAbsPath) {
             //     const wireboxInterface = constructWireboxInterface(sourceFile);
             //     if (wireboxInterface) {
@@ -361,21 +358,10 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
                 sourceFile.libRefs.delete("<<magic/wirebox>>");
             }
             
-
-            checker.check(sourceFile);
+            const checkStart = new Date().getTime();
+            checkWorker(sourceFile, oldDirectDependencies);
             const checkElapsed = new Date().getTime() - checkStart;
-
-            const newDependencies = new Set(sourceFile.directDependencies);
-
-            const {uniqueInL: depAdded, uniqueInR: depRemoved} = setDiff(newDependencies, oldDirectDependencies);
-            for (const removed of depRemoved) {
-                directDependencies.get(sourceFile)?.delete(removed);
-                directDependents.get(removed)?.delete(sourceFile);
-            }
-            for (const added of depAdded) {
-                addDependencyToWeakMap(directDependencies, sourceFile, added);
-                addDependencyToWeakMap(directDependents, added, sourceFile);
-            }
+            
 
             return { parse: parseElapsed, bind: bindElapsed, check: checkElapsed };
         }
@@ -385,6 +371,37 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
                 return { parse: NaN, bind: NaN, check: NaN };
             }
             throw error;
+        }
+    }
+
+    function recheck(sourceFile: SourceFile) : void {
+        // we don't want to "resetSourceFileInPlace"
+        // we can leave all the content and binding and etc untouched,
+        // we just want to recheck the existing tree assuming possibly changed dependencies
+        const oldDirectDependencies = new Set(sourceFile.directDependencies);
+        sourceFile.directDependencies = [];
+        sourceFile.diagnostics = []; // ah ha, would need to clear "checker diagnostics" only ...
+        // clear all checker flags from nodes
+        for (const node of sourceFile.nodeMap.values()) {
+            node.flags &= ~(NodeFlags.checked | NodeFlags.checkerError | NodeFlags.unreachable);
+        }
+        checkWorker(sourceFile, oldDirectDependencies);
+    }
+
+    function checkWorker(sourceFile: SourceFile, oldDirectDependencies: Set<SourceFile>) {
+        checker.check(sourceFile);
+
+        const newDependencies = new Set(sourceFile.directDependencies);
+
+        const {uniqueInL: depAdded, uniqueInR: depRemoved} = setDiff(newDependencies, oldDirectDependencies);
+
+        for (const removed of depRemoved) {
+            directDependencies.get(sourceFile)?.delete(removed);
+            directDependents.get(removed)?.delete(sourceFile);
+        }
+        for (const added of depAdded) {
+            addDependencyToWeakMap(directDependencies, sourceFile, added);
+            addDependencyToWeakMap(directDependents, added, sourceFile);
         }
     }
 
@@ -994,6 +1011,12 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         canonicalizePath,
         getTransitiveDependencies,
         getTransitiveDependents,
+        recheck: (fsPath: string) : void => {
+            const file = getCachedFile(fsPath);
+            if (file) {
+                recheck(file);
+            }
+        },
     }
 }
 
