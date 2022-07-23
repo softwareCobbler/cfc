@@ -74,6 +74,18 @@
 				"${workspaceFolder}/out/**/*.js",
 				"!**/node_modules/**"
 			]
+		},
+		{
+			"name": "debug target test (works, no precompile weirdness, and breakpoints bind...?)",
+			"type": "node",
+			"request": "launch",
+			"program": "${workspaceFolder}/node_modules/mocha/bin/_mocha",
+			"args": ["--spec=${file}", "--no-timeout",  "--nolazy", "--require", "ts-node/register"],
+			"cwd": "${workspaceFolder}",
+			"env": {
+				"TS_NODE_PROJECT": "./test/tsconfig.json"
+			},
+			"sourceMaps": true
 		}
     ],
     "compounds": [
