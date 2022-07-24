@@ -2502,7 +2502,7 @@ export const enum TypeShimKind {
     interfacedef,                       // `@!interface XYZ {}`, basically a typedef but different enough to need a separate treatement
     annotation,                         // `@!type sometype`, annotates the subsequent statement with a type
     namedAnnotation,                    // `@!arg:<argname> <type>` annotates a single function argument
-    nonCompositeFunctionTypeAnnotation, // we combine any loose functionArgAnnotations into a type shim of this kind
+    nonCompositeFunctionTypeAnnotation, // we combine any loose functionArgAnnotations, return types, and type params into a type shim of this kind
     namespace,                          // @!namespace Foo { typedef* }
     import,
 };
@@ -2565,12 +2565,14 @@ export interface TypeAnnotation extends TypeShimBase {
 
 export interface NonCompositeFunctionTypeAnnotation extends TypeShimBase {
     shimKind: TypeShimKind.nonCompositeFunctionTypeAnnotation,
+    typeparams: NamedAnnotation[] | null,
     params: NamedAnnotation[],
-    returns: NamedAnnotation | null
+    returns: Type | null
 }
 
 /**
  * there is no structural difference between this and a typedef?
+ * this represents a single argument anntoation like '@!arg Foo : Bar` (argument Foo to the following function has type Bar)
  */
 export interface NamedAnnotation extends TypeShimBase {
     shimKind: TypeShimKind.namedAnnotation,
@@ -2608,10 +2610,11 @@ export function NamedAnnotation(name: Token, type: Type) : NamedAnnotation {
     return v;
 }
 
-export function NonCompositeFunctionTypeAnnotation(params: NamedAnnotation[], returns: NamedAnnotation | null) : NonCompositeFunctionTypeAnnotation {
+export function NonCompositeFunctionTypeAnnotation(params: NamedAnnotation[], typeparams: NamedAnnotation[] | null, returns: Type | null) : NonCompositeFunctionTypeAnnotation {
     const v = NodeBase<TypeShimBase>(NodeKind.typeShim, SourceRange.Nil()) as NonCompositeFunctionTypeAnnotation;
     v.shimKind = TypeShimKind.nonCompositeFunctionTypeAnnotation;
     v.params = params;
+    v.typeparams = typeparams;
     v.returns = returns;
     return v;
 }

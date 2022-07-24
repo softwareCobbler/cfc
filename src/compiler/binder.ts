@@ -106,7 +106,13 @@ export function Binder(options: ProjectOptions) {
                         bindType(param.type, currentContainer);
                     }
                     if (node.typeAnnotation.returns) {
-                        bindType(node.typeAnnotation.returns.type, currentContainer);
+                        bindType(node.typeAnnotation.returns, currentContainer);
+                    }
+                    if (node.typeAnnotation.typeparams) {
+                        for (const typeparam of node.typeAnnotation.typeparams) {
+                            // this is really the "extends type" portion of "@!typeparam T extends U" (i.e. `U` in the preceding)
+                            bindType(typeparam.type, currentContainer)
+                        }
                     }
                     break;
                 }
@@ -297,8 +303,21 @@ export function Binder(options: ProjectOptions) {
 
     const scopeInterfaceNames : StaticallyKnownScopeName[] = ["variables", "application"];
 
+    function isBuiltinType(type: Type) {
+        for (const key of Object.keys(BuiltinType)) {
+            if (type === BuiltinType[key as keyof typeof BuiltinType]) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * bind types to contexts (i.e. containers where they should begin their lookup for other referenced types)
+     * n.b. We must not mutate the context of Builtin types
+     */
     function bindType(type: Type | undefined, context: Node) : void {
-        if (!type) {
+        if (!type || isBuiltinType(type)) {
             return;
         }
 
@@ -329,6 +348,22 @@ export function Binder(options: ProjectOptions) {
             }
             case TypeKind.typeConstructor: {
                 bindType(type.body, context);
+                return;
+            }
+            case TypeKind.typeConstructorParam: {
+                if (type.extends) {
+                    bindType(type.extends, context);
+                }
+                return;
+            }
+            case TypeKind.typeConstructorInvocation: {
+                for (const arg of type.args) {
+                    bindType(arg, context);
+                }
+                return;
+            }
+            case TypeKind.keyof: {
+                bindType(type.operand, context);
                 return;
             }
             case TypeKind.interpolatedString: {

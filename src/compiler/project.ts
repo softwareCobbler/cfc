@@ -7,7 +7,7 @@ import { EngineVersion } from "./engines";
 import { BlockType, mergeRanges, Node, NodeKind, SourceFile, SymTabEntry, DiagnosticKind, resetSourceFileInPlace, NodeFlags } from "./node";
 import { Parser } from "./parser";
 import { CfFileType, SourceRange } from "./scanner";
-import { cfFunctionSignatureParam, Interface, Type, CfcLookup, BuiltinType, cfTypeId, cfGenericFunctionSignature, TypeConstructorParam, freshKeyof, TypeIndexedAccessType } from "./types";
+import { Interface, Type, createLiteralType, Struct } from "./types";
 
 import { cfmOrCfc, findNodeInFlatSourceMap, flattenTree, getAttributeValue, getComponentAttrs, getComponentBlock, getTriviallyComputableString } from "./utils";
 
@@ -558,93 +558,41 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         if (!mappings.wirebox) {
             return undefined;
         }
-        
-        const wireboxNamesToCfcMappings = new Map<string, SymTabEntry>();
+
+        const wireboxMappings = new Map<string, SymTabEntry>();
 
         for (const [name, mapping] of mappings.wirebox) {
-            const possibleResolutions = buildPossibleCfcResolutionPaths(projectRoot, mapping);
-            if (!possibleResolutions) {
-                continue;
-            }
-
-            let cfcAbsPath : string | undefined = undefined;
-            for (const resolution of possibleResolutions) {
-                if (fileSystem.existsSync(resolution.absPath)) {
-                    cfcAbsPath = resolution.absPath;
-                    break;
-                }
-            }
-
-            if (!cfcAbsPath) {
-                continue;
-            }
-
-            const cfcRefType = CfcLookup(mapping, ComponentSpecifier(cfcAbsPath));
-            const canonicalName = name.toLowerCase();
-
-            wireboxNamesToCfcMappings.set(canonicalName, {
-                canonicalName,
-                uiName: name,
+            wireboxMappings.set(name, {
                 flags: 0,
+                canonicalName: name,
+                uiName: name,
                 declarations: null,
                 lexicalType: undefined,
-                effectivelyDeclaredType: cfcRefType,
+                effectivelyDeclaredType: createLiteralType(mapping),
                 symbolId: -1,
-            });
+            })
         }
 
-        /*
-            we want to say:
-
-            @!interface WireboxMappings {
-                "someBinding@folder": "foo.bar.baz",
-                "someOtherBinding": "a.b.c.d",
-                ...
-            }
-
-            @!interface Wirebox {
-                getInstance: <T extends keyof WireboxMappings>(name: T, initArgs: {}, dslParam: string) => WireboxMappings[T]
-            }
-
-            the machinery mostly exists but there's no user-surfaced syntax that we parse for this
-
-            also we need something like namespaces
-
-            @!namespace Wirebox {
-                @!interface Mappings {
-                    "a": "b",
-                    ...
-                }
-                getInstance: <T extends keyof Mappings>(name: T, initArgs: {}, dslParam: string) => Mappings[T]
-            }
-        */
-
-        const wireboxMappingInterface = Interface("__INTERNAL__WireboxMappings", wireboxNamesToCfcMappings);
-        const wireboxLookup = cfTypeId("__INTERNAL__WireboxMappings", TypeIndexedAccessType.head, [cfTypeId("T", TypeIndexedAccessType.dot)]);
-
-        const typeParam = TypeConstructorParam("T", undefined, freshKeyof(wireboxMappingInterface));
-        const nameParam = cfFunctionSignatureParam(true, cfTypeId("T", TypeIndexedAccessType.head), "name");
-        const initArgsParam = cfFunctionSignatureParam(false, BuiltinType.EmptyInterface, "initArgs");
-        const dslParam = cfFunctionSignatureParam(false, BuiltinType.string, "dsl");
-
-        const wireboxGetInstanceSymbol : SymTabEntry = {
-            uiName: "getInstance",
-            canonicalName: "getinstance",
-            flags: 0,
-            declarations: null,
-            lexicalType: undefined,
-            effectivelyDeclaredType: cfGenericFunctionSignature("getInstance", [typeParam], [nameParam, initArgsParam, dslParam], wireboxLookup, []),
-            symbolId: -1,
-        };
-
         const wireboxMembers = new Map<string, SymTabEntry>([
-            ["getinstance", wireboxGetInstanceSymbol],
+            ["mappings", {
+                flags: 0,
+                canonicalName: "mappings",
+                uiName: "mappings",
+                declarations: null,
+                lexicalType: undefined,
+                effectivelyDeclaredType: Struct(wireboxMappings),
+                symbolId: -1
+            }],
         ]);
-        
+
+        /**
+         * we create the following out of the json wirebox mapping file
+         * @!interface Wirebox { mappings: {foo: "bar", baz: "qux", ...} }
+         * in code the type `Wirebox["mappings"]` refers to the mappings
+         */
         const wireboxInterface = Interface("Wirebox", wireboxMembers);
         const libFile = SourceFile("<<magic/wirebox>>", CfFileType.dCfm, "");
         libFile.containedScope.typeinfo.mergedInterfaces.set("Wirebox", wireboxInterface);
-        libFile.containedScope.typeinfo.mergedInterfaces.set("__INTERNAL__WireboxMappings", wireboxMappingInterface)
         return libFile;
     }
 

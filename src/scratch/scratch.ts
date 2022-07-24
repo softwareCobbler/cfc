@@ -39,6 +39,18 @@ function projectFiddle() {
                     `
                 },
                 "someFolder": {
+                    "generic.cfc": `
+                        component {
+                            /**
+                             * @!typeparam T extends keyof Wirebox["mappings"]
+                             * @!arg name : T
+                             * @!returns cfc<Wirebox["mappings"][T]>
+                             */
+                            function getInstanceLike(name) {}
+
+                            getInstanceLike("someBinding");
+                        }
+                    `,
                     "someFile.cfc": `
                         /**
                          @!namespace CbOrm {
@@ -108,7 +120,7 @@ function projectFiddle() {
         parseTypes: true,
         engineVersion: EngineVersions["lucee.5"],
         withWireboxResolution: true,
-        cfConfigProjectRelativePath: "/Wirebox.cfc",
+        cfConfigProjectRelativePath: "cfconfig.json",
         checkReturnTypes: true,
         checkFlowTypes: true,
         genericFunctionInference: true,
@@ -123,7 +135,7 @@ function projectFiddle() {
     //project.addEngineLib("/lib.d.cfm");
     // project.addEngineLib("/realLib.d.cfm");
     //project.addFile("/coolFolder/QuickOrmTypedefs.d.cfm");
-    project.addFile("/someFolder/someFile.cfc");
+    project.addFile("/someFolder/generic.cfc");
     //project.addFile("C:\\Users\\anon\\dev\\cb\\testbox\\tests\\resources\\coldbox\\system\\EventHandler.cfc");
     const diagnostics = project.getDiagnostics("/someFolder/someFile.cfc");
 

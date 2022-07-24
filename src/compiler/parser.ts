@@ -26,8 +26,8 @@ import {
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
     ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess, Namespace, TypeImport, TypeInfo } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType } from "./scanner";
-import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard, Mutable } from "./utils";
-import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature, cfConditionalType, cfInterpolatedString, cfInferenceTarget, cfTuple, cfTypeConstructorInvocation, TypeIndexedAccessType } from "./types";
+import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, exhaustiveCaseGuard, Mutable } from "./utils";
+import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature, cfConditionalType, cfInterpolatedString, cfInferenceTarget, cfTuple, cfTypeConstructorInvocation, TypeIndexedAccessType, freshKeyof } from "./types";
 import { Type, UninstantiatedArray, Struct, cfFunctionSignature, cfTypeId, cfUnion, BuiltinType, cfFunctionSignatureParam } from "./types";
 import { Engine } from "./engines";
 import { ProjectOptions } from "./project";
@@ -145,9 +145,11 @@ export function Parser(config: ProjectOptions) {
     let lastDocBlock : {
         typeAnnotation: TypeAnnotation | null,
         typedefs: (Typedef | Interfacedef | Namespace | TypeImport)[],
+        typeparams: NamedAnnotation[] | null,
         argumentAnnotations: NamedAnnotation[] | null,
+        returns : Type | null,
         docBlockAttrs: TagAttribute[],
-        treatAsConstructor: boolean 
+        treatAsConstructor: boolean
     } | null = null;
     let parseErrorMsg : string | null = null;
 
@@ -3581,8 +3583,11 @@ export function Parser(config: ProjectOptions) {
     }
 
     function coalesceTypeAnnotationsToBindToNode(docBlock: typeof lastDocBlock) : TypeAnnotation | NonCompositeFunctionTypeAnnotation | null {
-        if (docBlock?.argumentAnnotations) {
-            return NonCompositeFunctionTypeAnnotation(docBlock.argumentAnnotations, null);
+        // loose arg annotations take precedence over an explicit "composite" type annotation
+        // a user should write on or the other
+        // we could issue a diagonstic here if there are both
+        if (docBlock?.argumentAnnotations || docBlock?.returns) {
+            return NonCompositeFunctionTypeAnnotation(docBlock.argumentAnnotations ?? [], docBlock.typeparams, docBlock.returns);
         }
         else if (docBlock?.typeAnnotation) {
             return docBlock.typeAnnotation;
@@ -4115,6 +4120,8 @@ export function Parser(config: ProjectOptions) {
         const docBlockAttrs : TagAttribute[] = [];
         const typedefs : (Typedef | Interfacedef | Namespace | TypeImport)[] = [];
         const argumentAnnotations : NamedAnnotation[] = [];
+        const typeparams : NamedAnnotation[] = [];
+        let returns : Type | null = null;
         let typeAnnotation : TypeAnnotation | null = null;
         let treatAsConstructor = false;
 
@@ -4165,6 +4172,29 @@ export function Parser(config: ProjectOptions) {
                     else if (parseTypes && name === "!init") {
                         treatAsConstructor = true;
                         continue;
+                    }
+                    else if (parseTypes && name === "!typeparam") {
+                        parseTrivia();
+                        const name = scanIdentifier();
+                        parseTrivia();
+                        if (!name) {
+                            parseErrorAtRange(new SourceRange(pos(), pos() + 1), "Expected an identifier");
+                            next();
+                        }
+                        else {
+                            let extends_ : Type = BuiltinType.any;
+                            if (peek().text === "extends") {
+                                next();
+                                parseTrivia();
+                                extends_ = parseType();
+                                parseTrivia();
+                            }
+                            typeparams.push(NamedAnnotation(name, extends_))
+                        }
+                    }
+                    else if (parseTypes && name === "!returns") {
+                        parseTrivia();
+                        returns = parseType();
                     }
                     else if (parseTypes && name === "!arg") {
                         //
@@ -4225,7 +4255,9 @@ export function Parser(config: ProjectOptions) {
         lastDocBlock = {
             typeAnnotation,
             typedefs,
+            typeparams: typeparams.length > 0 ? typeparams : null,
             argumentAnnotations: argumentAnnotations.length > 0 ? argumentAnnotations : null,
+            returns,
             docBlockAttrs,
             treatAsConstructor
         };
@@ -4290,6 +4322,8 @@ export function Parser(config: ProjectOptions) {
             typeAnnotation: typeAnnotations.length === 1 ? typeAnnotations[0] : null,
             typedefs: defs,
             argumentAnnotations,
+            typeparams: null,
+            returns: null,
             docBlockAttrs: [], // this is not a docblock, if it were, we'd be using "parseDocBlockFromPreParsedTrivia"
             treatAsConstructor
         };
@@ -4664,6 +4698,11 @@ export function Parser(config: ProjectOptions) {
                 case TokenType.LEXEME: {
                     const terminal = parseExpectedTerminal(TokenType.LEXEME, ParseOptions.withTrivia);
 
+                    if (terminal.token.text === "keyof") {
+                        const operand = parseType(); // not true! there needs to be grammar rules, we shouldn't parse `interface`, and probably other things
+                        return freshKeyof(operand);
+                    }
+
                     if (!isInSomeContext(ParseContext.interface) && terminal.token.text === "interface") {
                         const name = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ false);
                         let typeParams : cfTypeConstructorParam[] | undefined;
@@ -4701,14 +4740,14 @@ export function Parser(config: ProjectOptions) {
                     }
                     else {
                         result = tokenToType(terminal.token);
-                        if (terminal.token.text.toLowerCase() === "cfc") {
-                            parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
-                            const dottedPath = parseDottedPath();
-                            parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);
-                            const cfcPathNameAsLiteralType = createLiteralType(stringifyDottedPath(dottedPath).ui);
-                            result = CfcLookup(cfcPathNameAsLiteralType);
-                        }
-                        else if (result.kind === TypeKind.typeId) {
+                        // if (terminal.token.text.toLowerCase() === "cfc") {
+                        //     parseExpectedTerminal(TokenType.LEFT_ANGLE, ParseOptions.withTrivia);
+                        //     const dottedPath = parseDottedPath();
+                        //     parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.withTrivia);
+                        //     const cfcPathNameAsLiteralType = createLiteralType(stringifyDottedPath(dottedPath).ui);
+                        //     result = CfcLookup(cfcPathNameAsLiteralType);
+                        // }
+                        if (result.kind === TypeKind.typeId) {
                             result = (() => {
                                 const rest = parseTypeIdRest();
                                 return rest.length === 0 ? result : cfTypeId(result.name, TypeIndexedAccessType.head, rest);
@@ -5043,7 +5082,7 @@ export function Parser(config: ProjectOptions) {
         }
     }
 
-    function parseTypeIdRest() {
+    function parseTypeIdRest() : cfTypeId[] {
         // after parsing the first bracket-access, we can no longer accept dotted access (namespaces cannot reside within types)
         let canAcceptDot = true;
         const result : cfTypeId[] = [];
@@ -5061,19 +5100,22 @@ export function Parser(config: ProjectOptions) {
             }
             else if (lookahead() === TokenType.LEFT_BRACKET) {
                 parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
-                if (lookahead() !== TokenType.QUOTE_DOUBLE && lookahead() !== TokenType.QUOTE_SINGLE) {
-                    parseErrorAtCurrentToken("Expected a string literal.");
-                    return result;
+                const from = pos();
+                const id = parseType();
+                const to = pos();
+                parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
+
+                if (id.kind === TypeKind.literal && typeof id.literalValue === "string") {
+                    result.push(cfTypeId(id.literalValue, TypeIndexedAccessType.bracket_string));
                 }
-                const s = parseStringLiteral(StringUniverse.type);
-                if (s.kind !== NodeKind.simpleStringLiteral) {
-                    parseErrorAtRange(s.range, "Interpolated string indexed access types are not supported.");
-                    result.push(cfTypeId("<<error-type>>", TypeIndexedAccessType.bracket));
+                else if (id.kind === TypeKind.typeId && !id.next) {
+                    result.push(cfTypeId(id.name, TypeIndexedAccessType.bracket_id));
                 }
                 else {
-                    result.push(cfTypeId(s.textSpan.text, TypeIndexedAccessType.bracket));
+                    parseErrorAtRange(from, to, "A bracket-indexed type lookup must be either a string literal or an unqualified type id.")
+                    return result;
                 }
-                parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
+
                 canAcceptDot = false;
             }
             else {

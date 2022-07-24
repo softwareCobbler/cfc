@@ -92,7 +92,7 @@ export const enum TypeFlags {
     protected         = 1 << 6,
     private           = 1 << 7,
     containsUndefined = 1 << 8,
-    inferenceTarget             = 1 << 9,
+    inferenceTarget   = 1 << 9,
     end
 }
 
@@ -532,7 +532,8 @@ export function TypeConstructorParam(name: string, defaultType?: Type, extends_?
 export const enum TypeIndexedAccessType {
     head,   // the first in a chain of something like A.b["c"]
     dot,    // `b` in `A.b`
-    bracket // `b` in `A["b"]`
+    bracket_string, // `b` in `A["b"]`
+    bracket_id // `T` in `A[T]`
 }
 
 export interface cfTypeId extends TypeBase {

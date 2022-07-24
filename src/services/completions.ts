@@ -128,11 +128,19 @@ function getStringLiteralCompletions(checker: Checker, sourceFile: SourceFile, n
                 if (!typeParam) {
                     return undefined;
                 }
-                if (typeParam.extends?.kind === TypeKind.keyof && typeParam.extends.concrete) {
-                    for (const keyName of typeParam.extends.keyNames) {
-                        strings.add(keyName);
+
+                if (typeParam.extends?.kind === TypeKind.keyof) {
+                    // what if it's dependent on another type param? `keyof T` ?....
+                    // we need the type param map ...
+                    // from as many resolved type params for this call as possible (but possibly not all of them, or if they're not, they are 'any'?...)
+                    const keyof = checker.__experimental__instantiateType(sourceFile, typeParam.extends)
+                    if (keyof.kind === TypeKind.keyof) {
+                        for (const keyName of keyof.keyNames) {
+                            strings.add(keyName);
+                        }
                     }
                 }
+
 
                 // no-op -- ?
             }
