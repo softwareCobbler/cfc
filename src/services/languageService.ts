@@ -90,6 +90,7 @@ export function LanguageService<T extends ClientAdapter>() {
                     }
                     case CflsResponseType.diagnostics: {
                         handlerMappings.diagnostics?.(msg.fsPath, msg.diagnostics);
+                        // fix: circularities? can we (do we want to) say "hey don't recursively do this..."?
                         for (const fsPath of msg.affectedDependencies) {
                             if (openFiles.has(fsPath)) {
                                 emitDiagnostics(fsPath, null);

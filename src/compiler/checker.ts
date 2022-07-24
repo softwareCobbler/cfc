@@ -1507,13 +1507,22 @@ export function Checker(options: ProjectOptions) {
         }
 
         const sig = getCachedEvaluatedNodeType(node.left);
-        
-        if (sig.kind === TypeKind.functionSignature || sig.kind === TypeKind.functionOverloadSet || sig.kind === TypeKind.genericFunctionSignature) {
+
+        // we can do this no matter the type of receiver; foo(v=42, /*no name*/ 43) is always an error no matter the type of foo (well assuming foo is callable but that's a separate problem)
+        const enum CallType { named, positional, incoherent };
+        const callType = (() => {
             const namedArgCount = countNamedArgs(node.args);
-            if (namedArgCount > 0 && namedArgCount !== node.args.length) {
-                issueDiagnosticAtRange(node.left.range, "All arguments must be named, if any are named.");
+            if (namedArgCount === 0) {
+                return CallType.positional;
             }
-        }
+            else if (namedArgCount !== node.args.length) {
+                issueDiagnosticAtRange(node.left.range, "All arguments must be named, if any are named.");
+                return CallType.incoherent;
+            }
+            else {
+                return CallType.named;
+            }
+        })();
 
         let returnType : Type;
 
@@ -1534,13 +1543,13 @@ export function Checker(options: ProjectOptions) {
             setCachedEvaluatedNodeType(node, returnType = sig.returns);
         }
         else if (sig.kind === TypeKind.genericFunctionSignature) {
-            if (!GENERIC_FUNCTION_INFERENCE) {
+            if (!GENERIC_FUNCTION_INFERENCE || callType === CallType.incoherent) {
                 return;
             }
 
             const typeParamMap = new Map<string, Type | undefined>();
             const definitelyResolvedTypeParamMap = new Map<string, Type>();
-            const typeConstraintMap = new Map<string, Type>(); // all constraints are "subtypeof" at this point, e.g. <T extends "a" | "b">(...)
+            const typeConstraintMap = new Map<string, Type>(); // all constraints are "subtypeof / extends" at this point, e.g. <T extends "a" | "b">(...)
             const pushResolution = (name: string, type: Type) => {
                 typeParamMap.set(name, type);
                 definitelyResolvedTypeParamMap.set(name, type);
@@ -1554,9 +1563,42 @@ export function Checker(options: ProjectOptions) {
                 }
             }
 
-            for (let i = 0; i < sig.params.length && i < node.args.length; i++) {
-                const sigParamType = sig.params[i].paramType;
-                const callSiteArg = node.args[i];
+            //
+            // unify named/positional calls
+            //
+
+            let params : cfFunctionSignatureParam[] = [];
+            // by name, same order as params, but possibly filtered
+            // function foo(a, b, c, d) {} --> foo(d=42, b=42) --> [b,d]
+            let args : CallArgument[] = [];
+
+            if (callType === CallType.named) {
+                const argNameMap = new Map<string, CallArgument>();
+                for (let i = 0; i < node.args.length; ++i) {
+                    const name = getTriviallyComputableString(node.args[i].name)?.toLowerCase();
+                    if (!name) {
+                        // ???
+                        continue;
+                    }
+                    argNameMap.set(name, node.args[i]);
+                }
+                for (let i = 0; i < sig.params.length; ++i) {
+                    const param = sig.params[i];
+                    const arg = argNameMap.get(param.canonicalName);
+                    if (arg) {
+                        params.push(param);
+                        args.push(arg)
+                    }
+                }
+            }
+            else {
+                params = sig.params;
+                args = node.args;
+            }
+
+            for (let i = 0; i < params.length && i < args.length; i++) {
+                const sigParamType = params[i].paramType;
+                const callSiteArg = args[i];
 
 
                 if (sigParamType.kind === TypeKind.functionSignature) {
@@ -1568,7 +1610,8 @@ export function Checker(options: ProjectOptions) {
                                 typeParamMap,
                                 typeConstraintMap,
                                 sigParamType.params[j].paramType,
-                                evaluateType(typeFromJavaLikeTypename(callSiteArg.expr.params[j].javaLikeTypename)));
+                                evaluateType(typeFromJavaLikeTypename(callSiteArg.expr.params[j].javaLikeTypename)),
+                                /*sourceIsLiteralExpression*/ false);
                             if (resolutions) {
                                 for (const [k,v] of resolutions) {
                                     if (v) {
@@ -1613,8 +1656,8 @@ export function Checker(options: ProjectOptions) {
                 else {
                     // if param is optional and callSiteArg is undefined we don't need to do this?
                     checkNode(callSiteArg);
-                    const argType = getCachedEvaluatedNodeType(node.args[i])
-                    const resolutions = resolveGenericFunctionTypeParams(typeParamMap, typeConstraintMap, sigParamType, argType);
+                    const argType = getCachedEvaluatedNodeType(callSiteArg)
+                    const resolutions = resolveGenericFunctionTypeParams(typeParamMap, typeConstraintMap, sigParamType, argType, isLiteralExpr(callSiteArg.expr));
                     if (resolutions) {
                         for (const [k,v] of resolutions) {
                             if (v) {
@@ -1641,8 +1684,18 @@ export function Checker(options: ProjectOptions) {
                 return undefined;
             }
 
-            function resolveGenericFunctionTypeParams(unifiees: ReadonlyMap<string, Type | undefined>, constraintMap: ReadonlyMap<string, Type>, target: Type, source: Type) : ReadonlyMap<string, Type | undefined> | undefined {
+            /**
+             * "target" is expected to eventually be a leaf of a type-id, like "T"
+             * prior to walking to the leaf level, it could be some larger type that contains T (or some other named target), like `T[]` or `{a: {b: {c: T}}}`
+             */
+            function resolveGenericFunctionTypeParams(unifiees: ReadonlyMap<string, Type | undefined>, constraintMap: ReadonlyMap<string, Type>, target: Type, source: Type, sourceIsLiteralExpr: boolean) : ReadonlyMap<string, Type | undefined> | undefined {
                 if (target.kind === TypeKind.typeId) {
+                    if (sourceIsLiteralExpr) {
+                        const constraint = constraintMap.get(target.name);
+                        if (constraint) {
+                            setTypeConstraint(source, constraint);
+                        }
+                    }
                     if (unifiees.has(target.name)) {
                         if (!unifiees.get(target.name)) {
                             if (!constraintMap.has(target.name) || isAssignable(source, constraintMap.get(target.name)!)) {
@@ -1667,11 +1720,13 @@ export function Checker(options: ProjectOptions) {
                         return undefined;
                     }
                     else {
-                        throw "these types are closed -- we're not looking up arbitrary generic type IDs, they should have been resolved already during the containing type's instantiation"
+                        // these types are closed -- we're not looking up arbitrary generic type IDs, they should have been resolved already during the containing type's instantiation
+                        // this would be a weird bug on our part -- target name is "T" but there is unifiee named T?... so in foo<T>(v:T) we're looking for U?
+                        return undefined;
                     }
                 }
                 else if (target.kind === TypeKind.array && source.kind === TypeKind.array) {
-                    return resolveGenericFunctionTypeParams(unifiees, constraintMap, target.memberType, source.memberType);
+                    return resolveGenericFunctionTypeParams(unifiees, constraintMap, target.memberType, source.memberType, sourceIsLiteralExpr);
                 }
                 else if (isStructLike(target) && isStructLike(source)) {
                     if (target.kind === TypeKind.cfc && source.kind === TypeKind.cfc) {
@@ -1683,9 +1738,12 @@ export function Checker(options: ProjectOptions) {
                     }
                     const freshResolutions = new Map<string, Type | undefined>([...unifiees]);
                     for (const [name, symTabEntry] of target.members) {
-                        const targetType = symTabEntry.lexicalType!;
-                        if (!source.members.has(name)) return;
-                        const result = resolveGenericFunctionTypeParams(freshResolutions, constraintMap, targetType, source.members.get(name)!.lexicalType!);
+                        const targetType = symTabEntry.effectivelyDeclaredType;
+                        const sourceType = source.members.get(name)?.effectivelyDeclaredType;
+                        if (!sourceType || !targetType) {
+                            return;
+                        }
+                        const result = resolveGenericFunctionTypeParams(freshResolutions, constraintMap, targetType, sourceType, sourceIsLiteralExpr);
                         if (result) {
                             for (const [k,v] of result) freshResolutions.set(k,v);
                         }
@@ -1701,13 +1759,13 @@ export function Checker(options: ProjectOptions) {
                     for (let i = 0; i < target.params.length; i++) {
                         const targetParamType = target.params[i].paramType;
                         const sourceParamType = source.params[i].paramType;
-                        const result = resolveGenericFunctionTypeParams(unifiees, constraintMap, targetParamType, sourceParamType);
+                        const result = resolveGenericFunctionTypeParams(unifiees, constraintMap, targetParamType, sourceParamType, sourceIsLiteralExpr);
                         if (result) {
                             for (const[k,v] of result) freshResolutions.set(k,v);
                         }
                     }
 
-                    const returnTypeResolution = resolveGenericFunctionTypeParams(unifiees, constraintMap, target.returns, source.returns);
+                    const returnTypeResolution = resolveGenericFunctionTypeParams(unifiees, constraintMap, target.returns, source.returns, sourceIsLiteralExpr);
                     if (returnTypeResolution) {
                         for (const[k,v] of returnTypeResolution) freshResolutions.set(k,v);
                     }
@@ -1743,6 +1801,13 @@ export function Checker(options: ProjectOptions) {
             issueDiagnosticAtNode(getCallExprCallableName(node), `Type '${stringifyType(sig)}' is not callable.`);
         }
     }
+
+    function setTypeConstraint(type: Type, upperBoundedBy: Type) : void {
+        sourceFile.typeConstraints.set(type, upperBoundedBy);
+    }
+    // function getTypeConstraint(type: Type) : Type | undefined {
+    //     return sourceFile.typeConstraints.get(type);
+    // }
 
     function checkCallLikeArguments(sig: Type, args: CallArgument[], nameRange: SourceRange, isNewExpr: boolean, requireNamedArgs = false) : void {
         if (sig === BuiltinType.any) {

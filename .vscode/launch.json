@@ -62,11 +62,11 @@
 			]
 		},
 		{
-			"name": "debug current test",
+			"name": "debug target test",
 			"type": "node",
 			"request": "launch",
 			"program": "${workspaceFolder}/node_modules/mocha/bin/_mocha",
-			"args": ["--spec=${file}", "--no-timeout",  "--nolazy", "--require", "ts-node/register"],
+			"args": ["--spec=${workspaceFolder}/test/targeted-construct-smoketest.spec.ts", "--no-timeout",  "--nolazy", "--require", "ts-node/register"],
 			"cwd": "${workspaceFolder}",
 			"env": {
 				"TS_NODE_PROJECT": "./test/tsconfig.json"

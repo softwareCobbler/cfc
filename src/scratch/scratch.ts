@@ -23,7 +23,8 @@ function projectFiddle() {
                             "foo": "foo/bar/baz"
                         },
                         "wirebox": {
-                            "someBinding": "foo.someCfc"
+                            "someBinding": "foo.someCfc",
+                            "someOtherBinding": "haha"
                         }
                     }
                 `,
@@ -43,7 +44,7 @@ function projectFiddle() {
                         component {
                             /**
                              * @!typeparam T extends keyof Wirebox["mappings"]
-                             * @!arg name : T
+                             * @!arg name : {value: T}
                              * @!returns cfc<Wirebox["mappings"][T]>
                              */
                             function getInstanceLike(name) {}

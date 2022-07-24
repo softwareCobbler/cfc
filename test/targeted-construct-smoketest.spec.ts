@@ -2,7 +2,7 @@ import * as assert from "assert";
 
 import { Parser, Binder, CfFileType, SourceFile, NilCfm, flattenTree, NilCfc, DebugFileSystem, FileSystem, Project } from "../src/compiler";
 import { IndexedAccess, NodeKind } from "../src/compiler/node";
-import { findNodeInFlatSourceMap, getTriviallyComputableString } from "../src/compiler/utils";
+import { findNodeInFlatSourceMap, getTriviallyComputableString, isExpressionContext } from "../src/compiler/utils";
 import * as TestLoader from "./TestLoader";
 import { CompletionItem, getCompletions } from "../src/services/completions";
 import { ProjectOptions, FileSystemNode, pushFsNode } from "../src/compiler/project";
@@ -614,5 +614,56 @@ describe("general smoke test for particular constructs", () => {
         assert.strictEqual(!!completions.find(v => v.label === "scopeWithBar"), true);
         assert.strictEqual(!!completions.find(v => v.label === "WithFoo"), true);
         assert.strictEqual(!!completions.find(v => v.label === "WithBar"), true);
+    })
+    it("generic completion", () => {
+        const files = TestLoader.loadMultiFileTest("./test/sourcefiles/generic-completion.cfm");
+        const fsRoot : FileSystemNode = {"/": {}};
+
+        const completionsAtMeta = TestLoader.loadCompletionAtTestFromSource(files["/A.cfc"]);
+        pushFsNode(fsRoot, "/A.cfc", completionsAtMeta.sourceText);
+
+        const dfs = DebugFileSystem(fsRoot);
+        const project = Project("/", dfs, {...options(), parseTypes: true})
+
+        project.addFile("A.cfc");
+        const completions = getCompletions(project, "A.cfc", completionsAtMeta.index, null);
+        assert.strictEqual(completions.length, 3);
+        assert.strictEqual(!!completions.find(v => v.label === "fooKey"), true);
+        assert.strictEqual(!!completions.find(v => v.label === "barKey"), true);
+        assert.strictEqual(!!completions.find(v => v.label === "bazKey"), true);
+    })
+    it("generic nested completion", () => {
+        const files = TestLoader.loadMultiFileTest("./test/sourcefiles/generic-nested-completion.cfm");
+        const fsRoot : FileSystemNode = {"/": {}};
+
+        const completionsAtMeta = TestLoader.loadCompletionAtTestFromSource(files["/A.cfc"]);
+        pushFsNode(fsRoot, "/A.cfc", completionsAtMeta.sourceText);
+
+        const dfs = DebugFileSystem(fsRoot);
+        const project = Project("/", dfs, {...options(), parseTypes: true})
+
+        project.addFile("A.cfc");
+        const completions = getCompletions(project, "A.cfc", completionsAtMeta.index, null);
+        assert.strictEqual(completions.length, 3);
+        assert.strictEqual(!!completions.find(v => v.label === "fooKey"), true);
+        assert.strictEqual(!!completions.find(v => v.label === "barKey"), true);
+        assert.strictEqual(!!completions.find(v => v.label === "bazKey"), true);
+    })
+    it("generic reordered named parameter string completion", () => {
+        const files = TestLoader.loadMultiFileTest("./test/sourcefiles/generic-reordered-named-parameter-string-completion.cfm");
+        const fsRoot : FileSystemNode = {"/": {}};
+
+        const completionsAtMeta = TestLoader.loadCompletionAtTestFromSource(files["/A.cfc"]);
+        pushFsNode(fsRoot, "/A.cfc", completionsAtMeta.sourceText);
+
+        const dfs = DebugFileSystem(fsRoot);
+        const project = Project("/", dfs, {...options(), parseTypes: true})
+
+        project.addFile("A.cfc");
+        const completions = getCompletions(project, "A.cfc", completionsAtMeta.index, null);
+        assert.strictEqual(completions.length, 3);
+        assert.strictEqual(!!completions.find(v => v.label === "fooKey"), true);
+        assert.strictEqual(!!completions.find(v => v.label === "barKey"), true);
+        assert.strictEqual(!!completions.find(v => v.label === "bazKey"), true);
     })
 });
