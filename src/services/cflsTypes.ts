@@ -88,7 +88,7 @@ interface DiagnosticsResponse extends CflsResponseBase {
     type: CflsResponseType.diagnostics,
     fsPath: AbsPath,
     diagnostics: unknown[],
-    affectedDependencies: AbsPath[],
+    affectedDependents: AbsPath[],
 }
 
 interface CompletionsResponse extends CflsResponseBase {

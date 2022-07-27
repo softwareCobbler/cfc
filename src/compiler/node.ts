@@ -384,8 +384,8 @@ export interface SourceFile extends NodeBase {
         extends: SourceFile | null,
         implements: SourceFile[]
     } | undefined,
-    directDependencies: SourceFile[],
-    typeConstraints: Map<Type, Type>
+    directDependencies: Set<SourceFile>,
+    nodeTypeConstraints: Map<Node, Type>
 }
 
 export function resetSourceFileInPlace(target: SourceFile, newSource: string | Buffer) : void {
@@ -402,8 +402,8 @@ export function resetSourceFileInPlace(target: SourceFile, newSource: string | B
     target.symbolIdToSymbol = new Map();
     target.endOfNodeFlowMap = new Map<NodeId, Flow>();
     target.cfc = undefined;
-    target.directDependencies = [];
-    target.typeConstraints = new Map<Type, Type>();
+    target.directDependencies = new Set();
+    target.nodeTypeConstraints = new Map();
 }
 
 export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: string | Buffer) : SourceFile {
@@ -425,8 +425,8 @@ export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: 
     sourceFile.nodeToSymbol = new Map<NodeId, SymbolResolution>();
     sourceFile.symbolIdToSymbol = new Map();
     sourceFile.endOfNodeFlowMap = new Map<NodeId, Flow>();
-    sourceFile.directDependencies = [];
-    sourceFile.typeConstraints = new Map<Type, Type>();
+    sourceFile.directDependencies = new Set();
+    sourceFile.nodeTypeConstraints = new Map();
     return sourceFile;
 }
 export const DUMMY_CONTAINER = SourceFile("", CfFileType.cfc, "");

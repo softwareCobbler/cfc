@@ -44,7 +44,7 @@ process.on("message", (msg: CflsRequest) => {
                 response = {type: CflsResponseType.cancelled, id: msg.id};
             }
             else {
-                response = {type: CflsResponseType.diagnostics, id: msg.id, fsPath: diagnostics.fsPath, diagnostics: diagnostics.diagnostics, affectedDependencies: diagnostics.affectedDependencies};
+                response = {type: CflsResponseType.diagnostics, id: msg.id, fsPath: diagnostics.fsPath, diagnostics: diagnostics.diagnostics, affectedDependents: diagnostics.affectedDependents};
             }
             break;
         }
@@ -69,7 +69,7 @@ process.on("message", (msg: CflsRequest) => {
         case CflsRequestType.definitionLocations: {
             const locations = languageTool.getDefinitionLocations(msg.fsPath, msg.targetIndex);
             if (locations === NO_DATA) {
-                break;
+                response = {type: CflsResponseType.definitionLocations, id: msg.id, locations: []}
             }
             else if (locations === CANCELLED) {
                 response = {type: CflsResponseType.cancelled, id: msg.id};
@@ -125,7 +125,7 @@ function LanguageTool() {
      * This method is assumed to be called on every document update event, so we infer "ah this source file changed" by being called
      * freshText of `null` means the text wasn't updated
      */
-    function naiveGetDiagnostics(fsPath: AbsPath, freshText: string | Buffer | null) : Result<{fsPath: AbsPath, diagnostics: unknown[], affectedDependencies: AbsPath[]}> {
+    function naiveGetDiagnostics(fsPath: AbsPath, freshText: string | Buffer | null) : Result<{fsPath: AbsPath, diagnostics: unknown[], affectedDependents: AbsPath[]}> {
         const project = getOwningProjectFromAbsPath(fsPath);
         if (!project) return NO_DATA;
 
@@ -151,7 +151,7 @@ function LanguageTool() {
         return {
             fsPath,
             diagnostics: diagnostics.map((diagnostic) => clientAdapter.diagnostic(sourceFile.scanner.getAnnotatedChar, diagnostic)),
-            affectedDependencies: project.getTransitiveDependents(sourceFile).map(sourceFile => sourceFile.absPath)
+            affectedDependents: project.getTransitiveDependents(sourceFile).map(sourceFile => sourceFile.absPath)
         }
     }
 

@@ -338,26 +338,6 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             // e.g. in foo.cfc `public foo function bar() { return this; }`
             files.set(canonicalizePath(sourceFile.absPath), new WeakRef(sourceFile));
 
-            maybeFollowParentComponents(sourceFile);
-
-            // if (options.withWireboxResolution && sourceFile.absPath === options.wireboxConfigFileCanonicalAbsPath) {
-            //     const wireboxInterface = constructWireboxInterface(sourceFile);
-            //     if (wireboxInterface) {
-            //         if (!wireboxLib) wireboxLib = SourceFile("<<magic/wirebox>>", CfFileType.dCfm, "");
-            //         wireboxLib.containedScope.typeinfo.mergedInterfaces.set("Wirebox", wireboxInterface);
-            //     }
-            //     else {
-            //         wireboxLib = null;
-            //     }
-            // }
-
-            if (options.withWireboxResolution && wireboxLib) {
-                sourceFile.libRefs.set("<<magic/wirebox>>", wireboxLib);
-            }
-            else {
-                sourceFile.libRefs.delete("<<magic/wirebox>>");
-            }
-            
             const checkStart = new Date().getTime();
             checkWorker(sourceFile, oldDirectDependencies);
             const checkElapsed = new Date().getTime() - checkStart;
@@ -378,9 +358,12 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         // we don't want to "resetSourceFileInPlace"
         // we can leave all the content and binding and etc untouched,
         // we just want to recheck the existing tree assuming possibly changed dependencies
-        const oldDirectDependencies = new Set(sourceFile.directDependencies);
-        sourceFile.directDependencies = [];
+        const oldDirectDependencies = sourceFile.directDependencies;
+        sourceFile.directDependencies = new Set();
         sourceFile.diagnostics = []; // ah ha, would need to clear "checker diagnostics" only ...
+
+        // should we update librefs here?
+
         // clear all checker flags from nodes
         for (const node of sourceFile.nodeMap.values()) {
             node.flags &= ~(NodeFlags.checked | NodeFlags.checkerError | NodeFlags.unreachable);
@@ -389,11 +372,18 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     }
 
     function checkWorker(sourceFile: SourceFile, oldDirectDependencies: Set<SourceFile>) {
+        maybeFollowParentComponents(sourceFile); // should be in checker, resolves extends="..." attrs
+
+        if (options.withWireboxResolution && wireboxLib) {
+            sourceFile.libRefs.set("<<magic/wirebox>>", wireboxLib);
+        }
+        else {
+            sourceFile.libRefs.delete("<<magic/wirebox>>");
+        }
+
         checker.check(sourceFile);
 
-        const newDependencies = new Set(sourceFile.directDependencies);
-
-        const {uniqueInL: depAdded, uniqueInR: depRemoved} = setDiff(newDependencies, oldDirectDependencies);
+        const {uniqueInL: depAdded, uniqueInR: depRemoved} = setDiff(sourceFile.directDependencies, oldDirectDependencies);
 
         for (const removed of depRemoved) {
             directDependencies.get(sourceFile)?.delete(removed);
@@ -600,6 +590,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         engineLib = addFile(absPath);
     }
 
+    // this should probalby be done in the checker
     function maybeFollowParentComponents(sourceFile: SourceFile) {
         function reportCircularity() {
             const msg = "Circularity in inheritance chain.";
@@ -628,6 +619,9 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             }
 
             sourceFile.cfc = {extends: maybeParent ?? null, implements: []};
+            if (maybeParent) {
+                sourceFile.directDependencies.add(maybeParent);
+            }
         }
     }
 
@@ -704,7 +698,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             return {parse: -1, bind: -1, check: -1};
         }
 
-        const savedDependencies = new Set(sourceFile.directDependencies);
+        const savedDependencies = sourceFile.directDependencies;
         resetSourceFileInPlace(sourceFile, newSource);
 
         return parseBindCheckWorker(sourceFile, savedDependencies);

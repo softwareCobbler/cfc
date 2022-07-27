@@ -37,6 +37,7 @@ export function loadCompletionAtTest(absPath: string) {
     return loadCompletionAtTestFromSource(sourceText);
 }
 
+// trigger character?
 export function loadCompletionAtTestFromSource(sourceText: string) {
     let i = 0;
     let match : RegExpExecArray | null = null;

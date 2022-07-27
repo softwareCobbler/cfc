@@ -1,7 +1,7 @@
 import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, UnreachableFlow, FlowType, ConditionalSubtype, SymbolTable, Property, ParamStatement, ParamStatementSubType, typeinfo, DiagnosticKind, StaticallyKnownScopeName, SwitchCaseType, SymbolFlags, TypeShimKind, TypeAnnotation } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol, findAncestor, TupleKeyedMap, isNamedFunction, isInEffectiveConstructorMethod, Mutable } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
-import { BuiltinType, Type, Interface, cfTypeId, TypeKind, TypeIndexedAccessType } from "./types";
+import { BuiltinType, Type, Interface, cfTypeId, TypeKind, TypeIndexedAccessType, isBuiltinType } from "./types";
 import { Engine, supports } from "./engines";
 import { ProjectOptions } from "./project";
 
@@ -302,15 +302,6 @@ export function Binder(options: ProjectOptions) {
     }
 
     const scopeInterfaceNames : StaticallyKnownScopeName[] = ["variables", "application"];
-
-    function isBuiltinType(type: Type) {
-        for (const key of Object.keys(BuiltinType)) {
-            if (type === BuiltinType[key as keyof typeof BuiltinType]) {
-                return true;
-            }
-        }
-        return false;
-    }
 
     /**
      * bind types to contexts (i.e. containers where they should begin their lookup for other referenced types)

@@ -83,7 +83,8 @@ export function Checker(options: ProjectOptions) {
     let warnOnUndefined: boolean;
     let checkerStack : Node[];
     let forcedReturnTypes : WeakMap<Node, Type>;
-    
+    let currentConstraint : Type | null = null;
+
     function check(sourceFile_: SourceFile) {
         // we're using the Checker as a singleton, and checking one source file might trigger checking another
         // so, we have to save state before descending into the next check
@@ -95,23 +96,17 @@ export function Checker(options: ProjectOptions) {
         const savedWarnOnUndefined = warnOnUndefined;
         const savedCheckerStack = checkerStack;
         const savedForcedReturnTypes = forcedReturnTypes;
-
-        sourceFile = sourceFile_;
-        scanner = sourceFile_.scanner;
-        diagnostics = sourceFile_.diagnostics;
-        returnTypes = savedReturnTypes;
-        flowBecameUnreachable = savedFlowBecameUnreachable;
-        warnOnUndefined = savedWarnOnUndefined;
-        checkerStack = savedCheckerStack;
-        forcedReturnTypes = savedForcedReturnTypes;
+        const savedCurrentConstraint = currentConstraint;
 
         sourceFile = sourceFile_;
         scanner = sourceFile.scanner;
         diagnostics = sourceFile.diagnostics;
+        returnTypes = [];
         flowBecameUnreachable = false;
         warnOnUndefined = false;
         checkerStack = [];
         forcedReturnTypes = new WeakMap();
+        currentConstraint = null;
 
         if (sourceFile.cfFileType === CfFileType.cfc) {
             warnOnUndefined = getAttributeValue(getComponentAttrs(sourceFile) ?? [], "warn-undefined") !== null;
@@ -169,6 +164,7 @@ export function Checker(options: ProjectOptions) {
         warnOnUndefined = savedWarnOnUndefined;
         checkerStack = savedCheckerStack;
         forcedReturnTypes = savedForcedReturnTypes;
+        currentConstraint = savedCurrentConstraint;
     }
 
     function checkerStackContains(node: Node) {
@@ -362,8 +358,9 @@ export function Checker(options: ProjectOptions) {
                 }
                 return;
             case NodeKind.simpleStringLiteral:
+                setNodeTypeConstraint(node, currentConstraint);
                 setCachedEvaluatedNodeType(node, createLiteralType(node.textSpan.text));
-                return;                
+                return;
             case NodeKind.interpolatedStringLiteral:
                 checkList(node.elements);
                 setCachedEvaluatedNodeType(node, BuiltinType.string);
@@ -429,7 +426,13 @@ export function Checker(options: ProjectOptions) {
                 checkFor(node);
                 return;
             case NodeKind.structLiteral:
+                const savedConstraint = currentConstraint;
+                currentConstraint = currentConstraint && isStructLike(currentConstraint) ? currentConstraint : null;
+                if (currentConstraint) {
+                    setNodeTypeConstraint(node, currentConstraint);
+                }
                 checkStructLiteral(node);
+                currentConstraint = savedConstraint;
                 return;
             case NodeKind.structLiteralInitializerMember:
                 checkStructLiteralInitializerMember(node);
@@ -1538,7 +1541,7 @@ export function Checker(options: ProjectOptions) {
             }
         }
         else if (sig.kind === TypeKind.functionSignature) {
-            checkList(node.args);
+            // jul/25/2022 --- checkList(node.args); do this in checkCallLikeArgs so we can apply constraints with knowledge of param types
             checkCallLikeArguments(sig, node.args, getCallExpressionNameErrorRange(node), /*isNewExpr*/false);
             setCachedEvaluatedNodeType(node, returnType = sig.returns);
         }
@@ -1610,8 +1613,7 @@ export function Checker(options: ProjectOptions) {
                                 typeParamMap,
                                 typeConstraintMap,
                                 sigParamType.params[j].paramType,
-                                evaluateType(typeFromJavaLikeTypename(callSiteArg.expr.params[j].javaLikeTypename)),
-                                /*sourceIsLiteralExpression*/ false);
+                                evaluateType(typeFromJavaLikeTypename(callSiteArg.expr.params[j].javaLikeTypename)));
                             if (resolutions) {
                                 for (const [k,v] of resolutions) {
                                     if (v) {
@@ -1657,7 +1659,7 @@ export function Checker(options: ProjectOptions) {
                     // if param is optional and callSiteArg is undefined we don't need to do this?
                     checkNode(callSiteArg);
                     const argType = getCachedEvaluatedNodeType(callSiteArg)
-                    const resolutions = resolveGenericFunctionTypeParams(typeParamMap, typeConstraintMap, sigParamType, argType, isLiteralExpr(callSiteArg.expr));
+                    const resolutions = resolveGenericFunctionTypeParams(typeParamMap, typeConstraintMap, sigParamType, argType);
                     if (resolutions) {
                         for (const [k,v] of resolutions) {
                             if (v) {
@@ -1688,14 +1690,8 @@ export function Checker(options: ProjectOptions) {
              * "target" is expected to eventually be a leaf of a type-id, like "T"
              * prior to walking to the leaf level, it could be some larger type that contains T (or some other named target), like `T[]` or `{a: {b: {c: T}}}`
              */
-            function resolveGenericFunctionTypeParams(unifiees: ReadonlyMap<string, Type | undefined>, constraintMap: ReadonlyMap<string, Type>, target: Type, source: Type, sourceIsLiteralExpr: boolean) : ReadonlyMap<string, Type | undefined> | undefined {
+            function resolveGenericFunctionTypeParams(unifiees: ReadonlyMap<string, Type | undefined>, constraintMap: ReadonlyMap<string, Type>, target: Type, source: Type) : ReadonlyMap<string, Type | undefined> | undefined {
                 if (target.kind === TypeKind.typeId) {
-                    if (sourceIsLiteralExpr) {
-                        const constraint = constraintMap.get(target.name);
-                        if (constraint) {
-                            setTypeConstraint(source, constraint);
-                        }
-                    }
                     if (unifiees.has(target.name)) {
                         if (!unifiees.get(target.name)) {
                             if (!constraintMap.has(target.name) || isAssignable(source, constraintMap.get(target.name)!)) {
@@ -1726,7 +1722,7 @@ export function Checker(options: ProjectOptions) {
                     }
                 }
                 else if (target.kind === TypeKind.array && source.kind === TypeKind.array) {
-                    return resolveGenericFunctionTypeParams(unifiees, constraintMap, target.memberType, source.memberType, sourceIsLiteralExpr);
+                    return resolveGenericFunctionTypeParams(unifiees, constraintMap, target.memberType, source.memberType);
                 }
                 else if (isStructLike(target) && isStructLike(source)) {
                     if (target.kind === TypeKind.cfc && source.kind === TypeKind.cfc) {
@@ -1743,7 +1739,7 @@ export function Checker(options: ProjectOptions) {
                         if (!sourceType || !targetType) {
                             return;
                         }
-                        const result = resolveGenericFunctionTypeParams(freshResolutions, constraintMap, targetType, sourceType, sourceIsLiteralExpr);
+                        const result = resolveGenericFunctionTypeParams(freshResolutions, constraintMap, targetType, sourceType);
                         if (result) {
                             for (const [k,v] of result) freshResolutions.set(k,v);
                         }
@@ -1759,13 +1755,13 @@ export function Checker(options: ProjectOptions) {
                     for (let i = 0; i < target.params.length; i++) {
                         const targetParamType = target.params[i].paramType;
                         const sourceParamType = source.params[i].paramType;
-                        const result = resolveGenericFunctionTypeParams(unifiees, constraintMap, targetParamType, sourceParamType, sourceIsLiteralExpr);
+                        const result = resolveGenericFunctionTypeParams(unifiees, constraintMap, targetParamType, sourceParamType);
                         if (result) {
                             for (const[k,v] of result) freshResolutions.set(k,v);
                         }
                     }
 
-                    const returnTypeResolution = resolveGenericFunctionTypeParams(unifiees, constraintMap, target.returns, source.returns, sourceIsLiteralExpr);
+                    const returnTypeResolution = resolveGenericFunctionTypeParams(unifiees, constraintMap, target.returns, source.returns);
                     if (returnTypeResolution) {
                         for (const[k,v] of returnTypeResolution) freshResolutions.set(k,v);
                     }
@@ -1802,8 +1798,11 @@ export function Checker(options: ProjectOptions) {
         }
     }
 
-    function setTypeConstraint(type: Type, upperBoundedBy: Type) : void {
-        sourceFile.typeConstraints.set(type, upperBoundedBy);
+    function setNodeTypeConstraint(node: Node, constraint: Type | null) : void {
+        if (!constraint) {
+            return;
+        }
+        sourceFile.nodeTypeConstraints.set(node, constraint);
     }
     // function getTypeConstraint(type: Type) : Type | undefined {
     //     return sourceFile.typeConstraints.get(type);
@@ -1854,9 +1853,13 @@ export function Checker(options: ProjectOptions) {
                             }
                         }
                         else {
-                            const argType = getCachedEvaluatedNodeType(arg);
                             const paramType = paramPair.param.paramType;
-                            if (!isAssignable(argType, paramType)) {
+                            const savedConstraint = currentConstraint;
+                            currentConstraint = paramType;
+                            checkNode(arg);
+                            currentConstraint = savedConstraint;
+                            const argType = getCachedEvaluatedNodeType(arg);
+                            if (!isAssignable(argType, paramType, isLiteralExpr(arg.expr))) {
                                 issueDiagnosticAtNode(arg, `Argument of type '${stringifyType(argType)}' is not assignable to parameter of type '${stringifyType(paramType)}'.`);
                             }
                         }
@@ -1887,8 +1890,14 @@ export function Checker(options: ProjectOptions) {
                 const spreadAdjust = maxParams === undefined ? -1 : 0; // if there was a trailing spread arg, drop the spread count by 1
                 const minToCheck = Math.min(args.length, sig.params.length + spreadAdjust);
                 for (let i = 0; i < minToCheck; i++) {
-                    const argType = getCachedEvaluatedNodeType(args[i]);
                     const paramType = sig.params[i].paramType;
+
+                    const savedConstraint = currentConstraint;
+                    currentConstraint = paramType;
+                    checkNode(args[i]);
+                    currentConstraint = savedConstraint;
+
+                    const argType = getCachedEvaluatedNodeType(args[i]);
                     if (!isAssignable(argType, paramType, isLiteralExpr(args[i].expr))) {
                         issueDiagnosticAtNode(args[i], `Argument of type '${stringifyType(argType)}' is not assignable to parameter of type '${stringifyType(paramType)}'.`);
                     }
@@ -2238,7 +2247,10 @@ export function Checker(options: ProjectOptions) {
                 // if there is a type annotation, it might be for some literal type, and we need to check assignability
                 // this pattern might be used to support an annotation like "@!const", too
                 const shouldWidenLiteralTypes = node.typeAnnotation?.shimKind === TypeShimKind.annotation ? false : true;
+                const savedCurrentConstraint = currentConstraint;
+                currentConstraint = node.typeAnnotation?.shimKind === TypeShimKind.annotation ? evaluateType(node.typeAnnotation.type) : null;
                 checkNode(node.expr.right);
+                currentConstraint = savedCurrentConstraint;
 
                 const baseRhsType = getCachedEvaluatedNodeType(node.expr.right);
                 rhsExpr = node.expr.right;
@@ -3625,7 +3637,7 @@ export function Checker(options: ProjectOptions) {
                     // saner use of interpolated string for dynamic keys
                     //   - {"#expr#": key}
                     //
-
+                    let key : string | null = null;
                     if (node.key.kind !== NodeKind.simpleStringLiteral
                         && node.key.kind !== NodeKind.indexedAccess
                         && node.key.kind !== NodeKind.identifier
@@ -3639,10 +3651,17 @@ export function Checker(options: ProjectOptions) {
                         // (indexed-access might appear to, in the bracket-access case, but really its treated as a series of strings by the engine, see notes above)
                         // (e.g. {x[y]: v} isn't valid, it must be {x["y"]: v})
                         // (this might warrant a separate node type for such cases)
-                        // 
+                        //
+                        key = getTriviallyComputableString(node.key) ?? null;
                     }
+                    const savedCurrentConstraint = currentConstraint;
+                    currentConstraint = currentConstraint && isStructLike(currentConstraint) && key
+                        ? currentConstraint.members.get(key)?.effectivelyDeclaredType ?? null
+                        : null;
                     checkNode(node.expr);
                     setCachedEvaluatedNodeType(node, getCachedEvaluatedNodeType(node.expr));
+                    setNodeTypeConstraint(node.expr, currentConstraint)
+                    currentConstraint = savedCurrentConstraint;
                 }
                 break;
             }
@@ -3659,12 +3678,15 @@ export function Checker(options: ProjectOptions) {
     }
 
     function checkArrayLiteral(node: ArrayLiteral) {
+        const savedConstraint = currentConstraint;
+        currentConstraint = currentConstraint?.kind === TypeKind.array ? currentConstraint.memberType : null;
         checkList(node.members);
         const arrayMemberTypes = node.members.map((member) => getCachedEvaluatedNodeType(member));
         const membersAsUnion = unionify(arrayMemberTypes);
         const uninstantiatedArray = UninstantiatedArray(membersAsUnion);
         const instantiatedArrayType = evaluateType(uninstantiatedArray);
         setCachedEvaluatedNodeType(node, instantiatedArrayType);
+        currentConstraint = savedConstraint;
     }
 
     function checkArrayLiteralInitializerMember(node: ArrayLiteralInitializerMember) {
@@ -3699,8 +3721,15 @@ export function Checker(options: ProjectOptions) {
         if (!cfc) return;
         const cfcThis = Cfc(cfc.sourceFile);
         setCachedEvaluatedNodeType(node, cfcThis);
-        
-        const initSig = cfcThis.members.get("init");
+
+        if (!cfcThis.members) {
+            // bug from bailing prior to fully binding/checking and there is no `containedScope.*` ???
+            // debugger;
+            console.log(`internal compiler error -- expected members property on cfc with path ${cfcName}`);
+            return;
+        }
+
+        const initSig = cfcThis.members.get("init"); // @@@@@@@@@@@@@@@@ .get "reading property of undefined"
         if (initSig && initSig.lexicalType?.kind === TypeKind.functionSignature) {
             setCachedEvaluatedNodeType(node.callExpr.left, initSig.lexicalType);
             checkCallLikeArguments(initSig.lexicalType, node.callExpr.args, node.callExpr.left.range, /*isNewExpr*/ true);
@@ -3758,7 +3787,7 @@ export function Checker(options: ProjectOptions) {
                     cfcResolver = (args) => {
                         const result = installables[key]!(args);
                         if (result) {
-                            sourceFile.directDependencies.push(result.sourceFile);
+                            sourceFile.directDependencies.add(result.sourceFile);
                         }
                         return result;
                     };

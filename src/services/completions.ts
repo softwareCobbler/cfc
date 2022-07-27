@@ -1,9 +1,9 @@
 // fixme - use non-relative paths, which requires we get ts-node to resolve the paths during testing
 // we can get it to compile with tsc with non-relative paths, but loading it during testing does not work
 import { Project } from "../compiler/project"
-import { Node, NodeKind, CallExpression, CfTag, StaticallyKnownScopeName, SymbolTable, SymTabEntry, SimpleStringLiteral, SourceFile } from "../compiler/node"
+import { Node, NodeKind, CallExpression, CfTag, StaticallyKnownScopeName, SymbolTable, SymTabEntry, SimpleStringLiteral, SourceFile, StructLiteralInitializerMemberSubtype } from "../compiler/node"
 import { CfFileType, SourceRange, TokenType } from "../compiler/scanner";
-import { cfFunctionSignatureParam, SymbolTableTypeWrapper, TypeFlags, Type, TypeKind, BuiltinType, isStructLikeOrArray, cfFunctionSignature, cfGenericFunctionSignature } from "../compiler/types";
+import { cfFunctionSignatureParam, SymbolTableTypeWrapper, TypeFlags, Type, TypeKind, BuiltinType, isStructLikeOrArray, cfFunctionSignature, cfGenericFunctionSignature, isStructLike } from "../compiler/types";
 import { isExpressionContext, isCfScriptTagBlock, stringifyCallExprArgName, getSourceFile, cfcIsDescendantOf, isPublicMethod, getTriviallyComputableString } from "../compiler/utils";
 import { Checker } from "../compiler/checker";
 
@@ -122,8 +122,8 @@ function getStringLiteralCompletions(checker: Checker, sourceFile: SourceFile, n
                     return undefined;
                 }
             })();
-            const immediateNodeType = checker.getCachedEvaluatedNodeType(node, sourceFile);
-            const maybeConstraintType = sourceFile.typeConstraints.get(immediateNodeType); // a generic function may have constrained a param
+
+            const maybeConstraintType = sourceFile.nodeTypeConstraints.get(node); // a generic function may have constrained a param
             return extractTopLevelStringsFromType(maybeConstraintType || paramType || BuiltinType.any).map((s) => ({label: s, kind: CompletionItemKind.stringLiteral}));
         }
     }
@@ -166,8 +166,7 @@ function getStringLiteralCompletions(checker: Checker, sourceFile: SourceFile, n
         }
     }
 
-    const type = checker.getCachedEvaluatedNodeType(node, sourceFile);
-    const maybeConstraintType = sourceFile.typeConstraints.get(type);
+    const maybeConstraintType = sourceFile.nodeTypeConstraints.get(node);
     return extractTopLevelStringsFromType(maybeConstraintType || BuiltinType.any).map((s) => ({label: s, kind: CompletionItemKind.stringLiteral}));
 }
 
@@ -235,7 +234,9 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
 
     // a whitespace or left-paren trigger character is only used for showing named parameters inside a call argument list
     if ((triggerCharacter === " " || triggerCharacter === "(") && !callExpr) {
-        if (!callExpr) return [];
+        if (!callExpr) {
+            return maybeStructKeyCompletions(parsedSourceFile, node);
+        }
     }
 
     if (isCfScriptTagBlock(node)) {
@@ -418,15 +419,53 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
         });
     }
 
-    if (node.kind === NodeKind.terminal) {
-        const hookResults = checker.__experimental__runCompletionsHook(parsedSourceFile, node.token.text);
-        for (const hookResult of hookResults) {
+    result.push(...maybeStructKeyCompletions(parsedSourceFile, node));
+
+    // oof this "works" but, uh, no ("expando-autocomplete" by way of conditionalish types to basically parse dsls stored in string literals .... hm)
+    // if (node.kind === NodeKind.terminal) {
+    //     const hookResults = checker.__experimental__runCompletionsHook(parsedSourceFile, node.token.text);
+    //     for (const hookResult of hookResults) {
+    //         result.push({
+    //             kind: CompletionItemKind.variable,
+    //             label: hookResult
+    //         })
+    //     }
+    // }
+
+    return result;
+}
+
+function maybeStructKeyCompletions(sourceFile: SourceFile, node: Node) {
+    // very sloppy -- walk a possible path like text-span -> terminal -> structkey initializer -> struct
+    // it would be better to define which anticipated paths we could hit and say that
+    const getStructConstraint = (node: Node | undefined | null) : Type | undefined => {
+        if (!node) {
+            return undefined;
+        }
+
+        if (node.parent?.kind === NodeKind.structLiteralInitializerMember) {
+            if (node.parent?.subType === StructLiteralInitializerMemberSubtype.keyed) {
+                if (!node.parent.shorthand && node !== node.parent.expr) {
+                    return sourceFile.nodeTypeConstraints.get(node.parent.parent as Node);
+                }
+            }
+        }
+
+        return undefined;
+    }
+    const constraint = getStructConstraint(node)
+        || getStructConstraint(node.parent)
+        || getStructConstraint(node.parent?.parent);
+
+    const result : CompletionItem[] = [];
+    if (constraint && isStructLike(constraint)) {
+        for (const {uiName} of constraint.members.values()) {
             result.push({
-                kind: CompletionItemKind.variable,
-                label: hookResult
-            })
+                label: uiName,
+                kind: CompletionItemKind.structMember,
+                detail: "property"
+            });
         }
     }
-
     return result;
 }

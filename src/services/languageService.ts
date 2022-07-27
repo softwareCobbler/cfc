@@ -82,6 +82,11 @@ export function LanguageService<T extends ClientAdapter>() {
 
         server.on("message", (msg: CflsResponse) => {
             if (messageId.current() === msg.id) {
+                if (!currentTask) {
+                    // why no current task? who's clearning it
+                    // debugger;
+                }
+
                 clearRequestTimeout();
                 switch (msg.type) {
                     case CflsResponseType.initialized: {
@@ -90,8 +95,12 @@ export function LanguageService<T extends ClientAdapter>() {
                     }
                     case CflsResponseType.diagnostics: {
                         handlerMappings.diagnostics?.(msg.fsPath, msg.diagnostics);
-                        // fix: circularities? can we (do we want to) say "hey don't recursively do this..."?
-                        for (const fsPath of msg.affectedDependencies) {
+                        // fixme: circularities? can we (do we want to) say "hey don't recursively do this..."?
+                        // fixme: affectedDependencies includes itself? which is not right
+                        for (const fsPath of msg.affectedDependents) {
+                            if (fsPath === msg.fsPath) { // this shouldn't happen, fix where it does happen and remove this
+                                continue;
+                            }
                             if (openFiles.has(fsPath)) {
                                 emitDiagnostics(fsPath, null);
                             }

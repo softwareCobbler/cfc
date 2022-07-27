@@ -666,4 +666,142 @@ describe("general smoke test for particular constructs", () => {
         assert.strictEqual(!!completions.find(v => v.label === "barKey"), true);
         assert.strictEqual(!!completions.find(v => v.label === "bazKey"), true);
     })
+    it("nested constraints 1", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+
+        const completionsAtMeta = TestLoader.loadCompletionAtTestFromSource(
+            `
+            /**
+             * @!interface I { foo: { bar: { g: "a" | "b" }, baz: "foo" | "bar" | "baz" }
+             */
+            component {
+                function doit() {
+                    // @!type I
+                    var x = { foo: { baz: "|<<<<" } }
+                }
+            }
+            `
+        );
+        pushFsNode(fsRoot, "/A.cfc", completionsAtMeta.sourceText);
+
+        const dfs = DebugFileSystem(fsRoot);
+        const project = Project("/", dfs, {...options(), parseTypes: true})
+
+        project.addFile("A.cfc");
+        const completions = getCompletions(project, "A.cfc", completionsAtMeta.index, null);
+        assert.strictEqual(completions.length, 3);
+        assert.strictEqual(!!completions.find(v => v.label === "foo"), true);
+        assert.strictEqual(!!completions.find(v => v.label === "bar"), true);
+        assert.strictEqual(!!completions.find(v => v.label === "baz"), true);
+    })
+    it("nested constraints 2", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+
+        const completionsAtMeta = TestLoader.loadCompletionAtTestFromSource(
+            `
+            /**
+             * @!interface I { foo: { PROPNAME1: { g: "a" | "b" }, PROPNAME2: "foo" | "bar" | "baz" }
+             */
+            component {
+                // @!arg v : I
+                function xlel(v) {}
+
+                function doit() {
+                    xlel({foo: {|<<<< )
+                }
+            }
+            `
+        );
+        pushFsNode(fsRoot, "/A.cfc", completionsAtMeta.sourceText);
+
+        const dfs = DebugFileSystem(fsRoot);
+        const project = Project("/", dfs, {...options(), parseTypes: true})
+
+        project.addFile("A.cfc");
+        const completions = getCompletions(project, "A.cfc", completionsAtMeta.index, null);
+        assert.strictEqual(!!completions.find(v => v.label === "PROPNAME1"), true);
+        assert.strictEqual(!!completions.find(v => v.label === "PROPNAME2"), true);
+    })
+    it("nested constraints 3", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+
+        // this should figure out the trigger character?...
+        const completionsAtMeta = TestLoader.loadCompletionAtTestFromSource(
+            `
+            /**
+             * @!interface I { foo: { PROPNAME1: { g: "a" | "b" }, PROPNAME2: "foo" | "bar" | "baz" }
+             */
+            component {
+                function doit() {
+                    // @!type I
+                    var v = { foo: { PROPNAME1: {}, |<<<<}}
+                }
+            }
+            `
+        );
+        pushFsNode(fsRoot, "/A.cfc", completionsAtMeta.sourceText);
+
+        const dfs = DebugFileSystem(fsRoot);
+        const project = Project("/", dfs, {...options(), parseTypes: true})
+
+        project.addFile("A.cfc");
+        const completions = getCompletions(project, "A.cfc", completionsAtMeta.index, " ");
+        assert.strictEqual(!!completions.find(v => v.label === "PROPNAME1"), true);
+        assert.strictEqual(!!completions.find(v => v.label === "PROPNAME2"), true);
+    })
+    it("nested constraints 4", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+
+        // this should figure out the trigger character?...
+        const completionsAtMeta = TestLoader.loadCompletionAtTestFromSource(
+            `
+            /**
+             * @!interface I { foo: { PROPNAME1: { g: "a" | "b" }, PROPNAME2: "foo" | "bar" | "baz" }
+             */
+            component {
+                function doit() {
+                    var someVar = 0;
+                    // @!type I
+                    var v = { foo: { PROPNAME1: |<<<<}}
+                }
+            }
+            `
+        );
+        pushFsNode(fsRoot, "/A.cfc", completionsAtMeta.sourceText);
+
+        const dfs = DebugFileSystem(fsRoot);
+        const project = Project("/", dfs, {...options(), parseTypes: true})
+
+        project.addFile("A.cfc");
+        const completions = getCompletions(project, "A.cfc", completionsAtMeta.index, " ");
+        assert.strictEqual(!!completions.find(v => v.label === "someVar"), true);
+        assert.strictEqual(!!completions.find(v => v.label === "doit"), true);
+    })
+    it("affected dependencies", () => {
+        // check that affected dependencies for some file are computed correctly?
+    })
+    it.only("checks string unions in arg position", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+
+        const src = `
+            component {
+                // @!arg v : "foo" | "bar" | "baz"
+                function foo(v) {}
+
+                foo(v="not-assignable");
+                foo("not-assignable");
+                foo(v="bar");
+                foo("baz");
+            }
+        `
+
+        pushFsNode(fsRoot, "/A.cfc", src);
+
+        const dfs = DebugFileSystem(fsRoot);
+        const project = Project("/", dfs, {...options(), parseTypes: true})
+
+        project.addFile("A.cfc");
+        const diagnostics = project.getDiagnostics("A.cfc");
+        assert.strictEqual(diagnostics.length, 2);
+    })
 });

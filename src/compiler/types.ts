@@ -894,6 +894,21 @@ export const BuiltinType = (function() {
     return results;
 })();
 
+export function isBuiltinType(type: Type) {
+    return type === BuiltinType.any
+        || type === BuiltinType.void
+        || type === BuiltinType.null
+        || type === BuiltinType.undefined
+        || type === BuiltinType.string
+        || type === BuiltinType.numeric
+        || type === BuiltinType.true
+        || type === BuiltinType.false
+        || type === BuiltinType.never
+        || type === BuiltinType.EmptyInterface
+        || type === BuiltinType.anyFunction
+        || type === BuiltinType.arrayInterfaceName;
+}
+
 export function createType<T extends Type>(type: T) : T {
     if (debugTypeModule) {
         addDebugTypeInfo(type);
