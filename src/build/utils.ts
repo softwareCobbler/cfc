@@ -16,10 +16,16 @@ export function esBuildOrFail(options: esbuild.BuildOptions & TighterBuildOption
     }
 }
 
-export function tscBuildOrFail(tscCmd: string, buildTarget: string) : void {
+export function tscBuildOrFail(tscCmd: string, buildTarget: string, disregardLoneDebuggerOutputLine = false) : void {
     console.log(`[tsc] building ${buildTarget}`);
     const tscOutputLines = fixupTscOutput(child_process.spawnSync(tscCmd, ["--build", buildTarget]));
     if (tscOutputLines.length > 0) {
+        // when stepping in a debugger we'll get a single output line like
+        // "Debugger attached.\nWaiting for the debugger to disconnect...\n"
+        // which we can ignore
+        if (disregardLoneDebuggerOutputLine && tscOutputLines.length === 1 && /Debugger attached/.test(tscOutputLines[0])) {
+            return;
+        }
         for (const msg of tscOutputLines) {
             console.log(msg);
         }

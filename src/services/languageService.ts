@@ -14,21 +14,12 @@ import { CflsResponse, CflsResponseType, CflsRequest, CflsRequestType, CflsConfi
 import { ClientAdapter } from "./clientAdapter";
 import type { AbsPath } from "../compiler/utils";
 import type { IREPLACED_AT_BUILD } from "./buildShim";
-import { FileSystem } from "../compiler/project";
 
 declare const REPLACED_AT_BUILD : IREPLACED_AT_BUILD;
 
 interface EventHandlers {
     diagnostics: (fsPath: string, diagnostics: unknown[]) => void
 }
-
-/**
- * This canonicalization should be the same as the languageTool uses
- */
-const canonicalizePath = (() => {
-    const filesystem = FileSystem();
-    return (s: string) => filesystem.caseSensitive ? s : s.toLowerCase();
-})();
 
 export function LanguageService<T extends ClientAdapter>() {
     const forkInfo = {
@@ -40,19 +31,52 @@ export function LanguageService<T extends ClientAdapter>() {
 
     const openFiles = new Set<string>();
     const trackFile = (path: string) => {
-        openFiles.add(canonicalizePath(path));
+        if (openFiles.has(path)) {
+            return;
+        }
+        console.log("track file " + path);
+        pushTask({
+            msg: {
+                type: CflsRequestType.track,
+                id: messageId.bump(),
+                fsPath: path
+            },
+            task: function() { send(this.msg) },
+            onSuccess: () => openFiles.add(path)
+        })
     }
     const untrackFile = (path: string) => {
-        openFiles.delete(canonicalizePath(path));
+        if (!openFiles.has(path)) {
+            return;
+        }
+
+        pushTask({
+            msg: {
+                type: CflsRequestType.untrack,
+                id: messageId.bump(),
+                fsPath: path
+            },
+            task: function() { send(this.msg) },
+            onSuccess: () => openFiles.delete(path)
+        })
     }
 
     let server! : child_process.ChildProcess;
     let config! : InitArgs["config"]; // we keep a copy to diff reset requests against; this is probably unnecessary, a holdover from when we were accidentally registering to receive all client configuration changes
+    let _killWhenDrained = false;
+    let forked = false;
+
+    /**
+     * if undefined, the message queue was drained on an earlier run (or has never had any messages placed into it)
+     */
+    let messageQueueDrainedEvent : ExplodedPromise<void> | undefined = undefined;
+    const pendingResponses = new Set<number>();
+
     const cancellationToken = CancellationToken();
     const handlerMappings : Partial<EventHandlers> = {};
 
     interface TaskDef {
-        type: CflsRequestType,
+        msg: CflsRequest,
         task: () => void,
         timeout_ms?: number,
         onSuccess?: (payload?: any) => void
@@ -63,7 +87,13 @@ export function LanguageService<T extends ClientAdapter>() {
     let currentTask: TaskDef | null = null;
     let requestTimeoutId : NodeJS.Timeout | null = null;
 
-    const messageId = (() => {
+    interface InflightOrCompleteBatchedDiagnostics {
+        seen: Set<AbsPath>,
+        pendingMsgIds: Set<number>
+    }
+    const batchChecks = new Map<number, InflightOrCompleteBatchedDiagnostics>();
+
+    const counter = () => {
         let id = 0;
         return {
             bump: () => {
@@ -74,37 +104,54 @@ export function LanguageService<T extends ClientAdapter>() {
             },
             current: () => id
         }
-    })();
+    };
 
-    function fork(freshConfig: InitArgs["config"], workspaceRoots: AbsPath[]) : Promise<void> {
+    const messageId = counter();
+    const batch = counter();
+
+    function fork(freshConfig: InitArgs["config"], workspaceRoots: AbsPath[]) : {childProcess: child_process.ChildProcess, didInitSignal: Promise<void>} {
         config = freshConfig;
         server = child_process.fork(forkInfo.languageToolFilePath, forkInfo.forkArgs);
 
-        server.on("message", (msg: CflsResponse) => {
-            if (messageId.current() === msg.id) {
-                if (!currentTask) {
-                    // why no current task? who's clearning it
-                    // debugger;
-                }
 
-                clearRequestTimeout();
+        server.on("message", (msg: CflsResponse) => {
+            let autoRunNext = true;
+
+            if (!currentTask || currentTask.msg.id !== msg.id) {
+                // find msg in pending
+                // exists ? onNoResponse/onFailure / cleanup
+                console.log(`msg.id ${msg.id} will be onNoRespons'd/cleaned-up`);
+            }
+            else {
+                clearRequestTimeout(); // no auto cleanup, though unnecessary on this event loop turn right?
                 switch (msg.type) {
                     case CflsResponseType.initialized: {
-                        if (currentTask?.onSuccess) currentTask.onSuccess();
+                        currentTask.onSuccess?.();
+                        autoRunNext = false; // require a manual "runEnqueuedTasks" call or etc.
                         break;
                     }
                     case CflsResponseType.diagnostics: {
                         handlerMappings.diagnostics?.(msg.fsPath, msg.diagnostics);
                         // fixme: circularities? can we (do we want to) say "hey don't recursively do this..."?
                         // fixme: affectedDependencies includes itself? which is not right
+                        const inflightOrCompleteBatch = batchChecks.get(msg.batch);
+                        if (inflightOrCompleteBatch) { // should always be truthy
+                            inflightOrCompleteBatch.pendingMsgIds.delete(msg.id);
+                        }
                         for (const fsPath of msg.affectedDependents) {
                             if (fsPath === msg.fsPath) { // this shouldn't happen, fix where it does happen and remove this
                                 continue;
                             }
                             if (openFiles.has(fsPath)) {
-                                emitDiagnostics(fsPath, null);
+                                emitDiagnostics(fsPath, null, msg.batch);
                             }
                         }
+
+                        // nothing was pushed into the queue for this batch, this batch is done
+                        if (inflightOrCompleteBatch && inflightOrCompleteBatch.pendingMsgIds.size === 0) {
+                            batchChecks.delete(msg.batch);
+                        }
+
                         break;
                     }
                     case CflsResponseType.completions: {
@@ -115,15 +162,27 @@ export function LanguageService<T extends ClientAdapter>() {
                         if (currentTask?.onSuccess) currentTask.onSuccess(msg.locations);
                         break;
                     }
+                    case CflsResponseType.track: {
+                        currentTask.onSuccess?.();
+                        break;
+                    }
+                    case CflsResponseType.untrack: {
+                        currentTask.onSuccess?.();
+                        break;
+                    }
                 }
             }
-            runNextTask();
+
+            pendingResponses.delete(msg.id);
+
+            if (autoRunNext) {
+                maybeRunNextTask();
+            }
         })
 
         const {resolve, promise} = explodedPromise<void>();
         const initTask : TaskDef = {
-            type: CflsRequestType.init,
-            task: () => send({
+            msg: {
                 type: CflsRequestType.init,
                 id: messageId.bump(),
                 initArgs: {
@@ -131,37 +190,53 @@ export function LanguageService<T extends ClientAdapter>() {
                     workspaceRoots,
                     cancellationTokenId: cancellationToken.getId(),
                 },
-            }),
+            },
+            task: function() { send(this.msg) },
             timeout_ms: 1000 * 60 * 2, // long timeout for init request, to allow for setting up path mappings and etc.
             onSuccess: () => {
+                forked = true;
                 resolve(void 0);
             }
         };
 
-        pushTask(initTask);
+        taskQueue.unshift(initTask);
+        runNextTask();
 
-        return promise;
+        return {
+            childProcess: server,
+            didInitSignal: promise
+        }
+    }
+
+    function maybeRunNextTask() {
+        if (!forked) {
+            return;
+        }
+        runNextTask();
     }
 
     function runNextTask() {
         clearRequestTimeout();
         const task = taskQueue.shift();
         if (task) {
-            if (task.type === CflsRequestType.diagnostics) {
-                taskQueue = taskQueue.filter(task => task.type !== CflsRequestType.diagnostics)
-            }
             currentTask = task;
             requestTimeoutId = setTimeout(noResponseAndRunNext, task.timeout_ms ?? 5000);
             task.task();
         }
         else {
             currentTask = null;
+            if (_killWhenDrained) {
+                server.kill();
+            }
+            if (pendingResponses.size === 0) {
+                messageQueueDrainedEvent?.resolve();
+            }
         }
     }
 
     function noResponseAndRunNext() {
         currentTask?.onNoResponse?.();
-        runNextTask();
+        maybeRunNextTask();
     }
 
     function clearRequestTimeout() {
@@ -177,40 +252,73 @@ export function LanguageService<T extends ClientAdapter>() {
 
     function send(msg: CflsRequest) {
         server.send(msg);
+        pendingResponses.add(msg.id);
     }
 
-    function emitDiagnostics(fsPath: AbsPath, freshText: string | null) {
-        const task = () => {
-            const request : CflsRequest = {type: CflsRequestType.diagnostics, id: messageId.bump(), fsPath, freshText};
-            send(request);
+    function emitDiagnostics(fsPath: AbsPath, freshText: string | null, incomingBatchId?: number) {
+        let workingBatchId : number;
+        let workingMessageId : number;
+        if (incomingBatchId !== undefined) {
+            const inflightOrComplete = batchChecks.get(incomingBatchId)!;
+            if (inflightOrComplete.seen.has(fsPath)) {
+                return;
+            }
+            workingMessageId = messageId.bump();
+            workingBatchId = incomingBatchId;
+            inflightOrComplete.seen.add(fsPath);
+            inflightOrComplete.pendingMsgIds.add(workingMessageId);
         }
-        pushTask({type: CflsRequestType.diagnostics, task});
+        else {
+            workingBatchId = batch.bump();
+            workingMessageId = messageId.bump();
+            batchChecks.set(workingBatchId, {pendingMsgIds: new Set([workingMessageId]), seen: new Set()})
+        }
+
+        pushTask({
+            msg: {
+                type: CflsRequestType.diagnostics,
+                id: workingMessageId, fsPath,
+                freshText,
+                batch: workingBatchId
+            },
+            task: function() { send(this.msg) },
+        })
     }
 
-    function pushTask(taskDef: TaskDef) {
-        if (currentTask) {
-            // "diagnostic" task is conceptually overloaded to be responsible for doing all the heavy lifiting of loading a file into the project,
-            // and parse/bind/check to get a tree, so that other tasks have a good tree to pull info from
-            // so we treat it specially, and if the current task is diagnostics, we cancel the current diagnostic request and queue up another run
-            if (taskDef.type === CflsRequestType.diagnostics && currentTask.type === CflsRequestType.diagnostics) {
-                taskQueue = [{
-                    type: taskDef.type,
-                    task: () => {
-                        cancellationToken.reset();
-                        taskDef.task()
-                    }
-                }, ...taskQueue.filter((task) => task.type !== CflsRequestType.diagnostics)]; // do we need to tell the language server that we possibly dropped some requests?
+    function pushTask(freshTask: TaskDef) {
+        if (messageQueueDrainedEvent === undefined) {
+            messageQueueDrainedEvent = explodedPromise<void>();
+        }
 
+        if (currentTask) {
+            // if this is for diagnostics and we're already in the middle of diagnostics for this file, enqueue this request at the front of the line and cancel the currently running request
+            if (currentTask.msg.type === CflsRequestType.diagnostics
+                && freshTask.msg.type === CflsRequestType.diagnostics
+                && currentTask.msg.fsPath === freshTask.msg.fsPath
+            ) {
+                console.log("diagnostics requiring cancellation " + currentTask.msg.fsPath);
+                taskQueue = [{
+                    msg: freshTask.msg,
+                    task: function() {
+                        cancellationToken.reset();
+                        send(this.msg);
+                    }
+                }, ...taskQueue.filter(queuedTask => {
+                    // filter out other same requests, if any
+                    return !(queuedTask.msg.type === CflsRequestType.diagnostics
+                        && freshTask.msg.type === CflsRequestType.diagnostics
+                        && queuedTask.msg.fsPath === freshTask.msg.fsPath);
+                })];
                 cancellationToken.requestCancellation();
             }
             else {
-                taskQueue.push(taskDef);
+                taskQueue.push(freshTask);
             }
         }
         else {
             // no current tasks; queue it and then immediately run it
-            taskQueue.push(taskDef);
-            runNextTask();
+            taskQueue.push(freshTask);
+            maybeRunNextTask();
         }
     }
 
@@ -238,20 +346,20 @@ export function LanguageService<T extends ClientAdapter>() {
         return {resolve, reject, promise};
     }
 
+    type ExplodedPromise<T> = ReturnType<typeof explodedPromise<T>>;
+
     function getCompletions(fsPath: AbsPath, targetIndex: number, triggerCharacter: string | null) : Promise<ReturnType<T["completionItem"]>[]> {
         const {promise, resolve} = explodedPromise<ReturnType<T["completionItem"]>[]>();
 
         pushTask({
-            type: CflsRequestType.completions,
-            task: () => {
-                send({
-                    type: CflsRequestType.completions,
-                    id: messageId.bump(),
-                    fsPath,
-                    targetIndex,
-                    triggerCharacter
-                })
+            msg: {
+                type: CflsRequestType.completions,
+                id: messageId.bump(),
+                fsPath,
+                targetIndex,
+                triggerCharacter
             },
+            task: function() { send(this.msg) },
             onSuccess: (payload: ReturnType<T["completionItem"]>[]) => {
                 resolve(payload);
             },
@@ -265,15 +373,13 @@ export function LanguageService<T extends ClientAdapter>() {
         const {promise, resolve} = explodedPromise<ReturnType<T["sourceLocation"]>[]>();
 
         pushTask({
-            type: CflsRequestType.definitionLocations,
-            task: () => {
-                send({
-                    type: CflsRequestType.definitionLocations,
-                    id: messageId.bump(),
-                    fsPath,
-                    targetIndex,
-                })
+            msg: {
+                type: CflsRequestType.definitionLocations,
+                id: messageId.bump(),
+                fsPath,
+                targetIndex,
             },
+            task: function() { send(this.msg) },
             onSuccess: (payload: ReturnType<T["sourceLocation"]>[]) => {
                 resolve(payload);
             },
@@ -281,6 +387,10 @@ export function LanguageService<T extends ClientAdapter>() {
         })
 
         return promise;
+    }
+
+    function killWhenDrained() {
+        _killWhenDrained = true;
     }
 
     return {
@@ -292,6 +402,19 @@ export function LanguageService<T extends ClientAdapter>() {
         getDefinitionLocations,
         trackFile,
         untrackFile,
+        killWhenDrained,
+        allDrained: () => {
+            if (messageQueueDrainedEvent) {
+                return messageQueueDrainedEvent.promise
+            }
+            else {
+                const r = explodedPromise<void>();
+                r.resolve(void 0);
+                return r.promise;
+            }
+        },
+        runEnqueuedTasks: () => maybeRunNextTask()
+
     }
 }
 

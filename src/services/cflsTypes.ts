@@ -7,13 +7,17 @@ export type CflsRequest =
     | DefinitionLocationsRequest
     | InitRequest
     | ResetRequest
+    | TrackRequest
+    | UntrackRequest
 
 export const enum CflsRequestType {
     diagnostics,
     completions,
     definitionLocations,
     init,
-    reset
+    reset,
+    track,
+    untrack
 }
 
 interface CflsRequestBase {
@@ -40,7 +44,11 @@ export interface DiagnosticsRequest extends CflsRequestBase {
     /**
      * null means "text was not changed"
      */
-    freshText: string | null
+    freshText: string | null,
+    /**
+     * for emitting diagnostics of affected dependents, we'd like to see if we've seen a file in a particular batch and not go circular
+     */
+    batch: number
 }
 
 export interface CompletionsRequest extends CflsRequestBase {
@@ -60,12 +68,24 @@ export interface ResetRequest extends CflsRequestBase {
     config: SerializableCflsConfig
 }
 
-export const enum CflsResponseType {
+export interface TrackRequest extends CflsRequestBase {
+    type: CflsRequestType.track,
+    fsPath: string
+}
+
+export interface UntrackRequest extends CflsRequestBase {
+    type: CflsRequestType.untrack,
+    fsPath: string
+}
+
+export enum CflsResponseType {
     initialized,
     definitionLocations,
     diagnostics,
     completions,
     cancelled,
+    track,
+    untrack,
 }
 
 export type CflsResponse  =
@@ -74,6 +94,8 @@ export type CflsResponse  =
     | CompletionsResponse
     | DefinitionLocationsResponse
     | CancelledResponse
+    | TrackResponse
+    | UntrackResponse
 
 interface CflsResponseBase {
     type: CflsResponseType,
@@ -89,6 +111,7 @@ interface DiagnosticsResponse extends CflsResponseBase {
     fsPath: AbsPath,
     diagnostics: unknown[],
     affectedDependents: AbsPath[],
+    batch: number
 }
 
 interface CompletionsResponse extends CflsResponseBase {
@@ -103,6 +126,14 @@ interface DefinitionLocationsResponse extends CflsResponseBase {
 }
 interface CancelledResponse extends CflsResponseBase {
     type: CflsResponseType.cancelled
+}
+
+interface TrackResponse extends CflsResponseBase {
+    type: CflsResponseType.track
+}
+
+interface UntrackResponse extends CflsResponseBase {
+    type: CflsResponseType.untrack
 }
 
 export interface CflsConfig {

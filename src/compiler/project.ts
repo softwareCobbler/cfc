@@ -4,7 +4,7 @@ import * as path from "path";
 import { Binder } from "./binder";
 import { Checker } from "./checker";
 import { EngineVersion } from "./engines";
-import { BlockType, mergeRanges, Node, NodeKind, SourceFile, SymTabEntry, DiagnosticKind, resetSourceFileInPlace, NodeFlags } from "./node";
+import { BlockType, mergeRanges, Node, NodeKind, SourceFile, SymTabEntry, DiagnosticKind, resetSourceFileInPlace, NodeFlags, restoreSourceFileInPlace } from "./node";
 import { Parser } from "./parser";
 import { CfFileType, SourceRange } from "./scanner";
 import { Interface, Type, createLiteralType, Struct } from "./types";
@@ -318,7 +318,11 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         return addFile(absPath);
     }
 
-    function parseBindCheckWorker(sourceFile: SourceFile, oldDirectDependencies: Set<SourceFile>) : DevTimingInfo {
+    function parseBindCheckWorker(
+        sourceFile: SourceFile,
+        oldDirectDependencies: Set<SourceFile>,
+        restoreOnFailure?: SourceFile
+    ) : {cancellationRequested: true} | {cancellationRequested: false, devTimingInfo: DevTimingInfo} {
         try {
             const parseStart = new Date().getTime();
             parser.parse(sourceFile);
@@ -341,14 +345,21 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             const checkStart = new Date().getTime();
             checkWorker(sourceFile, oldDirectDependencies);
             const checkElapsed = new Date().getTime() - checkStart;
-            
 
-            return { parse: parseElapsed, bind: bindElapsed, check: checkElapsed };
+
+            return { cancellationRequested: false, devTimingInfo: {parse: parseElapsed, bind: bindElapsed, check: checkElapsed} };
         }
         catch (error) {
             // swallow CancellationExceptions, everything else gets rethrown
             if (error instanceof CancellationException) {
-                return { parse: NaN, bind: NaN, check: NaN };
+                if (restoreOnFailure) {
+                    // if we failed to parse, we need to restore everything about the file,
+                    // otherwise references to it across the project have assumptions about it, at the very least,
+                    // containedScope.this existing in the case of CFC files
+                    // an alternative would be to always include an empty `this`? either way seems like it will produce not great results
+                    restoreSourceFileInPlace(sourceFile, restoreOnFailure);
+                }
+                return { cancellationRequested: true }
             }
             throw error;
         }
@@ -469,13 +480,14 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         const bytes = fileSystem.readFileSync(absPath);
         const sourceFile = SourceFile(absPath, fileType, bytes);
 
-        parseBindCheckWorker(sourceFile, new Set());
+        const result = parseBindCheckWorker(sourceFile, new Set());
 
-        if (fileType === CfFileType.dCfm) {
-            
+        if (result.cancellationRequested) {
+            return undefined;
         }
-
-        return sourceFile;
+        else {
+            return sourceFile;
+        }
     }
 
     // function constructWireboxInterface(sourceFile: SourceFile) : Interface | undefined {
@@ -698,10 +710,19 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             return {parse: -1, bind: -1, check: -1};
         }
 
-        const savedDependencies = sourceFile.directDependencies;
+        const savedSourceFile : SourceFile = {...sourceFile};
+
         resetSourceFileInPlace(sourceFile, newSource);
 
-        return parseBindCheckWorker(sourceFile, savedDependencies);
+        const r = parseBindCheckWorker(sourceFile, savedSourceFile.directDependencies, savedSourceFile);
+
+        // if a cancellation was requested the source file should have been restored to it's state prior to the parseBindCheckWorker run
+        if (r.cancellationRequested) {
+            return {parse: NaN, bind: NaN, check: NaN}
+        }
+        else {
+            return r.devTimingInfo;
+        }
     }
 
     function getDiagnostics(absPath: string) : Diagnostic[] {

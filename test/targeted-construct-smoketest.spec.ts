@@ -1,13 +1,19 @@
 import * as assert from "assert";
 
 import { Parser, Binder, CfFileType, SourceFile, NilCfm, flattenTree, NilCfc, DebugFileSystem, FileSystem, Project } from "../src/compiler";
-import { IndexedAccess, NodeKind } from "../src/compiler/node";
-import { findNodeInFlatSourceMap, getTriviallyComputableString, isExpressionContext } from "../src/compiler/utils";
+import { Diagnostic, IndexedAccess, NodeKind } from "../src/compiler/node";
+import { AbsPath, findNodeInFlatSourceMap, getTriviallyComputableString, isExpressionContext } from "../src/compiler/utils";
 import * as TestLoader from "./TestLoader";
 import { CompletionItem, getCompletions } from "../src/services/completions";
 import { ProjectOptions, FileSystemNode, pushFsNode } from "../src/compiler/project";
 import { EngineVersions, EngineVersion } from "../src/compiler/engines";
 import { setDebug as setNodeModuleDebug } from "../src/compiler/node";
+
+import { adapter as vsCodeAdapter } from "../src/lang-server/server/src/vscode-adapter"
+import * as path from "path";
+import { IREPLACED_AT_BUILD } from "../src/services/buildShim";
+import * as build from "../src/build/build"
+import * as fs from "fs"
 
 setNodeModuleDebug();
 
@@ -46,7 +52,7 @@ function assertDiagnosticsCountWithProject(fs: FileSystem, diagnosticsTargetFile
     assert.strictEqual(diagnostics.length, count, `Expected ${count} errors.`);
 }
 
-describe("general smoke test for particular constructs", () => {
+describe("general smoke test for particular constructs", function() {
     const commonProjectOptions : ProjectOptions = options();
 
     it("Should accept `new` expression in an expression context", () => {
@@ -780,7 +786,7 @@ describe("general smoke test for particular constructs", () => {
     it("affected dependencies", () => {
         // check that affected dependencies for some file are computed correctly?
     })
-    it.only("checks string unions in arg position", () => {
+    it("checks string unions in arg position", () => {
         const fsRoot : FileSystemNode = {"/": {}};
 
         const src = `
@@ -804,4 +810,77 @@ describe("general smoke test for particular constructs", () => {
         const diagnostics = project.getDiagnostics("A.cfc");
         assert.strictEqual(diagnostics.length, 2);
     })
+    it.only("langserver", async function() {
+        this.timeout(10000);
+
+        const REPLACED_AT_BUILD : IREPLACED_AT_BUILD = {
+            debug: true,
+            runtimeLanguageToolPath: "./languageTool.js",
+            ClientAdapterModule_StaticRequirePath: path.resolve("out/services/clientAdapter.js"),
+        };
+
+        build.doTsc("tsc", /*disregardLoneDebuggerOutputLine*/ true);
+        build.link_ForTests(
+            build.getBuildOptions(REPLACED_AT_BUILD),
+            {
+                languageService: "test/out/build-temp/languageService.js",
+                languageTool: "test/out/build-temp/languageTool.js"
+            }
+        );
+
+        const loadPath = path.resolve("test/out/build-temp/languageService.js");
+
+        const {LanguageService} = await import(loadPath) as typeof import("../src/services/languageService")
+
+        const langService = LanguageService<typeof vsCodeAdapter>()
+
+        langService.on("diagnostics", (fsPath: AbsPath, diagnostics: unknown[]) => {
+            console.log(`got ${diagnostics.length} diagnostics for` + fsPath)
+        })
+
+        const config = {
+            engineLibAbsPath: "",
+            x_parseTypes: true,
+            x_genericFunctionInference: true,
+            x_checkReturnTypes: true,
+            x_checkFlowTypes: true,
+            engineVersion: "lucee.5" as const,
+            wireboxResolution: true,
+            cfConfigProjectRelativePath: "cfconfig.json"
+        }
+
+        const p = path.resolve("...");
+        const server = langService.fork(config, [p]);
+        server.childProcess.on("error", (v) => {
+            console.log("ERRROR")
+            console.log(v);
+        });
+
+        await server.didInitSignal;
+    })
 });
+
+
+function dirIter(root: string) : string[] {
+    const result : string[] = [];
+    const p = fs.statSync(root);
+    if (p.isDirectory()) {
+        const entries = fs.readdirSync(root);
+        for (const v of entries) {
+            result.push(...dirIter(path.join(root, v)));
+        }
+    }
+    else if (p.isFile()) {
+        return [root]
+    }
+    else {
+        // no-op
+    }
+    return result;
+}
+
+function getCfcFiles(root: string) {
+    const allFiles = dirIter(root);
+    const regex = /.(cfm|cfc)$/i;
+    return allFiles.filter(name => regex.test(name));
+}

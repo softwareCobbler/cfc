@@ -159,29 +159,21 @@ connection.onInitialized(async (x) => {
 		connection.client.register(DidChangeConfigurationNotification.type, {section: "cflsp"});
 		
 		const freshInitArgs = mungeConfig(await connection.workspace.getConfiguration("cflsp"));
-		await languageService.fork(freshInitArgs, workspaceRoots.map((root) => URI.parse(root.uri).fsPath));
+		await languageService.fork(freshInitArgs, workspaceRoots.map((root) => URI.parse(root.uri).fsPath)).didInitSignal;
 	}
 	else {
 		const freshInitArgs = mungeConfig(null);
-		await languageService.fork(freshInitArgs, workspaceRoots.map((root) => URI.parse(root.uri).fsPath));
+		await languageService.fork(freshInitArgs, workspaceRoots.map((root) => URI.parse(root.uri).fsPath)).didInitSignal;
 	}
 
 	didForkCfls = true;
 	connection.console.info("cflsp server initialized");
-
-	for (const doc of documents.all()) {
-		if (doc.languageId === "cfml") {
-			languageService.trackFile(URI.parse(doc.uri).fsPath);
-			runDiagonstics(doc);
-		}
-	}
+	languageService.runEnqueuedTasks();
 });
 
 function runDiagonstics(textDocument: TextDocument) {
-	if (didForkCfls) {
-		const fsPath = URI.parse(textDocument.uri).fsPath;
-		languageService.emitDiagnostics(fsPath, textDocument.getText());
-	}
+	const fsPath = URI.parse(textDocument.uri).fsPath;
+	languageService.emitDiagnostics(fsPath, textDocument.getText());
 }
 
 connection.onDidChangeConfiguration(async cflsConfig => {
@@ -193,11 +185,9 @@ connection.onDidChangeConfiguration(async cflsConfig => {
 
 // Only keep settings for open documents
 documents.onDidClose(e => {
-	if (didForkCfls) {
-		const fsPath = URI.parse(e.document.uri).fsPath;
-		languageService.untrackFile(fsPath);
-		connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] });
-	}
+	const fsPath = URI.parse(e.document.uri).fsPath;
+	languageService.untrackFile(fsPath);
+	connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] });
 });
 
 // The content of a text document has changed. This event is emitted

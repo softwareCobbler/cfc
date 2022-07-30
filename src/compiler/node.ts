@@ -385,26 +385,49 @@ export interface SourceFile extends NodeBase {
         implements: SourceFile[]
     } | undefined,
     directDependencies: Set<SourceFile>,
-    nodeTypeConstraints: Map<Node, Type>
+    nodeTypeConstraints: Map<Node, Type>,
 }
 
 export function resetSourceFileInPlace(target: SourceFile, newSource: string | Buffer) : void {
-    target.containedScope = {parentContainer: null, typeinfo: typeinfo()};
-    target.content = [];
-    target.flatTree = [];
-    // target.libRefs untouched
-    target.diagnostics = [];
-    target.scanner = Scanner(newSource);
-    target.nodeMap = new Map();
-    target.cachedNodeTypes = new Map();
-    target.cachedFlowTypes = new Map();
-    target.nodeToSymbol = new Map();
-    target.symbolIdToSymbol = new Map();
-    target.endOfNodeFlowMap = new Map<NodeId, Flow>();
-    target.cfc = undefined;
-    target.directDependencies = new Set();
-    target.nodeTypeConstraints = new Map();
+    const freshOther = SourceFile(target.absPath, target.cfFileType, newSource);
+    restoreSourceFileInPlace(target, freshOther);
+    // target.containedScope = {parentContainer: null, typeinfo: typeinfo()};
+    // target.content = [];
+    // target.flatTree = [];
+    // // target.libRefs untouched
+    // target.diagnostics = [];
+    // target.scanner = Scanner(newSource);
+    // target.nodeMap = new Map();
+    // target.cachedNodeTypes = new Map();
+    // target.cachedFlowTypes = new Map();
+    // target.nodeToSymbol = new Map();
+    // target.symbolIdToSymbol = new Map();
+    // target.endOfNodeFlowMap = new Map<NodeId, Flow>();
+    // target.cfc = undefined;
+    // target.directDependencies = new Set();
+    // target.nodeTypeConstraints = new Map();
 }
+
+// move assignment
+export function restoreSourceFileInPlace(target: SourceFile, other: SourceFile) : void {
+    target.containedScope = other.containedScope;
+    target.content = other.content;
+    target.flatTree = other.flatTree;
+    // target.libRefs untouched
+    target.diagnostics = other.diagnostics;
+    target.scanner = other.scanner;
+    target.nodeMap = other.nodeMap;
+    target.cachedNodeTypes = other.cachedNodeTypes;
+    target.cachedFlowTypes = other.cachedFlowTypes;
+    target.nodeToSymbol = other.nodeToSymbol;
+    target.symbolIdToSymbol = other.symbolIdToSymbol;
+    target.endOfNodeFlowMap = other.endOfNodeFlowMap;
+    target.cfc = other.cfc;
+    target.directDependencies = other.directDependencies;
+    target.nodeTypeConstraints = other.nodeTypeConstraints;
+}
+
+
 
 export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: string | Buffer) : SourceFile {
     const sourceFile = NodeBase<SourceFile>(NodeKind.sourceFile);

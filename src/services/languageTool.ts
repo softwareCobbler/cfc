@@ -44,7 +44,14 @@ process.on("message", (msg: CflsRequest) => {
                 response = {type: CflsResponseType.cancelled, id: msg.id};
             }
             else {
-                response = {type: CflsResponseType.diagnostics, id: msg.id, fsPath: diagnostics.fsPath, diagnostics: diagnostics.diagnostics, affectedDependents: diagnostics.affectedDependents};
+                response = {
+                    type: CflsResponseType.diagnostics,
+                    id: msg.id,
+                    fsPath: diagnostics.fsPath,
+                    diagnostics: diagnostics.diagnostics,
+                    affectedDependents: diagnostics.affectedDependents,
+                    batch: msg.batch
+                };
             }
             break;
         }
@@ -80,12 +87,24 @@ process.on("message", (msg: CflsRequest) => {
             }
             break;
         }
+        case CflsRequestType.track: {
+            languageTool.track(msg.fsPath);
+            response = {type:CflsResponseType.track, id: msg.id};
+            break;
+        }
+        case CflsRequestType.untrack: {
+            languageTool.untrack(msg.fsPath);
+            response = {type:CflsResponseType.untrack, id: msg.id};
+            break;
+        }
         default: {
             exhaustiveCaseGuard(msg);
         }
     }
 
-    if (response) send(response);
+    if (response) {
+        send(response);
+    }
 });
 
 type AbsPath = string;
@@ -101,6 +120,12 @@ function LanguageTool() {
     let workspaceRoots! : AbsPath[];
     let clientAdapter!: ClientAdapter;
     let cancellationToken: CancellationTokenConsumer;
+
+    // we hold strong references to files we're tracking, otherwise they will be GC'd
+    // a file open in the editor that has no dependents will have no strong references,
+    // unless we take that strong reference; the Project only holds weakrefs to SourceFiles,
+    // SourceFiles hold strong references to their immediate dependencies
+    const trackedFiles = new Map<string, SourceFile | "PENDING-FIRST-LOAD">();
 
     function init(initArgs : InitArgs) {
         workspaceProjects = new Map();
@@ -125,7 +150,7 @@ function LanguageTool() {
      * This method is assumed to be called on every document update event, so we infer "ah this source file changed" by being called
      * freshText of `null` means the text wasn't updated
      */
-    function naiveGetDiagnostics(fsPath: AbsPath, freshText: string | Buffer | null) : Result<{fsPath: AbsPath, diagnostics: unknown[], affectedDependents: AbsPath[]}> {
+    function naiveGetDiagnostics(fsPath: AbsPath, freshText: string | Buffer | null) : Result<{sourceFile: SourceFile, fsPath: AbsPath, diagnostics: unknown[], affectedDependents: AbsPath[]}> {
         const project = getOwningProjectFromAbsPath(fsPath);
         if (!project) return NO_DATA;
 
@@ -141,14 +166,22 @@ function LanguageTool() {
 
         // does this leave the sourcefile in a possibly corrupt state? like we cleared it out ("reset in place"), but then hit a cancellation,
         // so it's half parsed, and not binded or checked? (there's no check cancellation token in binder / checker, only the parser)
-        if (cancellationToken.cancellationRequested()) return CANCELLED;
+        if (cancellationToken.cancellationRequested()) {
+            return CANCELLED;
+        }
         //connection.console.info(`${fsPath}\n\tparse ${timing.parse} // bind ${timing.bind} // check ${timing.check}`);
 
         const diagnostics = project.getDiagnostics(fsPath) ?? [];
         const sourceFile = project.getParsedSourceFile(fsPath) ?? null;
         if (!sourceFile) return NO_DATA;
 
+        const shouldTrack = trackedFiles.get(fsPath);
+        if (shouldTrack === "PENDING-FIRST-LOAD") {
+            trackedFiles.set(fsPath, sourceFile);
+        }
+
         return {
+            sourceFile,
             fsPath,
             diagnostics: diagnostics.map((diagnostic) => clientAdapter.diagnostic(sourceFile.scanner.getAnnotatedChar, diagnostic)),
             affectedDependents: project.getTransitiveDependents(sourceFile).map(sourceFile => sourceFile.absPath)
@@ -350,11 +383,25 @@ function LanguageTool() {
         }
     }
 
+    function track(fsPath: string) : void {
+        const maybeAlreadyTracked = trackedFiles.get(fsPath);
+        if (maybeAlreadyTracked) {
+            return;
+        }
+        trackedFiles.set(fsPath, "PENDING-FIRST-LOAD");
+    }
+
+    function untrack(fsPath: string) : void {
+        trackedFiles.delete(fsPath);
+    }
+
     return {
         naiveGetDiagnostics,
         init,
         reset,
         getCompletions,
         getDefinitionLocations,
+        track,
+        untrack
     }
 }

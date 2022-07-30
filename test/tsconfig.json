@@ -81,6 +81,8 @@
     // having trouble getting `npm test` to compile project references, so tests will reference the build artifacts
     // this is here in the hopes that eventually we can just reference the ts files directly
     {"path": "../src/compiler"},
-    {"path": "../src/services"}
+    {"path": "../src/services"},
+    {"path": "../src/lang-server/server/"},
+    {"path": "../src/build"}
   ]
 }

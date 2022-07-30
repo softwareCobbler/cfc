@@ -83,6 +83,10 @@ export function Checker(options: ProjectOptions) {
     let warnOnUndefined: boolean;
     let checkerStack : Node[];
     let forcedReturnTypes : WeakMap<Node, Type>;
+
+    // Nodes have types, which we infer or assign
+    // but also has a constraints, which are carried in from outside (i.e. from a type assertion, or function param type)
+    // constraints aid autocomplete (i.e. the type is inferred to be "FOO" but the constraint is "FOO"|"BAR"|"BAZ")
     let currentConstraint : Type | null = null;
 
     function check(sourceFile_: SourceFile) {
@@ -1550,12 +1554,29 @@ export function Checker(options: ProjectOptions) {
                 return;
             }
 
+            // we are trying to resolve these, and only these
+            // all generic names exist here, but they map to undefined if we don't know what they are yet
+            // maybe we can map them to any? sometimes we want to map to any, sometimes we want to know they haven't been resolved yet
             const typeParamMap = new Map<string, Type | undefined>();
+            // generic names that have definitely been resolved
+            // "T resolves to {x: string}" or etc.
             const definitelyResolvedTypeParamMap = new Map<string, Type>();
+            // map of T->U for "T extends U"
             const typeConstraintMap = new Map<string, Type>(); // all constraints are "subtypeof / extends" at this point, e.g. <T extends "a" | "b">(...)
+
             const pushResolution = (name: string, type: Type) => {
                 typeParamMap.set(name, type);
                 definitelyResolvedTypeParamMap.set(name, type);
+                // need to "widen smartly"...
+                // set constraint to --> constraint(T) == any ? resolution(T) : (for all C in constraint(T) : resolution(T) <: C ? C : resolution(T))
+                // but also need to tag the resolution as unwidenable was `resolution(T) <: C`
+                // foo<T extends "foo" | "bar">(a:T, b:T)
+                // foo("bar", "foo") <-- T constrained to "bar", "foo" should not widen the constraint to either ("foo"|"bar") or string
+                // foo<T>(a:T,b:T)
+                // foo("bar", "foo") <-- T constrained to literal "bar", but subsequent "foo" should widen T to string
+
+                // n.b. for now we "narrow ignorantly", though there is some (wrong) logic in resolveGenericFunctionTypeParams about widen-to-common-supertype
+                typeConstraintMap.set(name, type);
             }
 
             for (const p of sig.typeParams) {
@@ -1563,6 +1584,9 @@ export function Checker(options: ProjectOptions) {
                 if (p.extends) {
                     const evaluatedConstraint = evaluateType(p.extends);
                     typeConstraintMap.set(p.name, evaluatedConstraint);
+                }
+                else {
+                    typeConstraintMap.set(p.name, BuiltinType.any);
                 }
             }
 
@@ -1657,8 +1681,15 @@ export function Checker(options: ProjectOptions) {
                 }
                 else {
                     // if param is optional and callSiteArg is undefined we don't need to do this?
+
+                    const constrainedGenericType = evaluateType(sigParamType, typeConstraintMap);
+
+                    const savedCurrentConstraint = currentConstraint;
+                    currentConstraint = constrainedGenericType;
                     checkNode(callSiteArg);
-                    const argType = getCachedEvaluatedNodeType(callSiteArg)
+                    currentConstraint = savedCurrentConstraint;
+
+                    const argType = getCachedEvaluatedNodeType(callSiteArg);
                     const resolutions = resolveGenericFunctionTypeParams(typeParamMap, typeConstraintMap, sigParamType, argType);
                     if (resolutions) {
                         for (const [k,v] of resolutions) {
@@ -1666,6 +1697,10 @@ export function Checker(options: ProjectOptions) {
                                 pushResolution(k, v);
                             }
                         }
+                    }
+
+                    if (!isAssignable(argType, constrainedGenericType, isLiteralExpr(callSiteArg))) {
+                        issueDiagnosticAtNode(callSiteArg, `Argument of type '${stringifyType(argType)}' is not assignable to parameter of type '${stringifyType(constrainedGenericType)}'.`);
                     }
                 }
             }
@@ -1680,7 +1715,7 @@ export function Checker(options: ProjectOptions) {
 
             function widenToCommonType(t: Type, u: Type) : Type | undefined {
                 if (t.kind === TypeKind.literal && u.kind === TypeKind.literal) {
-                    if (t.underlyingType === BuiltinType.string || u.underlyingType === BuiltinType.string) return BuiltinType.string;
+                    if (t.underlyingType === BuiltinType.string && u.underlyingType === BuiltinType.string) return BuiltinType.string;
                     if (t.underlyingType === BuiltinType.numeric && u.underlyingType === BuiltinType.numeric) return BuiltinType.numeric;
                 }
                 return undefined;
@@ -1707,9 +1742,6 @@ export function Checker(options: ProjectOptions) {
                             const widerType = widenToCommonType(source, resolvedTarget);
                             if (widerType) {
                                 return new Map([[target.name, widerType]]);
-                            }
-                            else {
-                                throw "unassignable from source to resolved generic --- that means T was resolved but now we have a different T?"
                             }
                         }
 
@@ -2630,6 +2662,7 @@ export function Checker(options: ProjectOptions) {
                         }
                     }
                     else {
+                        // @@@@@@@@@@@@@@@@ type.members is nullish?
                         symbol = getStructMember(element, type, propertyName);
                         if (symbol) {
                             setResolvedSymbol(element, symbol);
@@ -3656,7 +3689,7 @@ export function Checker(options: ProjectOptions) {
                     }
                     const savedCurrentConstraint = currentConstraint;
                     currentConstraint = currentConstraint && isStructLike(currentConstraint) && key
-                        ? currentConstraint.members.get(key)?.effectivelyDeclaredType ?? null
+                        ? currentConstraint.members.get(key?.toLowerCase())?.effectivelyDeclaredType ?? null
                         : null;
                     checkNode(node.expr);
                     setCachedEvaluatedNodeType(node, getCachedEvaluatedNodeType(node.expr));
@@ -3719,13 +3752,16 @@ export function Checker(options: ProjectOptions) {
         const cfcName = stringifyDottedPath(node.callExpr.left).ui;
         const cfc = cfcResolver(ComponentResolutionArgs(sourceFile.absPath, cfcName));
         if (!cfc) return;
+        if (!cfc.sourceFile.containedScope.this) {
+            debugger;
+        }
         const cfcThis = Cfc(cfc.sourceFile);
         setCachedEvaluatedNodeType(node, cfcThis);
 
         if (!cfcThis.members) {
             // bug from bailing prior to fully binding/checking and there is no `containedScope.*` ???
-            // debugger;
-            console.log(`internal compiler error -- expected members property on cfc with path ${cfcName}`);
+            debugger;
+            // console.log(`internal compiler error -- expected members property on cfc with path ${cfcName}`);
             return;
         }
 
@@ -4020,7 +4056,7 @@ export function Checker(options: ProjectOptions) {
                         let concrete = true;
                         for (const [canonicalName, symTabEntry] of type.members.entries()) {
                             const evaluatableType = symTabEntry.effectivelyDeclaredType ?? symTabEntry.lexicalType ?? BuiltinType.any;
-                            const evaluatedType = typeWorker(evaluatableType);
+                            const evaluatedType = typeWorker(evaluatableType, typeParamMap);
                             if (!evaluatedType) return null;
 
                             if (evaluatableType !== evaluatedType) { // fixme: merely expanding a non-generic alias will trigger this, since (alias !== *alias) (also consider Array after instantiation to be concrete...) )

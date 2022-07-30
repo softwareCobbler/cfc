@@ -42,14 +42,15 @@ function projectFiddle() {
                 "someFolder": {
                     "generic.cfc": `
                         component {
-                            /**
-                             * @!typeparam T extends keyof Wirebox["mappings"]
-                             * @!arg name : {value: T}
-                             * @!returns cfc<Wirebox["mappings"][T]>
-                             */
-                            function getInstanceLike(name) {}
 
-                            getInstanceLike("someBinding");
+
+                            /**
+                             * @!typeparam T extends {member: string}
+                             * @!arg a : T
+                             * @!arg b : T
+                             */
+                            function foo(a,b) {}
+                            foo(42, "42")
                         }
                     `,
                     "someFile.cfc": `
@@ -138,7 +139,7 @@ function projectFiddle() {
     //project.addFile("/coolFolder/QuickOrmTypedefs.d.cfm");
     project.addFile("/someFolder/generic.cfc");
     //project.addFile("C:\\Users\\anon\\dev\\cb\\testbox\\tests\\resources\\coldbox\\system\\EventHandler.cfc");
-    const diagnostics = project.getDiagnostics("/someFolder/someFile.cfc");
+    const diagnostics = project.getDiagnostics("/someFolder/generic.cfc");
 
     //const x = project.getInterestingNodeToLeftOfCursor("/someFile.cfc", 378);
     //const completions = getCompletions(project, "/someFile.cfc", 381, null);
