@@ -41,9 +41,8 @@ function projectFiddle() {
                 },
                 "someFolder": {
                     "generic.cfc": `
+                        // @cfls-parse-types
                         component {
-
-
                             /**
                              * @!typeparam T extends {member: string}
                              * @!arg a : T
@@ -116,10 +115,10 @@ function projectFiddle() {
     );
 
     //let x = debugfs.readFileSync("/Child.cfc").toString().slice(102,105)
-    
+
     const project = Project("/", debugfs, {
         debug: true,
-        parseTypes: true,
+        parseTypes: false,
         engineVersion: EngineVersions["lucee.5"],
         withWireboxResolution: true,
         cfConfigProjectRelativePath: "cfconfig.json",

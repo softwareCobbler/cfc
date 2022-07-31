@@ -115,8 +115,8 @@ interface ScannerState {
     artificialEndLimit: number | undefined;
 }
 
-export function Parser(config: ProjectOptions) {  
-    const parseTypes = config.parseTypes;
+export function Parser(config: ProjectOptions) {
+    let parseTypes = config.parseTypes;
     const debug = config.debug;
     const engineVersion = config.engineVersion;
 
@@ -986,6 +986,7 @@ export function Parser(config: ProjectOptions) {
         (typedefContainer as any) = undefined;
         lastDocBlock = null;
         parseErrorMsg = null;
+        parseTypes = config.parseTypes;
     }
 
     // fixme: we can supply a filetype, but have to set the sourceFile with an earlier call?
@@ -1029,6 +1030,49 @@ export function Parser(config: ProjectOptions) {
                 }
 
                 sourceFile.content.push(...componentInfo.preamble);
+
+                if (componentInfo.preamble.length > 0) {
+                    let maybeDirectiveComment : Comment | undefined = undefined;
+                    for (const node of componentInfo.preamble) {
+                        if (node.kind !== NodeKind.textSpan) {
+                            if (node.kind === NodeKind.comment) {
+                                maybeDirectiveComment = node;
+                            }
+                            break;
+                        }
+                        else {
+                            continue;
+                        }
+                    }
+                    if (maybeDirectiveComment) {
+                        const text = scanner.getTextSlice(maybeDirectiveComment.range);
+                        let directiveText : string;
+                        switch (maybeDirectiveComment.commentType) {
+                            case CommentType.tag: {
+                                // adjust for "<!---(...)--->"
+                                directiveText = text.slice(5, text.length - 4);
+                                break;
+                            }
+                            case CommentType.scriptSingleLine: {
+                                // adjust for "//(...)"
+                                directiveText = text.slice(2);
+                                break;
+                            }
+                            case CommentType.scriptMultiLine: {
+                                // no support for multiline directives, sort of weird like is a docblock OK? "/** directive */"
+                                directiveText = "";
+                                break;
+                            }
+                            default: {
+                                // should be unreachable but seems we haven't configured Comment to reflect that
+                                directiveText = "";
+                            }
+                        }
+                        if (directiveText.trim() === "@cfls-parse-types") {
+                            parseTypes = true;
+                        }
+                    }
+                }
 
                 // extract parsed types into working node's typedefs
                 // should probably break this out so we can use it on any current working node
@@ -4151,7 +4195,7 @@ export function Parser(config: ProjectOptions) {
                 // we need a way to use "@type" in a docblock, but "@type" is already a legitimate docblock attribute name
                 // right now we use "@!type" and "@!typedef" and etc, which can be used in current docblocks, but can't represent actual tag attributes
                 // i.e. in `function foo() !type="{}" {}`, "!type" is not valid in that position, so /** @!type {} */ is currently valid but probably won't conflict with much real world code
-                if (name[0] === "!") {
+                if (parseTypes && name[0] === "!") {
                     if (parseTypes && name === "!interface") {
                         restoreScannerState({...getScannerState(), index: getIndex() - name.length + 1}); // backup to start of `interface` "token" (without the "!")
                         const interfaceDef = parseType();
