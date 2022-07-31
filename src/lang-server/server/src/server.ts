@@ -219,8 +219,7 @@ connection.onCompletion(async (completionParams: CompletionParams): Promise<Comp
 
 		const completions = await languageService.getCompletions(fsPath, targetIndex, triggerCharacter);
 		return {
-			// this is to support "completions_hook" where a longer token may change the completions list
-			isIncomplete: true,
+			isIncomplete: false, // true would support "completions_hook" where a longer token may change the completions list
 			items: completions
 		}
 	}
