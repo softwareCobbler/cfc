@@ -179,9 +179,15 @@ function runDiagonstics(textDocument: TextDocument) {
 connection.onDidChangeConfiguration(async cflsConfig => {
 	if (didForkCfls) {
 		const freshInitArgs = mungeConfig(cflsConfig.settings.cflsp);
-		languageService.reset(freshInitArgs);
+		languageService.resetAssumingChangedConfig(freshInitArgs);
 	}
 });
+
+connection.onRequest("reloadPathMappings", (v) => {
+	if (didForkCfls) {
+		languageService.forceReset();
+	}
+})
 
 // Only keep settings for open documents
 documents.onDidClose(e => {

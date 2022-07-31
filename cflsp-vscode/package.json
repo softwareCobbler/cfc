@@ -27,7 +27,8 @@
 	],
 	"contributes": {
 		"commands": [
-			{"command": "cflsp.generateColdfusionMappingsScript", "title": "Generate ColdFusion mappings script", "enablement": ""}
+			{"command": "cflsp.generateColdfusionMappingsScript", "title": "cfls: Generate ColdFusion mappings script", "enablement": ""},
+			{"command": "cflsp.reloadPathMappings", "title": "cfls: Reload path mappings", "enablement": ""}
 		],
 		"languages": [
 			{

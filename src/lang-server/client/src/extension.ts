@@ -80,9 +80,13 @@ export function activate(context: ExtensionContext) {
 		clientOptions
 	);
 
-	
+
 	// Start the client. This will also launch the server
 	client.start();
+
+	commands.registerCommand("cflsp.reloadPathMappings", async () => {
+		client.sendRequest("reloadPathMappings");
+	})
 }
 
 function recursiveGetFiles(root: string, pattern: RegExp) : string [] {

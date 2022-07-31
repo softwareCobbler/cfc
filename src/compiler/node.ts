@@ -338,8 +338,10 @@ export function mergeRanges(...nodes : (SourceRange | Node | Node[] | undefined 
 }
 
 export const enum DiagnosticKind { error, warning }
+export const enum DiagnosticPhase { parse = 1, bind = 2, check = 3 }
 export interface Diagnostic {
     kind: DiagnosticKind,
+    phase: DiagnosticPhase,
     fromInclusive: number,
     toExclusive: number,
     msg: string,
@@ -368,23 +370,38 @@ export interface SourceFile extends NodeBase {
     kind: NodeKind.sourceFile,
     absPath: string,
     cfFileType: CfFileType,
+    /** binder */
     containedScope: ScopeDisplay,
+    /** parser / binder */
     content: Node[],
+    /** binder */
     flatTree: NodeSourceMap[],
+    /** binder / project? */
     libRefs: Map<string, SourceFile>,
+    /** parser / binder / checker */
     diagnostics: Diagnostic[],
+    /** project / initialization */
     scanner: Scanner,
+    /** binder */
     nodeMap: Map<NodeId, Node>,
+    /** checker */
     cachedNodeTypes: Map<NodeId, Type>, // type of a particular node, exactly zero or one per node
+    /** checker */
     cachedFlowTypes: Map<FlowId, Map<SymbolId, Type>>, // types for symbols as determined at particular flow nodes, zero or more per flow node
+    /** checker */
     nodeToSymbol: Map<NodeId, SymbolResolution>,
+    /** checker */
     symbolIdToSymbol: Map<SymbolId, SymTabEntry>,
+    /** checker */
     endOfNodeFlowMap: Map<NodeId, Flow>,
+    /** checker */
     cfc: {
         extends: SourceFile | null,
         implements: SourceFile[]
     } | undefined,
+    /** checker */
     directDependencies: Set<SourceFile>,
+    /** checker */
     nodeTypeConstraints: Map<Node, Type>,
 }
 

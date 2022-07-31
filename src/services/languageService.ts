@@ -62,7 +62,7 @@ export function LanguageService<T extends ClientAdapter>() {
     }
 
     let server! : child_process.ChildProcess;
-    let config! : InitArgs["config"]; // we keep a copy to diff reset requests against; this is probably unnecessary, a holdover from when we were accidentally registering to receive all client configuration changes
+    let config! : InitArgs["config"];
     let _killWhenDrained = false;
     let forked = false;
 
@@ -70,30 +70,16 @@ export function LanguageService<T extends ClientAdapter>() {
      * if undefined, the message queue was drained on an earlier run (or has never had any messages placed into it)
      */
     let messageQueueDrainedEvent : ExplodedPromise<void> | undefined = undefined;
-    const pendingResponses = new Set<number>();
 
     const cancellationToken = CancellationToken();
     const handlerMappings : Partial<EventHandlers> = {};
 
-    interface TaskDef {
-        msg: CflsRequest,
-        task: () => void,
-        timeout_ms?: number,
-        onSuccess?: (payload?: any) => void
-        onNoResponse?: () => void
-    }
-
     let taskQueue : TaskDef[] = [];
     let currentTask: TaskDef | null = null;
     let requestTimeoutId : NodeJS.Timeout | null = null;
+    const pendingResponses = new PendingResponses();
 
-    interface InflightOrCompleteBatchedDiagnostics {
-        seen: Set<AbsPath>,
-        pendingMsgIds: Set<number>
-    }
-    const batchChecks = new Map<number, InflightOrCompleteBatchedDiagnostics>();
-
-    const counter = () => {
+    const messageId = (() => {
         let id = 0;
         return {
             bump: () => {
@@ -104,10 +90,7 @@ export function LanguageService<T extends ClientAdapter>() {
             },
             current: () => id
         }
-    };
-
-    const messageId = counter();
-    const batch = counter();
+    })();
 
     function fork(freshConfig: InitArgs["config"], workspaceRoots: AbsPath[]) : {childProcess: child_process.ChildProcess, didInitSignal: Promise<void>} {
         config = freshConfig;
@@ -132,25 +115,22 @@ export function LanguageService<T extends ClientAdapter>() {
                     }
                     case CflsResponseType.diagnostics: {
                         handlerMappings.diagnostics?.(msg.fsPath, msg.diagnostics);
-                        // fixme: circularities? can we (do we want to) say "hey don't recursively do this..."?
+
+                        const batchedCheck = pendingResponses.getBatchedCheckForBatchId(msg.batch);
+                        batchedCheck?.markResponseAsReceived(msg.id);
+
                         // fixme: affectedDependencies includes itself? which is not right
-                        const inflightOrCompleteBatch = batchChecks.get(msg.batch);
-                        if (inflightOrCompleteBatch) { // should always be truthy
-                            inflightOrCompleteBatch.pendingMsgIds.delete(msg.id);
-                        }
                         for (const fsPath of msg.affectedDependents) {
                             if (fsPath === msg.fsPath) { // this shouldn't happen, fix where it does happen and remove this
                                 continue;
                             }
-                            if (openFiles.has(fsPath)) {
+                            if (openFiles.has(fsPath) && !batchedCheck?.hasSeenFsPath(fsPath)) {
                                 emitDiagnostics(fsPath, null, msg.batch);
                             }
                         }
 
-                        // nothing was pushed into the queue for this batch, this batch is done
-                        if (inflightOrCompleteBatch && inflightOrCompleteBatch.pendingMsgIds.size === 0) {
-                            batchChecks.delete(msg.batch);
-                        }
+                        // if nothing was pushed into the queue for this batch, this batch is done
+                        batchedCheck?.maybeCleanup();
 
                         break;
                     }
@@ -173,7 +153,7 @@ export function LanguageService<T extends ClientAdapter>() {
                 }
             }
 
-            pendingResponses.delete(msg.id);
+            pendingResponses.getPendingResponseForMsgId(msg.id)?.cleanup();
 
             if (autoRunNext) {
                 maybeRunNextTask();
@@ -228,7 +208,7 @@ export function LanguageService<T extends ClientAdapter>() {
             if (_killWhenDrained) {
                 server.kill();
             }
-            if (pendingResponses.size === 0) {
+            if (pendingResponses.getSize() === 0) {
                 messageQueueDrainedEvent?.resolve();
             }
         }
@@ -252,26 +232,33 @@ export function LanguageService<T extends ClientAdapter>() {
 
     function send(msg: CflsRequest) {
         server.send(msg);
-        pendingResponses.add(msg.id);
+        pendingResponses.add(msg.id, /*timeout*/10000)
     }
 
     function emitDiagnostics(fsPath: AbsPath, freshText: string | null, incomingBatchId?: number) {
         let workingBatchId : number;
         let workingMessageId : number;
         if (incomingBatchId !== undefined) {
-            const inflightOrComplete = batchChecks.get(incomingBatchId)!;
-            if (inflightOrComplete.seen.has(fsPath)) {
+            const batchedCheck = pendingResponses.getBatchedCheckForBatchId(incomingBatchId);
+            if (!batchedCheck) {
+                // ??? we should have found one, maybe it timedout
+                // probably nothing good would come of trying to reanimate it
+                return;
+            }
+            if (batchedCheck.hasSeenFsPath(fsPath)) {
                 return;
             }
             workingMessageId = messageId.bump();
             workingBatchId = incomingBatchId;
-            inflightOrComplete.seen.add(fsPath);
-            inflightOrComplete.pendingMsgIds.add(workingMessageId);
+
+            batchedCheck.markFsPathAsSeen(fsPath);
+            batchedCheck.markResponseAsPending(workingMessageId);
         }
         else {
-            workingBatchId = batch.bump();
             workingMessageId = messageId.bump();
-            batchChecks.set(workingBatchId, {pendingMsgIds: new Set([workingMessageId]), seen: new Set()})
+            const batchedCheck = pendingResponses.freshBatchedCheck();
+            batchedCheck.markResponseAsPending(workingMessageId);
+            workingBatchId = batchedCheck.id;
         }
 
         pushTask({
@@ -322,7 +309,7 @@ export function LanguageService<T extends ClientAdapter>() {
         }
     }
 
-    function reset(freshConfig: InitArgs["config"]) {
+    function resetAssumingChangedConfig(freshConfig: InitArgs["config"]) {
         let didChange = false;
         for (const key of Object.keys(freshConfig) as (keyof CflsConfig)[]) {
             if (freshConfig[key] !== config[key]) {
@@ -336,6 +323,10 @@ export function LanguageService<T extends ClientAdapter>() {
         }
 
         config = freshConfig;
+        send({type: CflsRequestType.reset, id: messageId.bump(), config});
+    }
+
+    function forceReset() {
         send({type: CflsRequestType.reset, id: messageId.bump(), config});
     }
 
@@ -394,7 +385,7 @@ export function LanguageService<T extends ClientAdapter>() {
     }
 
     return {
-        reset,
+        resetAssumingChangedConfig,
         fork,
         on,
         emitDiagnostics,
@@ -413,13 +404,107 @@ export function LanguageService<T extends ClientAdapter>() {
                 return r.promise;
             }
         },
-        runEnqueuedTasks: () => maybeRunNextTask()
-
+        runEnqueuedTasks: () => maybeRunNextTask(),
+        forceReset
     }
 }
 
-class _LanguageService<T extends ClientAdapter> {
-    _LanguageService() { return LanguageService<T>(); }
+interface TaskDef {
+    msg: CflsRequest,
+    task: () => void,
+    timeout_ms?: number,
+    onSuccess?: (payload?: any) => void
+    onNoResponse?: () => void
 }
 
-export type LanguageService<T extends ClientAdapter> = ReturnType<_LanguageService<T>["_LanguageService"]>;
+class PendingResponses {
+    private pendingResponses = new Map<number, NodeJS.Timeout>();
+    private batchedChecks = new Map<number, BatchedCheck>();
+    constructor() {}
+
+    add(msgId: number, timeout_ms: number) {
+        const timeoutId = setTimeout(() => this.cleanup(msgId), timeout_ms);
+        this.pendingResponses.set(msgId, timeoutId);
+    }
+
+    getSize() {
+        return this.pendingResponses.size;
+    }
+
+    getPendingResponseForMsgId(msgId: number) {
+        if (!this.pendingResponses.get(msgId)) {
+            return undefined;
+        }
+        return {
+            cleanup: () => this.cleanup(msgId)
+        }
+    }
+
+    getBatchedCheckForBatchId(batchId: number) {
+        return this.batchedChecks.get(batchId);
+    }
+
+    private cleanup(msgId: number) : void {
+        const timeoutId = this.pendingResponses.get(msgId);
+        if (!timeoutId) {
+            return;
+        }
+
+        clearTimeout(timeoutId);
+        this.pendingResponses.delete(msgId);
+
+        // this assumes that batchChecks doesn't grow to insane proporations
+        // like 2 or 3 at a time, and generally just 1
+        for (const batchedCheck of this.batchedChecks.values()) {
+            batchedCheck.markResponseAsReceived(msgId);
+            batchedCheck.maybeCleanup();
+        }
+    }
+
+    freshBatchedCheck() : BatchedCheck {
+        const v = new BatchedCheck(this);
+        this.batchedChecks.set(v.id, v);
+        return v;
+    }
+
+    disposeBatchedCheck(v: BatchedCheck) : void {
+        this.batchedChecks.delete(v.id);
+    }
+}
+
+class BatchedCheck {
+    private owner: PendingResponses;
+    readonly id : number;
+    private fsPathsSeen = new Set<string>();
+    private pendingResponses = new Set<number>();
+    private static _nextid_ : number = 0;
+
+    constructor(owner: PendingResponses) {
+        this.owner = owner;
+        this.id = BatchedCheck._nextid_++;
+    }
+
+    hasSeenFsPath(fsPath: string) {
+        return this.fsPathsSeen.has(fsPath);
+    }
+
+    markFsPathAsSeen(fsPath: string) {
+        this.fsPathsSeen.add(fsPath);
+    }
+
+    markResponseAsReceived(msgID: number) {
+        this.pendingResponses.delete(msgID);
+    }
+
+    markResponseAsPending(msgID: number) {
+        this.pendingResponses.add(msgID);
+    }
+
+    maybeCleanup() {
+        if (this.pendingResponses.size === 0) {
+            this.owner.disposeBatchedCheck(this);
+        }
+    }
+}
+
+export type LanguageService<T extends ClientAdapter> = ReturnType<typeof LanguageService<T>>;

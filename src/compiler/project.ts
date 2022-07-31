@@ -4,7 +4,7 @@ import * as path from "path";
 import { Binder } from "./binder";
 import { Checker } from "./checker";
 import { EngineVersion } from "./engines";
-import { BlockType, mergeRanges, Node, NodeKind, SourceFile, SymTabEntry, DiagnosticKind, resetSourceFileInPlace, NodeFlags, restoreSourceFileInPlace } from "./node";
+import { BlockType, mergeRanges, Node, NodeKind, SourceFile, SymTabEntry, DiagnosticKind, resetSourceFileInPlace, NodeFlags, restoreSourceFileInPlace, DiagnosticPhase } from "./node";
 import { Parser } from "./parser";
 import { CfFileType, SourceRange } from "./scanner";
 import { Interface, Type, createLiteralType, Struct } from "./types";
@@ -370,8 +370,19 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         // we can leave all the content and binding and etc untouched,
         // we just want to recheck the existing tree assuming possibly changed dependencies
         const oldDirectDependencies = sourceFile.directDependencies;
+        // retain the parse/bind diagnostics, but drop all the checker diagnostics
+        sourceFile.diagnostics = sourceFile.diagnostics.filter(diagnostic => diagnostic.phase !== DiagnosticPhase.check);
+
+        // clear out all the checker related maps and sets and caches
+        // this indicates the checker should be per-source-file (all this state on the checker), and not global how it is now
+        // where it is "rebound" to some sourcefile on each check
+        sourceFile.cachedNodeTypes = new Map();
+        sourceFile.cachedFlowTypes = new Map();
+        sourceFile.nodeToSymbol = new Map();
+        sourceFile.symbolIdToSymbol = new Map();
+        sourceFile.endOfNodeFlowMap = new Map();
         sourceFile.directDependencies = new Set();
-        sourceFile.diagnostics = []; // ah ha, would need to clear "checker diagnostics" only ...
+        sourceFile.nodeTypeConstraints = new Map();
 
         // should we update librefs here?
 
@@ -658,6 +669,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     function errorAtRange(sourceFile: SourceFile, range: SourceRange, msg: string) {
         sourceFile.diagnostics.push({
             kind: DiagnosticKind.error,
+            phase: DiagnosticPhase.check, // further indication we need to be doing stuff in the checker, not here
             fromInclusive: range.fromInclusive,
             toExclusive: range.toExclusive,
             msg: msg
