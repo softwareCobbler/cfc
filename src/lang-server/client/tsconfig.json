@@ -6,10 +6,13 @@
 		"outDir": "../../../out/lang-server/client/",
 		"sourceMap": true,
 		"composite": true,
-		"baseUrl": "./"
+		"baseUrl": "./",
 	},
+	"references": [
+		{"path": "../../services"}
+	],
 	"files": [
 		"src/extension.ts",
-		"src/coldfusionMappingsScript.ts"
+		"src/coldfusionMappingsScript.ts",
 	],
 }

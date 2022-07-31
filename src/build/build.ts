@@ -16,9 +16,11 @@ export function getBuildOptions(v: IREPLACED_AT_BUILD) : esbuild.BuildOptions {
         format: "cjs",
         external: ["vscode"],
         define: {
-            "REPLACED_AT_BUILD.ClientAdapterModule_StaticRequirePath": `"${v.ClientAdapterModule_StaticRequirePath}"`,
-            "REPLACED_AT_BUILD.runtimeLanguageToolPath": `"${v.runtimeLanguageToolPath}"`,
-            "REPLACED_AT_BUILD.debug": v.debug ? "true" : "false",
+            "REPLACED_AT_BUILD.ClientAdapterModule_StaticRequirePath": JSON.stringify(v.ClientAdapterModule_StaticRequirePath),
+            "REPLACED_AT_BUILD.runtimeLanguageToolPath": JSON.stringify(v.runtimeLanguageToolPath),
+            "REPLACED_AT_BUILD.debugExecArgv_forkedLangToolProcess": JSON.stringify(v.debugExecArgv_forkedLangToolProcess),
+            "REPLACED_AT_BUILD.debugExecArgv_serverProcess": JSON.stringify(v.debugExecArgv_serverProcess),
+            "REPLACED_AT_BUILD.debug": JSON.stringify(v.debug)
         },
         sourcemap: true
     }

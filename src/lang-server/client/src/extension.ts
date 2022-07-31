@@ -16,6 +16,9 @@ import {
 } from 'vscode-languageclient/node';
 
 import { coldfusionMappingsScript } from "./coldfusionMappingsScript";
+import { IREPLACED_AT_BUILD } from "../../../services/buildShim"
+
+declare const REPLACED_AT_BUILD : IREPLACED_AT_BUILD;
 
 let client: LanguageClient;
 let libAbsPath : string | null = null;
@@ -37,10 +40,10 @@ export function activate(context: ExtensionContext) {
 	
 	// The server is implemented in node
 	let serverModule = context.asAbsolutePath("./out/server.js"); 
-	
+
 	// The debug options for the server
 	// --inspect=6009: runs the server in Node's Inspector mode so VS Code can attach to the server for debugging
-	let debugOptions = { execArgv: ['--nolazy', '--inspect=6011', /*'--inspect-brk'*/] };
+	let debugOptions = { execArgv: REPLACED_AT_BUILD.debugExecArgv_serverProcess };
 
 	// If the extension is launched in debug mode then the debug server options are used
 	// Otherwise the run options are used
