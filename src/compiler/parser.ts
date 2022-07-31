@@ -4218,7 +4218,7 @@ export function Parser(config: ProjectOptions) {
                         treatAsConstructor = true;
                         continue;
                     }
-                    else if (parseTypes && name === "!typeparam") {
+                    else if (parseTypes && name === "!typearg") {
                         parseTrivia();
                         const name = scanIdentifier();
                         parseTrivia();
