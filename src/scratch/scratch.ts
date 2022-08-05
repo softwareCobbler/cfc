@@ -118,13 +118,9 @@ function projectFiddle() {
 
     const project = Project("/", debugfs, {
         debug: true,
-        parseTypes: false,
+        types: false,
         engineVersion: EngineVersions["lucee.5"],
-        withWireboxResolution: true,
         cfConfigProjectRelativePath: "cfconfig.json",
-        checkReturnTypes: true,
-        checkFlowTypes: true,
-        genericFunctionInference: true,
         cancellationToken: {
             cancellationRequested: () => false,
             throwIfCancellationRequested: () => void 0
@@ -166,13 +162,9 @@ function bench() {
 
     const parser = Parser({
         debug: false,
-        parseTypes: true,
+        types: true,
         engineVersion: EngineVersions["lucee.5"],
-        withWireboxResolution: true,
         cfConfigProjectRelativePath: "cfconfig.json",
-        checkReturnTypes: true,
-        checkFlowTypes: true,
-        genericFunctionInference: true,
         cancellationToken: {
             cancellationRequested: () => false,
             throwIfCancellationRequested: () => void 0

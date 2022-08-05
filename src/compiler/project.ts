@@ -183,13 +183,9 @@ export function DebugFileSystem(files?: Readonly<FileSystemNode>, pathSepOfDebug
 
 export interface ProjectOptions {
     debug: boolean,
-    parseTypes: boolean,
+    types: boolean,
     engineVersion: EngineVersion,
-    withWireboxResolution: boolean,
     cfConfigProjectRelativePath: string | null,
-    genericFunctionInference: boolean,
-    checkReturnTypes: boolean,
-    checkFlowTypes: boolean,
     cancellationToken: CancellationTokenConsumer,
 }
 
@@ -286,22 +282,18 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
                 }
             }
 
-            if (options.withWireboxResolution) {
-                const wireboxMappings = new Map<string, string>();
-                if (isObject(maybeJson) && isObject(maybeJson.wirebox)) {
-                    for (const [name, mapping] of Object.entries(maybeJson.wirebox)) {
-                        if (typeof name === "string" && typeof mapping === "string") {
-                            wireboxMappings.set(name, mapping);
-                        }
+            const wireboxMappings = new Map<string, string>();
+
+            if (isObject(maybeJson) && isObject(maybeJson.wirebox)) {
+                for (const [name, mapping] of Object.entries(maybeJson.wirebox)) {
+                    if (typeof name === "string" && typeof mapping === "string") {
+                        wireboxMappings.set(name, mapping);
                     }
                 }
-                return {
-                    cf: cfMappings,
-                    wirebox: wireboxMappings
-                }
             }
-            else {
-                return { cf: cfMappings };
+            return {
+                cf: cfMappings,
+                wirebox: wireboxMappings
             }
         }
         catch {
@@ -396,7 +388,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     function checkWorker(sourceFile: SourceFile, oldDirectDependencies: Set<SourceFile>) {
         maybeFollowParentComponents(sourceFile); // should be in checker, resolves extends="..." attrs
 
-        if (options.withWireboxResolution && wireboxLib) {
+        if (wireboxLib) {
             sourceFile.libRefs.set("<<magic/wirebox>>", wireboxLib);
         }
         else {
@@ -600,6 +592,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
 
         /**
          * we create the following out of the json wirebox mapping file
+         * conceptually residing in its own "magic" library file
          * @!interface Wirebox { mappings: {foo: "bar", baz: "qux", ...} }
          * in code the type `Wirebox["mappings"]` refers to the mappings
          */

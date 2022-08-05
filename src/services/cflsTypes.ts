@@ -138,37 +138,25 @@ interface UntrackResponse extends CflsResponseBase {
 
 export interface CflsConfig {
 	engineLibAbsPath: string | null
-	x_parseTypes: boolean,
+	x_types: boolean,
 	engineVersion: EngineVersion,
 	cfConfigProjectRelativePath: string | null,
-	wireboxResolution: boolean,
-	x_checkReturnTypes: boolean,
-    x_checkFlowTypes: boolean,
-	x_genericFunctionInference: boolean,
 }
 
 export function CflsConfig() : CflsConfig {
     return {
         engineLibAbsPath: null,
-        x_parseTypes: false,
+        x_types: false,
         engineVersion: EngineVersions["lucee.5"],
         cfConfigProjectRelativePath: null,
-        wireboxResolution: false,
-        x_checkReturnTypes: false,
-        x_checkFlowTypes: false,
-        x_genericFunctionInference: false,
     }
 }
 
 export function CflsInitArgs(): InitArgs["config"] {
     return {
         engineLibAbsPath: null,
-        x_parseTypes: false,
+        x_types: false,
         engineVersion: "lucee.5",
         cfConfigProjectRelativePath: null,
-        wireboxResolution: false,
-        x_checkReturnTypes: false,
-        x_checkFlowTypes: false,
-        x_genericFunctionInference: false,
     }
 }

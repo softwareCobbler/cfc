@@ -14,19 +14,16 @@ import * as path from "path";
 import { IREPLACED_AT_BUILD } from "../src/services/buildShim";
 import * as build from "../src/build/build"
 import * as fs from "fs"
+import { SerializableCflsConfig } from "../src/services/cflsTypes";
 
 setNodeModuleDebug();
 
 const options = () : ProjectOptions => {
     return {
         debug: true,
-        parseTypes: false,
-        withWireboxResolution: false,
+        types: false,
         cfConfigProjectRelativePath: null,
         engineVersion: EngineVersions["acf.2018"],
-        genericFunctionInference: false,
-        checkReturnTypes: false,
-        checkFlowTypes: false,
         cancellationToken: {
             cancellationRequested: () => false,
             throwIfCancellationRequested: () => void 0,
@@ -525,7 +522,7 @@ describe("general smoke test for particular constructs", function() {
         const fsRoot : FileSystemNode = {"/": {}};
         pushFsNode(fsRoot, "/lib.d.cfm", `@!interface Array<T> { PLACEHOLDER: any }`);
         pushFsNode(fsRoot, "/a.cfc", completionsAt.sourceText);
-        const luceeProject = Project("/", DebugFileSystem(fsRoot), {...commonProjectOptions, checkReturnTypes: true, engineVersion: EngineVersions["lucee.5"]});
+        const luceeProject = Project("/", DebugFileSystem(fsRoot), {...commonProjectOptions, types: true, engineVersion: EngineVersions["lucee.5"]});
 
         luceeProject.addEngineLib("/lib.d.cfm");
         luceeProject.addFile("/a.cfc");
@@ -539,7 +536,7 @@ describe("general smoke test for particular constructs", function() {
         const fsRoot : FileSystemNode = {"/": {}};
         pushFsNode(fsRoot, "/lib.d.cfm", `@!interface Array<T> { PLACEHOLDER: any }`);
         pushFsNode(fsRoot, "/a.cfc", completionsAt.sourceText);
-        const luceeProject = Project("/", DebugFileSystem(fsRoot), {...commonProjectOptions, parseTypes: true, engineVersion: EngineVersions["lucee.5"]});
+        const luceeProject = Project("/", DebugFileSystem(fsRoot), {...commonProjectOptions, types: true, engineVersion: EngineVersions["lucee.5"]});
 
         luceeProject.addEngineLib("/lib.d.cfm");
         luceeProject.addFile("/a.cfc");
@@ -584,7 +581,7 @@ describe("general smoke test for particular constructs", function() {
                 }
             }`);
         const dfs = DebugFileSystem(fsRoot);
-        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0, EngineVersions["lucee.5"], {checkFlowTypes: true});
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0, EngineVersions["lucee.5"], {types: true});
     })
     it("does not reject a valid function passed as a function argument to a function that accepts functions as parameters", () => {
         const fsRoot : FileSystemNode = {"/": {}};
@@ -596,7 +593,7 @@ describe("general smoke test for particular constructs", function() {
                 }
             }`);
         const dfs = DebugFileSystem(fsRoot);
-        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0, EngineVersions["lucee.5"], {checkFlowTypes: true});
+        assertDiagnosticsCountWithProject(dfs, "/a.cfc", 0, EngineVersions["lucee.5"], {types: true});
     })
     it("parses and applies a cfc-transform in a cfc file and performs lookup into imported namespace for the transformer", () => {
         const files = TestLoader.loadMultiFileTest("./test/sourcefiles/cfc-transform.cfm");
@@ -609,7 +606,7 @@ describe("general smoke test for particular constructs", function() {
         pushFsNode(fsRoot, "/B.cfc", completionsAtMeta.sourceText);
 
         const dfs = DebugFileSystem(fsRoot);
-        const project = Project("/", dfs, {...options(), parseTypes: true})
+        const project = Project("/", dfs, {...options(), types: true})
 
         project.addFile("SomeLib.d.cfm");
         project.addFile("A.cfc");
@@ -629,7 +626,7 @@ describe("general smoke test for particular constructs", function() {
         pushFsNode(fsRoot, "/A.cfc", completionsAtMeta.sourceText);
 
         const dfs = DebugFileSystem(fsRoot);
-        const project = Project("/", dfs, {...options(), parseTypes: true})
+        const project = Project("/", dfs, {...options(), types: true})
 
         project.addFile("A.cfc");
         const completions = getCompletions(project, "A.cfc", completionsAtMeta.index, null);
@@ -646,7 +643,7 @@ describe("general smoke test for particular constructs", function() {
         pushFsNode(fsRoot, "/A.cfc", completionsAtMeta.sourceText);
 
         const dfs = DebugFileSystem(fsRoot);
-        const project = Project("/", dfs, {...options(), parseTypes: true})
+        const project = Project("/", dfs, {...options(), types: true})
 
         project.addFile("A.cfc");
         const completions = getCompletions(project, "A.cfc", completionsAtMeta.index, null);
@@ -663,7 +660,7 @@ describe("general smoke test for particular constructs", function() {
         pushFsNode(fsRoot, "/A.cfc", completionsAtMeta.sourceText);
 
         const dfs = DebugFileSystem(fsRoot);
-        const project = Project("/", dfs, {...options(), parseTypes: true})
+        const project = Project("/", dfs, {...options(), types: true})
 
         project.addFile("A.cfc");
         const completions = getCompletions(project, "A.cfc", completionsAtMeta.index, null);
@@ -691,7 +688,7 @@ describe("general smoke test for particular constructs", function() {
         pushFsNode(fsRoot, "/A.cfc", completionsAtMeta.sourceText);
 
         const dfs = DebugFileSystem(fsRoot);
-        const project = Project("/", dfs, {...options(), parseTypes: true})
+        const project = Project("/", dfs, {...options(), types: true})
 
         project.addFile("A.cfc");
         const completions = getCompletions(project, "A.cfc", completionsAtMeta.index, null);
@@ -721,7 +718,7 @@ describe("general smoke test for particular constructs", function() {
         pushFsNode(fsRoot, "/A.cfc", completionsAtMeta.sourceText);
 
         const dfs = DebugFileSystem(fsRoot);
-        const project = Project("/", dfs, {...options(), parseTypes: true})
+        const project = Project("/", dfs, {...options(), types: true})
 
         project.addFile("A.cfc");
         const completions = getCompletions(project, "A.cfc", completionsAtMeta.index, null);
@@ -748,7 +745,7 @@ describe("general smoke test for particular constructs", function() {
         pushFsNode(fsRoot, "/A.cfc", completionsAtMeta.sourceText);
 
         const dfs = DebugFileSystem(fsRoot);
-        const project = Project("/", dfs, {...options(), parseTypes: true})
+        const project = Project("/", dfs, {...options(), types: true})
 
         project.addFile("A.cfc");
         const completions = getCompletions(project, "A.cfc", completionsAtMeta.index, " ");
@@ -776,7 +773,7 @@ describe("general smoke test for particular constructs", function() {
         pushFsNode(fsRoot, "/A.cfc", completionsAtMeta.sourceText);
 
         const dfs = DebugFileSystem(fsRoot);
-        const project = Project("/", dfs, {...options(), parseTypes: true})
+        const project = Project("/", dfs, {...options(), types: true})
 
         project.addFile("A.cfc");
         const completions = getCompletions(project, "A.cfc", completionsAtMeta.index, " ");
@@ -804,7 +801,7 @@ describe("general smoke test for particular constructs", function() {
         pushFsNode(fsRoot, "/A.cfc", src);
 
         const dfs = DebugFileSystem(fsRoot);
-        const project = Project("/", dfs, {...options(), parseTypes: true})
+        const project = Project("/", dfs, {...options(), types: true})
 
         project.addFile("A.cfc");
         const diagnostics = project.getDiagnostics("A.cfc");
@@ -817,6 +814,8 @@ describe("general smoke test for particular constructs", function() {
             debug: true,
             runtimeLanguageToolPath: "./languageTool.js",
             ClientAdapterModule_StaticRequirePath: path.resolve("out/services/clientAdapter.js"),
+            debugExecArgv_forkedLangToolProcess: [],
+            debugExecArgv_serverProcess: []
         };
 
         build.doTsc("tsc", /*disregardLoneDebuggerOutputLine*/ true);
@@ -838,14 +837,10 @@ describe("general smoke test for particular constructs", function() {
             console.log(`got ${diagnostics.length} diagnostics for` + fsPath)
         })
 
-        const config = {
+        const config : SerializableCflsConfig = {
             engineLibAbsPath: "",
-            x_parseTypes: true,
-            x_genericFunctionInference: true,
-            x_checkReturnTypes: true,
-            x_checkFlowTypes: true,
+            x_types: true,
             engineVersion: "lucee.5" as const,
-            wireboxResolution: true,
             cfConfigProjectRelativePath: "cfconfig.json"
         }
 

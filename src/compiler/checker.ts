@@ -71,8 +71,8 @@ export function Checker(options: ProjectOptions) {
 
     // dev feature flags, generally enable-able via editor config options
     const GENERIC_FUNCTION_INFERENCE = true; // reasonably crash-free, needed for a nice getInstance("") experience
-    const CHECK_RETURN_TYPES = options.checkReturnTypes;
-    const CHECK_FLOW_TYPES = options.checkFlowTypes;
+    const CHECK_RETURN_TYPES = true;
+    const CHECK_FLOW_TYPES = true;
     const debug = Debug();
 
     let sourceFile: SourceFile;
@@ -236,7 +236,13 @@ export function Checker(options: ProjectOptions) {
     }
     */
 
-    function issueDiagnosticAtRange(range: SourceRange, msg: string, kind = DiagnosticKind.error) : void {
+    // some errors we should probably move into binder, though they are convenient to issue here
+    // we'd like to still issue them even if the the types option is off (e.g. some args to a call are named and others are not)
+    function issueDiagnosticAtRange(range: SourceRange, msg: string, kind = DiagnosticKind.error, force?: {notReallyACheckerError: true}) : void {
+        if (!options.types && !force?.notReallyACheckerError) {
+            return;
+        }
+
         const freshDiagnostic : Diagnostic = {
             kind,
             phase: DiagnosticPhase.check,
@@ -256,8 +262,8 @@ export function Checker(options: ProjectOptions) {
         diagnostics.push(freshDiagnostic);
     }
 
-    function issueDiagnosticAtNode(node: Node, msg: string, kind = DiagnosticKind.error) {
-        issueDiagnosticAtRange(node.range, msg, kind);
+    function issueDiagnosticAtNode(node: Node, msg: string, kind = DiagnosticKind.error, force?: {notReallyACheckerError: true}) {
+        issueDiagnosticAtRange(node.range, msg, kind, force);
     }
 
     function checkList(nodes: Node[]) {
@@ -1505,7 +1511,7 @@ export function Checker(options: ProjectOptions) {
 
                 const namedArgCount = countNamedArgs(node.args);
                 if (namedArgCount > 0 && namedArgCount !== node.args.length) {
-                    issueDiagnosticAtRange(node.left.range, "All arguments must be named, if any are named.");
+                    issueDiagnosticAtRange(node.left.range, "All arguments must be named, if any are named.", DiagnosticKind.error, {notReallyACheckerError: true});
                 }
 
                 // check the expressions themselves, but for now we won't check that they are correct for the signature
@@ -1524,7 +1530,7 @@ export function Checker(options: ProjectOptions) {
                 return CallType.positional;
             }
             else if (namedArgCount !== node.args.length) {
-                issueDiagnosticAtRange(node.left.range, "All arguments must be named, if any are named.");
+                issueDiagnosticAtRange(node.left.range, "All arguments must be named, if any are named.", DiagnosticKind.error, {notReallyACheckerError: true});
                 return CallType.incoherent;
             }
             else {
@@ -2189,7 +2195,7 @@ export function Checker(options: ProjectOptions) {
         const func = getContainingFunction(node);
         if (!func) {
             const errNode = node.fromTag ? node.tagOrigin.startTag! : node.returnToken!;
-            issueDiagnosticAtNode(errNode, "A return statement must be contained inside a function body.");
+            issueDiagnosticAtNode(errNode, "A return statement must be contained inside a function body.", DiagnosticKind.error, {notReallyACheckerError: true});
             return;
         }
 
@@ -2540,7 +2546,7 @@ export function Checker(options: ProjectOptions) {
                 //     && node.parent.key === node
                 //     && !node.parent.shorthand;
                 if (warnOnUndefined && !isBuiltinScopeName /*&& !isKeyofKVPairStructLiteral*/) {
-                    issueDiagnosticAtNode(node, `Cannot find name '${node.uiName ?? node.canonicalName ?? "<<error-name>>"}'.`, DiagnosticKind.warning);
+                    issueDiagnosticAtNode(node, `Cannot find name '${node.uiName ?? node.canonicalName ?? "<<error-name>>"}'.`, DiagnosticKind.warning, {notReallyACheckerError: true});
                 }
                 return;
             }

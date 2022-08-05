@@ -65,29 +65,11 @@
 			"type": "object",
 			"title": "cflsp",
 			"properties": {
-				"cflsp.x_parseTypes": {
+				"cflsp.x_types": {
 					"scope": "resource",
 					"type": "boolean",
 					"default": false,
-					"description": "experimental: parse typedefs and types in comments; use `@!type <type>`, `@!typedef <typename> = <type>` and `@!interface <name> { <interface-members> }`"
-				},
-				"cflsp.x_checkReturnTypes": {
-					"scope": "resource",
-					"type": "boolean",
-					"default": false,
-					"description": "experimental: check return types of functions against function signatures"
-				},
-				"cflsp.x_checkFlowTypes": {
-					"scope": "resource",
-					"type": "boolean",
-					"default": false,
-					"description": "experimental: use flow analysis to aid type checking"
-				},
-				"cflsp.x_genericFunctionInference": {
-					"scope": "resource",
-					"type": "boolean",
-					"default": false,
-					"description": "experimental: run inference on generic function signatures (intended use is library functions like Array.map and friends)"
+					"description": "experimental: parse type annotations, emit type error diagnostics"
 				},
 				"cflsp.engineVersion": {
 					"scope": "resource",
@@ -105,12 +87,6 @@
 						"Lucee 5"
 					],
 					"items": ["Adobe/2018", "Adobe/2021", "Lucee/5"]
-				},
-				"cflsp.wireboxResolution": {
-					"scope": "resource",
-					"type": "boolean",
-					"description": "Enable experimental resolution of CFCs via Wirebox's `getInstance`.",
-					"default": false
 				},
 				"cflsp.cfConfigProjectRelativePath": {
 					"scope": "resource",

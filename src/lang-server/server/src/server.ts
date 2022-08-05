@@ -143,12 +143,8 @@ function mungeConfig(config: Record<string, any> | null) : SerializableCflsConfi
 	return {
 		engineLibAbsPath: initArgs.unwrap().engineLibAbsPath ?? null,
 		// the rest of these are supplied via config
-		x_parseTypes: !!config?.x_parseTypes,
-		x_genericFunctionInference: !!config?.x_genericFunctionInference,
-		x_checkReturnTypes: !!config?.x_checkReturnTypes,
-		x_checkFlowTypes: !!config?.x_checkFlowTypes,
+		x_types: !!config?.x_types,
 		engineVersion: config?.engineVersion ?? "lucee.5",
-		wireboxResolution: config?.wireboxResolution ?? false,
 		cfConfigProjectRelativePath: config?.cfConfigProjectRelativePath ?? null,
 	}
 }

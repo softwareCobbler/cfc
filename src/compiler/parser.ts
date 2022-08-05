@@ -116,7 +116,7 @@ interface ScannerState {
 }
 
 export function Parser(config: ProjectOptions) {
-    let parseTypes = config.parseTypes;
+    let parseTypes = config.types;
     const debug = config.debug;
     const engineVersion = config.engineVersion;
 
@@ -986,7 +986,7 @@ export function Parser(config: ProjectOptions) {
         (typedefContainer as any) = undefined;
         lastDocBlock = null;
         parseErrorMsg = null;
-        parseTypes = config.parseTypes;
+        parseTypes = config.types;
     }
 
     // fixme: we can supply a filetype, but have to set the sourceFile with an earlier call?

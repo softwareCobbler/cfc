@@ -252,13 +252,9 @@ const expectedDiagnosticCountByFile : Record<string, number> = {
 describe("MX-Unit smoke test", () => {
     const options : ProjectOptions = {
         debug: true,
-        parseTypes: false,
-        withWireboxResolution: false,
+        types: false,
         cfConfigProjectRelativePath: "",
         engineVersion: EngineVersions["acf.2018"],
-        genericFunctionInference: false,
-        checkReturnTypes: false,
-        checkFlowTypes: false,
         cancellationToken: {
             cancellationRequested: () => false,
             throwIfCancellationRequested: () => void 0,

@@ -230,9 +230,9 @@ function LanguageTool() {
             // ^^^^^^^^
             if (targetNode.parent?.kind === NodeKind.functionDefinition && !targetNode.parent.fromTag && targetNode.parent.returnType === targetNode) {
                 const symbol = checker.getSymbol(targetNode.parent, sourceFile)
-                if (symbol && symbol.symTabEntry.lexicalType?.kind === TypeKind.functionSignature && symbol.symTabEntry.lexicalType.returns.kind === TypeKind.cfc) {
+                if (symbol && symbol.symTabEntry.effectivelyDeclaredType?.kind === TypeKind.functionSignature && symbol.symTabEntry.effectivelyDeclaredType.returns.kind === TypeKind.cfc) {
                     return [{
-                        sourceFile: symbol.symTabEntry.lexicalType.returns.cfc,
+                        sourceFile: symbol.symTabEntry.effectivelyDeclaredType.returns.cfc,
                         range: exactlyFirstCharRange,
                     }];
                 }
@@ -363,14 +363,10 @@ function LanguageTool() {
                 rootAbsPath,
                 fileSystem,
                 {
-                    parseTypes: config.x_parseTypes,
+                    types: config.x_types,
                     debug: REPLACED_AT_BUILD.debug,
                     engineVersion: config.engineVersion,
-                    withWireboxResolution: config.wireboxResolution,
                     cfConfigProjectRelativePath: config.cfConfigProjectRelativePath,
-                    checkReturnTypes: config.x_checkReturnTypes,
-                    checkFlowTypes: config.x_checkFlowTypes,
-                    genericFunctionInference: config.x_genericFunctionInference,
                     cancellationToken
                 },
             );
