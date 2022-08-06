@@ -121,7 +121,10 @@ export function LanguageService<T extends ClientAdapter>() {
 
                         // fixme: affectedDependencies includes itself? which is not right
                         for (const fsPath of msg.affectedDependents) {
-                            if (fsPath === msg.fsPath) { // this shouldn't happen, fix where it does happen and remove this
+                            if (fsPath === msg.fsPath) {
+                                // this shouldn't happen, fix where it does happen and remove this
+                                // aug/5/2022 -- should be fixed; todo: add Debug.assert(...) logging or something
+                                // debugger;
                                 continue;
                             }
                             if (openFiles.has(fsPath) && !batchedCheck?.hasSeenFsPath(fsPath)) {

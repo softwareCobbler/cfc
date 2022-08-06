@@ -380,15 +380,19 @@ function LanguageTool() {
     }
 
     function track(fsPath: string) : void {
-        const maybeAlreadyTracked = trackedFiles.get(fsPath);
-        if (maybeAlreadyTracked) {
+        const project = getOwningProjectFromAbsPath(fsPath);
+        if (!project) {
             return;
         }
-        trackedFiles.set(fsPath, "PENDING-FIRST-LOAD");
+        project.trackFile(fsPath);
     }
 
     function untrack(fsPath: string) : void {
-        trackedFiles.delete(fsPath);
+        const project = getOwningProjectFromAbsPath(fsPath);
+        if (!project) {
+            return;
+        }
+        project.untrackFile(fsPath);
     }
 
     return {

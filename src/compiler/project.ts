@@ -225,8 +225,22 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
      * The SourceFiles themselves hold strong refs to their dependencies (in their `extends`/`implements` clauses and in general in their `directDependencies` property,
      * which holds references to, for example, the sourcefiles for "Foo" and "Bar" after we see `Foo function doThing(Bar arg1) {}`)
      */
-    type FileCache = Map<AbsPath, WeakRef<SourceFile>>;
-    const files : FileCache = new Map();
+    const weakFileRefs = new Map<AbsPath, WeakRef<SourceFile>>();
+    const enum StrongSourceFileRefStatus {AWAITING_FIRST_OPEN = 1}
+    // strongFileRefs represent source files we want to "definitely hold open"
+    // e.g. files that are open in an editor tab
+    const strongFileRefs = new Map<AbsPath, StrongSourceFileRefStatus | SourceFile>();
+
+    function trackFile(fsPath: string) {
+        const maybeAlreadyTracked = strongFileRefs.get(fsPath);
+        if (maybeAlreadyTracked === undefined) {
+            strongFileRefs.set(fsPath, StrongSourceFileRefStatus.AWAITING_FIRST_OPEN);
+        }
+    }
+
+    function untrackFile(fsPath: string) {
+        strongFileRefs.delete(fsPath);
+    }
 
     /**
      * dependencies for some sourcefile
@@ -234,14 +248,15 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
      * directDependencies.get(A).has(B) -> true
      * directDependencies.get(A).has(C) -> false (not a direct dependency)
      */
-    const directDependencies = new WeakMap<SourceFile, Set<SourceFile>>(); // need to iterate over values, maybe WeakRef<SourceFile>[] instead?
+    const directDependencies = new Map<string, Set<string>>(); // need to iterate over values, maybe WeakRef<SourceFile>[] instead?
     /**
-     * direct dependents of some sourcefile ()
+     * direct dependents of some sourcefile
      * so `A imports B`, `B imports C`
-     * dependents.get(B).has(A) -> true
+     * dependents.get(B).has(A) -> true (A depends on B)
      * dependents.get(B).has(C) -> false (C does not depend on B)
+     * dependents.get(C).has(B) -> true (B depends on C)
      */
-    const directDependents = new WeakMap<SourceFile, Set<SourceFile>>();
+    const directDependents = new Map<string, Set<string>>();
 
     let engineLib : SourceFile | undefined;
 
@@ -332,12 +347,23 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
 
             // do before checking so resolving a self-referential cfc in the checker works
             // e.g. in foo.cfc `public foo function bar() { return this; }`
-            files.set(canonicalizePath(sourceFile.absPath), new WeakRef(sourceFile));
+            addFileToCache(sourceFile.absPath, sourceFile);
 
             const checkStart = new Date().getTime();
             checkWorker(sourceFile, oldDirectDependencies);
             const checkElapsed = new Date().getTime() - checkStart;
 
+            // invalidate dependents' type info; we changed so they are likely invalid,
+            const transitiveDependents = getTransitiveDependents(sourceFile);
+            for (const dep of transitiveDependents) {
+                if (dep === sourceFile) {
+                    debugger;
+                    continue;
+                }
+                dep.flags &= ~NodeFlags.checked; // we could do recursively but sort of expensive? mostly this is intended as a marker for other code - "hey! this source file is type-wise invalid"
+                // clear out type checker info so we refs to types only present in the "old" sourcefile can be GC'd
+                clearTypeCheckerInfo(dep);
+            }
 
             return { cancellationRequested: false, devTimingInfo: {parse: parseElapsed, bind: bindElapsed, check: checkElapsed} };
         }
@@ -357,17 +383,12 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         }
     }
 
-    function recheck(sourceFile: SourceFile) : void {
-        // we don't want to "resetSourceFileInPlace"
-        // we can leave all the content and binding and etc untouched,
-        // we just want to recheck the existing tree assuming possibly changed dependencies
-        const oldDirectDependencies = sourceFile.directDependencies;
-        // retain the parse/bind diagnostics, but drop all the checker diagnostics
-        sourceFile.diagnostics = sourceFile.diagnostics.filter(diagnostic => diagnostic.phase !== DiagnosticPhase.check);
-
-        // clear out all the checker related maps and sets and caches
-        // this indicates the checker should be per-source-file (all this state on the checker), and not global how it is now
-        // where it is "rebound" to some sourcefile on each check
+    /**
+    * clear out all the checker related maps and sets and caches
+    * todo: this indicates the checker should be per-source-file (all this state on the checker), and not global how it is now,
+    * where it is "rebound" to some sourcefile on each check
+    */
+    function clearTypeCheckerInfo(sourceFile: SourceFile) : void {
         sourceFile.cachedNodeTypes = new Map();
         sourceFile.cachedFlowTypes = new Map();
         sourceFile.nodeToSymbol = new Map();
@@ -375,13 +396,27 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         sourceFile.endOfNodeFlowMap = new Map();
         sourceFile.directDependencies = new Set();
         sourceFile.nodeTypeConstraints = new Map();
+    }
+
+    function recheck(sourceFile: SourceFile) : void {
+        // we don't want to "resetSourceFileInPlace"
+        // we can leave all the content and binding and etc untouched,
+        // we just want to recheck the existing tree assuming possibly changed dependencies
+        const oldDirectDependencies = sourceFile.directDependencies;
+
+        // retain the parse/bind diagnostics, but drop all the checker diagnostics
+        sourceFile.diagnostics = sourceFile.diagnostics.filter(diagnostic => diagnostic.phase !== DiagnosticPhase.check);
+
+        clearTypeCheckerInfo(sourceFile);
 
         // should we update librefs here?
 
         // clear all checker flags from nodes
+        // this should maybe be in clearTypeCheckerInfo ?
         for (const node of sourceFile.nodeMap.values()) {
             node.flags &= ~(NodeFlags.checked | NodeFlags.checkerError | NodeFlags.unreachable);
         }
+
         checkWorker(sourceFile, oldDirectDependencies);
     }
 
@@ -400,25 +435,29 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         const {uniqueInL: depAdded, uniqueInR: depRemoved} = setDiff(sourceFile.directDependencies, oldDirectDependencies);
 
         for (const removed of depRemoved) {
-            directDependencies.get(sourceFile)?.delete(removed);
-            directDependents.get(removed)?.delete(sourceFile);
+            directDependencies.get(sourceFile.absPath)?.delete(removed.absPath);
+            directDependents.get(removed.absPath)?.delete(sourceFile.absPath);
         }
         for (const added of depAdded) {
-            addDependencyToWeakMap(directDependencies, sourceFile, added);
-            addDependencyToWeakMap(directDependents, added, sourceFile);
+            addDependencyInfo(directDependencies, sourceFile, added);
+            addDependencyInfo(directDependents, added, sourceFile);
         }
     }
 
-    function addDependencyToWeakMap(v: WeakMap<SourceFile, Set<SourceFile>>, key: SourceFile, value: SourceFile) : void {
-        const freshValue = v.get(key) ?? new Set<SourceFile>();
-        freshValue.add(value);
-        v.set(key, freshValue);
+    function addDependencyInfo(map: Map<string, Set<string>>, key: SourceFile, value: SourceFile) : void {
+        if (key === value) {
+            // a SourceFile need not explicitly "depend" on itself; trivially all sourcefiles depend on themselves, right?
+            return;
+        }
+        const target = map.get(key.absPath) ?? new Set<string>();
+        target.add(value.absPath);
+        map.set(key.absPath, target);
     }
 
     function getTransitiveDependencies(sourceFile: SourceFile) : SourceFile[] {
-        const seen = new Set<SourceFile>();
-        const dependencies : SourceFile[] = (() => {
-            const v = directDependencies.get(sourceFile);
+        const seen = new Set<string>();
+        const dependencies : string[] = (() => {
+            const v = directDependencies.get(sourceFile.absPath);
             if (v) {
                 return [...v];
             }
@@ -440,13 +479,21 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             }
         }
 
-        return [...seen];
+        const result : SourceFile[] = [];
+        for (const absPath of seen) {
+            const sourceFile = getCachedFile(absPath);
+            if (sourceFile) { // we assume strongly that it if it's a dependent, then it is cached
+                result.push(sourceFile);
+            }
+        }
+
+        return result;
     }
 
     function getTransitiveDependents(sourceFile: SourceFile) : SourceFile[] {
-        const seen = new Set<SourceFile>();
-        const dependents : SourceFile[] = (() => {
-            const v = directDependents.get(sourceFile);
+        const seen = new Set<string>();
+        const dependents : string[] = (() => {
+            const v = directDependents.get(sourceFile.absPath);
             if (v) {
                 return [...v];
             }
@@ -458,7 +505,9 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         while (dependents.length > 0) {
             const dep = dependents[0];
             dependents.shift();
-            if (seen.has(dep)) {
+            // if we've seen it, don't loop back into it
+            // also, never include some sourcefile S as dependent on itself
+            if (seen.has(dep) || dep === sourceFile.absPath) {
                 continue;
             }
             seen.add(dep);
@@ -468,7 +517,14 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             }
         }
 
-        return [...seen];
+        const result : SourceFile[] = [];
+        for (const absPath of seen) {
+            const sourceFile = getCachedFile(absPath);
+            if (sourceFile) { // we assume strongly that it if it's a dependent, then it is cached
+                result.push(sourceFile);
+            }
+        }
+        return result;
     }
 
     function addFile(absPath: string) : SourceFile | undefined {
@@ -651,7 +707,30 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     }
 
     function getCachedFile(absPath: string) : SourceFile | undefined {
-        return files.get(canonicalizePath(absPath))?.deref();
+        return weakFileRefs.get(canonicalizePath(absPath))?.deref();
+    }
+
+    function addFileToCache(absPath: string, sourceFile: SourceFile) : void {
+        const alreadyCached = !!getCachedFile(absPath);
+        if (!alreadyCached) {
+            weakFileRefs.set(canonicalizePath(sourceFile.absPath), new WeakRef(sourceFile));
+        }
+
+        const strongRefStatus = strongFileRefs.get(absPath);
+
+        if (strongRefStatus === undefined) {
+            // don't need a strong ref
+            return;
+        }
+        else if (strongRefStatus === StrongSourceFileRefStatus.AWAITING_FIRST_OPEN) {
+            strongFileRefs.set(sourceFile.absPath, sourceFile);
+        }
+        else if (strongRefStatus !== sourceFile) {
+            console.log(`existing project strongRef for ${sourceFile.absPath} doesn't match current sourceFile representation`)
+        }
+        else {
+            // no-op
+        }
     }
 
     // fixme: dedup/unify this with the ones in parser/binder/checker
@@ -731,7 +810,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     }
 
     function getDiagnostics(absPath: string) : Diagnostic[] {
-        return files.get(canonicalizePath(absPath))?.deref()?.diagnostics || [];
+        return weakFileRefs.get(canonicalizePath(absPath))?.deref()?.diagnostics || [];
     }
 
     /**
@@ -973,9 +1052,9 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         getNodeToLeftOfCursor,
         getInterestingNodeToLeftOfCursor,
         getParsedSourceFile: (absPath: string) => getCachedFile(absPath),
-        getFileListing: () => [...files.keys()],
+        getFileListing: () => [...weakFileRefs.keys()],
         __unsafe_dev_getChecker: () => checker,
-        __unsafe_dev_getFile: (fname: string) : SourceFile | undefined => files.get(canonicalizePath(fname))?.deref(),
+        __unsafe_dev_getFile: (fname: string) : SourceFile | undefined => weakFileRefs.get(canonicalizePath(fname))?.deref(),
         canonicalizePath,
         getTransitiveDependencies,
         getTransitiveDependents,
@@ -985,6 +1064,8 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
                 recheck(file);
             }
         },
+        trackFile,
+        untrackFile
     }
 }
 
