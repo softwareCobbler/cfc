@@ -578,13 +578,15 @@ describe("general smoke test for particular constructs", () => {
             <cfscript>
                 " foo ".trim();
                 " foo "["trim"]();
+                
+                // https://github.com/softwareCobbler/cfc/issues/10
+                someCall("#"2022-11-08".lsDateFormat("full")#");
             </cfscript>`
         );
 
         {
             const dfs = DebugFileSystem(fsRoot);
             const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["lucee.5"]});
-            project.addEngineLib("lib.d.cfm");
             project.addFile("a.cfm");
         
             const diagnostics = project.getDiagnostics("a.cfm");
@@ -594,7 +596,6 @@ describe("general smoke test for particular constructs", () => {
         {
             const dfs = DebugFileSystem(fsRoot);
             const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["acf.2018"]});
-            project.addEngineLib("lib.d.cfm");
             project.addFile("a.cfm");
         
             const diagnostics = project.getDiagnostics("a.cfm");
