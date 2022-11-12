@@ -3846,7 +3846,7 @@ export function Parser(config: ProjectOptions) {
                     //
                     // in adobe, param is just a typical sugared tag name: `param <attr>+`
                     //
-                    if (peekedCanonicalText === "param" && engineVersion.engine === Engine.Lucee) {
+                    if (peekedCanonicalText === "param") {
                         // param is also a valid variable name;
                         // we don't want to create a ParamStatement for something like `param = 42`, which is an assignment to a symbol named 'param', and has nothing to do with a ParamStatement
                         const paramToken = SpeculationHelper.speculate(() => {
@@ -3870,6 +3870,11 @@ export function Parser(config: ProjectOptions) {
                                 return ParamStatement(paramToken, attrs);
                             }
 
+                            //
+                            // This production is like `param string foo = 42;`
+                            // where the type and name are "implicit" in that they aren't explicitly given the attrnames, as in
+                            // a "taglike" param statement -> `param name="foo" type="string" default="42"`
+                            //
                             const paramWithImplicitTypeAndName = SpeculationHelper.speculate(() => {
                                 const typeName = parseDottedPath();
                                 if (lookahead() === TokenType.EQUAL) return null; // the implicit type will not be followed by an equals

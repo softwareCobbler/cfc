@@ -1421,7 +1421,7 @@ export function Binder(options: ProjectOptions) {
 
         if (node.subType === ParamStatementSubType.withImplicitTypeAndName || node.subType === ParamStatementSubType.withImplicitName) {
             const nameIndex = node.attrs.findIndex(tagAttr => tagAttr.canonicalName === "name");
-            const defaultIndex = node.implicitNameExpr ? node.attrs.findIndex(tagAttr => tagAttr.canonicalName === "default") : -1;
+            const defaultIndex = node.implicitDefaultExpr ? node.attrs.findIndex(tagAttr => tagAttr.canonicalName === "default") : -1;
 
             if (nameIndex !== -1) {
                 issueDiagnosticAtRange(node.attrs[nameIndex].range, `Explicit name attribute shadows implicit name attribute '${stringifyDottedPath(node.implicitName).ui}'.`);

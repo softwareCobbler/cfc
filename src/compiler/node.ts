@@ -2618,7 +2618,12 @@ interface ParamStatementBase extends NodeBase {
     implicitType?: DottedPath,
     implicitName?: DottedPath,
     implicitNameEquals?: Terminal | null,
-    implicitNameExpr?: Node | null
+    /**
+     * the "default" expression, but without an explicit default attribute binding, like:
+     * `param foo = 42`
+     *              ^^--- implicit default expr
+     */
+    implicitDefaultExpr?: Node | null
     attrs: TagAttribute[]
 }
 
@@ -2631,14 +2636,14 @@ export interface ParamStatementWithImplicitTypeAndName extends ParamStatementBas
     implicitType: DottedPath,
     implicitName: DottedPath,
     implicitNameEquals: Terminal | null,
-    implicitNameExpr: Node | null
+    implicitDefaultExpr: Node | null
 }
 
 export interface ParamStatementWithImplicitName extends ParamStatementBase {
     subType: ParamStatementSubType.withImplicitName,
     implicitName: DottedPath,
     implicitNameEquals: Terminal | null,
-    implicitNameExpr: Node | null
+    implicitDefaultExpr: Node | null
 }
 
 export type ParamStatement = ParamStatementDefault | ParamStatementWithImplicitName | ParamStatementWithImplicitTypeAndName;
@@ -2655,7 +2660,7 @@ export function ParamStatementWithImplicitTypeAndName(paramToken: Terminal,
     v.implicitType = type;
     v.implicitName = name;
     v.implicitNameEquals = equals;
-    v.implicitNameExpr = expr;
+    v.implicitDefaultExpr = expr;
     v.attrs = attrs;
     return v;
 }
@@ -2670,7 +2675,7 @@ export function ParamStatementWithImplicitName(paramToken: Terminal,
     v.paramToken = paramToken;
     v.implicitName = name;
     v.implicitNameEquals = equals;
-    v.implicitNameExpr = expr;
+    v.implicitDefaultExpr = expr;
     v.attrs = attrs;
     return v;
 }

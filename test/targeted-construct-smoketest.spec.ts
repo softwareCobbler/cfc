@@ -603,4 +603,34 @@ describe("general smoke test for particular constructs", () => {
             assert.strictEqual(diagnostics[0].msg, `cf engine Adobe/2018 does not support bracket-access into string literals.`)
         }
     })
+    it("parses param statements with a dot-indexed target binding", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+        pushFsNode(fsRoot, "/a.cfc", `
+            // https://github.com/softwareCobbler/cfc/issues/9
+            component {
+                public static void function sendReceipt(required struct mailParams) {
+                    param string mailParams.replyTo = "";
+                }
+            }`
+        );
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["acf.2018"]});
+            project.addFile("a.cfc");
+        
+            const diagnostics = project.getDiagnostics("a.cfc");
+            assert.strictEqual(diagnostics.length, 0);
+        }
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["lucee.5"]});
+            project.addFile("a.cfc");
+        
+            const diagnostics = project.getDiagnostics("a.cfc");
+            assert.strictEqual(diagnostics.length, 0);
+        }
+        
+    })
 });

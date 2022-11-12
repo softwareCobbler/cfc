@@ -649,7 +649,7 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
             }
         case NodeKind.paramStatement: 
             return (node.subType === ParamStatementSubType.withImplicitTypeAndName ? visitor(node.implicitType) : undefined)
-                || (node.subType === ParamStatementSubType.withImplicitName ? visitor(node.implicitName) || visitor(node.implicitNameEquals) || visitor(node.implicitNameExpr) : undefined)
+                || (node.subType === ParamStatementSubType.withImplicitName ? visitor(node.implicitName) || visitor(node.implicitNameEquals) || visitor(node.implicitDefaultExpr) : undefined)
                 || forEachNode(node.attrs, visitor);
         case NodeKind.staticAccess:
             return visitor(node.left)
