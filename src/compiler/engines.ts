@@ -1,38 +1,63 @@
+import { exhaustiveCaseGuard } from "./utils";
+
 export const enum Engine { Adobe = 1, Lucee = 2 };
 
-// fixme - predicates are wrong 
 export class Semver {
     major: number;
     minor: number;
     patch: number;
+
     constructor(major: number, minor: number, patch: number) {
         this.major = major;
         this.minor = minor;
         this.patch = patch;
     }
 
-    raw() {
-        return [this.major, this.minor, this.patch];
+    private compareInt(rhsMajor: number, rhsMinor: number, rhsPatch: number) : -1 | 0 | 1 {
+        const compare = [
+            intCompare(this.major, rhsMajor),
+            intCompare(this.minor, rhsMinor),
+            intCompare(this.patch, rhsPatch),
+        ];
+
+        for (const v of compare) {
+            switch (v) {
+                case -1: return -1;
+                case 0: continue;
+                case 1: return 1;
+                default: exhaustiveCaseGuard(v);
+            }
+        }
+
+        return 0;
+
+        function intCompare(l: number, r: number) : -1 | 0 | 1 {
+            return l < r ? -1 : l === r ? 0 : 1;
+        }
+    }
+    
+    public compare(rhsMajor: number, rhsMinor: number, rhsPatch: number) : -1 | 0 | 1 {
+        return this.compareInt(rhsMajor, rhsMinor, rhsPatch);
     }
 
-    eq(rhsMajor: number, rhsMinor: number, rhsPatch: number) {
-        return this.major == rhsMajor && this.minor === rhsMinor && this.patch === rhsPatch;
+    eq(rhsMajor: number, rhsMinor?: number, rhsPatch?: number) {
+        return this.compareInt(rhsMajor, rhsMinor as number, rhsPatch as number) === 0;
     }
 
     lt(rhsMajor: number, rhsMinor: number, rhsPatch: number) {
-        return this.major < rhsMajor || this.minor < rhsMinor || this.patch < rhsPatch;
+        return this.compareInt(rhsMajor, rhsMinor, rhsPatch) < 0;
     }
 
     lte(rhsMajor: number, rhsMinor: number, rhsPatch: number) {
-        return this.eq(rhsMajor, rhsMinor, rhsPatch) || this.major < rhsMajor || this.minor < rhsMinor || this.patch < rhsPatch;
+        return this.compareInt(rhsMajor, rhsMinor, rhsPatch) <= 0;
     }
 
     gt(rhsMajor: number, rhsMinor: number, rhsPatch: number) {
-        return this.major > rhsMajor || this.minor > rhsMinor || this.patch > rhsPatch;
+        return this.compareInt(rhsMajor, rhsMinor, rhsPatch) > 0;
     }
 
     gte(rhsMajor: number, rhsMinor: number, rhsPatch: number) {
-        return this.eq(rhsMajor, rhsMinor, rhsPatch) || this.major > rhsMajor || this.minor > rhsMinor || this.patch > rhsPatch;
+        return this.compareInt(rhsMajor, rhsMinor, rhsPatch) >= 0;
     }
 }
 
@@ -65,6 +90,15 @@ export const EngineVersions = LiteralRecord<EngineVersion>()({
 } as const)
 
 export const supports = {
+    /**
+     * something like:
+     * " foo ".trim();
+     * vs.
+     * " foo "["trim"]();
+     */
+    bracketAccessIntoStringLiteral(ev: EngineVersion) {
+        return ev.engine === Engine.Lucee;
+    },
     trailingStructLiteralComma(ev: EngineVersion) {
         return ev.engine === Engine.Lucee;
     },

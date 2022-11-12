@@ -572,4 +572,34 @@ describe("general smoke test for particular constructs", () => {
         assert.strictEqual(completions[0].label, "aMember", "completion is as expected");
         assert.strictEqual(completions[1].label, "bar", "completion is as expected");
     })
+    it("Parses and does some minor binding phase checks for indexed access into string literals", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+        pushFsNode(fsRoot, "/a.cfm", `
+            <cfscript>
+                " foo ".trim();
+                " foo "["trim"]();
+            </cfscript>`
+        );
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["lucee.5"]});
+            project.addEngineLib("lib.d.cfm");
+            project.addFile("a.cfm");
+        
+            const diagnostics = project.getDiagnostics("a.cfm");
+            assert.strictEqual(diagnostics.length, 0);
+        }
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["acf.2018"]});
+            project.addEngineLib("lib.d.cfm");
+            project.addFile("a.cfm");
+        
+            const diagnostics = project.getDiagnostics("a.cfm");
+            assert.strictEqual(diagnostics.length, 1);
+            assert.strictEqual(diagnostics[0].msg, `cf engine Adobe/2018 does not support bracket-access into string literals.`)
+        }
+    })
 });

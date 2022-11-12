@@ -838,6 +838,15 @@ export function Binder(options: ProjectOptions) {
     function bindIndexedAccess(node: IndexedAccess) {
         bindNode(node.root, node);
         let parent : Node = node.root;
+
+        if (
+            (node.root.kind === NodeKind.simpleStringLiteral || node.root.kind === NodeKind.interpolatedStringLiteral) &&
+            node.accessElements[0]?.accessType === IndexedAccessType.bracket
+            && !supports.bracketAccessIntoStringLiteral(engineVersion)
+        ) {
+            issueDiagnosticAtRange(node.accessElements[0].range, `cf engine ${engineVersion.uiString} does not support bracket-access into string literals.`);
+        }
+
         for (let i = 0; i < node.accessElements.length; i++) {
             const element = node.accessElements[i];
             bindNode(element, parent);

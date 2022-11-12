@@ -2298,7 +2298,7 @@ export function Parser(config: ProjectOptions) {
                 return parseNumericLiteral();
             case TokenType.QUOTE_DOUBLE: // [[fallthrough]];
             case TokenType.QUOTE_SINGLE:
-                return parseStringLiteral();
+                return parseStaticAccessOrCallExpressionOrLowerRest(parseStringLiteral());
             case TokenType.KW_TRUE:
                 return BooleanLiteral(parseExpectedTerminal(lookahead(), ParseOptions.withTrivia), true);
             case TokenType.KW_FALSE:
@@ -2335,13 +2335,14 @@ export function Parser(config: ProjectOptions) {
     }
 
     /**
-     * we have identifier "foo"
+     * we have identifier `foo` or string literal "foo#maybeWithInterpolations#"
      * what follows may be a callExpressionOrLower chain (e.g. foo.bar[3].baz()++)
+     * 
      * or it may be a qualified pathname followed by a static access token followed by a callexpression or lower (e.g. `foo.bar.baz::indexed["access"]().chain`)
      * it seems like static access is only allowable at the "top level", because you can't do something like `#pathnameVar#::member`, so you can't do `x.y.getPathName()::foo`
      */
-    function parseStaticAccessOrCallExpressionOrLowerRest(root: Identifier) : Node {
-        let workingRoot : Identifier | IndexedAccess<Identifier> = root;
+    function parseStaticAccessOrCallExpressionOrLowerRest(root: Identifier | SimpleStringLiteral | InterpolatedStringLiteral) : Node {
+        let workingRoot : (typeof root) | IndexedAccess = root;
         while (lookahead() === TokenType.DOT) {
             const dot = parseExpectedTerminal(TokenType.DOT, ParseOptions.withTrivia);
             const propertyName = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/ true, /*allowNumeric*/ true);
@@ -2351,9 +2352,17 @@ export function Parser(config: ProjectOptions) {
         }
 
         // we've parsed "id ['.' id]*"
-        // if what follows is '::', convert what we've got so far into a string, use it as the pathname and the right-hand-side is a callExpressionOrLower
-        if (lookahead() === TokenType.DBL_COLON) {
-            const headTerminal = workingRoot.kind === NodeKind.identifier ? workingRoot.source : workingRoot.root.source;
+        // if what follows is '::', and the root is either an identifier or an indexed-access into an identifier,
+        // convert what we've got so far into a string, use it as the pathname and the right-hand-side is a callExpressionOrLower
+        // todo: clarify if the following is valid `"stringliteral #maybeWithInterpolation#"::isValidStaticAccess()`
+        if (
+            lookahead() === TokenType.DBL_COLON &&
+            (
+                workingRoot.kind === NodeKind.identifier ||
+                (workingRoot.kind === NodeKind.indexedAccess && workingRoot.root.kind === NodeKind.identifier)
+            )
+        ) {
+            const headTerminal = workingRoot.kind === NodeKind.identifier ? workingRoot.source : (workingRoot.root as Identifier).source;
             const qualifiedID  = DottedPath(headTerminal)
             if (workingRoot.kind === NodeKind.indexedAccess) {
                 for (const element of (workingRoot.accessElements as DotAccess[])) {
@@ -2407,7 +2416,7 @@ export function Parser(config: ProjectOptions) {
      * accept a Node, and if it is an IndexedAccess node, push an access element into it
      * if it is not already an IndexedAccess node, convert it to one, and then push the access element into it
      */
-    function transformingPushAccessElement<T extends Node>(root: T, accessElement: IndexedAccessChainElement) : T extends IndexedAccess<infer U> ? IndexedAccess<U> : IndexedAccess<T> {
+    function transformingPushAccessElement<T extends Node>(root: T, accessElement: IndexedAccessChainElement) : T extends IndexedAccess ? T : IndexedAccess<T> {
         const v : IndexedAccess = root.kind === NodeKind.indexedAccess ? root : IndexedAccess(root);
         pushAccessElement(v, accessElement);
         return v as any;

@@ -35,9 +35,9 @@ function projectFiddle() {
                     "someFile.cfc": `
                         component {
                             function foo(haha, ok) {
-                                //rest[   ::   ];
-                                rest[ (v) ::   ];
-                                //rest[   :: v ];
+                                "foo".trim();
+                                "foo#withInterpolation#".trim();
+                                "foo#withInterpolation#"["trim"]();
                             }
                         }
                     `
@@ -64,7 +64,7 @@ function projectFiddle() {
     const project = Project("/", debugfs, {
         debug: true,
         parseTypes: true,
-        engineVersion: EngineVersions["lucee.5"],
+        engineVersion: EngineVersions["acf.2021"],
         withWireboxResolution: true,
         cfConfigProjectRelativePath: "/Wirebox.cfc",
         checkReturnTypes: true,
