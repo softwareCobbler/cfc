@@ -631,6 +631,264 @@ describe("general smoke test for particular constructs", () => {
             const diagnostics = project.getDiagnostics("a.cfc");
             assert.strictEqual(diagnostics.length, 0);
         }
+    })
+    it("cfc property decl / implicit name with trailing attrs", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+        pushFsNode(fsRoot, "/a.cfc", `
+            component {
+                property xName foo=42;
+            }`
+        );
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["acf.2018"]});
+            project.addFile("a.cfc");
         
+            const diagnostics = project.getDiagnostics("a.cfc");
+            assert.strictEqual(diagnostics.length, 0);
+
+            assert.strictEqual(project.getParsedSourceFile("a.cfc")?.containedScope.variables?.get("xname")?.uiName, "xName");
+        }
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["lucee.5"]});
+            project.addFile("a.cfc");
+        
+            const diagnostics = project.getDiagnostics("a.cfc");
+            assert.strictEqual(diagnostics.length, 0);
+            assert.strictEqual(project.getParsedSourceFile("a.cfc")?.containedScope.variables?.get("xname")?.uiName, "xName");
+        }
+    })
+    it("cfc property decl / implicit name with no trailing attrs", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+        pushFsNode(fsRoot, "/a.cfc", `
+            component {
+                property xName;
+            }`
+        );
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["acf.2018"]});
+            project.addFile("a.cfc");
+        
+            const diagnostics = project.getDiagnostics("a.cfc");
+            assert.strictEqual(diagnostics.length, 0);
+
+            assert.strictEqual(project.getParsedSourceFile("a.cfc")?.containedScope.variables?.get("xname")?.uiName, "xName");
+        }
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["lucee.5"]});
+            project.addFile("a.cfc");
+        
+            const diagnostics = project.getDiagnostics("a.cfc");
+            assert.strictEqual(diagnostics.length, 0);
+            assert.strictEqual(project.getParsedSourceFile("a.cfc")?.containedScope.variables?.get("xname")?.uiName, "xName");
+        }
+    })
+    it("cfc property decl / implicit type and name with no trailing attrs", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+        pushFsNode(fsRoot, "/a.cfc", `
+            component {
+                property foo.bar.baz xName;
+            }`
+        );
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["acf.2018"]});
+            project.addFile("a.cfc");
+        
+            const diagnostics = project.getDiagnostics("a.cfc");
+            assert.strictEqual(diagnostics.length, 0);
+
+            assert.strictEqual(project.getParsedSourceFile("a.cfc")?.containedScope.variables?.get("xname")?.uiName, "xName");
+        }
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["lucee.5"]});
+            project.addFile("a.cfc");
+        
+            const diagnostics = project.getDiagnostics("a.cfc");
+            assert.strictEqual(diagnostics.length, 0);
+            assert.strictEqual(project.getParsedSourceFile("a.cfc")?.containedScope.variables?.get("xname")?.uiName, "xName");
+        }
+    })
+    it("cfc property decl / implicit type and name with trailing attrs", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+        pushFsNode(fsRoot, "/a.cfc", `
+            component {
+                property foo.bar.baz xName default=42;
+            }`
+        );
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["acf.2018"]});
+            project.addFile("a.cfc");
+        
+            const diagnostics = project.getDiagnostics("a.cfc");
+            assert.strictEqual(diagnostics.length, 0);
+
+            assert.strictEqual(project.getParsedSourceFile("a.cfc")?.containedScope.variables?.get("xname")?.uiName, "xName");
+        }
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["lucee.5"]});
+            project.addFile("a.cfc");
+        
+            const diagnostics = project.getDiagnostics("a.cfc");
+            assert.strictEqual(diagnostics.length, 0);
+            assert.strictEqual(project.getParsedSourceFile("a.cfc")?.containedScope.variables?.get("xname")?.uiName, "xName");
+        }
+    })
+    it("cfc property decl / ambiguous implied name is resolved as missing name", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+        pushFsNode(fsRoot, "/a.cfc", `
+            component {
+                property xName=42;
+            }`
+        );
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["acf.2018"]});
+            project.addFile("a.cfc");
+        
+            const diagnostics = project.getDiagnostics("a.cfc");
+            assert.strictEqual(diagnostics.length, 1);
+            assert.match(diagnostics[0].msg, /must have a 'name' attribute/)
+        }
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["lucee.5"]});
+            project.addFile("a.cfc");
+        
+            const diagnostics = project.getDiagnostics("a.cfc");
+            assert.strictEqual(diagnostics.length, 1);
+            assert.match(diagnostics[0].msg, /must have a 'name' attribute/)
+        }
+    })
+    it("cfc property decl / explicit attributes must provide a name attribute", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+        pushFsNode(fsRoot, "/a.cfc", `
+            component {
+                property attr1=42 attr2=42;
+            }`
+        );
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["acf.2018"]});
+            project.addFile("a.cfc");
+        
+            const diagnostics = project.getDiagnostics("a.cfc");
+            assert.strictEqual(diagnostics.length, 1);
+            assert.match(diagnostics[0].msg, /must have a 'name' attribute/)
+        }
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["lucee.5"]});
+            project.addFile("a.cfc");
+        
+            const diagnostics = project.getDiagnostics("a.cfc");
+            assert.strictEqual(diagnostics.length, 1);
+            assert.match(diagnostics[0].msg, /must have a 'name' attribute/)
+        }
+    })
+    it("cfc property decl / implied names may not be qualified", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+        pushFsNode(fsRoot, "/a.cfc", `
+            component {
+                property array foo.bar;
+            }`
+        );
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["acf.2018"]});
+            project.addFile("a.cfc");
+        
+            const diagnostics = project.getDiagnostics("a.cfc");
+            assert.strictEqual(diagnostics.length, 1);
+            assert.match(diagnostics[0].msg, /'.' cannot appear in this name./);
+        }
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["lucee.5"]});
+            project.addFile("a.cfc");
+        
+            const diagnostics = project.getDiagnostics("a.cfc");
+            assert.strictEqual(diagnostics.length, 1);
+            assert.match(diagnostics[0].msg, /'.' cannot appear in this name./);
+        }
+    })
+    it("cfc property decl / error on explicit attr shadows implicit attr", () => {
+        {
+            const fsRoot : FileSystemNode = {"/": {}};
+            pushFsNode(fsRoot, "/a.cfc", `
+                component {
+                    property foo name="foo1";
+                }`
+            );
+
+            {
+                const dfs = DebugFileSystem(fsRoot);
+                const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["acf.2018"]});
+                project.addFile("a.cfc");
+            
+                const diagnostics = project.getDiagnostics("a.cfc");
+                assert.strictEqual(diagnostics.length, 1);
+                assert.match(diagnostics[0].msg, /Explicit 'name' attribute shadows implied 'name' attribute./);
+            }
+
+            {
+                const dfs = DebugFileSystem(fsRoot);
+                const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["lucee.5"]});
+                project.addFile("a.cfc");
+            
+                const diagnostics = project.getDiagnostics("a.cfc");
+                assert.strictEqual(diagnostics.length, 1);
+                assert.match(diagnostics[0].msg, /Explicit 'name' attribute shadows implied 'name' attribute./);
+            }
+        }
+
+        {
+            const fsRoot : FileSystemNode = {"/": {}};
+            pushFsNode(fsRoot, "/a.cfc", `
+                component {
+                    property array foo type="foo1";
+                }`
+            );
+
+            {
+                const dfs = DebugFileSystem(fsRoot);
+                const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["acf.2018"]});
+                project.addFile("a.cfc");
+            
+                const diagnostics = project.getDiagnostics("a.cfc");
+                assert.strictEqual(diagnostics.length, 1);
+                assert.match(diagnostics[0].msg, /Explicit 'type' attribute shadows implied 'type' attribute./);
+            }
+
+            {
+                const dfs = DebugFileSystem(fsRoot);
+                const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["lucee.5"]});
+                project.addFile("a.cfc");
+            
+                const diagnostics = project.getDiagnostics("a.cfc");
+                assert.strictEqual(diagnostics.length, 1);
+                assert.match(diagnostics[0].msg, /Explicit 'type' attribute shadows implied 'type' attribute./);
+            }
+        }
     })
 });

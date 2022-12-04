@@ -34,9 +34,7 @@ function projectFiddle() {
                 "someFolder": {
                     "someFile.cfc": `
                         component {
-                            public static void function sendReceipt(required struct mailParams) {
-                                param string mailParams.replyTo = "";
-                            }
+                            property foo.bar baz.qux default="x";
                         }
                     `
                 },
@@ -82,6 +80,9 @@ function projectFiddle() {
     //project.addFile("C:\\Users\\anon\\dev\\cb\\testbox\\tests\\resources\\coldbox\\system\\EventHandler.cfc");
     const diagnostics = project.getDiagnostics("/someFolder/someFile.cfc");
 
+    const x = project.getParsedSourceFile("/someFolder/someFile.cfc");
+    console.log(x?.containedScope.variables?.get("xname"))
+    
     //const x = project.getInterestingNodeToLeftOfCursor("/someFile.cfc", 378);
     //const completions = getCompletions(project, "/someFile.cfc", 381, null);
     //console.log(completions);

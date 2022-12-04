@@ -1394,6 +1394,11 @@ export function Binder(options: ProjectOptions) {
                 return;
             }
 
+            if (uiName.indexOf(".") !== -1) {
+                issueDiagnosticAtRange(uiNameAttr.range, "'.' cannot appear in this name.");
+                return;
+            }
+
             // property gets add to variables scope with just its name;
             addFreshSymbolToTable(sourceFile.containedScope.variables!, uiName, node, BuiltinType.any);
 

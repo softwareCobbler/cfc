@@ -512,6 +512,9 @@ export function Parser(config: ProjectOptions) {
         return Terminal(tagName, parseTrivia());
     }
 
+    /**
+     * @see parseDottedPathAsString -- are these methods basically the same?
+     */
     function parseExpectedLexemeLikeTerminal(consumeOnFailure: boolean, allowNumeric: boolean, errorMsg?: string) : Terminal {
         const labelLike = peek();
         let trivia : Node[] = [];
@@ -3051,6 +3054,49 @@ export function Parser(config: ProjectOptions) {
         return result;
     }
 
+    /**
+     * we need a synthetic string literal, or something
+     */
+    function parseDottedPathAsString() : SimpleStringLiteral {
+        const dottedPath = parseDottedPath();
+        const name = stringifyDottedPath(dottedPath).ui;
+        
+        let trivia : Node[];
+
+        if (dottedPath.rest.length === 0) {
+            // ok, no interspersed comments to diagnose
+            trivia = dottedPath.headKey.trivia;
+        }
+        else {
+            // where "X" indicates a position where there should not be comments
+            // 1) foo /* OK */
+            // 2) foo /* X */ . /* X */ bar /* X */ . /* X */ baz /* OK */
+            diagnoseIllegalComments(dottedPath.headKey.trivia);
+            for (let i = 0; i < dottedPath.rest.length - 1; ++i) {
+                diagnoseIllegalComments(dottedPath.rest[i].dot.trivia)
+                diagnoseIllegalComments(dottedPath.rest[i].key.trivia)
+            }
+            const lastElement = dottedPath.rest[dottedPath.rest.length - 1];
+            diagnoseIllegalComments(lastElement.dot.trivia)
+            trivia = lastElement.key.trivia;
+        }
+
+        const syntheticLeftQuote = NilTerminal(dottedPath.range.fromInclusive, `"`);
+        const textSpan = TextSpan(dottedPath.range, name);
+        const syntheticRightQuote = NilTerminal(dottedPath.range.toExclusive, `"`);
+        syntheticRightQuote.trivia = trivia;
+
+        return SimpleStringLiteral(syntheticLeftQuote, textSpan, syntheticRightQuote);
+
+        function diagnoseIllegalComments(trivia: Node[]) {
+            for (const node of trivia) {
+                if (node.kind === NodeKind.comment) {
+                    parseErrorAtRange(node.range, "Comments cannot appear in this position.");
+                }
+            }
+        }
+    }
+
     // @fixme: unify the following 2 methods
     // function parseFunctionDeclarationParameters() : cfFunctionSignatureParam[] {
     //     const params = tryParseFunctionDefinitionParameters(/*speculative*/ false, /*asDeclaration*/ true);
@@ -3833,8 +3879,90 @@ export function Parser(config: ProjectOptions) {
                     
                     if (isInSomeContext(ParseContext.cfcPsuedoConstructor) && peekedCanonicalText === "property") {
                         const propertyToken = parseExpectedLexemeLikeTerminal(/*consumeOnFailure*/false, /*allowNumeric*/false);
-                        const attrs = parseTagAttributes();
-                        return Script.Property(propertyToken, attrs);
+                        
+                        /*
+                            3 productions:
+                            - property <type> <name> ( = expr | stringlike )? <attrs>*;
+                            - property <name> <attrs>*;
+                            - property <attrs>+;
+
+                            "property foo=42" is ambiguous;
+                              - lucee and acf both interpret it as "property with attribute foo and missing name attribute"
+
+                            property someTypeName=42; // illegal, no implied name
+                            property someTypeName someName = 42; // ok (buggy on lucee, doesn't generate getters/setters?)
+                        */
+                        const propertyWithImplicitTypeAndNameOrImplicitName = SpeculationHelper.speculate(() => {
+                            const bareAttrNoEquals = () => SpeculationHelper.speculate(() => {
+                                const v = isLexemeLikeToken(peek(), /*allowNumeric*/ false) ? parseDottedPathAsString() : null;
+                                if (!v) {
+                                    return null;
+                                }
+                                return lookahead() === TokenType.EQUAL
+                                    ? null
+                                    : v;
+                            })
+
+                            const typenameOrName = bareAttrNoEquals();
+
+                            if (!typenameOrName) {
+                                return null;
+                            }
+
+                            const name = bareAttrNoEquals();
+
+                            if (name) {
+                                const attrs = parseTagAttributes();
+
+                                diagnoseAndDropExplicitAttrInConflictWithExplicitAttr("type", attrs);
+                                diagnoseAndDropExplicitAttrInConflictWithExplicitAttr("name", attrs);
+
+                                // "unshift backwards" to keep array ordering in sync with lexical ordering
+                                attrs.unshift(syntheticTagAttr("name", name));
+                                attrs.unshift(syntheticTagAttr("type", typenameOrName));
+
+                                return Script.Property(propertyToken, attrs, /*impliedTypeAttr*/ true, /*impliedNameAttr*/ true);
+                            }
+                            else {
+                                // property <name> <attrs>*;
+
+                                const attrs = parseTagAttributes();
+
+                                diagnoseAndDropExplicitAttrInConflictWithExplicitAttr("name", attrs);
+
+                                // to front of list, to maintain lexical order
+                                attrs.unshift(syntheticTagAttr("name", typenameOrName));
+
+                                return Script.Property(propertyToken, attrs, /*impliedTypeAttr*/ false, /*impliedNameAttr*/ true);
+                            }
+
+                            function diagnoseAndDropExplicitAttrInConflictWithExplicitAttr(name: "type" | "name", attrs: TagAttribute[]) {
+                                const idxOfExplicitNameAttr = attrs.findIndex(attr => attr.canonicalName === name);
+                                if (idxOfExplicitNameAttr !== -1) {
+                                    parseErrorAtRange(attrs[idxOfExplicitNameAttr].range, `Explicit '${name}' attribute shadows implied '${name}' attribute.`);
+                                    attrs.splice(idxOfExplicitNameAttr, 1);
+                                }
+                            }
+
+                            function syntheticTagAttr(name: "type" | "name" | "default", expr: Node) {
+                                return TagAttribute(
+                                    // must share a start pos with typeNameOrName for the tree flattener
+                                    NilTerminal(expr.range.fromInclusive, "name"),
+                                    name,
+                                    // must share a start pos with typeNameOrName for the tree flattener
+                                    NilTerminal(expr.range.fromInclusive, "="),
+                                    expr
+                                );
+                            }
+                        });
+
+                        if (propertyWithImplicitTypeAndNameOrImplicitName) {
+                            return propertyWithImplicitTypeAndNameOrImplicitName;
+                        }
+                        else {
+                            const attrs = parseTagAttributes();
+                            return Script.Property(propertyToken, attrs, /*impliedTypeAttr*/ false, /*impliedNameAttr*/ false);
+                        }
                     }
 
                     //

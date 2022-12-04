@@ -2598,13 +2598,17 @@ export namespace Script {
     export interface Property extends PropertyBase {
         fromTag: false,
         propertyTerminal: Terminal,
+        impliedTypeAttr: boolean,
+        impliedNameAttr: boolean
     }
 
-    export function Property(terminal: Terminal, attrs: TagAttribute[]) : Property {
+    export function Property(terminal: Terminal, attrs: TagAttribute[], impliedTypeAttr: boolean, impliedNameAttr: boolean) : Property {
         const v = NodeBase<Property>(NodeKind.property, mergeRanges(terminal, attrs));
         v.fromTag = false;
         v.propertyTerminal = terminal;
         v.attrs = attrs;
+        v.impliedTypeAttr = impliedTypeAttr;
+        v.impliedNameAttr = impliedNameAttr;
         return v;
     }
 }
