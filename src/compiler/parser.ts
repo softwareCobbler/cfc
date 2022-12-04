@@ -3882,11 +3882,11 @@ export function Parser(config: ProjectOptions) {
                         
                         /*
                             3 productions:
-                            - property <type> <name> ( = expr | stringlike )? <attrs>*;
+                            - property <type> <name> <attrs>*;
                             - property <name> <attrs>*;
                             - property <attrs>+;
 
-                            "property foo=42" is ambiguous;
+                            "property foo=42" sort of seems like it would be `name=foo default=42`;
                               - lucee and acf both interpret it as "property with attribute foo and missing name attribute"
 
                             property someTypeName=42; // illegal, no implied name
