@@ -24,7 +24,7 @@ import {
     New,
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
-    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess, DestructuredElement, DestructuredRecordElement, DestructuredList, DestructuredRecord } from "./node";
+    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess, DestructuredElement, DestructuredList, DestructuredRecord, DestructuredRecordElement_Bare, DestructuredRecordElement_RenamingOrNested } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard, Mutable } from "./utils";
 import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature } from "./types";
@@ -61,7 +61,8 @@ const enum ParseContext {
     typeAnnotation,
     interface,
     cfcPsuedoConstructor, // inside the top-level of a cfc
-    destructuringExpression,
+    destructuringRecordExpression,
+    destructuringListExpression,
     END                 // sentinel for looping over ParseContexts
 }
 
@@ -1882,13 +1883,13 @@ export function Parser(config: ProjectOptions) {
     function parseDestructuringExpression() : DestructuredRecord | DestructuredList {
         if (lookahead() === TokenType.LEFT_BRACE) {
             const leftBrace = parseExpectedTerminal(TokenType.LEFT_BRACE, ParseOptions.withTrivia);
-            const elements = parseList(ParseContext.destructuringExpression, parseDestructuredRecordElement);
+            const elements = parseList(ParseContext.destructuringRecordExpression, parseDestructuredRecordElement);
             const rightBrace = parseExpectedTerminal(TokenType.RIGHT_BRACE, ParseOptions.withTrivia);
             return DestructuredRecord(leftBrace, elements, rightBrace);
         }
         else if (lookahead() === TokenType.LEFT_BRACKET) {
             const leftBracket = parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
-            const elements = parseList(ParseContext.destructuringExpression, parseDestructuredListElement);
+            const elements = parseList(ParseContext.destructuringListExpression, parseDestructuredListElement);
             const rightBracket = parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
             return DestructuredList(leftBracket, elements, rightBracket);
         }
@@ -1909,10 +1910,11 @@ export function Parser(config: ProjectOptions) {
             if (lookahead() === TokenType.COLON) {
                 const colon = parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
                 const value = parseDestructuredListElement();
-                return DestructuredRecordElement(name, colon, value);
+                return DestructuredRecordElement_RenamingOrNested(name, colon, value);
             }
             else {
-                return DestructuredRecordElement(name);
+                const maybeComma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+                return DestructuredRecordElement_Bare(name, maybeComma);
             }
         }
     }
@@ -2787,7 +2789,9 @@ export function Parser(config: ProjectOptions) {
 
     function startsParseInContext(what: ParseContext) : boolean {
         switch (what) {
-            case ParseContext.destructuringExpression:
+            case ParseContext.destructuringRecordExpression:
+                return isIdentifier();
+            case ParseContext.destructuringListExpression:
                 return lookahead() === TokenType.LEFT_BRACE
                     || lookahead() === TokenType.LEFT_BRACKET
                     || isIdentifier();
@@ -2815,9 +2819,10 @@ export function Parser(config: ProjectOptions) {
         if (lookahead() === TokenType.EOF) return true;
 
         switch (what) {
-            case ParseContext.destructuringExpression:
-                return lookahead() === TokenType.RIGHT_BRACKET
-                    || lookahead() === TokenType.RIGHT_BRACE;
+            case ParseContext.destructuringListExpression:
+                return lookahead() === TokenType.RIGHT_BRACKET;
+            case ParseContext.destructuringRecordExpression:
+                return lookahead() === TokenType.RIGHT_BRACE;
             case ParseContext.argOrParamList:
                 return lookahead() === TokenType.RIGHT_PAREN;
             case ParseContext.arrayLiteralBody:

@@ -1,6 +1,6 @@
 import * as path from "path";
 import * as fs from "fs";
-import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CallExpression, CfTag, DottedPath, DUMMY_CONTAINER, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, isStaticallyKnownScopeName, NamedFunctionDefinition, Node, NodeFlags, NodeId, NodeSourceMap, ParamStatementSubType, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymbolResolution, SymbolTable, SymTabEntry, SymTabResolution, TagAttribute, TypeShimKind, UnaryOperatorPos } from "./node";
+import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CallExpression, CfTag, DestructuredRecordElementKind, DottedPath, DUMMY_CONTAINER, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, isStaticallyKnownScopeName, NamedFunctionDefinition, Node, NodeFlags, NodeId, NodeSourceMap, ParamStatementSubType, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymbolResolution, SymbolTable, SymTabEntry, SymTabResolution, TagAttribute, TypeShimKind, UnaryOperatorPos } from "./node";
 import { NodeKind } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, isStructLike, TypeFlags } from "./types";
@@ -664,13 +664,13 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                 || forEachNode(node.elements, visitor)
                 || visitor(node.rightBrace);
         case NodeKind.destructuredRecordElement:
-            if (node.rest) {
-                return visitor(node.name)
-                    || visitor(node.rest.colon)
-                    || visitor(node.rest.value);
+            if (node.value.type === DestructuredRecordElementKind.renamingOrNested) {
+                return visitor(node.value.name)
+                    || visitor(node.value.colon)
+                    || visitor(node.value.value);
             }
             else {
-                return visitor(node.name);
+                return visitor(node.value.value);
             }
         case NodeKind.destructuredElement:
             return visitor(node.value)

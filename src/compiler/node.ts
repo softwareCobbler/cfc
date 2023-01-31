@@ -2715,20 +2715,25 @@ export interface DestructuredRecord extends NodeBase {
     rightBrace: Terminal
 }
 
-export interface DestructuredElement extends NodeBase {
+export interface DestructuredElement<T extends DestructuredList | DestructuredRecord | Identifier = DestructuredList | DestructuredRecord | Identifier> extends NodeBase {
     kind: NodeKind.destructuredElement,
-    value: DestructuredList | DestructuredRecord | Identifier,
+    value: T,
     comma: Terminal | null,
 }
 
+export const enum DestructuredRecordElementKind { bare, renamingOrNested }
 export interface DestructuredRecordElement extends NodeBase {
     kind: NodeKind.destructuredRecordElement,
-    name: Identifier,
-    rest:
-        | null
+    value:
         | {
+            type: DestructuredRecordElementKind.bare,
+            value: DestructuredElement<Identifier>
+        }
+        | {
+            type: DestructuredRecordElementKind.renamingOrNested,
+            name: Identifier,
             colon: Terminal,
-            value: DestructuredElement
+            value: DestructuredElement,
         }
 }
 
@@ -2756,37 +2761,32 @@ export function DestructuredRecord(
     return v;
 }
 
-export function DestructuredElement(
-    element: DestructuredList | DestructuredRecord | Identifier,
+export function DestructuredElement<T extends DestructuredList | DestructuredRecord | Identifier = DestructuredList | DestructuredRecord | Identifier >(
+    element: T,
     comma: Terminal | null
-) : DestructuredElement {
-    const v = NodeBase<DestructuredElement>(NodeKind.destructuredElement, mergeRanges(element, comma));
+) : DestructuredElement<T> {
+    const v = NodeBase<DestructuredElement<T>>(NodeKind.destructuredElement, mergeRanges(element, comma));
     v.value = element;
     v.comma = comma;
     return v;
 }
 
-export function DestructuredRecordElement(name: Identifier) : DestructuredRecordElement;
-export function DestructuredRecordElement(name: Identifier, colon: Terminal, element: DestructuredElement) : DestructuredRecordElement;
-export function DestructuredRecordElement(
-    name: Identifier,
-    colon?: Terminal,
-    element?: DestructuredElement,
-) : DestructuredRecordElement {
-    if (!colon) {
-        // overload 1
-        const v = NodeBase<DestructuredRecordElement>(NodeKind.destructuredRecordElement, name.range);
-        v.name = name;
-        return v;
+export function DestructuredRecordElement_Bare(name: Identifier, comma: Terminal | null) : DestructuredRecordElement {
+    const v = NodeBase<DestructuredRecordElement>(NodeKind.destructuredRecordElement, mergeRanges(name, comma));
+    v.value = {
+        type: DestructuredRecordElementKind.bare,
+        value: DestructuredElement(name, comma)
+    };
+    return v;
+}
+
+export function DestructuredRecordElement_RenamingOrNested(name: Identifier, colon: Terminal, element: DestructuredElement) : DestructuredRecordElement {
+    const v = NodeBase<DestructuredRecordElement>(NodeKind.destructuredRecordElement, mergeRanges(name, colon, element));
+    v.value = {
+        type: DestructuredRecordElementKind.renamingOrNested,
+        name: name,
+        colon: colon,
+        value: element
     }
-    else {
-        // overload 2
-        const v = NodeBase<DestructuredRecordElement>(NodeKind.destructuredRecordElement, mergeRanges(name, colon, element));
-        v.name = name;
-        v.rest = {
-            colon: colon!,
-            value: element!
-        }
-        return v;
-    }
+    return v;
 }
