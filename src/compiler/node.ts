@@ -36,6 +36,7 @@ export const enum NodeKind {
     new, typeShim,
     property, paramStatement,
     staticAccess,
+    destructuredRecord, destructuredList, destructuredElement, destructuredRecordElement
 }
 
 const NodeTypeUiString : Record<NodeKind, string> = {
@@ -90,6 +91,10 @@ const NodeTypeUiString : Record<NodeKind, string> = {
     [NodeKind.property]: "property",
     [NodeKind.paramStatement]: "param",
     [NodeKind.staticAccess]: "staticAccess",
+    [NodeKind.destructuredList]: "destructuredList",
+    [NodeKind.destructuredRecord]: "destructuredRecord",
+    [NodeKind.destructuredElement]: "destructuredElement",
+    [NodeKind.destructuredRecordElement]: "destructuredRecordElement",
 };
 
 export type Node =
@@ -148,6 +153,10 @@ export type Node =
     | Property
     | ParamStatement
     | StaticAccess
+    | DestructuredRecord
+    | DestructuredList
+    | DestructuredElement
+    | DestructuredRecordElement
 
 //
 // wip:
@@ -2690,4 +2699,94 @@ export function ParamStatement(paramToken: Terminal, attrs: TagAttribute[]) {
     v.paramToken = paramToken;
     v.attrs = attrs;
     return v;
+}
+
+export interface DestructuredList extends NodeBase {
+    kind: NodeKind.destructuredList,
+    leftBracket: Terminal,
+    elements: DestructuredElement[]
+    rightBracket: Terminal,
+}
+
+export interface DestructuredRecord extends NodeBase {
+    kind: NodeKind.destructuredRecord,
+    leftBrace: Terminal,
+    elements: DestructuredRecordElement[],
+    rightBrace: Terminal
+}
+
+export interface DestructuredElement extends NodeBase {
+    kind: NodeKind.destructuredElement,
+    value: DestructuredList | DestructuredRecord | Identifier,
+    comma: Terminal | null,
+}
+
+export interface DestructuredRecordElement extends NodeBase {
+    kind: NodeKind.destructuredRecordElement,
+    name: Identifier,
+    rest:
+        | null
+        | {
+            colon: Terminal,
+            value: DestructuredElement
+        }
+}
+
+export function DestructuredList(
+    leftBracket: Terminal,
+    elements: DestructuredElement[],
+    rightBracket: Terminal
+) : DestructuredList {
+    const v = NodeBase<DestructuredList>(NodeKind.destructuredList, mergeRanges(leftBracket, elements, rightBracket));
+    v.leftBracket = leftBracket;
+    v.elements = elements;
+    v.rightBracket = rightBracket;
+    return v;
+}
+
+export function DestructuredRecord(
+    leftBrace: Terminal,
+    elements: DestructuredRecordElement[],
+    rightBrace: Terminal,
+) : DestructuredRecord {
+    const v = NodeBase<DestructuredRecord>(NodeKind.destructuredRecord, mergeRanges(leftBrace, elements, rightBrace));
+    v.leftBrace = leftBrace;
+    v.elements = elements;
+    v.rightBrace = rightBrace;
+    return v;
+}
+
+export function DestructuredElement(
+    element: DestructuredList | DestructuredRecord | Identifier,
+    comma: Terminal | null
+) : DestructuredElement {
+    const v = NodeBase<DestructuredElement>(NodeKind.destructuredElement, mergeRanges(element, comma));
+    v.value = element;
+    v.comma = comma;
+    return v;
+}
+
+export function DestructuredRecordElement(name: Identifier) : DestructuredRecordElement;
+export function DestructuredRecordElement(name: Identifier, colon: Terminal, element: DestructuredElement) : DestructuredRecordElement;
+export function DestructuredRecordElement(
+    name: Identifier,
+    colon?: Terminal,
+    element?: DestructuredElement,
+) : DestructuredRecordElement {
+    if (!colon) {
+        // overload 1
+        const v = NodeBase<DestructuredRecordElement>(NodeKind.destructuredRecordElement, name.range);
+        v.name = name;
+        return v;
+    }
+    else {
+        // overload 2
+        const v = NodeBase<DestructuredRecordElement>(NodeKind.destructuredRecordElement, mergeRanges(name, colon, element));
+        v.name = name;
+        v.rest = {
+            colon: colon!,
+            value: element!
+        }
+        return v;
+    }
 }

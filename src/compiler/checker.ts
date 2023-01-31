@@ -409,6 +409,12 @@ export function Checker(options: ProjectOptions) {
                 // can be like left::r1.r2(ahThisIsLocal).etc[3]
                 checkNode(node.right);
                 return;
+            case NodeKind.destructuredElement:
+            case NodeKind.destructuredList:
+            case NodeKind.destructuredRecord:
+            case NodeKind.destructuredRecordElement:
+                // nothing to check at the moment here
+                return;
             default:
                 exhaustiveCaseGuard(node);
         }
@@ -2215,7 +2221,12 @@ export function Checker(options: ProjectOptions) {
             // implying that it is used before assignment
             // except in the case of member functions, which are always visible
             // maybe we could hoist just member functions so they are always first in flow
-            if (!isOuterVar && (CHECK_FLOW_TYPES && !flowType) && !maybeMemberFunctionDefinition) {
+            if (!isOuterVar
+                && (CHECK_FLOW_TYPES && !flowType)
+                && !maybeMemberFunctionDefinition
+                // punt on destructuring assignments, we parse and offer autocomplete but don't even try to check them
+                && !resolvedSymbol.symTabEntry.declarations?.find(v => v.kind === NodeKind.destructuredElement || v.kind === NodeKind.destructuredRecordElement)
+            ) {
                 if (CHECK_FLOW_TYPES) {
                     issueDiagnosticAtNode(node, `${node.uiName} is used before its first local declaration.`);
                 }

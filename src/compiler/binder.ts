@@ -1,8 +1,8 @@
-import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, UnreachableFlow, FlowType, ConditionalSubtype, SymbolTable, Property, ParamStatement, ParamStatementSubType, typeinfo, DiagnosticKind, StaticallyKnownScopeName, SwitchCaseType } from "./node";
+import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, UnreachableFlow, FlowType, ConditionalSubtype, SymbolTable, Property, ParamStatement, ParamStatementSubType, typeinfo, DiagnosticKind, StaticallyKnownScopeName, SwitchCaseType, DestructuredRecordElement, DestructuredElement } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol, findAncestor, TupleKeyedMap, isNamedFunction, isInEffectiveConstructorMethod } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { BuiltinType, Type, Interface, cfTypeId, TypeKind } from "./types";
-import { Engine, supports } from "./engines";
+import { Engine, EngineVersions, supports } from "./engines";
 import { ProjectOptions } from "./project";
 
 let symbolId = 0;
@@ -257,6 +257,25 @@ export function Binder(options: ProjectOptions) {
             case NodeKind.staticAccess:
                 bindNode(node.left, node);
                 bindNode(node.right, node);
+                return;
+            case NodeKind.destructuredRecord:
+                // fallthrough
+            case NodeKind.destructuredList: {
+                if (engineVersion.engine === Engine["Lucee"]) {
+                    issueDiagnosticAtRange(node.range, "Lucee does not support destructuring assignments.");
+                }
+                else if (engineVersion.engine === Engine["Adobe"] && engineVersion.semver.compare(EngineVersions["acf.2021"].semver) === -1) {
+                    issueDiagnosticAtRange(node.range, `Adobe supports destructuring assignments starting in version ${EngineVersions["acf.2021"].uiString}. cfls is currently configured for ${engineVersion.uiString}.`);
+                }
+                const cbind = (next: Node) => bindNode(next, node);
+                node.elements.forEach(cbind);
+                return;
+            }
+            case NodeKind.destructuredElement:
+                bindMaybeDestructuringLeaf(node);
+                return;
+            case NodeKind.destructuredRecordElement:
+                bindMaybeDestructuringLeaf(node);
                 return;
             default:
                 exhaustiveCaseGuard(node);
@@ -1486,7 +1505,39 @@ export function Binder(options: ProjectOptions) {
         bindTypeAndInterfacedefsForContainer(sourceFile);
     }
 
+    function bindMaybeDestructuringLeaf(node: DestructuredElement | DestructuredRecordElement) {
+        switch (node.kind) {
+            case NodeKind.destructuredElement: {
+                if (node.value.kind === NodeKind.identifier) {
+                    maybeAddSymbolToLocalScope(node.value);
+                }
+                else {
+                    bindNode(node.value, node);
+                }
+                return;
+            }
+            case NodeKind.destructuredRecordElement: {
+                if (!node.rest) {
+                    maybeAddSymbolToLocalScope(node.name);
+                }
+                else {
+                    bindNode(node.rest.value, node);
+                }
+                return;
+            }
+            default: exhaustiveCaseGuard(node);
+        }
 
+        function maybeAddSymbolToLocalScope(identifier: Identifier) : void {
+            if (getContainingFunction(node)) {
+                addFreshSymbolToTable(currentContainer.containedScope.local!, identifier.uiName || "<<name?>>", node);
+            }
+            else {
+                // the diagnostic here would be "can't use a destructuring expression in top-level scope",
+                // but we have to be in a var declaration, so the var declaration binder should handle that
+            }
+        }
+    }
 
     function checkIdentifierValidity(node: Node) : void {
         const defaultMsg = (nameLike: {uiName: string | undefined, canonicalName: string | undefined}) => `'${nameLike.uiName || nameLike.canonicalName}' cannot be used as an identifier in this position.`;

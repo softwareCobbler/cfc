@@ -36,8 +36,16 @@ export class Semver {
         }
     }
     
-    public compare(rhsMajor: number, rhsMinor: number, rhsPatch: number) : -1 | 0 | 1 {
-        return this.compareInt(rhsMajor, rhsMinor, rhsPatch);
+    public compare(rhs: Semver) : -1 | 0 | 1;
+    public compare(rhsMajor: number, rhsMinor: number, rhsPatch: number) : -1 | 0 | 1;
+    public compare(rhsMajor: Semver | number, rhsMinor?: number, rhsPatch?: number) : -1 | 0 | 1 {
+        if (typeof rhsMajor === "number") {
+            return this.compareInt(rhsMajor, rhsMinor!, rhsPatch!);
+        }
+        else {
+            const rhs = rhsMajor;
+            return this.compareInt(rhs.major, rhs.minor, rhs.patch);
+        }
     }
 
     eq(rhsMajor: number, rhsMinor?: number, rhsPatch?: number) {

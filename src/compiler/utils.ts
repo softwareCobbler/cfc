@@ -655,6 +655,26 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
             return visitor(node.left)
                 || visitor(node.dblColon)
                 || visitor(node.right);
+        case NodeKind.destructuredList:
+            return visitor(node.leftBracket)
+                || forEachNode(node.elements, visitor)
+                || visitor(node.rightBracket);
+        case NodeKind.destructuredRecord:
+            return visitor(node.leftBrace)
+                || forEachNode(node.elements, visitor)
+                || visitor(node.rightBrace);
+        case NodeKind.destructuredRecordElement:
+            if (node.rest) {
+                return visitor(node.name)
+                    || visitor(node.rest.colon)
+                    || visitor(node.rest.value);
+            }
+            else {
+                return visitor(node.name);
+            }
+        case NodeKind.destructuredElement:
+            return visitor(node.value)
+                || visitor(node.comma);
         default:
             exhaustiveCaseGuard(node);
     }

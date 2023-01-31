@@ -34,7 +34,13 @@ function projectFiddle() {
                 "someFolder": {
                     "someFile.cfc": `
                         component {
-                            property foo.bar baz.qux default="x";
+                            function foo() {
+                                sources["seasons"].each((item, index) => {
+                                    for (var {x,y} in z) {
+
+                                    }
+                                });
+                            }
                         }
                     `
                 },

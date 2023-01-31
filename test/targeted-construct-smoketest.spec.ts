@@ -528,7 +528,7 @@ describe("general smoke test for particular constructs", () => {
             completionsTestTargets[absPath].check(completions);
         }
     })
-    it("Unparenthesized arrow functions illegal in Lucce", () => {
+    it("Unparenthesized arrow functions illegal in Lucee", () => {
         const fsRoot : FileSystemNode = {"/": {}};
         pushFsNode(fsRoot, "/a.cfc", `component { x = v => 42; }`);
         const luceeProject = Project("/", DebugFileSystem(fsRoot), {...commonProjectOptions, engineVersion: EngineVersions["lucee.5"]});
@@ -888,6 +888,74 @@ describe("general smoke test for particular constructs", () => {
                 const diagnostics = project.getDiagnostics("a.cfc");
                 assert.strictEqual(diagnostics.length, 1);
                 assert.match(diagnostics[0].msg, /Explicit 'type' attribute shadows implied 'type' attribute./);
+            }
+        }
+    })
+    it("destructuring assignments parse and issue diagnostics against particular engines", () => {
+        {
+            const fsRoot : FileSystemNode = {"/": {}};
+            pushFsNode(fsRoot, "/a.cfc", `
+                component {
+                    function foo() {
+                        sources["seasons"].each((item, index) => {
+                            var {name, seasonId, seasonState} = item;
+                        });
+                    }
+                }`
+            );
+
+            {
+                const dfs = DebugFileSystem(fsRoot);
+                const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["acf.2018"]});
+                project.addFile("a.cfc");
+            
+                const diagnostics = project.getDiagnostics("a.cfc");
+                assert.strictEqual(diagnostics.length, 1);
+                assert.match(diagnostics[0].msg, /Adobe supports destructuring assignments starting in version Adobe\/2021. cfls is currently configured for Adobe\/2018./);
+            }
+
+            {
+                const dfs = DebugFileSystem(fsRoot);
+                const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["lucee.5"]});
+                project.addFile("a.cfc");
+            
+                const diagnostics = project.getDiagnostics("a.cfc");
+                assert.strictEqual(diagnostics.length, 1);
+                assert.match(diagnostics[0].msg, /Lucee does not support destructuring assignments./);
+            }
+        }
+    })
+    it("destructuring assignments parse and offer autocomplete", () => {
+        {
+            const fsRoot : FileSystemNode = {"/": {}};
+            const text = `
+                component {
+                    function foo() {
+                        sources["seasons"].each((items, index) => {
+                            for (var {foo: [{x: /*comments*/ [xbar,xbaz,xqux]}]} in items) {
+                                x|<<<<
+                            }
+                        });
+                    }
+                }
+            `;
+
+            const {index, sourceText} = TestLoader.loadCompletionAtTestFromSource(text);
+
+            pushFsNode(fsRoot, "/a.cfc", sourceText);
+
+            {
+                const dfs = DebugFileSystem(fsRoot);
+                const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["acf.2021"]});
+                project.addFile("a.cfc");
+
+                const diagnostics = project.getDiagnostics("a.cfc");
+                assert.strictEqual(diagnostics.length, 0);
+                
+                const completions = getCompletions(project, "a.cfc", index, null);
+                assert.strictEqual(!!completions.find(v => v.label === "xbar"), true);
+                assert.strictEqual(!!completions.find(v => v.label === "xbaz"), true);
+                assert.strictEqual(!!completions.find(v => v.label === "xqux"), true);
             }
         }
     })
