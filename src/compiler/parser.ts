@@ -698,7 +698,7 @@ export function Parser(config: ProjectOptions) {
                 return CfTag.ScriptLike(CfTag.Which.start, tagStart, tagName, null, rightAngle, canonicalName, expr);
             }
             case "set": {
-                const expr = doInExtendedContext(ParseContext.awaitingVoidSlash, parseAssignmentOrLower);
+                const expr = doInExtendedContext(ParseContext.awaitingVoidSlash, () => parseAssignmentOrLower(/*supportDestructuringAssignment*/true));
                 const maybeVoidSlash = parseOptionalTerminal(TokenType.FORWARD_SLASH, ParseOptions.withTrivia);
                 const rightAngle = parseExpectedTerminal(TokenType.RIGHT_ANGLE, ParseOptions.noTrivia);
                 return CfTag.ScriptLike(CfTag.Which.start, tagStart, tagName, maybeVoidSlash, rightAngle, canonicalName, expr);
@@ -1919,7 +1919,7 @@ export function Parser(config: ProjectOptions) {
         }
     }
 
-    function parseAssignmentOrLower() : Node {
+    function parseAssignmentOrLower(supportDestructuringAssignment: boolean) : Node {
         const savedLastDocBlock = lastDocBlock;
         function isAssignmentOperator() : boolean {
             switch (lookahead()) {
@@ -1938,7 +1938,7 @@ export function Parser(config: ProjectOptions) {
 
         const finalModifier = parseOptionalTerminal(TokenType.KW_FINAL, ParseOptions.withTrivia);
         const varModifier = parseOptionalTerminal(TokenType.KW_VAR, ParseOptions.withTrivia);
-        const root = lookahead() === TokenType.LEFT_BRACE || lookahead() === TokenType.LEFT_BRACKET
+        const root = supportDestructuringAssignment && varModifier && (lookahead() === TokenType.LEFT_BRACE || lookahead() === TokenType.LEFT_BRACKET)
             ? parseDestructuringExpression()
             : parseAnonymousFunctionDefinitionOrExpression();
 
@@ -2261,7 +2261,7 @@ export function Parser(config: ProjectOptions) {
                 const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
                 const expr = engineVersion.engine === Engine.Adobe
                     ? parseAnonymousFunctionDefinitionOrExpression()
-                    : parseAssignmentOrLower()
+                    : parseAssignmentOrLower(/*supportDestructuringAssignment*/false)
                 const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
                 let root : Node = Parenthetical(leftParen, expr, rightParen);
 
@@ -3392,7 +3392,7 @@ export function Parser(config: ProjectOptions) {
                         fatArrow,
                         doOutsideOfContext(ParseContext.cfcPsuedoConstructor, () => engineVersion.engine === Engine.Adobe
                             ? parseAnonymousFunctionDefinitionOrExpression()
-                            : parseAssignmentOrLower()));
+                            : parseAssignmentOrLower(/*supportDestructuringAssignment*/false)));
                 }
             }
         });
@@ -3644,7 +3644,7 @@ export function Parser(config: ProjectOptions) {
         const forToken = parseExpectedTerminal(TokenType.KW_FOR, ParseOptions.withTrivia);
         const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
         let init = isStartOfExpression()
-            ? parseAssignmentOrLower()
+            ? parseAssignmentOrLower(/*supportDestructuringAssignment*/true)
             : null;
 
         if (peek().text.toLowerCase() === "in") {
@@ -3665,7 +3665,7 @@ export function Parser(config: ProjectOptions) {
             const semi1 = parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia);
             const condition = isStartOfExpression() ? parseExpression() : null;
             const semi2 = parseExpectedTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia);
-            const incrementExpr = isStartOfExpression() ? parseAssignmentOrLower() : null;
+            const incrementExpr = isStartOfExpression() ? parseAssignmentOrLower(/*supportDestructuringAssignment*/false) : null;
             const rightParen = parseExpectedTerminal(TokenType.RIGHT_PAREN, ParseOptions.withTrivia);
 
             parseContext = savedContext;
@@ -3795,7 +3795,7 @@ export function Parser(config: ProjectOptions) {
                 case TokenType.KW_NEW:
                 case TokenType.KW_FINAL:
                 case TokenType.KW_VAR: {
-                    const stmt = parseAssignmentOrLower();
+                    const stmt = parseAssignmentOrLower(/*supportDestructuringAssignment*/lookahead() === TokenType.KW_VAR);
 
                     // we may want to hold onto the semicolon later, but right now we can just discard it
                     // it is valid in this position though so we need to parse it
@@ -3878,7 +3878,7 @@ export function Parser(config: ProjectOptions) {
                 }
                 case TokenType.KW_RETURN: {
                     const returnToken = parseExpectedTerminal(TokenType.KW_RETURN, ParseOptions.withTrivia);
-                    const expr = isStartOfExpression() ? parseAssignmentOrLower() : null;
+                    const expr = isStartOfExpression() ? parseAssignmentOrLower(/*supportDestructuringAssignment*/false) : null;
                     // if we've got a return statement we should be in a script context;
                     // but a user may not be heeding that rule
                     const semi = scriptMode() ? parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia) : null;
@@ -4150,7 +4150,7 @@ export function Parser(config: ProjectOptions) {
                     }
 
                     if (isStartOfExpression()) {
-                        const result = parseAssignmentOrLower();
+                        const result = parseAssignmentOrLower(/*supportDestructuringAssignment*/false);
                         const semi = scriptMode() ? parseOptionalTerminal(TokenType.SEMICOLON, ParseOptions.withTrivia) : null;
                         return Statement(result, semi);
                     }
