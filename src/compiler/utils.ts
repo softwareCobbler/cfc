@@ -1,6 +1,6 @@
 import * as path from "path";
 import * as fs from "fs";
-import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CallExpression, CfTag, DestructuredRecordElementKind, DottedPath, DUMMY_CONTAINER, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, isStaticallyKnownScopeName, NamedFunctionDefinition, Node, NodeFlags, NodeId, NodeSourceMap, ParamStatementSubType, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymbolResolution, SymbolTable, SymTabEntry, SymTabResolution, TagAttribute, TypeShimKind, UnaryOperatorPos } from "./node";
+import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CallExpression, CfTag, DestructuredElementType, DestructuredRecordElementKind, DottedPath, DUMMY_CONTAINER, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, isStaticallyKnownScopeName, NamedFunctionDefinition, Node, NodeFlags, NodeId, NodeSourceMap, ParamStatementSubType, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymbolResolution, SymbolTable, SymTabEntry, SymTabResolution, TagAttribute, TypeShimKind, UnaryOperatorPos } from "./node";
 import { NodeKind } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, isStructLike, TypeFlags } from "./types";
@@ -673,8 +673,15 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                 return visitor(node.value.value);
             }
         case NodeKind.destructuredElement:
-            return visitor(node.value)
-                || visitor(node.comma);
+            if (node.elementType === DestructuredElementType.common) {
+                return visitor(node.value)
+                    || visitor(node.comma);
+            }
+            else {
+                return visitor(node.dotdotdot)
+                    || visitor(node.value)
+                    || visitor(node.comma);
+            }
         default:
             exhaustiveCaseGuard(node);
     }

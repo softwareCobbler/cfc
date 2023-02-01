@@ -2968,7 +2968,7 @@ export function Checker(options: ProjectOptions) {
             }
             case StructLiteralInitializerMemberSubtype.spread: {
                 if (!supports.structLiteralSpread(engineVersion)) {
-                    issueDiagnosticAtNode(node, `CF engine ${engineVersion} does not support struct literal spread syntax.`)
+                    issueDiagnosticAtNode(node, `CF engine ${engineVersion.uiString} does not support struct literal spread syntax.`)
                     setCachedEvaluatedNodeType(node, BuiltinType.never);
                 }
                 checkNode(node.expr);

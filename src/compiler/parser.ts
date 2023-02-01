@@ -24,7 +24,7 @@ import {
     New,
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
-    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess, DestructuredElement, DestructuredList, DestructuredRecord, DestructuredRecordElement_Bare, DestructuredRecordElement_RenamingOrNested } from "./node";
+    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess, DestructuredElement, DestructuredList, DestructuredRecord, DestructuredRecordElement_Bare, DestructuredRecordElement_RenamingOrNested, DestructuredElement_Rest } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard, Mutable } from "./utils";
 import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature } from "./types";
@@ -1898,6 +1898,13 @@ export function Parser(config: ProjectOptions) {
         }
         
         function parseDestructuredListElement() {
+            if (lookahead() === TokenType.DOT_DOT_DOT) {
+                const dotdotdot = parseExpectedTerminal(TokenType.DOT_DOT_DOT, ParseOptions.withTrivia);
+                const name = parseIdentifier();
+                const maybeComma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+                return DestructuredElement_Rest(dotdotdot, name, maybeComma);
+            }
+            
             const element = lookahead() === TokenType.LEFT_BRACE || lookahead() === TokenType.LEFT_BRACKET
                 ? parseDestructuringExpression()
                 : parseIdentifier();
@@ -1906,6 +1913,12 @@ export function Parser(config: ProjectOptions) {
         }
 
         function parseDestructuredRecordElement() {
+            if (lookahead() === TokenType.DOT_DOT_DOT) {
+                const dotdotdot = parseExpectedTerminal(TokenType.DOT_DOT_DOT, ParseOptions.withTrivia);
+                const name = parseIdentifier();
+                const maybeComma = parseOptionalTerminal(TokenType.COMMA, ParseOptions.withTrivia);
+                return DestructuredElement_Rest(dotdotdot, name, maybeComma);
+            }
             const name = parseIdentifier();
             if (lookahead() === TokenType.COLON) {
                 const colon = parseExpectedTerminal(TokenType.COLON, ParseOptions.withTrivia);
@@ -2790,10 +2803,11 @@ export function Parser(config: ProjectOptions) {
     function startsParseInContext(what: ParseContext) : boolean {
         switch (what) {
             case ParseContext.destructuringRecordExpression:
-                return isIdentifier();
+                return lookahead() === TokenType.DOT_DOT_DOT || isIdentifier();
             case ParseContext.destructuringListExpression:
                 return lookahead() === TokenType.LEFT_BRACE
                     || lookahead() === TokenType.LEFT_BRACKET
+                    || lookahead() === TokenType.DOT_DOT_DOT
                     || isIdentifier();
             case ParseContext.arrayLiteralBody:
             case ParseContext.structLiteralBody:

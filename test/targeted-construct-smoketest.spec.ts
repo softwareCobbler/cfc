@@ -959,4 +959,93 @@ describe("general smoke test for particular constructs", () => {
             }
         }
     })
+    it("destructuring assignment list rest -- must be in last position", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+        const text = `
+            component {
+                function foo() {
+                    var [...rest, x] = [];
+                }
+            }
+        `;
+
+        pushFsNode(fsRoot, "/a.cfc", text);
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["acf.2021"]});
+            project.addFile("a.cfc");
+
+            const diagnostics = project.getDiagnostics("a.cfc");
+            assert.strictEqual(diagnostics.length, 1);
+            assert.match(diagnostics[0].msg, /An array '...rest' binding should always be the last binding in the destructuring list./)
+        }     
+    })
+    it("destructuring assignment record rest -- cannot be on right side of named property", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+        const text = `
+            component {
+                function foo() {
+                    var {foo: ...rest} = {}
+                }
+            }
+        `;
+
+        pushFsNode(fsRoot, "/a.cfc", text);
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["acf.2021"]});
+            project.addFile("a.cfc");
+
+            const diagnostics = project.getDiagnostics("a.cfc");
+            assert.strictEqual(diagnostics.length, 1);
+            assert.match(diagnostics[0].msg, /An object '...rest' binding cannot be on the right-hand side of a named object property./)
+        }     
+    })
+    it("destructuring assignment list rest -- should only have max 1", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+        const text = `
+            component {
+                function foo() {
+                    var [...rest, ...moreRest] = [];
+                }
+            }
+        `;
+
+        pushFsNode(fsRoot, "/a.cfc", text);
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["acf.2021"]});
+            project.addFile("a.cfc");
+
+            const diagnostics = project.getDiagnostics("a.cfc");
+            assert.strictEqual(diagnostics.length, 2);
+            assert.match(diagnostics[0].msg, /A destructuring assignment should have exactly zero or one '...rest' binding./)
+            assert.match(diagnostics[1].msg, /An array '...rest' binding should always be the last binding in the destructuring list./)
+        }          
+    })
+    it("destructuring assignment record rest -- should only have max 1", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+        const text = `
+            component {
+                function foo() {
+                    var {...rest, ...moreRest} = [];
+                }
+            }
+        `;
+
+        pushFsNode(fsRoot, "/a.cfc", text);
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["acf.2021"]});
+            project.addFile("a.cfc");
+
+            const diagnostics = project.getDiagnostics("a.cfc");
+            assert.strictEqual(diagnostics.length, 1);
+            assert.match(diagnostics[0].msg, /A destructuring assignment should have exactly zero or one '...rest' binding./)
+        }          
+    })
 });

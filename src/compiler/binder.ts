@@ -1,4 +1,4 @@
-import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, UnreachableFlow, FlowType, ConditionalSubtype, SymbolTable, Property, ParamStatement, ParamStatementSubType, typeinfo, DiagnosticKind, StaticallyKnownScopeName, SwitchCaseType, DestructuredRecordElement, DestructuredElement, DestructuredRecordElementKind } from "./node";
+import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, UnreachableFlow, FlowType, ConditionalSubtype, SymbolTable, Property, ParamStatement, ParamStatementSubType, typeinfo, DiagnosticKind, StaticallyKnownScopeName, SwitchCaseType, DestructuredRecordElement, DestructuredElement, DestructuredRecordElementKind, DestructuredElementType, DestructuredList, DestructuredRecord } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol, findAncestor, TupleKeyedMap, isNamedFunction, isInEffectiveConstructorMethod } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { BuiltinType, Type, Interface, cfTypeId, TypeKind } from "./types";
@@ -259,18 +259,11 @@ export function Binder(options: ProjectOptions) {
                 bindNode(node.right, node);
                 return;
             case NodeKind.destructuredRecord:
-                // fallthrough
-            case NodeKind.destructuredList: {
-                if (engineVersion.engine === Engine["Lucee"]) {
-                    issueDiagnosticAtRange(node.range, "Lucee does not support destructuring assignments.");
-                }
-                else if (engineVersion.engine === Engine["Adobe"] && engineVersion.semver.compare(EngineVersions["acf.2021"].semver) === -1) {
-                    issueDiagnosticAtRange(node.range, `Adobe supports destructuring assignments starting in version ${EngineVersions["acf.2021"].uiString}. cfls is currently configured for ${engineVersion.uiString}.`);
-                }
-                const cbind = (next: Node) => bindNode(next, node);
-                node.elements.forEach(cbind);
+                bindDestructuringRoot(node);
                 return;
-            }
+            case NodeKind.destructuredList:
+                bindDestructuringRoot(node);
+                return;
             case NodeKind.destructuredElement:
                 bindMaybeDestructuringLeaf(node);
                 return;
@@ -1505,16 +1498,89 @@ export function Binder(options: ProjectOptions) {
         bindTypeAndInterfacedefsForContainer(sourceFile);
     }
 
+    function bindDestructuringRoot(node: DestructuredRecord | DestructuredList) {
+        if (engineVersion.engine === Engine["Lucee"]) {
+            issueDiagnosticAtRange(node.range, "Lucee does not support destructuring assignments.");
+        }
+        else if (engineVersion.engine === Engine["Adobe"] && engineVersion.semver.compare(EngineVersions["acf.2021"].semver) === -1) {
+            issueDiagnosticAtRange(node.range, `Adobe supports destructuring assignments starting in version ${EngineVersions["acf.2021"].uiString}. cfls is currently configured for ${engineVersion.uiString}.`);
+        }
+
+        const restCandidates = (() => {
+            switch (node.kind) {
+                case NodeKind.destructuredList: {
+                    return node.elements;
+                }
+                case NodeKind.destructuredRecord: {
+                    // maybe a TS bug here, node.elements.filter(isDestructuredElement) doesn't apply the type guard?
+                    const restCandidates : DestructuredElement[] = []
+                    for (const element of node.elements) {
+                        if (isDestructuredElement(element)) {
+                            restCandidates.push(element);
+                        }
+                    }
+                    return restCandidates;
+                }
+                default: exhaustiveCaseGuard(node);
+            }
+
+            function isDestructuredElement(v: Node) : v is DestructuredElement {
+                return v.kind === NodeKind.destructuredElement;
+            }
+        })();
+        
+        maybeIssueDiagnosticsOnTooManySpreads(restCandidates);
+
+        node.elements.forEach((next: Node) => bindNode(next, node));
+
+        function maybeIssueDiagnosticsOnTooManySpreads(elements: DestructuredElement[]) : void {
+            let totalRestElements = 0;
+            for (const element of elements) {
+                if (element.elementType === DestructuredElementType.rest) {
+                    totalRestElements++;
+                    if (totalRestElements > 1) {
+                        issueDiagnosticAtRange(element.range, "A destructuring assignment should have exactly zero or one '...rest' binding.");
+                    }
+                }
+            }
+        }
+    }
+
     function bindMaybeDestructuringLeaf(node: DestructuredElement | DestructuredRecordElement) {
         switch (node.kind) {
             case NodeKind.destructuredElement: {
-                if (node.value.kind === NodeKind.identifier) {
-                    maybeAddSymbolToLocalScope(node.value);
+                switch (node.elementType) {
+                    case DestructuredElementType.common: {
+                        if (node.value.kind === NodeKind.identifier) {
+                            maybeAddSymbolToLocalScope(node.value);
+                        }
+                        else {
+                            bindNode(node.value, node);
+                        }
+                        return;
+                    }
+                    case DestructuredElementType.rest: {
+                        if (node.parent?.kind === NodeKind.destructuredList) {
+                            // check it is "last" postition (for lists)
+                            if (node.parent.elements.indexOf(node) !== node.parent.elements.length - 1) {
+                                issueDiagnosticAtRange(node.range, "An array '...rest' binding should always be the last binding in the destructuring list.");
+                            }
+                        }
+                        else if (node.parent?.kind === NodeKind.destructuredRecordElement) {
+                            // check that we are not on the right side of a rebinding (for records)
+                            // {x: ...bad} parses, but is non-sensical
+                            issueDiagnosticAtRange(node.range, "An object '...rest' binding cannot be on the right-hand side of a named object property.");
+                        }
+                        else {
+                            // no-op
+                        }
+
+                        maybeAddSymbolToLocalScope(node.value);
+
+                        return;
+                    }
+                    default: exhaustiveCaseGuard(node);
                 }
-                else {
-                    bindNode(node.value, node);
-                }
-                return;
             }
             case NodeKind.destructuredRecordElement: {
                 if (node.value.type === DestructuredRecordElementKind.bare) {

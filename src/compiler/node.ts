@@ -2711,14 +2711,31 @@ export interface DestructuredList extends NodeBase {
 export interface DestructuredRecord extends NodeBase {
     kind: NodeKind.destructuredRecord,
     leftBrace: Terminal,
-    elements: DestructuredRecordElement[],
+    elements: (DestructuredElementRest | DestructuredRecordElement)[],
     rightBrace: Terminal
 }
 
-export interface DestructuredElement<T extends DestructuredList | DestructuredRecord | Identifier = DestructuredList | DestructuredRecord | Identifier> extends NodeBase {
+export const enum DestructuredElementType { common, rest }
+interface DestructuredElementBase<T extends DestructuredList | DestructuredRecord | Identifier> extends NodeBase {
     kind: NodeKind.destructuredElement,
+    elementType: DestructuredElementType,
+    dotdotdot: Terminal | null,
     value: T,
     comma: Terminal | null,
+}
+
+export type DestructuredElement = DestructuredElementCommon | DestructuredElementRest;
+export interface DestructuredElementCommon<
+    T extends DestructuredList | DestructuredRecord | Identifier
+        = DestructuredList | DestructuredRecord | Identifier>
+extends DestructuredElementBase<T>  {
+    elementType: DestructuredElementType.common,
+    dotdotdot: null
+}
+
+export interface DestructuredElementRest extends DestructuredElementBase<Identifier>  {
+    elementType: DestructuredElementType.rest,
+    dotdotdot: Terminal
 }
 
 export const enum DestructuredRecordElementKind { bare, renamingOrNested }
@@ -2727,7 +2744,7 @@ export interface DestructuredRecordElement extends NodeBase {
     value:
         | {
             type: DestructuredRecordElementKind.bare,
-            value: DestructuredElement<Identifier>
+            value: DestructuredElementCommon<Identifier>
         }
         | {
             type: DestructuredRecordElementKind.renamingOrNested,
@@ -2751,7 +2768,7 @@ export function DestructuredList(
 
 export function DestructuredRecord(
     leftBrace: Terminal,
-    elements: DestructuredRecordElement[],
+    elements: (DestructuredElementRest | DestructuredRecordElement)[],
     rightBrace: Terminal,
 ) : DestructuredRecord {
     const v = NodeBase<DestructuredRecord>(NodeKind.destructuredRecord, mergeRanges(leftBrace, elements, rightBrace));
@@ -2764,8 +2781,23 @@ export function DestructuredRecord(
 export function DestructuredElement<T extends DestructuredList | DestructuredRecord | Identifier = DestructuredList | DestructuredRecord | Identifier >(
     element: T,
     comma: Terminal | null
-) : DestructuredElement<T> {
-    const v = NodeBase<DestructuredElement<T>>(NodeKind.destructuredElement, mergeRanges(element, comma));
+) : DestructuredElementCommon<T> {
+    const v = NodeBase<DestructuredElementCommon<T>>(NodeKind.destructuredElement, mergeRanges(element, comma));
+    v.elementType = DestructuredElementType.common;
+    v.dotdotdot = null;
+    v.value = element;
+    v.comma = comma;
+    return v;
+}
+
+export function DestructuredElement_Rest(
+    dotdotdot: Terminal,
+    element: Identifier,
+    comma: Terminal | null,
+) : DestructuredElementRest {
+    const v = NodeBase<DestructuredElementRest>(NodeKind.destructuredElement, mergeRanges(element, comma));
+    v.elementType = DestructuredElementType.rest;
+    v.dotdotdot = dotdotdot;
     v.value = element;
     v.comma = comma;
     return v;

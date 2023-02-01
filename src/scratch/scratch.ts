@@ -36,7 +36,7 @@ function projectFiddle() {
                         component {
                             function foo() {
                                 sources["seasons"].each((item, index) => {
-                                    var {x, [z,zzzzzzzzzz]} = 42;
+                                    var [...rest, ...moreRest] = 0
                                     z
                                 });
                             }
