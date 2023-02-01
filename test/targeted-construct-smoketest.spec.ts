@@ -1048,4 +1048,24 @@ describe("general smoke test for particular constructs", () => {
             assert.match(diagnostics[0].msg, /A destructuring assignment should have exactly zero or one '...rest' binding./)
         }          
     })
+    it("Should parse array[] notation on typenames in cf function signatures", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+        const text = `
+            component {
+                some.java.like.type.name[] function foo(required bar[] baz) {}
+                Foo[/*comments*/][][][] function bar(required Bar[][] baz) {}
+            }
+        `;
+
+        pushFsNode(fsRoot, "/a.cfc", text);
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["acf.2021"]});
+            project.addFile("a.cfc");
+
+            const diagnostics = project.getDiagnostics("a.cfc");
+            assert.strictEqual(diagnostics.length, 0);
+        }
+    })
 });

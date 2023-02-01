@@ -3055,24 +3055,41 @@ export function Parser(config: ProjectOptions) {
         return NumericLiteral(parseExpectedTerminal(TokenType.NUMBER, ParseOptions.withTrivia));
     }  
 
+    // we should hold onto these, wherever we do parse them,
+    // but this is mostly for `SomeType.Foo[][] function getFoo(x[][] xs) ...`
+    // and we don't type check it anyway so we don't really need the info, we just
+    // need to parse it
+    function parseMatchingArrayBraces_withIntentToDiscard() : void {
+        while (lookahead() === TokenType.LEFT_BRACKET) {
+            parseExpectedTerminal(TokenType.LEFT_BRACKET, ParseOptions.withTrivia);
+            parseExpectedTerminal(TokenType.RIGHT_BRACKET, ParseOptions.withTrivia);
+        }
+    }
+
     function isJavaLikeTypename() {
         if (!isLexemeLikeToken(peek())) {
             return false;
         }
 
-        next();
-
-        while (lookahead() === TokenType.DOT) {
-            next();
-            if (isLexemeLikeToken(peek())) next();
-            else return false;    
+        while (true) {
+            if (isLexemeLikeToken(peek())) {
+                next();
+                if (lookahead() === TokenType.DOT) {
+                    next();
+                    continue;
+                }
+                else if (lookahead() === TokenType.LEFT_BRACKET) {
+                    parseMatchingArrayBraces_withIntentToDiscard();
+                    return true;
+                }
+                else {
+                    return true;
+                }
+            }
+            else {
+                return false;
+            }
         }
-
-        // @fixme - handle the case of a trailing dot here ?
-        // `x.y.z.`
-        //       ^ this is probably OK in this predicate; parser has to handle it though
-
-        return true;
     }
 
     function isJavaLikeTypenameThenName() : boolean {
@@ -3271,6 +3288,7 @@ export function Parser(config: ProjectOptions) {
                 //                          ^^^^^^^^^^^^^
                 if (SpeculationHelper.lookahead(isJavaLikeTypenameThenName)) {
                     javaLikeTypename = parseDottedPath();
+                    parseMatchingArrayBraces_withIntentToDiscard();
                     name = parseIdentifier();
                     // todo - parse type annotation
                 }
@@ -3563,6 +3581,7 @@ export function Parser(config: ProjectOptions) {
         }
         if (SpeculationHelper.lookahead(isJavaLikeTypenameThenFunction)) {
             returnType = parseDottedPath();
+            parseMatchingArrayBraces_withIntentToDiscard();
         }
 
         if (speculative) {

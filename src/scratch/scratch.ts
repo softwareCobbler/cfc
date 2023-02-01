@@ -34,12 +34,8 @@ function projectFiddle() {
                 "someFolder": {
                     "someFile.cfc": `
                         component {
-                            function foo() {
-                                sources["seasons"].each((item, index) => {
-                                    var [...rest, ...moreRest] = 0
-                                    z
-                                });
-                            }
+                            some.java.like.type.name[] function foo(required bar[] baz) {}
+                            Foo[/*comments*/][][][] function bar(required Bar[][] baz) {}
                         }
                     `
                 },
