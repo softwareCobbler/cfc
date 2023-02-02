@@ -415,6 +415,10 @@ export function Checker(options: ProjectOptions) {
             case NodeKind.destructuredRecordElement:
                 // nothing to check at the moment here
                 return;
+            case NodeKind.typedArrayLiteral:
+                // we don't do anything with the typehint
+                checkArrayLiteral(node.array);
+                return;
             default:
                 exhaustiveCaseGuard(node);
         }

@@ -30,7 +30,8 @@ export const enum NodeKind {
     identifier,
     indexedAccess, indexedAccessChainElement, sliceExpression,
     functionDefinition, arrowFunctionDefinition, functionParameter,
-    dottedPath, dottedPathRest, switch, switchCase, do, while, ternary, for, structLiteral, arrayLiteral,
+    dottedPath, dottedPathRest, switch, switchCase, do, while, ternary, for, structLiteral,
+    arrayLiteral, typedArrayLiteral,
     structLiteralInitializerMember, arrayLiteralInitializerMember, try, catch, finally,
     breakStatement, continueStatement, returnStatement, importStatement,
     new, typeShim,
@@ -77,6 +78,7 @@ const NodeTypeUiString : Record<NodeKind, string> = {
     [NodeKind.for]: "for",
     [NodeKind.structLiteral]: "structLiteral",
     [NodeKind.arrayLiteral]: "arrayLiteral",
+    [NodeKind.typedArrayLiteral]: "typedArrayLiteral",
     [NodeKind.structLiteralInitializerMember]: "structLiteralInitializerMember",
     [NodeKind.arrayLiteralInitializerMember]: "arrayLiteralInitializerMember",
     [NodeKind.returnStatement]: "returnStatement",
@@ -138,6 +140,7 @@ export type Node =
     | StructLiteral
     | StructLiteralInitializerMember
     | ArrayLiteral
+    | TypedArrayLiteral
     | ArrayLiteralInitializerMember
     | Try
     | Catch
@@ -2820,5 +2823,28 @@ export function DestructuredRecordElement_RenamingOrNested(name: Identifier, col
         colon: colon,
         value: element
     }
+    return v;
+}
+
+/**
+ * on adobe, a "typed array literal", is an array literal like
+ * ["a.b.c"][v,v,v,...] // type is a.b.c[]
+ * a = {b: {c: "string"}}
+ * [a.b.c][v,v,v,...] // type is string[]
+ * foo = () => "string"
+ * [foo()][v,v,v,...] // type is string[]
+ * where the first array is actually a type annotation; the first array always has exactly 1 element,
+ * and the element may be a string literal or (any?) expression
+ */
+export interface TypedArrayLiteral extends NodeBase {
+    kind: NodeKind.typedArrayLiteral,
+    typehint: ArrayLiteral
+    array: ArrayLiteral
+}
+
+export function TypedArrayLiteral(typehint: ArrayLiteral, array: ArrayLiteral) : TypedArrayLiteral {
+    const v = NodeBase<TypedArrayLiteral>(NodeKind.typedArrayLiteral, mergeRanges(typehint, array));
+    v.typehint = typehint;
+    v.array = array;
     return v;
 }

@@ -1068,4 +1068,33 @@ describe("general smoke test for particular constructs", () => {
             assert.strictEqual(diagnostics.length, 0);
         }
     })
+    it("Should parse ['type'][...] array notation in Adobe mode", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+        const text = `
+            component {
+                function foo() {
+                    var x = [foo.bar.baz][
+                        [f()][
+                            ["a.b.c"][
+                                1
+                            ],
+                            2
+                        ],
+                        3
+                    ];
+                }
+            }
+        `;
+
+        pushFsNode(fsRoot, "/a.cfc", text);
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["acf.2018"]});
+            project.addFile("a.cfc");
+
+            const diagnostics = project.getDiagnostics("a.cfc");
+            assert.strictEqual(diagnostics.length, 0);
+        }
+    });
 });

@@ -270,6 +270,10 @@ export function Binder(options: ProjectOptions) {
             case NodeKind.destructuredRecordElement:
                 bindMaybeDestructuringLeaf(node);
                 return;
+            case NodeKind.typedArrayLiteral:
+                // we don't do anything with the typehint
+                bindArrayLiteral(node.array);
+                return;
             default:
                 exhaustiveCaseGuard(node);
         }

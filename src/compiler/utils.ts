@@ -682,6 +682,9 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
                     || visitor(node.value)
                     || visitor(node.comma);
             }
+        case NodeKind.typedArrayLiteral:
+            return visitor(node.typehint)
+                || visitor(node.array)
         default:
             exhaustiveCaseGuard(node);
     }

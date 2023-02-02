@@ -24,7 +24,7 @@ import {
     New,
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
-    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess, DestructuredElement, DestructuredList, DestructuredRecord, DestructuredRecordElement_Bare, DestructuredRecordElement_RenamingOrNested, DestructuredElement_Rest } from "./node";
+    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess, DestructuredElement, DestructuredList, DestructuredRecord, DestructuredRecordElement_Bare, DestructuredRecordElement_RenamingOrNested, DestructuredElement_Rest, TypedArrayLiteral } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard, Mutable } from "./utils";
 import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature } from "./types";
@@ -2370,8 +2370,28 @@ export function Parser(config: ProjectOptions) {
                 return parseCallExpressionOrLowerRest(
                     parseStructLiteral());
             case TokenType.LEFT_BRACKET:
-                return parseCallExpressionOrLowerRest(
-                    parseArrayLiteralOrOrderedStructLiteral());
+                const arrayLiteralOrOrderedStructLiteral = parseArrayLiteralOrOrderedStructLiteral()
+                // on Adobe, we may need to parse:
+                // [someTypeName][m0, m1, ...]
+                // ["someTypeName"][m0, m1, ...]
+                if (engineVersion.engine === Engine.Adobe) {
+                    if (arrayLiteralOrOrderedStructLiteral.kind === NodeKind.arrayLiteral) {
+                        const typehint = arrayLiteralOrOrderedStructLiteral;
+                        if (arrayLiteralOrOrderedStructLiteral.members.length === 1) {
+                            if (lookahead() === TokenType.LEFT_BRACKET) {
+                                const array = parseArrayLiteralOrOrderedStructLiteral();
+                                if (array.kind === NodeKind.arrayLiteral) {
+                                    return TypedArrayLiteral(typehint, array);
+                                }
+                                else {
+                                    parseErrorAtRange(array.range, "Expected an array to complete the typed array expression.");
+                                    return TypedArrayLiteral(typehint, ArrayLiteral(array.leftDelimiter, [], array.rightDelimiter));
+                                }
+                            }
+                        }
+                    }
+                }
+                return parseCallExpressionOrLowerRest(arrayLiteralOrOrderedStructLiteral);
             case TokenType.HASH:
                 if (!isInSomeContext(ParseContext.hashWrappedExpr)) {
                     // do this outside of an interpolated text context;
