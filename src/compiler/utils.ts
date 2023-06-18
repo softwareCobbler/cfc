@@ -1,6 +1,6 @@
 import * as path from "path";
 import * as fs from "fs";
-import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CallExpression, CfTag, DestructuredElementType, DestructuredRecordElementKind, DottedPath, DUMMY_CONTAINER, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, isStaticallyKnownScopeName, NamedFunctionDefinition, Node, NodeFlags, NodeId, NodeSourceMap, ParamStatementSubType, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymbolResolution, SymbolTable, SymTabEntry, SymTabResolution, TagAttribute, TypeShimKind, UnaryOperatorPos } from "./node";
+import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CallExpression, CfTag, Comment, DestructuredElementType, DestructuredRecordElementKind, DottedPath, DUMMY_CONTAINER, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, isStaticallyKnownScopeName, NamedFunctionDefinition, Node, NodeFlags, NodeId, NodeSourceMap, ParamStatementSubType, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymbolResolution, SymbolTable, SymTabEntry, SymTabResolution, TagAttribute, Terminal, TextSpan, TypeShimKind, UnaryOperatorPos, IndexableTree } from "./node";
 import { NodeKind } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, isStructLike, TypeFlags } from "./types";
@@ -692,16 +692,19 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
 
 export function exhaustiveCaseGuard(_: never) : never { throw "Non-exhaustive case or unintentional fallthrough."; }
 
-export function flattenTree(tree: Node | Node[]) : NodeSourceMap[] {
-    const result : NodeSourceMap[] = [];
+export function flattenTree(tree: Node | Node[]) : IndexableTree {
+    const result : IndexableTree = {
+        sourceOrderedTerminals: [],
+        nodesByStartPos: new Map(),
+    }
 
-    function pushNode(node: Node) {
-        if (result.length > 0) {
-            if (result[result.length-1].range.toExclusive > node.range.fromInclusive) {
+    function pushNode(node: Terminal | Comment | TextSpan) {
+        if (result.sourceOrderedTerminals.length > 0) {
+            if (result.sourceOrderedTerminals[result.sourceOrderedTerminals.length-1].range.toExclusive > node.range.fromInclusive) {
                 throw "each subsequent node should start on or after the exclusive end of the previous node";
             }
         }
-        result.push({
+        result.sourceOrderedTerminals.push({
             nodeId: node.nodeId,
             range: node.range
         });
@@ -709,6 +712,12 @@ export function flattenTree(tree: Node | Node[]) : NodeSourceMap[] {
 
     function visitor(node: Node | undefined | null) {
         if (node) {
+            {
+                const nodesAtThisStartPos = (result.nodesByStartPos.get(node.range.fromInclusive) ?? [])
+                nodesAtThisStartPos.push(node)
+                result.nodesByStartPos.set(node.range.fromInclusive, nodesAtThisStartPos);
+            }
+
             // a docBlock attribute is sourced from a comment; the comments get visited and flattened, so we don't need to do the same
             // to the attributes the doc block generates (if we did so, they would be out-of-source order, too, which would break things)
             if (node.kind === NodeKind.tagAttribute && node.flags & NodeFlags.docBlock) {

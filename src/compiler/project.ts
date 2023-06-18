@@ -309,7 +309,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             binder.bind(sourceFile);
             const bindElapsed = new Date().getTime() - bindStart;
 
-            sourceFile.flatTree = flattenTree(sourceFile);
+            sourceFile.indexableTree = flattenTree(sourceFile);
 
             // do before checking so resolving a self-referential cfc in the checker works
             // e.g. in foo.cfc `public foo function bar() { return this; }`
@@ -767,7 +767,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     function getNodeToLeftOfCursor(absPath: string, targetIndex: number) : Node | undefined {
 		const sourceFile = getCachedFile(absPath);
 		if (!sourceFile) return undefined;
-		return findNodeInFlatSourceMap(sourceFile.flatTree, sourceFile.nodeMap, targetIndex);
+		return findNodeInFlatSourceMap(sourceFile.indexableTree.sourceOrderedTerminals, sourceFile.nodeMap, targetIndex);
     }
 
     /**
@@ -777,7 +777,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     function getInterestingNodeToLeftOfCursor(absPath: string, targetIndex: number) : Node | undefined {
 		const sourceFile = getCachedFile(absPath);
 		if (!sourceFile) return undefined;
-		const node = findNodeInFlatSourceMap(sourceFile.flatTree, sourceFile.nodeMap, targetIndex);
+		const node = findNodeInFlatSourceMap(sourceFile.indexableTree.sourceOrderedTerminals, sourceFile.nodeMap, targetIndex);
         if (!node
             || node.kind === NodeKind.comment
             || (node.kind === NodeKind.textSpan

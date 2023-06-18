@@ -369,13 +369,18 @@ export interface NodeSourceMap {
     range: SourceRange
 }
 
+export interface IndexableTree {
+    sourceOrderedTerminals: NodeSourceMap[],
+    nodesByStartPos: Map<number, Node[]>,
+}
+
 export interface SourceFile extends NodeBase {
     kind: NodeKind.sourceFile,
     absPath: string,
     cfFileType: CfFileType,
     containedScope: ScopeDisplay,
     content: Node[],
-    flatTree: NodeSourceMap[],
+    indexableTree: IndexableTree,
     libRefs: Map<string, SourceFile>,
     diagnostics: Diagnostic[],
     scanner: Scanner,
@@ -394,7 +399,10 @@ export interface SourceFile extends NodeBase {
 export function resetSourceFileInPlace(target: SourceFile, newSource: string | Buffer) : void {
     target.containedScope = {parentContainer: null, typeinfo: typeinfo()};
     target.content = [];
-    target.flatTree = [];
+    target.indexableTree = {
+        sourceOrderedTerminals: [],
+        nodesByStartPos: new Map()
+    };
     // target.libRefs untouched
     target.diagnostics = [];
     target.scanner = Scanner(newSource);
@@ -416,7 +424,10 @@ export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: 
         typeinfo: typeinfo(),
     };
     sourceFile.content = [];
-    sourceFile.flatTree = [];
+    sourceFile.indexableTree = {
+        sourceOrderedTerminals: [],
+        nodesByStartPos: new Map()
+    };
     sourceFile.libRefs = new Map();
     sourceFile.diagnostics = [];
     sourceFile.scanner = Scanner(sourceText);

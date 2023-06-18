@@ -144,7 +144,7 @@ function addDebugTypeInfo(type: Type) {
             const flags : string[] = [];
             for (let i = 1; (1 << i) < TypeFlags.end; i++) {
                 if (type.flags & (1 << i)) {
-                    flags.push(TypeFlagsUiString[1 << i]);
+                    flags.push((TypeFlagsUiString as any)[1 << i]);
                 }
             }
 
