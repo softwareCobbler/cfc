@@ -396,6 +396,11 @@ export class SourceRange {
         return this.fromInclusive <= index && index < this.toExclusive
     }
 
+    isDisjointFrom(other: SourceRange) : boolean {
+        return (this.fromInclusive >= other.toExclusive) // definitely entirely beyond other
+            || (this.fromInclusive < other.fromInclusive && this.toExclusive <= other.fromInclusive) // entirely before other
+    }
+
     size() {
         return this.toExclusive - this.fromInclusive;
     }

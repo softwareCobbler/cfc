@@ -1,13 +1,14 @@
 import * as assert from "assert";
 
 import { Parser, Binder, CfFileType, SourceFile, NilCfm, flattenTree, NilCfc, DebugFileSystem, FileSystem, Project } from "../src/compiler";
-import { IndexedAccess, NodeKind } from "../src/compiler/node";
+import { IndexedAccess, NodeKind, resetSourceFileInPlace } from "../src/compiler/node";
 import { findNodeInFlatSourceMap, getTriviallyComputableString } from "../src/compiler/utils";
 import * as TestLoader from "./TestLoader";
 import { CompletionItem, getCompletions } from "../src/services/completions";
 import { ProjectOptions, FileSystemNode, pushFsNode } from "../src/compiler/project";
 import { EngineVersions, EngineVersion } from "../src/compiler/engines";
 import { setDebug as setNodeModuleDebug } from "../src/compiler/node";
+import { SourceRange } from "../src/compiler/scanner";
 
 setNodeModuleDebug();
 
@@ -128,7 +129,7 @@ describe("general smoke test for particular constructs", () => {
         const flatSourceMap = flattenTree(sourceFile);
         const nodeMap = sourceFile.nodeMap;
 
-        const node = findNodeInFlatSourceMap(flatSourceMap, nodeMap, completionsTestCase.index);
+        const node = findNodeInFlatSourceMap(flatSourceMap.sourceOrderedTerminals, nodeMap, completionsTestCase.index);
         assert.strictEqual(node?.kind, NodeKind.terminal, "found node is a terminal");
         assert.strictEqual(node?.parent?.kind, NodeKind.indexedAccessChainElement, "found node parent is an indexedAccessChainElement");
         assert.strictEqual(node?.parent?.parent?.kind, NodeKind.identifier, "found node parent.parent is an identifier");
@@ -241,7 +242,7 @@ describe("general smoke test for particular constructs", () => {
         const flatSourceMap = flattenTree(sourceFile);
         const nodeMap = sourceFile.nodeMap;
 
-        const node = findNodeInFlatSourceMap(flatSourceMap, nodeMap, completionsTestCase.index);
+        const node = findNodeInFlatSourceMap(flatSourceMap.sourceOrderedTerminals, nodeMap, completionsTestCase.index);
         assert.strictEqual(node?.parent?.kind, NodeKind.dottedPath);
         assert.strictEqual(node?.parent?.parent?.kind, NodeKind.functionDefinition);
     });
@@ -1097,4 +1098,65 @@ describe("general smoke test for particular constructs", () => {
             assert.strictEqual(diagnostics.length, 0);
         }
     });
+    it.only("reparse 1", () => {
+        const HERE = "|<<<<"
+        const REPLACED_WITH = "some_arg"
+        // bleem()
+        // ^281
+        const text1_withChangeTarget = `
+            component {
+                function foo() {
+                    if (foo) {
+                        bar();
+                    }
+                    else if (bar) {
+                        baz(${HERE})
+                    }
+                    else {
+                        var z = () => { return 42; }
+                    }
+                }
+
+                function bar() {}
+            }
+        `;
+
+        // bleem()
+        // ^290
+        const text2 = `
+            component {
+                function foo() {
+                    if (foo) {
+                        bar();
+                    }
+                    else if (bar) {
+                        baz(${REPLACED_WITH})
+                    }
+                    else {
+                        var z = () => { return 42; }
+                    }
+                }
+
+                function bar() {}
+            }
+        `;
+
+        const {index, sourceText} = TestLoader.loadCompletionAtTestFromSource(text1_withChangeTarget);
+        const changeRange = new SourceRange(index, index + REPLACED_WITH.length)
+
+        const sourceFile = SourceFile("x.cfm", CfFileType.cfc, sourceText)
+        const parser = Parser(commonProjectOptions)
+        const binder = Binder(commonProjectOptions)
+        parser.parse(sourceFile)
+        binder.bind(sourceFile)
+        sourceFile.indexableTree = flattenTree(sourceFile)
+
+        const oldTree = sourceFile.indexableTree
+        const oldNodeMap = sourceFile.nodeMap
+
+        resetSourceFileInPlace(sourceFile, text2)
+        debugger;
+        parser.reparse(sourceFile, oldTree, oldNodeMap, changeRange)
+        console.log(42);
+    })
 });

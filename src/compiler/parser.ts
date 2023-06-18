@@ -24,9 +24,9 @@ import {
     New,
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
-    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess, DestructuredElement, DestructuredList, DestructuredRecord, DestructuredRecordElement_Bare, DestructuredRecordElement_RenamingOrNested, DestructuredElement_Rest, TypedArrayLiteral } from "./node";
+    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess, DestructuredElement, DestructuredList, DestructuredRecord, DestructuredRecordElement_Bare, DestructuredRecordElement_RenamingOrNested, DestructuredElement_Rest, TypedArrayLiteral, IndexableTree, StatementType, NodeId, FunctionDefinition } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType } from "./scanner";
-import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard, Mutable } from "./utils";
+import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard, Mutable, findNodeInFlatSourceMap, findAncestor, visit } from "./utils";
 import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature } from "./types";
 import { Type, UninstantiatedArray, Struct, cfFunctionSignature, cfTypeId, cfUnion, BuiltinType, cfFunctionSignatureParam } from "./types";
 import { Engine } from "./engines";
@@ -112,10 +112,12 @@ interface ScannerState {
     artificialEndLimit: number | undefined;
 }
 
-export function Parser(config: ProjectOptions) {  
+export function Parser(config: ProjectOptions) { 
     const parseTypes = config.parseTypes;
     const debug = config.debug;
     const engineVersion = config.engineVersion;
+    
+    let reparser : ReturnType<typeof Reparser> | null = null;
 
     function primePeekCacheAndLookahead() : void {
         peek0Cache_ = null;
@@ -203,6 +205,7 @@ export function Parser(config: ProjectOptions) {
         parseTags,
         parseScript,
         parse,
+        reparse
     };
 
     return self_;
@@ -960,6 +963,78 @@ export function Parser(config: ProjectOptions) {
         (typedefContainer as any) = undefined;
         lastDocBlock = null;
         parseErrorMsg = null;
+    }
+
+    function Reparser(oldTree: IndexableTree, reparsingThisRange_oldText: SourceRange, changeSize: number) {
+        // if change was "add text", so "foo(a) + x" --> "foo(abcd) + x", the newtext pos after the change needs to be shifted left
+        //                               0123456789       0123456789ABC
+        //                                        ^-------------------| change size of +3, delta of -3 to old node positions
+        //
+        // if change was "remove text", so "foo(abcd) + x" --> "foo(a) + x", the newtext pos after the change needs to be shifted right
+        //                                  0123456789ABC       0123456789       
+        //                                              ^----------------| change size of -3, delta of +3 to old node positions
+        const newTextScannerPosDelta = changeSize * -1;
+        function maybeGetReusableNode<T extends Node>(nodeKind: T["kind"], scannerPos_newText: number) : T | null {
+            const isAfterChangeRange = scannerPos_newText >= reparsingThisRange_oldText.toExclusive
+            const scannerPos_oldText = isAfterChangeRange
+                ? scannerPos_newText + newTextScannerPosDelta
+                : scannerPos_newText;
+
+            // does the directly affected production contain the scanner position?
+            // if so, we can't reuse any nodes from here
+            if (reparsingThisRange_oldText.includes(scannerPos_oldText)) {
+                return null;
+            }
+
+            const oldNode = oldTree.nodesByStartPos.get(scannerPos_oldText)?.find(node => node.kind === nodeKind) as T || null;
+
+            // does the discovered node NOT overlap with the reparsing range?
+            // function foo() { var z = () => reparsingThis() } // can't reuse function foo()
+            if (oldNode && oldNode.range.isDisjointFrom(reparsingThisRange_oldText)) {
+                return isAfterChangeRange
+                    ? updateRanges(oldNode, changeSize)
+                    : oldNode
+            }
+            else {
+                return null;
+            }
+        }
+
+        function updateRanges<T extends Node>(node: T, delta: number) {
+            // visit doesn't visit the initial "root" node ... 
+            node.range.fromInclusive += delta;
+            node.range.toExclusive += delta;
+
+            visit(node, node => {
+                if (!node) {
+                    return;
+                }
+                node.range.fromInclusive += delta;
+                node.range.toExclusive += delta;
+                if (node.kind === NodeKind.terminal) {
+                    node.rangeWithTrivia.fromInclusive += delta;
+                    node.rangeWithTrivia.toExclusive += delta;
+                }
+            })
+            return node;
+        }
+        
+        return {
+            maybeGetReusableNode
+        }    
+    }
+    
+    function reparse(sourceFile: SourceFile, oldTree: IndexableTree, oldNodeMap: Map<NodeId, Node>, changeRange: SourceRange) {
+        {
+            const closestTerminal = findNodeInFlatSourceMap(oldTree.sourceOrderedTerminals, oldNodeMap, changeRange.fromInclusive)
+            if (closestTerminal) {
+                const root = findAncestor(closestTerminal, node => node.kind === NodeKind.statement && node.subType === StatementType.expressionWrapper)
+                if (root) {
+                    reparser = Reparser(oldTree, root.range, changeRange.size());
+                }
+            }
+        }
+        return void parse(sourceFile)
     }
 
     // fixme: we can supply a filetype, but have to set the sourceFile with an earlier call?
@@ -3372,6 +3447,16 @@ export function Parser(config: ProjectOptions) {
     }
 
     function tryParseArrowFunctionDefinition() : ArrowFunctionDefinition | null {
+        const maybeReusableNode = reparser?.maybeGetReusableNode<ArrowFunctionDefinition>(NodeKind.arrowFunctionDefinition, getIndex())
+        if (maybeReusableNode) {
+            restoreScannerState({
+                artificialEndLimit: undefined,
+                index: maybeReusableNode.range.toExclusive,
+                mode: ScannerMode.script
+            })
+            return maybeReusableNode
+        }
+
         // the whole thing is speculative
         return SpeculationHelper.speculate(() => {
             let leftParen : Terminal | null = null;
@@ -3525,6 +3610,16 @@ export function Parser(config: ProjectOptions) {
     }
 
     function parseAnonymousFunctionDefinition() {
+        const maybeReusableNode = reparser?.maybeGetReusableNode<FunctionDefinition>(NodeKind.functionDefinition, getIndex())
+        if (maybeReusableNode) {
+            restoreScannerState({
+                artificialEndLimit: undefined,
+                index: maybeReusableNode.range.toExclusive,
+                mode: ScannerMode.script
+            })
+            return maybeReusableNode
+        }
+
         let accessModifier = null;
         let returnType     = null;
         let functionToken  : Terminal;
@@ -3580,6 +3675,15 @@ export function Parser(config: ProjectOptions) {
     function tryParseNamedFunctionDefinition(speculative: false, asDeclaration: boolean) : Script.FunctionDefinition;
     function tryParseNamedFunctionDefinition(speculative: true) : Script.FunctionDefinition | null;
     function tryParseNamedFunctionDefinition(speculative: boolean, asDeclaration = false) : Script.FunctionDefinition | null {
+        const maybeReusableNode = reparser?.maybeGetReusableNode<Script.FunctionDefinition>(NodeKind.functionDefinition, getIndex())
+        if (maybeReusableNode) {
+            restoreScannerState({
+                artificialEndLimit: undefined,
+                index: maybeReusableNode.range.toExclusive,
+                mode: ScannerMode.script
+            })
+            return maybeReusableNode
+        }
         maybePushTypedefsToCurrentTypedefContainer(lastDocBlock?.typedefs);
 
         const savedLastDocBlock = lastDocBlock;
