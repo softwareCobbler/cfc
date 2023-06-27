@@ -1709,7 +1709,7 @@ export namespace Script {
         body          : Block,
         returnTypeAnnotation : Type | null
     ) : FunctionDefinition {
-        const v = NodeBase<FunctionDefinition>(NodeKind.functionDefinition, mergeRanges(accessModifier, returnType, functionToken, (body.kind === NodeKind.block && body.rightBrace?.rangeWithTrivia) || body));
+        const v = NodeBase<FunctionDefinition>(NodeKind.functionDefinition, mergeRanges(accessModifier, returnType, functionToken, body));
         v.fromTag        = false;
         v.accessModifier = accessModifier;
         v.returnType     = returnType;
@@ -1779,7 +1779,7 @@ export interface ArrowFunctionDefinition extends NodeBase {
 
 export function ArrowFunctionDefinition(leftParen: Terminal | null, params: Script.FunctionParameter[], rightParen: Terminal | null, fatArrow: Terminal, body: Node) : ArrowFunctionDefinition {
     const v = NodeBase<ArrowFunctionDefinition>(NodeKind.arrowFunctionDefinition);
-    v.range = mergeRanges(leftParen, (body.kind === NodeKind.block && body.rightBrace?.rangeWithTrivia) || body);
+    v.range = mergeRanges(leftParen, body);
     v.parens = (leftParen && rightParen) ? {left: leftParen, right: rightParen} : null,
     v.params = params;
     v.fatArrow = fatArrow;
