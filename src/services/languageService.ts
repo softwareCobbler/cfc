@@ -14,6 +14,7 @@ import { CflsResponse, CflsResponseType, CflsRequest, CflsRequestType, CflsConfi
 import { ClientAdapter } from "./clientAdapter";
 import type { AbsPath } from "../compiler/utils";
 import type { IREPLACED_AT_BUILD } from "./buildShim";
+import { SourceRange } from "../compiler/scanner";
 
 declare const REPLACED_AT_BUILD : IREPLACED_AT_BUILD;
 
@@ -147,9 +148,10 @@ export function LanguageService<T extends ClientAdapter>() {
         server.send(msg);
     }
 
-    function emitDiagnostics(fsPath: AbsPath, freshText: string) {
+    function emitDiagnostics(fsPath: AbsPath, freshText: string, sourceRange?: SourceRange) {
         const task = () => {
-            const request : CflsRequest = {type: CflsRequestType.diagnostics, id: messageId.bump(), fsPath, freshText};
+            const serializedRange = sourceRange ? [sourceRange.fromInclusive, sourceRange.toExclusive] as const : null;
+            const request : CflsRequest = {type: CflsRequestType.diagnostics, id: messageId.bump(), fsPath, freshText, sourceRange: serializedRange};
             send(request);
         }
         pushTask({type: CflsRequestType.diagnostics, task});

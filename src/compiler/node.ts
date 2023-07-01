@@ -20,6 +20,7 @@ export const enum NodeFlags {
     docBlock     = 1 << 3,
     unreachable  = 1 << 4,
     checked      = 1 << 5,
+    cancellationOccured = 1 << 6,
 }
 
 export const enum NodeKind {
@@ -343,11 +344,14 @@ export function mergeRanges(...nodes : (SourceRange | Node | Node[] | undefined 
 }
 
 export const enum DiagnosticKind { error, warning }
+export const enum DiagnosticPhase { parse, bind, check }
 export interface Diagnostic {
     kind: DiagnosticKind,
+    phase: DiagnosticPhase,
     fromInclusive: number,
     toExclusive: number,
     msg: string,
+
     __debug_from_line?: number,
     __debug_from_col?: number,
     __debug_to_line?: number,

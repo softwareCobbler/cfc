@@ -24,7 +24,7 @@ import {
     New,
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
-    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess, DestructuredElement, DestructuredList, DestructuredRecord, DestructuredRecordElement_Bare, DestructuredRecordElement_RenamingOrNested, DestructuredElement_Rest, TypedArrayLiteral, IndexableTree, StatementType, NodeId, FunctionDefinition } from "./node";
+    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess, DestructuredElement, DestructuredList, DestructuredRecord, DestructuredRecordElement_Bare, DestructuredRecordElement_RenamingOrNested, DestructuredElement_Rest, TypedArrayLiteral, IndexableTree, StatementType, NodeId, FunctionDefinition, DiagnosticPhase } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType } from "./scanner";
 import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard, Mutable, findNodeInFlatSourceMap, findAncestor, visit } from "./utils";
 import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature } from "./types";
@@ -423,6 +423,7 @@ export function Parser(config: ProjectOptions) {
         const lastDiagnostic = diagnostics.length > 0 ? diagnostics[diagnostics.length-1] : undefined;
         const freshDiagnostic : Diagnostic = {
             kind: DiagnosticKind.error,
+            phase: DiagnosticPhase.parse,
             fromInclusive: from,
             toExclusive: to,
             msg: msg ?? (toExclusiveOrMsg as string)
@@ -1001,7 +1002,7 @@ export function Parser(config: ProjectOptions) {
         }
 
         function updateRanges<T extends Node>(node: T, delta: number) {
-            // visit doesn't visit the initial "root" node ... 
+            // visit doesn't visit the initial "root" node
             node.range.fromInclusive += delta;
             node.range.toExclusive += delta;
 
@@ -1018,19 +1019,42 @@ export function Parser(config: ProjectOptions) {
             })
             return node;
         }
-        
+
+        // source ranges were initially designed with diagnostics in mind, so in some cases they don't
+        // contain the whitespace we need to set the scanner into the appropriate position. We have the information but it needs a little massaging
+        // to bring out.
+        function getEffectiveSourceRange(node: Script.FunctionDefinition | ArrowFunctionDefinition) {
+            switch (node.kind) {
+                case NodeKind.functionDefinition: {
+                    const from = node.range.fromInclusive
+                    const to = node.body.rightBrace?.rangeWithTrivia.toExclusive || node.range.toExclusive;
+                    return new SourceRange(from, to);
+                }
+                case NodeKind.arrowFunctionDefinition: {
+                    const from = node.range.fromInclusive
+                    const to = node.body.kind === NodeKind.block 
+                        ? (node.body.rightBrace?.rangeWithTrivia.toExclusive ?? node.body.range.toExclusive)
+                        : node.range.toExclusive
+                    return new SourceRange(from, to);
+                }
+                default: exhaustiveCaseGuard(node)
+            }
+        }
+
         return {
-            maybeGetReusableNode
+            maybeGetReusableNode,
+            getEffectiveSourceRange
         }    
     }
     
-    function reparse(sourceFile: SourceFile, oldTree: IndexableTree, oldNodeMap: Map<NodeId, Node>, changeRange: SourceRange) {
+    function reparse(sourceFile: SourceFile, oldTree: IndexableTree, oldNodeMap: Map<NodeId, Node>, oldParserDiagnostics: Diagnostic[], changeRange: SourceRange) {
         {
             const closestTerminal = findNodeInFlatSourceMap(oldTree.sourceOrderedTerminals, oldNodeMap, changeRange.fromInclusive)
             if (closestTerminal) {
                 const root = findAncestor(closestTerminal, node => node.kind === NodeKind.statement && node.subType === StatementType.expressionWrapper)
                 if (root) {
                     reparser = Reparser(oldTree, root.range, changeRange.size());
+                    sourceFile.diagnostics = oldParserDiagnostics.filter(diagnostic => root.range.includes(diagnostic.fromInclusive) || root.range.includes(diagnostic.toExclusive - 1))
                 }
             }
         }
@@ -3449,9 +3473,10 @@ export function Parser(config: ProjectOptions) {
     function tryParseArrowFunctionDefinition() : ArrowFunctionDefinition | null {
         const maybeReusableNode = reparser?.maybeGetReusableNode<ArrowFunctionDefinition>(NodeKind.arrowFunctionDefinition, getIndex())
         if (maybeReusableNode) {
+            reparser!.maybeGetReusableNode
             restoreScannerState({
                 artificialEndLimit: undefined,
-                index: maybeReusableNode.range.toExclusive,
+                index: reparser!.getEffectiveSourceRange(maybeReusableNode).toExclusive,
                 mode: ScannerMode.script
             })
             return maybeReusableNode
@@ -3679,7 +3704,7 @@ export function Parser(config: ProjectOptions) {
         if (maybeReusableNode) {
             restoreScannerState({
                 artificialEndLimit: undefined,
-                index: maybeReusableNode.range.toExclusive,
+                index: reparser!.getEffectiveSourceRange(maybeReusableNode).toExclusive,
                 mode: ScannerMode.script
             })
             return maybeReusableNode

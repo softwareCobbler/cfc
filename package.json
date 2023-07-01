@@ -20,5 +20,8 @@
     "mocha": "^8.4.0",
     "ts-node": "^9.1.1",
     "typescript": "^4.4.3"
+  },
+  "dependencies": {
+    "vscode-languageserver-textdocument": "^1.0.8"
   }
 }

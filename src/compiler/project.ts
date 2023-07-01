@@ -4,7 +4,7 @@ import * as path from "path";
 import { Binder } from "./binder";
 import { Checker } from "./checker";
 import { EngineVersion } from "./engines";
-import { BlockType, mergeRanges, Node, NodeKind, SourceFile, SymTabEntry, DiagnosticKind, resetSourceFileInPlace } from "./node";
+import { BlockType, mergeRanges, Node, NodeKind, SourceFile, SymTabEntry, DiagnosticKind, resetSourceFileInPlace, NodeFlags, DiagnosticPhase } from "./node";
 import { Parser } from "./parser";
 import { CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignatureParam, Interface, Type, CfcLookup, BuiltinType, cfTypeId, cfGenericFunctionSignature, TypeConstructorParam, freshKeyof } from "./types";
@@ -295,10 +295,10 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         return addFile(absPath);
     }
 
-    function parseBindCheckWorker(sourceFile: SourceFile) : DevTimingInfo {
+    function parseBindCheckWorker(sourceFile: SourceFile, doParse: () => void) : DevTimingInfo {
         try {
             const parseStart = new Date().getTime();
-            parser.parse(sourceFile);
+            doParse();
             const parseElapsed = new Date().getTime() - parseStart;
 
             if (engineLib && engineLib !== sourceFile) {
@@ -346,6 +346,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         catch (error) {
             // swallow CancellationExceptions, everything else gets rethrown
             if (error instanceof CancellationException) {
+                sourceFile.flags |= NodeFlags.cancellationOccured
                 return { parse: NaN, bind: NaN, check: NaN };
             }
             throw error;
@@ -364,7 +365,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         const bytes = fileSystem.readFileSync(absPath);
         const sourceFile = SourceFile(absPath, fileType, bytes);
 
-        parseBindCheckWorker(sourceFile);
+        parseBindCheckWorker(sourceFile, () => parser.parse(sourceFile));
 
         if (fileType === CfFileType.dCfm) {
             
@@ -585,6 +586,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     function errorAtRange(sourceFile: SourceFile, range: SourceRange, msg: string) {
         sourceFile.diagnostics.push({
             kind: DiagnosticKind.error,
+            phase: DiagnosticPhase.bind,
             fromInclusive: range.fromInclusive,
             toExclusive: range.toExclusive,
             msg: msg
@@ -630,16 +632,25 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     // for a file that should already be in cache;
     // if for some reason it isn't, we try to add it
     // as a dev kludge, we return parse/bind/check times; this method otherwise returns void
-    function parseBindCheck(absPath: AbsPath, newSource: string | Buffer) : DevTimingInfo {
+    function parseBindCheck(absPath: AbsPath, newSource: string | Buffer, changeRange?: SourceRange) : DevTimingInfo {
         const sourceFile = getCachedFile(absPath);
         if (!sourceFile) {
             tryAddFile(absPath);
             return {parse: -1, bind: -1, check: -1};
         }
 
-        resetSourceFileInPlace(sourceFile, newSource);
+        if (changeRange && !(sourceFile.flags & NodeFlags.cancellationOccured)) {
+            const oldTree = sourceFile.indexableTree
+            const oldNodeMap = sourceFile.nodeMap
+            const oldDiagnostics = sourceFile.diagnostics.filter(v => v.phase === DiagnosticPhase.parse)
+            resetSourceFileInPlace(sourceFile, newSource);
+            return parseBindCheckWorker(sourceFile, () => parser.reparse(sourceFile, oldTree, oldNodeMap, oldDiagnostics, changeRange));
+        }
+        else {
+            resetSourceFileInPlace(sourceFile, newSource);
+            return parseBindCheckWorker(sourceFile, () => parser.parse(sourceFile));
+        }
 
-        return parseBindCheckWorker(sourceFile);
     }
 
     function getDiagnostics(absPath: string) : Diagnostic[] {

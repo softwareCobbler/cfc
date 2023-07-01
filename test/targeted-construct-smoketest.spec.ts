@@ -1,7 +1,7 @@
 import * as assert from "assert";
 
 import { Parser, Binder, CfFileType, SourceFile, NilCfm, flattenTree, NilCfc, DebugFileSystem, FileSystem, Project } from "../src/compiler";
-import { IndexedAccess, NodeKind, resetSourceFileInPlace } from "../src/compiler/node";
+import { DiagnosticPhase, IndexedAccess, NodeKind, resetSourceFileInPlace } from "../src/compiler/node";
 import { findNodeInFlatSourceMap, getTriviallyComputableString } from "../src/compiler/utils";
 import * as TestLoader from "./TestLoader";
 import { CompletionItem, getCompletions } from "../src/services/completions";
@@ -1121,8 +1121,6 @@ describe("general smoke test for particular constructs", () => {
             }
         `;
 
-        // bleem()
-        // ^290
         const text2 = `
             component {
                 function foo() {
@@ -1153,10 +1151,11 @@ describe("general smoke test for particular constructs", () => {
 
         const oldTree = sourceFile.indexableTree
         const oldNodeMap = sourceFile.nodeMap
+        const retainedParserDiagnostics = sourceFile.diagnostics.filter(v => v.phase === DiagnosticPhase.parse)
 
         resetSourceFileInPlace(sourceFile, text2)
         debugger;
-        parser.reparse(sourceFile, oldTree, oldNodeMap, changeRange)
+        parser.reparse(sourceFile, oldTree, oldNodeMap, retainedParserDiagnostics, changeRange)
         console.log(42);
     })
 });
