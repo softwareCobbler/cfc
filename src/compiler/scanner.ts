@@ -363,13 +363,6 @@ const xxx = {
     dblColon: /::/iy,
 }
 
-export interface AnnotatedChar {
-    codepoint: number,
-    index: number,
-    col: number,
-    line: number
-}
-
 //
 // @fixme -- instead of a 'Nil' token; just use null; but this requires some wide reaching changes,
 // and we'd rather not have to write `range!` everywhere to declare that it is non-null, so a design that guarantees a source range is not null
@@ -384,6 +377,10 @@ export class SourceRange {
         this.toExclusive = toExclusive;
     }
 
+    static copy(rhs: SourceRange) {
+        return new SourceRange(rhs.fromInclusive, rhs.toExclusive);
+    }
+
     static Nil() {
         return new SourceRange(-1, -1);
     }
@@ -394,6 +391,16 @@ export class SourceRange {
 
     includes(index: number) : boolean {
         return this.fromInclusive <= index && index < this.toExclusive
+    }
+
+    isDisjointFrom(other: SourceRange) : boolean {
+        return (this.fromInclusive >= other.toExclusive) // definitely entirely beyond other
+            || (this.fromInclusive < other.fromInclusive && this.toExclusive <= other.fromInclusive) // entirely before other
+    }
+
+    isDisjointFromAndNotAbutting(other: SourceRange) : boolean {
+        return (this.fromInclusive > other.toExclusive)
+            || (this.fromInclusive < other.fromInclusive && this.toExclusive < other.fromInclusive)
     }
 
     size() {
@@ -415,6 +422,7 @@ export function Scanner(source_: string | Buffer) {
     let sourceEncoding : "utf-8" | "utf-16-le" | "utf-16-be" = "utf-8";
     let hadBom = false;
 
+    // these were once "annotated" with line/col info, but that's really expensive to do
     const annotatedChars = annotate(source_);
 
     let end = annotatedChars.length;
@@ -428,7 +436,7 @@ export function Scanner(source_: string | Buffer) {
     // we record if there was a BOM and what encoding we're in, but drop the BOM (if there was one)
     // before we start parsing, so we don't have to consier tokenizing it or having it end up in an identifier
     //
-    function annotate(bytesOrAlreadyUtf16: string | Buffer) : AnnotatedChar[] {
+    function annotate(bytesOrAlreadyUtf16: string | Buffer) : string {
         if (typeof bytesOrAlreadyUtf16 === "string") { // already UTF-16
             if (bytesOrAlreadyUtf16.charCodeAt(0) === 0xFEFF) {
                 hadBom = true;
@@ -476,45 +484,46 @@ export function Scanner(source_: string | Buffer) {
     /**
      * build the (codepoint, col, line) tuples for each codepoint in the source text
      */
-    function annotateWorker(utf16: string) : AnnotatedChar[] {
-        let index = 0;
-        let col = 0;
-        let line = 0;
-        const result : AnnotatedChar[] = [];
-        for (const char of utf16) {
-            for (let i = 0; i < char.length; i++) {
-                const c = char.charCodeAt(i);
-                result.push({
-                    codepoint: c,
-                    index,
-                    col,
-                    line
-                });
-                if (c == AsciiMap.NEWLINE) {
-                    line += 1;
-                    col = 0;
-                }
-                else {
-                    col += 1;
-                }
-                index += 1;
-            }
-        }
+    function annotateWorker(utf16: string) : string {
+        return utf16;
+        // let index = 0;
+        // let col = 0;
+        // let line = 0;
+        // const result : AnnotatedChar[] = [];
+        // for (const char of utf16) {
+        //     for (let i = 0; i < char.length; i++) {
+        //         const c = char.charCodeAt(i);
+        //         result.push({
+        //             codepoint: c,
+        //             // index,
+        //             // col,
+        //             // line
+        //         });
+        //         if (c == AsciiMap.NEWLINE) {
+        //             line += 1;
+        //             col = 0;
+        //         }
+        //         else {
+        //             col += 1;
+        //         }
+        //         index += 1;
+        //     }
+        // }
 
-        // push "eof"
-        result.push({
-            codepoint: 0,
-            index,
-            col,
-            line
-        });
+        // // push "eof"
+        // result.push({
+        //     codepoint: 0,
+        //     // index,
+        //     // col,
+        //     // line
+        // });
 
-        return result;
+        // return result;
     }
 
     // for now this is really just utf8 position for just ascii...
     function getUtf16Position(index: number) {
-        return annotatedChars[index];
+        return annotatedChars.codePointAt(index)!
     }
 
     function getIndex() {
@@ -540,16 +549,16 @@ export function Scanner(source_: string | Buffer) {
 
     function peekChar(jump: number = 0) : AnnotatedChar | null {
         if (hasNext(jump)) {
-            return annotatedChars[index + jump];
+            return annotatedChars.codePointAt(index + jump)!;
         }
         return null;
     }
-
+type AnnotatedChar = number;
     function nextChar() : AnnotatedChar {
         if (!hasNext()) {
             throw "scanner : call to next after EOF"
         }
-        return annotatedChars[index++];
+        return annotatedChars.codePointAt(index++)!;
     }
 
     function peekToken(jump: number, mode: ScannerMode) : Token {
@@ -582,7 +591,7 @@ export function Scanner(source_: string | Buffer) {
         const docBlock = !!(mode & ScannerMode.docBlock);
         const from = getIndex();
 
-        const c = peekChar()!.codepoint;
+        const c = peekChar()!;
         switch (c) {
             case 0:
                 return makeToken(TokenType.EOF, from, from, '');
@@ -788,7 +797,7 @@ export function Scanner(source_: string | Buffer) {
             }
             const targetCodepoint = target.charCodeAt(0);
             while (true) { // will bail on peekChar returning null
-                const nextCodepoint = peekChar()?.codepoint;
+                const nextCodepoint = peekChar();
                 if (!nextCodepoint || nextCodepoint === targetCodepoint) {
                     break;
                 }
@@ -818,13 +827,13 @@ export function Scanner(source_: string | Buffer) {
     }
 
     function isTagNameStart() {
-        const codePoint = annotatedChars[index].codepoint;
+        const codePoint = annotatedChars.codePointAt(index)!;
         return isAsciiAlpha(codePoint)
             || codePoint === AsciiMap.UNDERSCORE
     }
 
     function isTagNameRest() {
-        const codePoint = annotatedChars[index].codepoint;
+        const codePoint = annotatedChars.codePointAt(index)!
         return isAsciiAlpha(codePoint)
             || isAsciiDigit(codePoint)
             || codePoint === AsciiMap.UNDERSCORE
@@ -857,10 +866,10 @@ export function Scanner(source_: string | Buffer) {
     }
 
     function scanTagAttributeName(allowDot: boolean) : Token | null {
-        if (!hasNext() || !isTagAttributeNameStart(annotatedChars[index].codepoint)) return null;
+        if (!hasNext() || !isTagAttributeNameStart(annotatedChars.codePointAt(index)!)) return null;
         const from = index;
         index += 1;
-        while (isTagAttributeNameRest(annotatedChars[index].codepoint, allowDot)) {
+        while (isTagAttributeNameRest(annotatedChars.codePointAt(index)!, allowDot)) {
             index += 1;
         }
         lastScannedText = sourceText.slice(from, index);
@@ -871,21 +880,21 @@ export function Scanner(source_: string | Buffer) {
         if (index + "<!---".length >= annotatedChars.length) {
             return false;
         }
-        return annotatedChars[index + 0].codepoint === AsciiMap.LEFT_ANGLE
-            && annotatedChars[index + 1].codepoint === AsciiMap.EXCLAMATION
-            && annotatedChars[index + 2].codepoint === AsciiMap.MINUS
-            && annotatedChars[index + 3].codepoint === AsciiMap.MINUS
-            && annotatedChars[index + 4].codepoint === AsciiMap.MINUS;
+        return annotatedChars.codePointAt(index + 0) === AsciiMap.LEFT_ANGLE
+            && annotatedChars.codePointAt(index + 1) === AsciiMap.EXCLAMATION
+            && annotatedChars.codePointAt(index + 2) === AsciiMap.MINUS
+            && annotatedChars.codePointAt(index + 3) === AsciiMap.MINUS
+            && annotatedChars.codePointAt(index + 4) === AsciiMap.MINUS;
     }
 
     function isTagCommentClose() {
-        if (index + "--->".length >= annotatedChars.length) { // final annotated char is EOF
+        if (index + "--->".length > annotatedChars.length) {
             return false;
         }
-        return annotatedChars[index + 0].codepoint === AsciiMap.MINUS
-            && annotatedChars[index + 1].codepoint === AsciiMap.MINUS
-            && annotatedChars[index + 2].codepoint === AsciiMap.MINUS
-            && annotatedChars[index + 3].codepoint === AsciiMap.RIGHT_ANGLE
+        return annotatedChars.codePointAt(index + 0) === AsciiMap.MINUS
+            && annotatedChars.codePointAt(index + 1) === AsciiMap.MINUS
+            && annotatedChars.codePointAt(index + 2) === AsciiMap.MINUS
+            && annotatedChars.codePointAt(index + 3) === AsciiMap.RIGHT_ANGLE
     }
 
     /**
@@ -893,7 +902,7 @@ export function Scanner(source_: string | Buffer) {
      * which could reasonably be matched as [DBL_MINUS, DBL_MINUS, MINUS, RIGHT_ANGLE]
      */
     function scanToNextTagCommentToken() : void {
-        while (index < annotatedChars.length - 1) { // final annotated char is EOF
+        while (index < annotatedChars.length) {
             if (isTagCommentOpen() || isTagCommentClose()) {
                 return;
             }
@@ -915,14 +924,14 @@ export function Scanner(source_: string | Buffer) {
     }
 
     function scanLexemeLikeStructKey() : Token | null {
-        if (!isLexemeLikeStructKeyStart(annotatedChars[index].codepoint)) {
+        if (!isLexemeLikeStructKeyStart(annotatedChars.codePointAt(index)!)) {
             return null;
         }
 
         const from = index;
         index += 1;
 
-        while (isLexemeLikeStructKeyRest(annotatedChars[index].codepoint)) {
+        while (isLexemeLikeStructKeyRest(annotatedChars.codePointAt(index)!)) {
             index += 1;
         }
 
@@ -945,10 +954,10 @@ export function Scanner(source_: string | Buffer) {
     }
 
     function scanIdentifierWorker() : string | null {
-        if (!isIdentifierStart(annotatedChars[index].codepoint)) return null;
+        if (!isIdentifierStart(annotatedChars.codePointAt(index)!)) return null;
         const from = index;
         index += 1;
-        while (isIdentifierRest(annotatedChars[index].codepoint)) {
+        while (isIdentifierRest(annotatedChars.codePointAt(index)!)) {
             index += 1;
         }
         return sourceText.slice(from, index);
@@ -968,10 +977,10 @@ export function Scanner(source_: string | Buffer) {
 
     function scanDocBlockAttrName() : string | null {
         let withExclamation = false;
-        if (annotatedChars[index].codepoint === AsciiMap.AT) {
+        if (annotatedChars.codePointAt(index)! === AsciiMap.AT) {
             const startPos = index;
             index++;
-            if (annotatedChars[index].codepoint === AsciiMap.EXCLAMATION) { // support constructs like "@!type any", have to disambiguate with real CF attribute syntax
+            if (annotatedChars.codePointAt(index)! === AsciiMap.EXCLAMATION) { // support constructs like "@!type any", have to disambiguate with real CF attribute syntax
                 index++;
                 withExclamation = true;
             }
@@ -997,11 +1006,11 @@ export function Scanner(source_: string | Buffer) {
         let inPrefix = false;
         const result : string[] = [];
         while (hasNext()) {
-            if (annotatedChars[index].codepoint === AsciiMap.SPACE || annotatedChars[index].codepoint === AsciiMap.TAB) {
+            if (annotatedChars.codePointAt(index)! === AsciiMap.SPACE || annotatedChars.codePointAt(index)! === AsciiMap.TAB) {
                 index += 1;
                 continue;
             }
-            else if (annotatedChars[index].codepoint === AsciiMap.NEWLINE) {
+            else if (annotatedChars.codePointAt(index)! === AsciiMap.NEWLINE) {
                 justWhitespaceThisLine = true;
                 inPrefix = true;
                 index += 1;
@@ -1009,7 +1018,7 @@ export function Scanner(source_: string | Buffer) {
                 start = index;
                 continue;
             }
-            else if (annotatedChars[index].codepoint === AsciiMap.CARRIAGE_RETURN && annotatedChars[index+1].codepoint === AsciiMap.NEWLINE) {
+            else if (annotatedChars.codePointAt(index)! === AsciiMap.CARRIAGE_RETURN && annotatedChars.codePointAt(index+1)! === AsciiMap.NEWLINE) {
                 justWhitespaceThisLine = true;
                 inPrefix = true;
                 index += 2;
@@ -1017,7 +1026,7 @@ export function Scanner(source_: string | Buffer) {
                 start = index;
                 continue;
             }
-            else if (annotatedChars[index].codepoint === AsciiMap.STAR) {
+            else if (annotatedChars.codePointAt(index)! === AsciiMap.STAR) {
                 index += 1;
                 if (inPrefix) {
                     start = index;
@@ -1027,7 +1036,7 @@ export function Scanner(source_: string | Buffer) {
                     justWhitespaceThisLine = false;
                 }
             }
-            else if (annotatedChars[index].codepoint === AsciiMap.AT) {
+            else if (annotatedChars.codePointAt(index)! === AsciiMap.AT) {
                 if (!justWhitespaceThisLine) {
                     index += 1;
                 }
@@ -1048,7 +1057,7 @@ export function Scanner(source_: string | Buffer) {
     }
 
     function isIdentifier() {
-        return isIdentifierStart(annotatedChars[index].codepoint);
+        return isIdentifierStart(annotatedChars.codePointAt(index)!);
     }
 
     function maybeEat(pattern: RegExp) {
@@ -1067,11 +1076,11 @@ export function Scanner(source_: string | Buffer) {
     function makeToken(tokenType: TokenType, from: number, to: number, text: string = lastScannedText): Token {
         const token = Token(tokenType, text, from!, to!);
 
-        const annotatedFrom = getAnnotatedChar(from);
 
         if (debugScanner) {
-            token.__debug_line = annotatedFrom.line + 1;
-            token.__debug_col = annotatedFrom.col + 1;
+            // const annotatedFrom = getAnnotatedChar(from);
+            // token.__debug_line = annotatedFrom.line + 1;
+            // token.__debug_col = annotatedFrom.col + 1;
             token.__debug_type = TokenTypeUiString[tokenType];
         }
 
@@ -1090,7 +1099,7 @@ export function Scanner(source_: string | Buffer) {
         restoreIndex(token.range.fromInclusive);
         while(getIndex() != token.range.toExclusive) {
             result.push(
-                String.fromCharCode(nextChar().codepoint))
+                String.fromCharCode(nextChar()))
         }
         restoreIndex(saveIndex);
         return result.join("");
@@ -1130,7 +1139,7 @@ export function Scanner(source_: string | Buffer) {
         const clampedIndex = index < annotatedChars.length
             ? index
             : annotatedChars.length-1;
-        return annotatedChars[clampedIndex];
+        return annotatedChars.codePointAt(clampedIndex)!;
     }
 
     return {
@@ -1145,7 +1154,7 @@ export function Scanner(source_: string | Buffer) {
         hasNext,
         peek: peekToken,
         peekChar: (jump: number) => {
-            const codepoint = peekChar(jump)?.codepoint;
+            const codepoint = peekChar(jump);
             return codepoint ? String.fromCharCode(codepoint) : "";
         },
         nextToken,

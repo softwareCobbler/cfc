@@ -37,7 +37,8 @@ export interface InitRequest extends CflsRequestBase {
 export interface DiagnosticsRequest extends CflsRequestBase {
     type: CflsRequestType.diagnostics,
     fsPath: string,
-    freshText: string
+    freshText: string,
+    sourceRange: null | readonly [fromInclusive: number, toExclusive: number]
 }
 
 export interface CompletionsRequest extends CflsRequestBase {

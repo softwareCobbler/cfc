@@ -4,58 +4,35 @@
  * ------------------------------------------------------------------------------------------ */
 import {
 	createConnection,
-	TextDocuments,
-	Diagnostic,
-	DiagnosticSeverity,
 	ProposedFeatures,
 	InitializeParams,
 	DidChangeConfigurationNotification,
 	CompletionItem,
-	CompletionItemKind,
-	TextDocumentPositionParams,
 	TextDocumentSyncKind,
 	InitializeResult,
-	ConnectionOptions,
-	DocumentSymbolParams,
-	SymbolInformation,
-	SymbolKind,
-	CompletionContext,
 	CompletionParams,
-	CompletionTriggerKind,
-	SignatureInformation,
-	ParameterInformation,
-	DidChangeConfigurationParams,
-	ConfigurationItem,
 	WorkspaceFolder,
-	ProgressType,
-	HoverParams,
-	Hover,
+	TextDocumentContentChangeEvent,
 } from 'vscode-languageserver/node';
 
-import * as child_process from "child_process"
-import { SignatureHelp, Position, Location, Range } from "vscode-languageserver-types"
+import { Location } from "vscode-languageserver-types"
 import {
 	TextDocument
 } from 'vscode-languageserver-textdocument';
 
+
 import { URI } from "vscode-uri";
 
-import * as path from "path";
-//import { NodeId, SourceFile, Parser, Binder, Node, Diagnostic as cfcDiagnostic, cfmOrCfc, NodeSourceMap, Checker, NodeKind } from "compiler";
-
-// import { isCfcTypeWrapper, isFunctionSignature, _Type } from '../../../compiler/types';
-// import { FileSystem, Project } from "../../../compiler/project";
-import { EngineVersions, EngineVersion } from "../../../compiler/engines";
-// import * as cfls from "../../../services/completions";
-// import { Scanner, SourceRange, Token } from '../../../compiler/scanner';
-import { LanguageService } from "../../../services/languageService"
-import { adapter as VsClientAdapter } from "./vscode-adapter";
+import { LanguageTool } from "../../../services/languageTool"
 import { CflsInitArgs, SerializableCflsConfig } from "../../../services/cflsTypes"
+import { SourceRange } from '../../../compiler/scanner';
+import { CancellationToken } from '../../../compiler/cancellationToken';
 
-type TextDocumentUri = string;
-type AbsPath = string;
+import { adapter as resultsAdapter } from "./vscode-direct-adapter"
 
-let languageService! : LanguageService<typeof VsClientAdapter>;
+const languageTool = LanguageTool();
+const knownDocs = new Map</*URI*/string, TextDocument>();
+const cancellationToken = CancellationToken();
 
 // unwrap is required to make it harder to accidentally use in a position where we wanted a local with a similar name
 const initArgs = Object.freeze((() => {
@@ -68,15 +45,14 @@ const initArgs = Object.freeze((() => {
 let connection = createConnection(ProposedFeatures.all);
 
 // Create a simple text document manager.
-let documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
+
 let workspaceRoots : WorkspaceFolder[] = [];
 
 let hasConfigurationCapability: boolean = false;
 let hasWorkspaceFolderCapability: boolean = false;
 let hasDiagnosticRelatedInformationCapability: boolean = false;
-let didForkCfls = false;
 
-connection.onInitialize((params: InitializeParams) => {
+connection.onInitialize(async (params: InitializeParams) => {
 	let capabilities = params.capabilities;
 
 	let roots = params.workspaceFolders;
@@ -114,27 +90,50 @@ connection.onInitialize((params: InitializeParams) => {
 	if (typeof params.initializationOptions?.libAbsPath === "string") {
 		initArgs.unwrap().engineLibAbsPath = params.initializationOptions?.libAbsPath;
 	}
+
+	const config = params.initializationOptions.config;
 	
-	languageService = LanguageService<typeof VsClientAdapter>();
-	languageService.on("diagnostics", (fsPath: AbsPath, diagnostics: unknown[]) => {
-		connection.sendDiagnostics({
-			uri: URI.file(fsPath).toString(),
-			diagnostics: diagnostics as Diagnostic[]
-		});
-	})
+	//
+	// init with no config, because it's impossible to ask for workspace/configuration from within onInitialize?
+	// we get `rejected promise not handled within 1 second: Error: Unhandled method workspace/configuration` if we do
+	// `await connection.connection.workspace.getConfiguration("cflsp")` here, but it's ok in "onInitialized" and elsewhere?
+	//
+	const freshInitArgs = mungeConfig(config);
+	languageTool.init({
+		config: freshInitArgs,
+		cancellationTokenId: cancellationToken.getId(),
+		workspaceRoots: workspaceRoots.map((root) => URI.parse(root.uri).fsPath)
+	});
 
 	return result;
 });
-
 // show where a symbol is defined at
 connection.onDefinition(async (params) : Promise<Location[] | undefined> => {
-	const document = documents.get(params.textDocument.uri);
-	if (!document) return undefined;
+	const doc = knownDocs.get(params.textDocument.uri);
+	if (!doc) {
+		return undefined;
+	}
 
-	const fsPath = URI.parse(document.uri).fsPath;
-	const targetIndex = document.offsetAt(params.position);
+	const fsPath = URI.parse(doc.uri).fsPath;
+	const targetIndex = doc.offsetAt(params.position);
 
-	return languageService.getDefinitionLocations(fsPath, targetIndex);
+	const maybeDefLocations = languageTool.getDefinitionLocations(fsPath, targetIndex);
+	if (maybeDefLocations) {
+		const mapped = maybeDefLocations.map(defLoc => {
+			const sourceDocUri = URI.parse(defLoc.sourceFile.absPath).toString();
+			//
+			// we might not know about the doc here, because the langauge service opened it off the file system as dependency, but the
+			// user doesn't have it open, so we don't know about it in the list of "open vscode docs".
+			//
+			const sourceDoc = knownDocs.get(sourceDocUri) || TextDocument.create("", "cfml", -1, defLoc.sourceFile.scanner.getSourceText());
+			const posMapper = resultsAdapter.cfPositionToVsPosition(sourceDoc);
+			return resultsAdapter.sourceLocation(posMapper, defLoc);
+		});
+		return mapped;
+	}
+	else {
+		return undefined;
+	}
 });
 
 function mungeConfig(config: Record<string, any> | null) : SerializableCflsConfig {
@@ -152,118 +151,152 @@ function mungeConfig(config: Record<string, any> | null) : SerializableCflsConfi
 	}
 }
 
-connection.onInitialized(async (x) => {
-	if (hasConfigurationCapability) {
-		// Register for all configuration changes.
-		connection.client.register(DidChangeConfigurationNotification.type, {section: "cflsp"});
-		
-		const freshInitArgs = mungeConfig(await connection.workspace.getConfiguration("cflsp"));
-		await languageService.fork(freshInitArgs, workspaceRoots.map((root) => URI.parse(root.uri).fsPath));
-	}
-	else {
-		const freshInitArgs = mungeConfig(null);
-		await languageService.fork(freshInitArgs, workspaceRoots.map((root) => URI.parse(root.uri).fsPath));
-	}
-
-	didForkCfls = true;
-	connection.console.info("cflsp server initialized");
-
-	for (const doc of documents.all()) {
-		runDiagonstics(doc);
-	}
+connection.onDidChangeConfiguration(async cflsConfig => {
+	const freshInitArgs = mungeConfig(cflsConfig.settings.cflsp);
+	languageTool.reset(freshInitArgs);
 });
 
-function runDiagonstics(textDocument: TextDocument) {
-	if (didForkCfls) {
-		const fsPath = URI.parse(textDocument.uri).fsPath;
-		languageService.emitDiagnostics(fsPath, textDocument.getText());
+function runDiagonstics(uri: string, textDocument: string, sourceRangeIfIncremental?: {sourceRange: SourceRange, changeSize: number}) {
+	const doc = knownDocs.get(uri);
+	if (!doc) {
+		// shouldn't happen
+		return;
+	}
+
+	const fsPath = URI.parse(uri).fsPath;
+	const diagnostics = languageTool.naiveGetDiagnostics(fsPath, textDocument, sourceRangeIfIncremental);
+	if (diagnostics) {
+		const posMapper = resultsAdapter.cfPositionToVsPosition(doc)
+		connection.sendDiagnostics({
+			uri,
+			diagnostics: diagnostics.diagnostics.map(diagnostic => resultsAdapter.diagnostic(posMapper, diagnostic))
+		});
 	}
 }
 
-connection.onDidChangeConfiguration(async cflsConfig => {
-	if (didForkCfls) {
-		const freshInitArgs = mungeConfig(cflsConfig.settings.cflsp);
-		languageService.reset(freshInitArgs);
+connection.onDidOpenTextDocument(v => {
+	if (v.textDocument.languageId === 'cfml') {
+		knownDocs.set(v.textDocument.uri, TextDocument.create(v.textDocument.uri, v.textDocument.languageId, v.textDocument.version, v.textDocument.text));
+		try {
+			runDiagonstics(v.textDocument.uri, v.textDocument.text);
+		}
+		catch (err) {
+			console.error("onDidOpen --", err);
+		}
 	}
-});
+})
 
-// Only keep settings for open documents
-documents.onDidClose(e => {
-	connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] });
-});
+/**
+ * A vscode TextDocumentContentChangeEvent converted into offsets and size info.
+ * The [from,to) range is the location of the mutation in the **old document**. A range here can be zero length, meaning some edit
+ * directly on a cursor, like a typical character insertion or deletion, e.g.
+ *  - "a|b" -> "axb"
+ *  - "a|bc" -> "ac"
+ *
+ *                                                        vvvvvvvvvvvvv ---- toExclusive? or some computed thing as a function of from/to/size?
+ * The "size delta" is the distance all characters after `fromInclusive` have moved, in the **new document**, e.g.
+ *  - "abc|d" -> "abcxd"  sizeDelta=+1
+ *  - "abc|xd" -> "abcd"  sizeDelta=-1
+ *
+ * ab|cd|ef --> abCDCDef (fromInc=2, toExc=4, sizeDelta=+2)
+ *    ^^ paste CDCD
+ *
+ * ab|cd|ef --> abef (fromInc=2, toExc=4, sizeDelta=-2)
+ *    ^^ delete
+ *
+ */
+interface MungedTextDocumentContentChangeEvent {
+	fromInclusive: number,
+	toExclusive: number,
+	sizeDelta: number
+}
 
-// The content of a text document has changed. This event is emitted
-// when the text document first opened or when its content has changed.
-documents.onDidChangeContent(change => {
-	runDiagonstics(change.document);
-});
+function contentChangeToXContentChange(doc: TextDocument, incrementalChange: TextDocumentContentChangeEvent) : MungedTextDocumentContentChangeEvent {
+	if (!TextDocumentContentChangeEvent.isIncremental(incrementalChange)) {
+		throw "should have been filtered prior to getting here";
+	}
 
-connection.onCompletion(async (completionParams: CompletionParams): Promise<CompletionItem[]> => {
-	const document = documents.get(completionParams.textDocument.uri);
-	if (!document) return [];
+	const fromInclusive = doc.offsetAt(incrementalChange.range.start);
+	const toExclusive = doc.offsetAt(incrementalChange.range.end);
+	const sizeDelta = incrementalChange.text.length - (toExclusive - fromInclusive)
+	return {fromInclusive, toExclusive, sizeDelta}
+}
+
+function mergeContentChangeRange(mut_changes: MungedTextDocumentContentChangeEvent[]) : {affectedTextRange: SourceRange, changeSize: number} | undefined {
+	if (mut_changes.length === 0) {
+		return undefined;
+	}
+	else if (mut_changes.length === 1) {
+		const change = mut_changes[0];
+		return {
+			affectedTextRange: new SourceRange(change.fromInclusive, change.toExclusive),
+			changeSize: change.sizeDelta
+		}
+	}
+	else {
+		mut_changes.sort((l,r) => l.fromInclusive < r.fromInclusive ? -1 : l.fromInclusive === r.fromInclusive ? 0 : 1);
+		const fromInclusive = mut_changes[0].fromInclusive;
+		const toExclusive = mut_changes[0].toExclusive;
+		const changeSize = (() => {
+			let c = 0;
+			mut_changes.forEach(change => { c += change.sizeDelta; })
+			return c;
+		})();
+		return {
+			affectedTextRange: new SourceRange(fromInclusive, toExclusive),
+			changeSize
+		}
+	}
+}
+
+connection.onDidChangeTextDocument(changes => {
+	const doc = knownDocs.get(changes.textDocument.uri)
 	
-	if (didForkCfls) {
-		const fsPath = URI.parse(document.uri).fsPath;
-		const targetIndex = document.offsetAt(completionParams.position);
-		const triggerCharacter = completionParams.context?.triggerCharacter ?? null;
+	if (!doc) {
+		return;
+	}
+	
+	const x = changes
+		.contentChanges
+		.filter(TextDocumentContentChangeEvent.isIncremental)
+		.map(change => contentChangeToXContentChange(doc, change));
+	const y = mergeContentChangeRange(x);
 
-		return languageService.getCompletions(fsPath, targetIndex, triggerCharacter);
+	// works in-place on `doc`
+	TextDocument.update(doc, changes.contentChanges, doc.version + 1);
+
+	try {
+		runDiagonstics(changes.textDocument.uri, doc.getText(), y  ? {sourceRange: y.affectedTextRange, changeSize: y.changeSize} : undefined);
+	}
+	catch (err) {
+		console.error("onDidChange --", err);
+	}
+})
+
+connection.onDidCloseTextDocument(v => {
+	knownDocs.delete(v.textDocument.uri);
+	connection.sendDiagnostics({ uri: v.textDocument.uri, diagnostics: [] });
+})
+
+
+connection.onCompletion((completionParams: CompletionParams): CompletionItem[] => {
+	const doc = knownDocs.get(completionParams.textDocument.uri);
+	if (!doc) {
+		return [];
+	}
+	
+	const fsPath = URI.parse(doc.uri).fsPath;
+	const targetIndex = doc.offsetAt(completionParams.position);
+	const triggerCharacter = completionParams.context?.triggerCharacter ?? null;
+
+	const items = languageTool.getCompletions(fsPath, targetIndex, triggerCharacter)?.completions
+	if (items) {
+		const posMapper = resultsAdapter.cfPositionToVsPosition(doc)
+		return items.map(item => resultsAdapter.completionItem(posMapper, item));
 	}
 	else {
 		return [];
 	}
 });
 
-/*connection.onSignatureHelp((params) : SignatureHelp => {
-	params;
-	const x : ParameterInformation[] = [];
-	x.push(ParameterInformation.create("someparam1", "1111 where does type info go"));
-	x.push(ParameterInformation.create("someparam2", "2222 where does type info go"));
-	const siginfo = SignatureInformation.create("foo", "docstring goes here\nmaybe a newline?", ...x);
-	return {
-		signatures: [siginfo],
-		activeSignature: null,
-		activeParameter: 0 // 0 indexed
-	}
-})*/
-
-// connection.onNotification("cflsp/cache-cfcs", (cfcAbsPaths: string[]) => {
-// 	const start = new Date().getTime();
-// 	let addFileTime = 0;
-// 	let i = 0;
-// 	for (const absPath of cfcAbsPaths) {
-// 		connection.console.log(`Staring ${absPath}...`);
-// 		const project = getOwningProjectFromAbsPath(path.parse(absPath).dir);
-// 		if (!project) continue;
-// 		const start = new Date().getTime();
-// 		project.addFile(absPath);
-// 		const elapsed = new Date().getTime() - start;
-// 		connection.console.log(`${absPath} (cachetime): ${elapsed}`);
-// 		addFileTime += elapsed;
-// 		connection.sendNotification("cflsp/cached-cfc"); // just saying "hey we're done with one more"
-// 	}
-// 	const elapsed = (new Date().getTime()) - start;
-// 	connection.console.info("Cached " + cfcAbsPaths.length + " CFCs in " + elapsed + "ms, time spend in addfile: " + addFileTime + "ms");
-// });
-
-// This handler resolves additional information for the item selected in
-// the completion list.
-/*connection.onCompletionResolve(
-	(item: CompletionItem): CompletionItem => {
-		if (item.data === 1) {
-			item.detail = 'TypeScript details';
-			item.documentation = 'TypeScript documentation';
-		} else if (item.data === 2) {
-			item.detail = 'JavaScript details';
-			item.documentation = 'JavaScript documentation';
-		}
-		return item;
-	}
-);*/
-
-// Make the text document manager listen on the connection
-// for open, change and close text document events
-documents.listen(connection);
-
-// Listen on the connection
 connection.listen();

@@ -2,7 +2,7 @@ import * as child_process from "child_process";
 import * as esbuild from "esbuild";
 
 interface TighterBuildOptions extends esbuild.BuildOptions {
-    entryPoints: [string], // is there a way to say here "entryPoints must be a keyof esbuild.BuildOptions"
+    entryPoints: [string], // is there a way to say here "entryPoints as a property name must be a property name on BuildOptions", e.g. "override" or etc.
     outfile: string
 }
 

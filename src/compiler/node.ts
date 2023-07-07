@@ -20,6 +20,8 @@ export const enum NodeFlags {
     docBlock     = 1 << 3,
     unreachable  = 1 << 4,
     checked      = 1 << 5,
+    cancellationOccured = 1 << 6,
+    reused = 1 << 7
 }
 
 export const enum NodeKind {
@@ -291,7 +293,7 @@ export function NodeBase<T extends NodeBase>(type: T["kind"], range: SourceRange
     result.nodeId = nextNodeId++;
     result.kind = type;
     result.parent = null;
-    result.range = range ?? null;
+    result.range = SourceRange.copy(range);
     result.typeAnnotation = null;
     result.tagOrigin = {
         startTag: null,
@@ -343,11 +345,14 @@ export function mergeRanges(...nodes : (SourceRange | Node | Node[] | undefined 
 }
 
 export const enum DiagnosticKind { error, warning }
+export const enum DiagnosticPhase { parse, bind, check }
 export interface Diagnostic {
     kind: DiagnosticKind,
+    phase: DiagnosticPhase,
     fromInclusive: number,
     toExclusive: number,
     msg: string,
+
     __debug_from_line?: number,
     __debug_from_col?: number,
     __debug_to_line?: number,
@@ -364,22 +369,16 @@ export interface SymbolResolution extends SymTabResolution {
     container: Node
 }
 
-export interface NodeSourceMap {
-    nodeId: number,
-    range: SourceRange
-}
-
 export interface SourceFile extends NodeBase {
     kind: NodeKind.sourceFile,
     absPath: string,
     cfFileType: CfFileType,
     containedScope: ScopeDisplay,
     content: Node[],
-    flatTree: NodeSourceMap[],
+    sourceOrderedTerminals: Node[],
     libRefs: Map<string, SourceFile>,
     diagnostics: Diagnostic[],
     scanner: Scanner,
-    nodeMap: Map<NodeId, Node>,
     cachedNodeTypes: Map<NodeId, Type>, // type of a particular node, exactly zero or one per node
     cachedFlowTypes: Map<FlowId, Map<SymbolId, Type>>, // types for symbols as determined at particular flow nodes, zero or more per flow node
     nodeToSymbol: Map<NodeId, SymbolResolution>,
@@ -394,11 +393,10 @@ export interface SourceFile extends NodeBase {
 export function resetSourceFileInPlace(target: SourceFile, newSource: string | Buffer) : void {
     target.containedScope = {parentContainer: null, typeinfo: typeinfo()};
     target.content = [];
-    target.flatTree = [];
+    target.sourceOrderedTerminals = [],
     // target.libRefs untouched
     target.diagnostics = [];
     target.scanner = Scanner(newSource);
-    target.nodeMap = new Map();
     target.cachedNodeTypes = new Map();
     target.cachedFlowTypes = new Map();
     target.nodeToSymbol = new Map();
@@ -416,11 +414,10 @@ export function SourceFile(absPath: string, cfFileType: CfFileType, sourceText: 
         typeinfo: typeinfo(),
     };
     sourceFile.content = [];
-    sourceFile.flatTree = [];
+    sourceFile.sourceOrderedTerminals = [];
     sourceFile.libRefs = new Map();
     sourceFile.diagnostics = [];
     sourceFile.scanner = Scanner(sourceText);
-    sourceFile.nodeMap = new Map<NodeId, Node>();
     sourceFile.cachedNodeTypes = new Map<NodeId, Type>();
     sourceFile.cachedFlowTypes = new Map<FlowId, Map<SymbolId, Type>>();
     sourceFile.nodeToSymbol = new Map<NodeId, SymbolResolution>();

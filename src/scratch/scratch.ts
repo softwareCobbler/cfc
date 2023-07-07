@@ -34,8 +34,9 @@ function projectFiddle() {
                 "someFolder": {
                     "someFile.cfc": `
                         component {
-                            some.java.like.type.name[] function foo(required bar[] baz) {}
-                            Foo[/*comments*/][][][] function bar(required Bar[][] baz) {}
+                            function foo() {
+                                
+                            }
                         }
                     `
                 },

@@ -65,9 +65,11 @@ export function activate(context: ExtensionContext) {
 			fileEvents: workspace.createFileSystemWatcher('**/.clientrc')
 		},
 		initializationOptions: {
-			libAbsPath
+			libAbsPath,
+			config: workspace.getConfiguration("cflsp")
 		}
 	};
+
 
 	// Create the language client and start the client.
 	client = new LanguageClient(

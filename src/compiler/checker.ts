@@ -1,4 +1,4 @@
-import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, UnreachableFlow, DiagnosticKind, TagAttribute, SymbolId, TypeShimKind, NonCompositeFunctionTypeAnnotation, DUMMY_CONTAINER } from "./node";
+import { Diagnostic, SourceFile, Node, NodeKind, BlockType, IndexedAccess, StatementType, CallExpression, IndexedAccessType, CallArgument, BinaryOperator, BinaryOpType, FunctionDefinition, ArrowFunctionDefinition, IndexedAccessChainElement, NodeFlags, VariableDeclaration, Identifier, Flow, isStaticallyKnownScopeName, For, ForSubType, UnaryOperator, Do, While, Ternary, StructLiteral, StructLiteralInitializerMemberSubtype, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Catch, Try, Finally, New, Switch, CfTag, SwitchCase, SwitchCaseType, Conditional, ConditionalSubtype, SymTabEntry, mergeRanges, ReturnStatement, SymbolResolution, SymbolTable, UnreachableFlow, DiagnosticKind, TagAttribute, SymbolId, TypeShimKind, NonCompositeFunctionTypeAnnotation, DUMMY_CONTAINER, DiagnosticPhase } from "./node";
 import { CfcResolution, CfcResolver, ComponentResolutionArgs, EngineSymbolResolver, LibTypeResolver, ProjectOptions } from "./project";
 import { Scanner, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, Struct, cfUnion, BuiltinType, TypeFlags, UninstantiatedArray, extractCfFunctionSignature, Type, stringifyType, cfFunctionSignatureParam, cfFunctionOverloadSet, cfTypeId, SymbolTableTypeWrapper, Cfc, Interface, createType, createLiteralType, typeFromJavaLikeTypename, structurallyCompareTypes, TypeKind, isStructLike, cfArray, cfStructLike, isStructLikeOrArray, cfGenericFunctionSignature, cfKeyof, cfTypeConstructorParam } from "./types";
@@ -164,18 +164,19 @@ export function Checker(options: ProjectOptions) {
     function issueDiagnosticAtRange(range: SourceRange, msg: string, kind = DiagnosticKind.error) : void {
         const freshDiagnostic : Diagnostic = {
             kind,
+            phase: DiagnosticPhase.check,
             fromInclusive: range.fromInclusive,
             toExclusive: range.toExclusive,
             msg: msg,
         }
 
-        const debugFrom = scanner.getAnnotatedChar(freshDiagnostic.fromInclusive);
-        const debugTo = scanner.getAnnotatedChar(freshDiagnostic.toExclusive);
-        // bump 0-offsetted info to editor-centric 1-offset
-        freshDiagnostic.__debug_from_line = debugFrom.line+1;
-        freshDiagnostic.__debug_from_col = debugFrom.col+1;
-        freshDiagnostic.__debug_to_line = debugTo.line+1;
-        freshDiagnostic.__debug_to_col = debugTo.col+1;
+        // const debugFrom = scanner.getAnnotatedChar(freshDiagnostic.fromInclusive);
+        // const debugTo = scanner.getAnnotatedChar(freshDiagnostic.toExclusive);
+        // // bump 0-offsetted info to editor-centric 1-offset
+        // freshDiagnostic.__debug_from_line = debugFrom.line+1;
+        // freshDiagnostic.__debug_from_col = debugFrom.col+1;
+        // freshDiagnostic.__debug_to_line = debugTo.line+1;
+        // freshDiagnostic.__debug_to_col = debugTo.col+1;
 
         diagnostics.push(freshDiagnostic);
     }
