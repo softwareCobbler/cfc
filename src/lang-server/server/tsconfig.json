@@ -13,7 +13,7 @@
 			"compiler": ["../../compiler"]
 		}
 	},
-	"files": ["src/server.ts", "src/vscode-adapter.ts"],
+	"files": ["src/server.ts", "src/vscode-adapter.ts", "src/vscode-direct-adapter.ts"],
 	"references": [
 		{"path": "../../services"}
 	]

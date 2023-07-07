@@ -182,7 +182,7 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
 
     const parsedSourceFile = project.getParsedSourceFile(fsPath);
     const checker = project.__unsafe_dev_getChecker();
-    const node = project.getNodeToLeftOfCursor(fsPath, targetIndex); // fixme: probably generally want "getInterestingNodeLeftOfCursor" to not grab terminals, but all the ".parent.parent..." chains would have to be fixed up
+    const node = project.getNodeToLeftOfCursor_forCompletion(fsPath, targetIndex); // fixme: probably generally want "getInterestingNodeLeftOfCursor" to not grab terminals, but all the ".parent.parent..." chains would have to be fixed up
 
     if (!parsedSourceFile || !node) return [];
 
@@ -306,12 +306,25 @@ export function getCompletions(project: Project, fsPath: string, targetIndex: nu
         }
     }
 
-    if (node.parent?.kind === NodeKind.indexedAccessChainElement) {
+    if (node.kind === NodeKind.indexedAccessChainElement || node.parent?.kind === NodeKind.indexedAccessChainElement) {
         // get the type one level before the current
-        // x.y| -- we want the type of `x` for completions, not `y`
+        // x.y|  --> for x
+        // x.|   --> for x
+        // x.y.| --> for x.y
+        const targetIndexedAccessNode = (() => {
+            if (node.kind === NodeKind.indexedAccessChainElement) {
+                return node.parent;
+            }
+            else if (node.parent?.kind === NodeKind.indexedAccessChainElement) {
+                return node.parent.parent;
+            }
+            else {
+                throw "unreachable";
+            }
+        })();
 
         // fixme: unify "type" vs. "SymbolTable" disparity, we have symbol tables pretending to be structs for typechecking purposes but is that necessary? or can everything be a struct or ... ?
-        let typeinfo : Type | SymbolTable | undefined = project.__unsafe_dev_getChecker().getCachedEvaluatedNodeType(node.parent.parent, parsedSourceFile);
+        let typeinfo : Type | SymbolTable | undefined = project.__unsafe_dev_getChecker().getCachedEvaluatedNodeType(targetIndexedAccessNode, parsedSourceFile);
         
         // the first symbol table we get is a cfStruct or null; after that, we will start getting actual symbol tables
         let parsedSourceFileIsDescendantOfTypeinfoCfc : boolean;

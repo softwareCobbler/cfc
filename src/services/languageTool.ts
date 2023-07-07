@@ -4,12 +4,11 @@
  */
 import type { IREPLACED_AT_BUILD } from "./buildShim";
 import { Project, FileSystem } from "../compiler/project"
-import { ClientAdapter } from "../services/clientAdapter";
 import { CancellationTokenConsumer } from "../compiler/cancellationToken";
 import { CflsConfig, InitArgs, SerializableCflsConfig } from "./cflsTypes";
 import * as Completions from "./completions";
 import { getAttribute, getSourceFile } from "../compiler/utils";
-import { BinaryOperator, BinaryOpType, BlockType, FunctionDefinition, NodeKind, Property, SourceFile } from "../compiler/node";
+import { BinaryOperator, BinaryOpType, BlockType, Diagnostic, FunctionDefinition, NodeKind, Property, SourceFile } from "../compiler/node";
 import { SourceRange } from "../compiler/scanner";
 import { EngineVersions } from "../compiler/engines";
 import { TypeKind } from "../compiler/types";
@@ -90,22 +89,20 @@ type Result<T> = typeof NO_DATA | typeof CANCELLED | T;
 
 type AbsPath = string;
 
-function getClientAdapter() : ClientAdapter {
-    // adapter module is expected to `export const adapter : ClientAdapter = ...`
-    return require(REPLACED_AT_BUILD.ClientAdapterModule_StaticRequirePath).adapter;
-}
+// function getClientAdapter() : ClientAdapter<any> {
+//     // adapter module is expected to `export const adapter : ClientAdapter = ...`
+//     return require(REPLACED_AT_BUILD.ClientAdapterModule_StaticRequirePath).adapter;
+// }
 
 export function LanguageTool() {
     let config! : CflsConfig;
     let workspaceProjects! : Map<AbsPath, Project>;
     let workspaceRoots! : AbsPath[];
-    let clientAdapter!: ClientAdapter;
     let cancellationToken: CancellationTokenConsumer;
 
     function init(initArgs : InitArgs) {
         workspaceProjects = new Map();
         workspaceRoots = initArgs.workspaceRoots;
-        clientAdapter = getClientAdapter();
         cancellationToken = CancellationTokenConsumer(initArgs.cancellationTokenId)
         
         reset(initArgs.config);
@@ -121,7 +118,7 @@ export function LanguageTool() {
         return undefined;
     }
 
-    function naiveGetDiagnostics(fsPath: AbsPath, freshText: string, sourceRange?: SourceRange) : Result<{fsPath: AbsPath, diagnostics: unknown[]}> {
+    function naiveGetDiagnostics(fsPath: AbsPath, freshText: string, sourceRange?: {sourceRange: SourceRange, changeSize: number}) : Result<{fsPath: AbsPath, diagnostics: Diagnostic[]}> {
         const project = getOwningProjectFromAbsPath(fsPath);
         if (!project) return NO_DATA;
 
@@ -136,11 +133,11 @@ export function LanguageTool() {
 
         return {
             fsPath,
-            diagnostics: diagnostics.map((diagnostic) => clientAdapter.diagnostic(sourceFile.scanner.getAnnotatedChar, diagnostic))
+            diagnostics
         }
     }
 
-    function getCompletions(fsPath: AbsPath, targetIndex: number, triggerCharacter: string | null) : Result<{fsPath: AbsPath, completionItems: unknown[]}> {
+    function getCompletions(fsPath: AbsPath, targetIndex: number, triggerCharacter: string | null) : Result<{fsPath: AbsPath, completions: Completions.CompletionItem[]}> {
         const project = getOwningProjectFromAbsPath(fsPath);
         if (!project) return NO_DATA;
 
@@ -155,16 +152,15 @@ export function LanguageTool() {
 
         return {
             fsPath,
-            completionItems: completions.map((completionItem) => clientAdapter.completionItem(file.scanner.getAnnotatedChar, completionItem))
+            completions
         };
     }
 
     const exactlyFirstCharRange = new SourceRange(0,0);
     type SourceLocation = {sourceFile: SourceFile, range: SourceRange};
     
-    function getDefinitionLocations(fsPath: AbsPath, targetIndex: number) : Result<unknown[]> { // fixme: this isn't cancellable, so Result<T> is unnecessary?
-        const result = __getDefinitionLocations();
-        return result?.map(location => clientAdapter.sourceLocation(location.sourceFile.scanner.getAnnotatedChar, location.sourceFile.absPath, location.range));
+    function getDefinitionLocations(fsPath: AbsPath, targetIndex: number) : { sourceFile: Readonly<SourceFile>, range: SourceRange}[] | undefined | null {
+        return __getDefinitionLocations();
 
         function __getDefinitionLocations() { // fixme: this isn't cancellable, so Result<T> is unnecessary?
             const project = getOwningProjectFromAbsPath(fsPath);
@@ -173,7 +169,7 @@ export function LanguageTool() {
             const sourceFile = project.__unsafe_dev_getFile(fsPath);
             if (!sourceFile) return undefined;
 
-            const targetNode = project.getInterestingNodeToLeftOfCursor(fsPath, targetIndex);
+            const targetNode = project.getNodeContainingIndex_forSourceLocation(fsPath, targetIndex);
             if (!targetNode) return undefined;
 
             const checker = project.__unsafe_dev_getChecker();

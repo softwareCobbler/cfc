@@ -24,9 +24,9 @@ import {
     New,
     DotAccess, BracketAccess, OptionalDotAccess, OptionalCall, IndexedAccessChainElement, OptionalBracketAccess, IndexedAccessType,
     ScriptSugaredTagCallBlock, ScriptTagCallBlock,
-    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess, DestructuredElement, DestructuredList, DestructuredRecord, DestructuredRecordElement_Bare, DestructuredRecordElement_RenamingOrNested, DestructuredElement_Rest, TypedArrayLiteral, IndexableTree, StatementType, NodeId, FunctionDefinition, DiagnosticPhase } from "./node";
+    ScriptSugaredTagCallStatement, ScriptTagCallStatement, SourceFile, Script, Tag, SpreadStructLiteralInitializerMember, StructLiteralInitializerMember, SimpleArrayLiteralInitializerMember, SpreadArrayLiteralInitializerMember, SliceExpression, SymTabEntry, pushDottedPathElement, ParamStatementWithImplicitTypeAndName, ParamStatementWithImplicitName, ParamStatement, ShorthandStructLiteralInitializerMember, DiagnosticKind, Typedef, Interfacedef, TypeShimKind, TypeAnnotation, NamedAnnotation, NonCompositeFunctionTypeAnnotation, StaticAccess, DestructuredElement, DestructuredList, DestructuredRecord, DestructuredRecordElement_Bare, DestructuredRecordElement_RenamingOrNested, DestructuredElement_Rest, TypedArrayLiteral, DiagnosticPhase } from "./node";
 import { SourceRange, Token, TokenType, ScannerMode, Scanner, TokenTypeUiString, CfFileType } from "./scanner";
-import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard, Mutable, findNodeInFlatSourceMap, findAncestor, visit } from "./utils";
+import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputableString, isSugaredTagName, isSimpleOrInterpolatedStringLiteral, getAttributeValue, stringifyDottedPath, exhaustiveCaseGuard, Mutable, visit, findNearestParentNodeKindFromTerminalHavingPosition } from "./utils";
 import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature } from "./types";
 import { Type, UninstantiatedArray, Struct, cfFunctionSignature, cfTypeId, cfUnion, BuiltinType, cfFunctionSignatureParam } from "./types";
 import { Engine } from "./engines";
@@ -112,11 +112,20 @@ interface ScannerState {
     artificialEndLimit: number | undefined;
 }
 
+export interface ReparserInitConfig {
+    sourceOrderedTerminals: Node[],
+    oldDiagnostics: Diagnostic[],
+    changeRange: {sourceRange: SourceRange, changeSize: number}
+}
+
+
 export function Parser(config: ProjectOptions) { 
     const parseTypes = config.parseTypes;
     const debug = config.debug;
     const engineVersion = config.engineVersion;
     
+    // If non-null, implies if we're performing an incremental update to the source text, and this
+    // can be used to inquire about possibly reusable nodes.
     let reparser : ReturnType<typeof Reparser> | null = null;
 
     function primePeekCacheAndLookahead() : void {
@@ -430,13 +439,13 @@ export function Parser(config: ProjectOptions) {
         };
 
         if (debug) {
-            const debugFrom = scanner.getAnnotatedChar(freshDiagnostic.fromInclusive);
-            const debugTo = scanner.getAnnotatedChar(freshDiagnostic.toExclusive);
-            // bump 0-offsetted info to editor-centric 1-offset
-            freshDiagnostic.__debug_from_line = debugFrom.line+1;
-            freshDiagnostic.__debug_from_col = debugFrom.col+1;
-            freshDiagnostic.__debug_to_line = debugTo.line+1;
-            freshDiagnostic.__debug_to_col = debugTo.col+1;
+            // const debugFrom = scanner.getAnnotatedChar(freshDiagnostic.fromInclusive);
+            // const debugTo = scanner.getAnnotatedChar(freshDiagnostic.toExclusive);
+            // // bump 0-offsetted info to editor-centric 1-offset
+            // freshDiagnostic.__debug_from_line = debugFrom.line+1;
+            // freshDiagnostic.__debug_from_col = debugFrom.col+1;
+            // freshDiagnostic.__debug_to_line = debugTo.line+1;
+            // freshDiagnostic.__debug_to_col = debugTo.col+1;
         }
 
         // this will break with current speculation logic
@@ -943,12 +952,21 @@ export function Parser(config: ProjectOptions) {
         else return null;
     }
 
-    function acquire(sourceFile_: SourceFile) {
+    function acquire(sourceFile_: SourceFile, reparseConfig?: ReparserInitConfig) {
         sourceFile = sourceFile_;
         typedefContainer = sourceFile;
         scanner = sourceFile.scanner;
         parseContext = ParseContext.none;
         diagnostics = sourceFile.diagnostics = [];
+
+        if (reparseConfig) {
+            reparser = Reparser(
+                reparseConfig.sourceOrderedTerminals,
+                reparseConfig.oldDiagnostics,
+                reparseConfig.changeRange.sourceRange,
+                reparseConfig.changeRange.changeSize
+            );
+        }
     }
 
     function release() : void {
@@ -964,9 +982,18 @@ export function Parser(config: ProjectOptions) {
         (typedefContainer as any) = undefined;
         lastDocBlock = null;
         parseErrorMsg = null;
+        reparser = null;
     }
 
-    function Reparser(oldTree: IndexableTree, reparsingThisRange_oldText: SourceRange, changeSize: number) {
+    type ReusableNode =
+        | Script.FunctionDefinition
+        | ArrowFunctionDefinition
+        | CallExpression
+
+    function Reparser(oldSourceOrderedTerminals: Node[], oldDiagnostics_: Diagnostic[], reparsingThisRange_oldText: SourceRange, changeSize: number) {
+        // this is plucked from as necessary
+        let reusableDiagnostics = [...oldDiagnostics_];
+
         // if change was "add text", so "foo(a) + x" --> "foo(abcd) + x", the newtext pos after the change needs to be shifted left
         //                               0123456789       0123456789ABC
         //                                        ^-------------------| change size of +3, delta of -3 to old node positions
@@ -975,7 +1002,8 @@ export function Parser(config: ProjectOptions) {
         //                                  0123456789ABC       0123456789       
         //                                              ^----------------| change size of -3, delta of +3 to old node positions
         const newTextScannerPosDelta = changeSize * -1;
-        function maybeGetReusableNode<T extends Node>(nodeKind: T["kind"], scannerPos_newText: number) : T | null {
+        let __debug__reused = 0;
+        function maybeGetReusableNode<T extends ReusableNode>(nodeKind: T["kind"], scannerPos_newText: number) : T | null {
             const isAfterChangeRange = scannerPos_newText >= reparsingThisRange_oldText.toExclusive
             const scannerPos_oldText = isAfterChangeRange
                 ? scannerPos_newText + newTextScannerPosDelta
@@ -987,14 +1015,17 @@ export function Parser(config: ProjectOptions) {
                 return null;
             }
 
-            const oldNode = oldTree.nodesByStartPos.get(scannerPos_oldText)?.find(node => node.kind === nodeKind) as T || null;
+            const oldNode = findNearestParentNodeKindFromTerminalHavingPosition<T>(nodeKind, oldSourceOrderedTerminals, scannerPos_oldText);// oldTree.nodesByStartPos.get(scannerPos_oldText)?.find(node => node.kind === nodeKind) as T || null;
 
             // does the discovered node NOT overlap with the reparsing range?
             // function foo() { var z = () => reparsingThis() } // can't reuse function foo()
-            if (oldNode && oldNode.range.isDisjointFrom(reparsingThisRange_oldText)) {
-                return isAfterChangeRange
+            if (oldNode && getEffectiveSourceRange(oldNode).isDisjointFromAndNotAbutting(reparsingThisRange_oldText)) {
+                __debug__reused += 1;
+                const result = isAfterChangeRange
                     ? updateRanges(oldNode, changeSize)
                     : oldNode
+                result.flags |= NodeFlags.reused;
+                return result;
             }
             else {
                 return null;
@@ -1006,7 +1037,7 @@ export function Parser(config: ProjectOptions) {
             node.range.fromInclusive += delta;
             node.range.toExclusive += delta;
 
-            visit(node, node => {
+            const visitor = (node: null | undefined | Node) => {
                 if (!node) {
                     return;
                 }
@@ -1016,17 +1047,21 @@ export function Parser(config: ProjectOptions) {
                     node.rangeWithTrivia.fromInclusive += delta;
                     node.rangeWithTrivia.toExclusive += delta;
                 }
-            })
+                visit(node, visitor);
+            }
+
+            visit(node, visitor);
+
             return node;
         }
 
         // source ranges were initially designed with diagnostics in mind, so in some cases they don't
         // contain the whitespace we need to set the scanner into the appropriate position. We have the information but it needs a little massaging
         // to bring out.
-        function getEffectiveSourceRange(node: Script.FunctionDefinition | ArrowFunctionDefinition) {
+        function getEffectiveSourceRange(node: ReusableNode) {
             switch (node.kind) {
                 case NodeKind.functionDefinition: {
-                    const from = node.range.fromInclusive
+                    const from = node. range.fromInclusive
                     const to = node.body.rightBrace?.rangeWithTrivia.toExclusive || node.range.toExclusive;
                     return new SourceRange(from, to);
                 }
@@ -1034,37 +1069,133 @@ export function Parser(config: ProjectOptions) {
                     const from = node.range.fromInclusive
                     const to = node.body.kind === NodeKind.block 
                         ? (node.body.rightBrace?.rangeWithTrivia.toExclusive ?? node.body.range.toExclusive)
-                        : node.range.toExclusive
+                        : maxExprRange(node.body)
+                    return new SourceRange(from, to);
+                }
+                case NodeKind.callExpression: {
+                    const from = node.range.fromInclusive;
+                    const to = node.rightParen.rangeWithTrivia.toExclusive;
                     return new SourceRange(from, to);
                 }
                 default: exhaustiveCaseGuard(node)
             }
+
+            // we have something like `foo(a , () => 42 + 42 , c)
+            //                                 ^^^^^^^^^^^^^
+            //                                 ^^^^^^^^^^^^^^
+            // we need to pull the full range, including trailing expression trivia
+            function maxExprRange(node: Node) {
+                let max = 0;
+
+                // almost need a reverse iterator, from right-to-left, and just pick the first (i.e. last) terminal
+                // we expect (hope!) that expressions aren't huge, and that large expressions would be brace-blocked
+                // statements instead, so this shouldn't be too onerous.
+                const visitor = (node: Node | undefined | null) => {
+                    if (!node) {
+                        return;
+                    }
+                    if (node.kind === NodeKind.terminal) {
+                        max = Math.max(max, node.rangeWithTrivia.toExclusive)
+                    }
+                    else {
+                        visit(node, visitor);
+                    }
+                }
+
+                visitor(node);
+                return max;
+            }
+        }
+
+        function commitReusableDiagnostics(node: ReusableNode) : void {
+            const reuseThese : Diagnostic[] = [];
+
+            reusableDiagnostics = reusableDiagnostics.filter(d => { // filter with side effect
+                const isAfterChangeRange = d.fromInclusive >= reparsingThisRange_oldText.toExclusive
+                const delta = isAfterChangeRange ? changeSize : 0;
+                const nodeOwnsThisDiagnostic = node.range.includes(d.fromInclusive + delta) && node.range.includes(d.toExclusive + delta);
+                if (nodeOwnsThisDiagnostic) {
+                    d.fromInclusive += delta;
+                    d.toExclusive += delta;
+                    reuseThese.push(d);
+                    return false; // drop this diagnostic, it's been reused
+                }
+                else {
+                    return true; // keep this diagnostic around in reusable diagnostics
+                }
+            })
+
+            diagnostics.push(...reuseThese);
         }
 
         return {
             maybeGetReusableNode,
-            getEffectiveSourceRange
+            getEffectiveSourceRange,
+            get __debug__reused() { return __debug__reused; },
+            commitReusableDiagnostics,
         }    
     }
-    
-    function reparse(sourceFile: SourceFile, oldTree: IndexableTree, oldNodeMap: Map<NodeId, Node>, oldParserDiagnostics: Diagnostic[], changeRange: SourceRange) {
-        {
-            const closestTerminal = findNodeInFlatSourceMap(oldTree.sourceOrderedTerminals, oldNodeMap, changeRange.fromInclusive)
-            if (closestTerminal) {
-                const root = findAncestor(closestTerminal, node => node.kind === NodeKind.statement && node.subType === StatementType.expressionWrapper)
-                if (root) {
-                    reparser = Reparser(oldTree, root.range, changeRange.size());
-                    sourceFile.diagnostics = oldParserDiagnostics.filter(diagnostic => root.range.includes(diagnostic.fromInclusive) || root.range.includes(diagnostic.toExclusive - 1))
-                }
-            }
+
+    function maybeConsumeReusableNode<T extends ReusableNode>(kind: T["kind"], restoreScannerMode: ScannerMode) : T | undefined {
+        const maybeReusableNode = reparser?.maybeGetReusableNode<T>(kind, getIndex())
+        if (maybeReusableNode) {
+            restoreScannerState({
+                artificialEndLimit: undefined,
+                index: reparser!.getEffectiveSourceRange(maybeReusableNode).toExclusive,
+                mode: restoreScannerMode
+            })
+            reparser!.commitReusableDiagnostics(maybeReusableNode);
+
+            //
+            // Parse trivia if it is available.
+            //
+            // We should attach any parsed trivia to some appropriate node, but for now we discard it.
+            //
+            // This is a kludgy solution for:
+            // function foo() {} / */
+            // ^                ^^ ^--- decl or statement expected
+            // |                ||----- decl or statement expected
+            // |----------------|------ range of function def node, including trivia (end range here is inclusive, visually)
+            //
+            // next input is "*", completing the comment block:
+            //
+            // function foo() {} /* */
+            // ^----------------^^---^
+            // we reuse foo's decl node, because the change range does not overlap. This is fine.
+            // However, foo's trivia should now include the completed comment.
+            //
+
+            parseTrivia();
+
+            return maybeReusableNode
         }
-        return void parse(sourceFile)
+        else {
+            return undefined;
+        }
+    }
+    
+    function reparse(sourceFile: SourceFile, reparseConfig : ReparserInitConfig) {
+        acquire(sourceFile, reparseConfig);
+        parseWorker();
+
+        if (reparser) {
+            console.log("Reused " + reparser.__debug__reused + " nodes");
+        }
+
+        release();
     }
 
-    // fixme: we can supply a filetype, but have to set the sourceFile with an earlier call?
     function parse(sourceFile_: SourceFile) : void {
-        acquire(sourceFile_);
+        if (reparser) {
+            throw "recursive call to parse?";
+        }
 
+        acquire(sourceFile_);
+        parseWorker();
+        release();
+    }
+
+    function parseWorker() : void {
         const cfFileType = sourceFile.cfFileType || CfFileType.cfm
 
         switch (cfFileType) {
@@ -1145,8 +1276,6 @@ export function Parser(config: ProjectOptions) {
                 break;
             }
         }
-
-        release();
     }
 
     function parseScript() : Node[] {
@@ -2906,6 +3035,11 @@ export function Parser(config: ProjectOptions) {
     }
 
     function parseCallExpression(root: Node) : CallExpression {
+        const maybeReusableNode = maybeConsumeReusableNode<CallExpression>(NodeKind.callExpression, getScannerState().mode);
+        if (maybeReusableNode) {
+            return maybeReusableNode;
+        }
+
         const leftParen = parseExpectedTerminal(TokenType.LEFT_PAREN, ParseOptions.withTrivia);
         const args = parseList(ParseContext.argOrParamList, parseArgument);
 
@@ -3471,15 +3605,9 @@ export function Parser(config: ProjectOptions) {
     }
 
     function tryParseArrowFunctionDefinition() : ArrowFunctionDefinition | null {
-        const maybeReusableNode = reparser?.maybeGetReusableNode<ArrowFunctionDefinition>(NodeKind.arrowFunctionDefinition, getIndex())
+        const maybeReusableNode = maybeConsumeReusableNode<ArrowFunctionDefinition>(NodeKind.arrowFunctionDefinition, ScannerMode.script)
         if (maybeReusableNode) {
-            reparser!.maybeGetReusableNode
-            restoreScannerState({
-                artificialEndLimit: undefined,
-                index: reparser!.getEffectiveSourceRange(maybeReusableNode).toExclusive,
-                mode: ScannerMode.script
-            })
-            return maybeReusableNode
+            return maybeReusableNode;
         }
 
         // the whole thing is speculative
@@ -3635,14 +3763,9 @@ export function Parser(config: ProjectOptions) {
     }
 
     function parseAnonymousFunctionDefinition() {
-        const maybeReusableNode = reparser?.maybeGetReusableNode<FunctionDefinition>(NodeKind.functionDefinition, getIndex())
+        const maybeReusableNode = maybeConsumeReusableNode<Script.FunctionDefinition>(NodeKind.functionDefinition, ScannerMode.script)
         if (maybeReusableNode) {
-            restoreScannerState({
-                artificialEndLimit: undefined,
-                index: maybeReusableNode.range.toExclusive,
-                mode: ScannerMode.script
-            })
-            return maybeReusableNode
+            return maybeReusableNode;
         }
 
         let accessModifier = null;
@@ -3700,15 +3823,11 @@ export function Parser(config: ProjectOptions) {
     function tryParseNamedFunctionDefinition(speculative: false, asDeclaration: boolean) : Script.FunctionDefinition;
     function tryParseNamedFunctionDefinition(speculative: true) : Script.FunctionDefinition | null;
     function tryParseNamedFunctionDefinition(speculative: boolean, asDeclaration = false) : Script.FunctionDefinition | null {
-        const maybeReusableNode = reparser?.maybeGetReusableNode<Script.FunctionDefinition>(NodeKind.functionDefinition, getIndex())
+        const maybeReusableNode = maybeConsumeReusableNode<Script.FunctionDefinition>(NodeKind.functionDefinition, ScannerMode.script);
         if (maybeReusableNode) {
-            restoreScannerState({
-                artificialEndLimit: undefined,
-                index: reparser!.getEffectiveSourceRange(maybeReusableNode).toExclusive,
-                mode: ScannerMode.script
-            })
-            return maybeReusableNode
+            return maybeReusableNode;
         }
+
         maybePushTypedefsToCurrentTypedefContainer(lastDocBlock?.typedefs);
 
         const savedLastDocBlock = lastDocBlock;

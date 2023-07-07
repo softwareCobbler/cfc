@@ -1,4 +1,4 @@
-import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, NodeId, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, UnreachableFlow, FlowType, ConditionalSubtype, SymbolTable, Property, ParamStatement, ParamStatementSubType, typeinfo, DiagnosticKind, StaticallyKnownScopeName, SwitchCaseType, DestructuredRecordElement, DestructuredElement, DestructuredRecordElementKind, DestructuredElementType, DestructuredList, DestructuredRecord, DiagnosticPhase } from "./node";
+import { Diagnostic, SymTabEntry, ArrowFunctionDefinition, BinaryOperator, Block, BlockType, CallArgument, FunctionDefinition, Node, NodeKind, Statement, StatementType, VariableDeclaration, mergeRanges, BinaryOpType, IndexedAccessType, IndexedAccess, IndexedAccessChainElement, SourceFile, CfTag, CallExpression, UnaryOperator, Conditional, ReturnStatement, BreakStatement, ContinueStatement, FunctionParameter, Switch, SwitchCase, Do, While, Ternary, For, ForSubType, StructLiteral, StructLiteralInitializerMember, ArrayLiteral, ArrayLiteralInitializerMember, Try, Catch, Finally, ImportStatement, New, SimpleStringLiteral, InterpolatedStringLiteral, Identifier, isStaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SliceExpression, NodeWithScope, Flow, freshFlow, UnreachableFlow, FlowType, ConditionalSubtype, SymbolTable, Property, ParamStatement, ParamStatementSubType, typeinfo, DiagnosticKind, StaticallyKnownScopeName, SwitchCaseType, DestructuredRecordElement, DestructuredElement, DestructuredRecordElementKind, DestructuredElementType, DestructuredList, DestructuredRecord, DiagnosticPhase, NodeFlags } from "./node";
 import { getTriviallyComputableString, visit, getAttributeValue, getContainingFunction, isInCfcPsuedoConstructor, stringifyLValue, isNamedFunctionArgumentName, isObjectLiteralPropertyName, isInScriptBlock, exhaustiveCaseGuard, getComponentAttrs, getTriviallyComputableBoolean, stringifyDottedPath, walkupScopesToResolveSymbol, findAncestor, TupleKeyedMap, isNamedFunction, isInEffectiveConstructorMethod } from "./utils";
 import { CfFileType, Scanner, SourceRange } from "./scanner";
 import { BuiltinType, Type, Interface, cfTypeId, TypeKind } from "./types";
@@ -15,7 +15,7 @@ export function Binder(options: ProjectOptions) {
     let currentContainer : NodeWithScope;
     let scanner : Scanner;
     let diagnostics: Diagnostic[];
-    let nodeMap : Map<NodeId, Node>;
+
     let diagnosticIssuanceMap! : TupleKeyedMap<[number, number, string], Diagnostic>;
     let currentFlow : Flow;
     let currentJumpTargetPredecessors : Flow[];
@@ -32,7 +32,7 @@ export function Binder(options: ProjectOptions) {
         currentContainer = sourceFile_;
         scanner = sourceFile_.scanner;
         diagnostics = sourceFile_.diagnostics;
-        nodeMap = sourceFile_.nodeMap;
+
         diagnosticIssuanceMap = TupleKeyedMap();
         currentFlow = freshFlow([], FlowType.start);
         currentJumpTargetPredecessors = [];
@@ -81,7 +81,6 @@ export function Binder(options: ProjectOptions) {
         (diagnosticIssuanceMap as any) = undefined;
         (currentFlow as any) = undefined;
         (currentJumpTargetPredecessors as any) = undefined;
-        (nodeMap as any) = undefined;
         (withPropertyAccessors as any) = undefined;
         // @useless-transient (pendingSymbolResolutionStack as any) = undefined;
     }
@@ -99,13 +98,19 @@ export function Binder(options: ProjectOptions) {
             : freshFlow([...filteredFlows], FlowType.jumpTarget);
     }
 
-    function bindNode(node: Node | null | undefined, parent: Node) {
+    function bindNode(node: Node | null | undefined, parent: Node) : void {
         if (!node) return;
 
+        //
+        // in incremental cases, clear out checker state
+        // this isn't really great, but it does support re-running checker errors.
+        //
+        node.flags &= ~(NodeFlags.checked | NodeFlags.checkerError)
+
         node.flow = currentFlow;
-        nodeMap.set(node.nodeId, node);
-        bindDirectTerminals(node);
         node.parent = parent;
+
+        bindDirectTerminals(node);
 
         switch (node.kind) {
             case NodeKind.sourceFile:
@@ -282,7 +287,6 @@ export function Binder(options: ProjectOptions) {
     function bindDirectTerminals(node: Node) {
         visit(node, function(visitedNode: Node | null | undefined) {
             if (visitedNode?.kind === NodeKind.terminal) {
-                nodeMap.set(visitedNode.nodeId, visitedNode);
                 visitedNode.parent = node;
                 bindList(visitedNode.trivia, visitedNode);
             }
@@ -1461,13 +1465,13 @@ export function Binder(options: ProjectOptions) {
         }
 
         if (debug) {
-            const debugFrom = scanner.getAnnotatedChar(freshDiagnostic.fromInclusive);
-            const debugTo = scanner.getAnnotatedChar(freshDiagnostic.toExclusive);
+            // const debugFrom = scanner.getAnnotatedChar(freshDiagnostic.fromInclusive);
+            // const debugTo = scanner.getAnnotatedChar(freshDiagnostic.toExclusive);
             // bump 0-offsetted info to editor-centric 1-offset
-            freshDiagnostic.__debug_from_line = debugFrom.line+1;
-            freshDiagnostic.__debug_from_col = debugFrom.col+1;
-            freshDiagnostic.__debug_to_line = debugTo.line+1;
-            freshDiagnostic.__debug_to_col = debugTo.col+1;
+            // freshDiagnostic.__debug_from_line = debugFrom.line+1;
+            // freshDiagnostic.__debug_from_col = debugFrom.col+1;
+            // freshDiagnostic.__debug_to_line = debugTo.line+1;
+            // freshDiagnostic.__debug_to_col = debugTo.col+1;
         }
 
         diagnosticIssuanceMap.set([fromInclusive, toExclusive, msg], freshDiagnostic);

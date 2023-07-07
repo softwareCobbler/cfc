@@ -22,7 +22,7 @@ interface EventHandlers {
     diagnostics: (fsPath: string, diagnostics: unknown[]) => void
 }
 
-export function LanguageService<T extends ClientAdapter>() {
+export function LanguageService<T extends ClientAdapter<any>>() {
     const forkInfo = {
         languageToolFilePath: path.join(__dirname, REPLACED_AT_BUILD.runtimeLanguageToolPath),
         forkArgs: REPLACED_AT_BUILD.debug
@@ -263,8 +263,4 @@ export function LanguageService<T extends ClientAdapter>() {
     }
 }
 
-class _LanguageService<T extends ClientAdapter> {
-    _LanguageService() { return LanguageService<T>(); }
-}
-
-export type LanguageService<T extends ClientAdapter> = ReturnType<_LanguageService<T>["_LanguageService"]>;
+export type LanguageService<T extends ClientAdapter</*oof*/any>> = ReturnType<typeof LanguageService<T>>

@@ -170,13 +170,13 @@ export function Checker(options: ProjectOptions) {
             msg: msg,
         }
 
-        const debugFrom = scanner.getAnnotatedChar(freshDiagnostic.fromInclusive);
-        const debugTo = scanner.getAnnotatedChar(freshDiagnostic.toExclusive);
-        // bump 0-offsetted info to editor-centric 1-offset
-        freshDiagnostic.__debug_from_line = debugFrom.line+1;
-        freshDiagnostic.__debug_from_col = debugFrom.col+1;
-        freshDiagnostic.__debug_to_line = debugTo.line+1;
-        freshDiagnostic.__debug_to_col = debugTo.col+1;
+        // const debugFrom = scanner.getAnnotatedChar(freshDiagnostic.fromInclusive);
+        // const debugTo = scanner.getAnnotatedChar(freshDiagnostic.toExclusive);
+        // // bump 0-offsetted info to editor-centric 1-offset
+        // freshDiagnostic.__debug_from_line = debugFrom.line+1;
+        // freshDiagnostic.__debug_from_col = debugFrom.col+1;
+        // freshDiagnostic.__debug_to_line = debugTo.line+1;
+        // freshDiagnostic.__debug_to_col = debugTo.col+1;
 
         diagnostics.push(freshDiagnostic);
     }

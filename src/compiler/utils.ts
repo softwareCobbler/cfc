@@ -1,6 +1,6 @@
 import * as path from "path";
 import * as fs from "fs";
-import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CallExpression, CfTag, Comment, DestructuredElementType, DestructuredRecordElementKind, DottedPath, DUMMY_CONTAINER, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, isStaticallyKnownScopeName, NamedFunctionDefinition, Node, NodeFlags, NodeId, NodeSourceMap, ParamStatementSubType, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymbolResolution, SymbolTable, SymTabEntry, SymTabResolution, TagAttribute, Terminal, TextSpan, TypeShimKind, UnaryOperatorPos, IndexableTree } from "./node";
+import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CallExpression, CfTag, Comment, DestructuredElementType, DestructuredRecordElementKind, DottedPath, DUMMY_CONTAINER, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, isStaticallyKnownScopeName, NamedFunctionDefinition, Node, NodeFlags, ParamStatementSubType, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymbolResolution, SymbolTable, SymTabEntry, SymTabResolution, TagAttribute, Terminal, TextSpan, TypeShimKind, UnaryOperatorPos } from "./node";
 import { NodeKind } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignature, isStructLike, TypeFlags } from "./types";
@@ -692,52 +692,40 @@ export function visit(node: Node | Node[], visitor: (arg: Node | undefined | nul
 
 export function exhaustiveCaseGuard(_: never) : never { throw "Non-exhaustive case or unintentional fallthrough."; }
 
-export function flattenTree(tree: Node | Node[]) : IndexableTree {
-    const result : IndexableTree = {
-        sourceOrderedTerminals: [],
-        nodesByStartPos: new Map(),
-    }
+
+export function flattenTree(tree: SourceFile) : Node[] {
+    const sourceOrderedTerminals : Node[] = []
 
     function pushNode(node: Terminal | Comment | TextSpan) {
-        if (result.sourceOrderedTerminals.length > 0) {
-            if (result.sourceOrderedTerminals[result.sourceOrderedTerminals.length-1].range.toExclusive > node.range.fromInclusive) {
+        if (sourceOrderedTerminals.length > 0) {
+            if (sourceOrderedTerminals[sourceOrderedTerminals.length-1].range.toExclusive > node.range.fromInclusive) {
                 throw "each subsequent node should start on or after the exclusive end of the previous node";
             }
         }
-        result.sourceOrderedTerminals.push({
-            nodeId: node.nodeId,
-            range: node.range
-        });
+        sourceOrderedTerminals.push(node)
     }
 
     function visitor(node: Node | undefined | null) {
-        if (node) {
-            {
-                const nodesAtThisStartPos = (result.nodesByStartPos.get(node.range.fromInclusive) ?? [])
-                nodesAtThisStartPos.push(node)
-                result.nodesByStartPos.set(node.range.fromInclusive, nodesAtThisStartPos);
-            }
-
-            // a docBlock attribute is sourced from a comment; the comments get visited and flattened, so we don't need to do the same
-            // to the attributes the doc block generates (if we did so, they would be out-of-source order, too, which would break things)
-            if (node.kind === NodeKind.tagAttribute && node.flags & NodeFlags.docBlock) {
-                return;
-            }
-            
-            if (node.kind === NodeKind.terminal || node.kind === NodeKind.comment || node.kind === NodeKind.textSpan) {
-                pushNode(node);
-            }
-
-            // we also want the trivia for a terminal, too
-            visit(node, visitor);
+        if (!node) {
+            return;
         }
+
+        // a docBlock attribute is sourced from a comment; the comments get visited and flattened, so we don't need to do the same
+        // to the attributes the doc block generates (if we did so, they would be out-of-source order, too, which would break things)
+        if (node.kind === NodeKind.tagAttribute && node.flags & NodeFlags.docBlock) {
+            return;
+        }
+
+        if (node.kind === NodeKind.terminal || node.kind === NodeKind.comment || node.kind === NodeKind.textSpan) {
+            pushNode(node);
+        }
+
+        visit(node, visitor);
     }
 
-    Array.isArray(tree)
-        ? forEachNode(tree, visitor)
-        : visit(tree, visitor);
+    visit(tree, visitor);
 
-    return result;
+    return sourceOrderedTerminals;
 }
 
 // conform to java's java.util.Arrays.binarySearch
@@ -783,7 +771,34 @@ export function binarySearch<T>(vs: T[], comparator: (v: T) => number) : number 
     return ~index;
 }
 
-export function findNodeInFlatSourceMap(flatSourceMap: NodeSourceMap[], nodeMap: ReadonlyMap<NodeId, Node>, index: number) {
+export function findNearestParentNodeKindFromTerminalHavingPosition<T extends Node>(nodeKind: T["kind"], flatSourceMap: Node[], pos: number) : T | undefined {
+    const terminal = findTerminalByExactStartPos(flatSourceMap, pos);
+    if (!terminal) {
+        return undefined;
+    }
+
+    let working : Node | null = terminal;
+    while (working && working.range.fromInclusive === pos) {
+        if (working.kind === nodeKind) {
+            return working as T;
+        }
+        working = working.parent;
+    }
+
+    return undefined;
+
+    function findTerminalByExactStartPos(flatSourceMap: Node[], pos: number) : Node | undefined {
+        const idx = binarySearch(flatSourceMap, node => node.range.fromInclusive < pos ? -1 : node.range.fromInclusive === pos ? 0 : 1)
+        if (idx >= 0) {
+            return flatSourceMap[idx];
+        }
+        else {
+            return undefined;
+        }
+    }
+}
+
+export function findNodeInFlatSourceMap_forCompletion(flatSourceMap: Node[], index: number) {
     if (flatSourceMap.length === 0) return undefined;
 
     let match = binarySearch(flatSourceMap,
@@ -794,7 +809,7 @@ export function findNodeInFlatSourceMap(flatSourceMap: NodeSourceMap[], nodeMap:
             // so cursor is right after the dot, on position 4
             // we want to say were "in" the dot
             //
-            if (v.range.fromInclusive < index && index <= v.range.toExclusive) {
+            if (v.kind !== NodeKind.comment && (v.range.fromInclusive < index && index <= v.range.toExclusive)) {
                 // match: on or in the target index
                 return 0;
             }
@@ -808,7 +823,47 @@ export function findNodeInFlatSourceMap(flatSourceMap: NodeSourceMap[], nodeMap:
 
     // if we didn't match get the closest to "leftmost" node
     match = match < 0 ? ~match : match;
-    return nodeMap.get(flatSourceMap[match].nodeId);
+    return flatSourceMap[match];
+}
+
+export function findNodeInFlatSourceMap_forSourceLocation(flatSourceMap: Node[], index: number) : Node | undefined {
+    if (flatSourceMap.length === 0) return undefined;
+
+    let match = binarySearch(flatSourceMap,
+        (v) => {
+            //
+            // check that we don't stop on "leading" trivia
+            // like
+            // `foo <whitespace-or-comment> bar`
+            // because <whitespace-or-comment>.range.toExclusive === bar.range.fromInclusive
+            // Also we want only terminals of type lexeme, e.g.
+            // "foo|()"
+            //    ^ ^ --- (fromInc=3, toExc=4)
+            //    |------ (fromInc=2, toExc=3)
+            // both "o" and "(" are good matches range-wise ("exactly at the end of, exactly at the start of")
+            // but it doesn't make sense to give source location for a non-lexeme
+            //
+            if (v.kind === NodeKind.terminal && v.token.type === TokenType.LEXEME && (index >= v.range.fromInclusive && index <= v.range.toExclusive)) {
+                // match: on or in the target index
+                // "foo +| bar + ..." --> (nil)
+                // "foo + |bar + ..." --> bar
+                // "foo + b|ar + ..." --> bar
+                // "foo + ba|r + ..." --> bar
+                // "foo + bar| + ..." --> bar
+                // "foo + bar |+ ..." --> (nil)
+                return 0;
+            }
+            else if (v.range.toExclusive <= index) { // move floor up, our target is further ahead in the input
+                return -1;
+            }
+            else { // move ceiling down, our target node is before this node
+                return 1;
+            }
+        });
+
+    // if we didn't match get the closest to "leftmost" node
+    match = match < 0 ? ~match : match;
+    return flatSourceMap[match];
 }
 
 export function isExpressionContext(node: Node | null) : boolean {

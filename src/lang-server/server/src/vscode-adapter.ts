@@ -3,12 +3,14 @@ import { Position as vsPosition, Range as vsRange, Location as vsLocation } from
 import { Diagnostic, DiagnosticKind } from "../../../compiler/node";
 import { CompletionItemKind, CompletionItem } from "../../../services/completions";
 import { SourceRange } from "../../../compiler/scanner"
-import { AnnotatedCharGetter, asClientAdapter } from "../../../services/clientAdapter";
+import { ClientAdapter, PosMapper } from "../../../services/clientAdapter";
 import { AbsPath, exhaustiveCaseGuard } from "../../../compiler/utils";
 import { URI } from "vscode-uri";
 
-function cfPositionToVsPosition(getAnnotatedChar: AnnotatedCharGetter, pos: number) : vsPosition {
-    const annotatedChar = getAnnotatedChar(pos);
+interface LineCol { line: number, col: number }
+
+function cfPositionToVsPosition(posMapper: PosMapper<LineCol>, pos: number) : vsPosition {
+    const annotatedChar = posMapper(pos);
     return {
         line: annotatedChar.line,
         character: annotatedChar.col
@@ -17,21 +19,21 @@ function cfPositionToVsPosition(getAnnotatedChar: AnnotatedCharGetter, pos: numb
 
 const nilRangeAsAnnotatedCharLike = {line: 0, col: 0};
 
-function cfRangeToVsRange(getAnnotatedChar: AnnotatedCharGetter, sourceRange: SourceRange) : vsRange {
-	const from = sourceRange.isNil() ? nilRangeAsAnnotatedCharLike : getAnnotatedChar(sourceRange.fromInclusive);
-	const to = sourceRange.isNil() ? nilRangeAsAnnotatedCharLike : getAnnotatedChar(sourceRange.toExclusive);
+function cfRangeToVsRange(posMapper: PosMapper<LineCol>, sourceRange: SourceRange) : vsRange {
+	const from = sourceRange.isNil() ? nilRangeAsAnnotatedCharLike : posMapper(sourceRange.fromInclusive);
+	const to = sourceRange.isNil() ? nilRangeAsAnnotatedCharLike : posMapper(sourceRange.toExclusive);
 	return {
 		start: {line: from.line, character: from.col},
 		end: {line: to.line, character: to.col}
 	}
 }
 
-function diagnostic(getAnnotatedChar: AnnotatedCharGetter, diagnostic: Diagnostic) : vsDiagnostic {
+function diagnostic(posMapper: PosMapper<LineCol>, diagnostic: Diagnostic) : vsDiagnostic {
     return {
         severity: diagnostic.kind === DiagnosticKind.error ? vsDiagnosticSeverity.Error : vsDiagnosticSeverity.Warning,
         range: {
-            start: cfPositionToVsPosition(getAnnotatedChar, diagnostic.fromInclusive),
-            end: cfPositionToVsPosition(getAnnotatedChar, diagnostic.toExclusive)
+            start: cfPositionToVsPosition(posMapper, diagnostic.fromInclusive),
+            end: cfPositionToVsPosition(posMapper, diagnostic.toExclusive)
         },
         message: diagnostic.msg,
         source: "cfls"
@@ -49,7 +51,7 @@ function mapCflsCompletionItemKindToVsCodeCompletionItemKind(kind: CompletionIte
 	}
 }
 
-function mapCflsCompletionToVsCodeCompletion(getAnnotatedChar: AnnotatedCharGetter, completion: CompletionItem) : vsCompletionItem {
+function mapCflsCompletionToVsCodeCompletion(posMapper: PosMapper<LineCol>, completion: CompletionItem) : vsCompletionItem {
 	const result : Partial<vsCompletionItem> = {};
 	result.label = completion.label;
 	result.kind = mapCflsCompletionItemKindToVsCodeCompletionItemKind(completion.kind);
@@ -58,23 +60,23 @@ function mapCflsCompletionToVsCodeCompletion(getAnnotatedChar: AnnotatedCharGett
 	if (completion.sortText) result.sortText = completion.sortText;
 	if (completion.textEdit) {
 		result.textEdit = {
-			insert: cfRangeToVsRange(getAnnotatedChar, completion.textEdit.range),
+			insert: cfRangeToVsRange(posMapper, completion.textEdit.range),
 			newText: completion.textEdit.newText,
-			replace: cfRangeToVsRange(getAnnotatedChar, completion.textEdit.replace),
+			replace: cfRangeToVsRange(posMapper, completion.textEdit.replace),
 		}
 	}
 	return result as vsCompletionItem;
 }
 
-function sourceLocation(getAnnotatedChar: AnnotatedCharGetter, fsPath: AbsPath, sourceRange: SourceRange) : vsLocation {
+function sourceLocation(posMapper: PosMapper<LineCol>, fsPath: AbsPath, sourceRange: SourceRange) : vsLocation {
 	return {
 		uri: URI.file(fsPath).toString(),
-		range: cfRangeToVsRange(getAnnotatedChar, sourceRange)
+		range: cfRangeToVsRange(posMapper, sourceRange)
 	}
 }
 
-export const adapter = asClientAdapter(Object.freeze({
+export const adapter = {
     diagnostic,
     completionItem: mapCflsCompletionToVsCodeCompletion,
 	sourceLocation
-}));
+} as const satisfies ClientAdapter<LineCol>

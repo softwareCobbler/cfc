@@ -9,7 +9,7 @@ import { Parser } from "./parser";
 import { CfFileType, SourceRange } from "./scanner";
 import { cfFunctionSignatureParam, Interface, Type, CfcLookup, BuiltinType, cfTypeId, cfGenericFunctionSignature, TypeConstructorParam, freshKeyof } from "./types";
 
-import { cfmOrCfc, findNodeInFlatSourceMap, flattenTree, getAttributeValue, getComponentAttrs, getComponentBlock, getTriviallyComputableString } from "./utils";
+import { cfmOrCfc, findNodeInFlatSourceMap_forCompletion, findNodeInFlatSourceMap_forSourceLocation, flattenTree, getAttributeValue, getComponentAttrs, getComponentBlock, getTriviallyComputableString } from "./utils";
 
 import { CancellationException, CancellationTokenConsumer } from "./cancellationToken";
 
@@ -301,6 +301,8 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             doParse();
             const parseElapsed = new Date().getTime() - parseStart;
 
+            console.log(`Parsed ${sourceFile.absPath} in ${parseElapsed}ms`);
+
             if (engineLib && engineLib !== sourceFile) {
                 sourceFile.libRefs.set("<<engine>>", engineLib);
             }
@@ -309,7 +311,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             binder.bind(sourceFile);
             const bindElapsed = new Date().getTime() - bindStart;
 
-            sourceFile.indexableTree = flattenTree(sourceFile);
+            sourceFile.sourceOrderedTerminals = flattenTree(sourceFile);
 
             // do before checking so resolving a self-referential cfc in the checker works
             // e.g. in foo.cfc `public foo function bar() { return this; }`
@@ -632,7 +634,7 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
     // for a file that should already be in cache;
     // if for some reason it isn't, we try to add it
     // as a dev kludge, we return parse/bind/check times; this method otherwise returns void
-    function parseBindCheck(absPath: AbsPath, newSource: string | Buffer, changeRange?: SourceRange) : DevTimingInfo {
+    function parseBindCheck(absPath: AbsPath, newSource: string | Buffer, changeRange?: {sourceRange: SourceRange, changeSize: number}) : DevTimingInfo {
         const sourceFile = getCachedFile(absPath);
         if (!sourceFile) {
             tryAddFile(absPath);
@@ -640,11 +642,10 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         }
 
         if (changeRange && !(sourceFile.flags & NodeFlags.cancellationOccured)) {
-            const oldTree = sourceFile.indexableTree
-            const oldNodeMap = sourceFile.nodeMap
+            const sourceOrderedTerminals = sourceFile.sourceOrderedTerminals
             const oldDiagnostics = sourceFile.diagnostics.filter(v => v.phase === DiagnosticPhase.parse)
             resetSourceFileInPlace(sourceFile, newSource);
-            return parseBindCheckWorker(sourceFile, () => parser.reparse(sourceFile, oldTree, oldNodeMap, oldDiagnostics, changeRange));
+            return parseBindCheckWorker(sourceFile, () => parser.reparse(sourceFile, {sourceOrderedTerminals, oldDiagnostics, changeRange}));
         }
         else {
             resetSourceFileInPlace(sourceFile, newSource);
@@ -775,28 +776,38 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         }
     }
 
-    function getNodeToLeftOfCursor(absPath: string, targetIndex: number) : Node | undefined {
-		const sourceFile = getCachedFile(absPath);
-		if (!sourceFile) return undefined;
-		return findNodeInFlatSourceMap(sourceFile.indexableTree.sourceOrderedTerminals, sourceFile.nodeMap, targetIndex);
-    }
-
     /**
      * get node to left of cursor, but return undefined on text spans and comments, and jump from the terminal node to it's parent construct
      * so instead of a terminal, return Identifier, or etc.
      */
-    function getInterestingNodeToLeftOfCursor(absPath: string, targetIndex: number) : Node | undefined {
+    function getNodeToLeftOfCursor_forCompletion(absPath: string, targetIndex: number) : Node | undefined {
 		const sourceFile = getCachedFile(absPath);
-		if (!sourceFile) return undefined;
-		const node = findNodeInFlatSourceMap(sourceFile.indexableTree.sourceOrderedTerminals, sourceFile.nodeMap, targetIndex);
+		if (!sourceFile) {
+            return undefined;
+        }
+		return findNodeInFlatSourceMap_forCompletion(sourceFile.sourceOrderedTerminals, targetIndex);
+    }
+
+    function getNodeContainingIndex_forSourceLocation(absPath: string, targetIndex: number) : Node | undefined {
+        const sourceFile = getCachedFile(absPath);
+		if (!sourceFile) {
+            return undefined;
+        }
+
+        const node = findNodeInFlatSourceMap_forSourceLocation(sourceFile.sourceOrderedTerminals, targetIndex);
+
         if (!node
             || node.kind === NodeKind.comment
             || (node.kind === NodeKind.textSpan
                 && node.parent?.kind !== NodeKind.simpleStringLiteral
-                && node.parent?.kind !== NodeKind.interpolatedStringLiteral)) return undefined;
+                && node.parent?.kind !== NodeKind.interpolatedStringLiteral)
+        ) {
+            return undefined;
+        }
         
-        // climb from terminal into production, or from textSpan into string literal
-        if (node.kind === NodeKind.terminal || node.kind === NodeKind.textSpan) return node.parent ?? undefined;
+        if (node.kind === NodeKind.terminal || node.kind === NodeKind.textSpan) {
+            return node.parent ?? undefined;
+        }
 
         return node;
     }
@@ -887,8 +898,8 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
         addEngineLib,
         parseBindCheck,
         getDiagnostics,
-        getNodeToLeftOfCursor,
-        getInterestingNodeToLeftOfCursor,
+        getNodeToLeftOfCursor_forCompletion,
+        getNodeContainingIndex_forSourceLocation,
         getParsedSourceFile: (absPath: string) => getCachedFile(absPath),
         getFileListing: () => [...files.keys()],
         __unsafe_dev_getChecker: () => checker,
