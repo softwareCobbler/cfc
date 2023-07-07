@@ -422,6 +422,7 @@ export function Scanner(source_: string | Buffer) {
     let sourceEncoding : "utf-8" | "utf-16-le" | "utf-16-be" = "utf-8";
     let hadBom = false;
 
+    // these were once "annotated" with line/col info, but that's really expensive to do
     const annotatedChars = annotate(source_);
 
     let end = annotatedChars.length;
@@ -887,7 +888,7 @@ type AnnotatedChar = number;
     }
 
     function isTagCommentClose() {
-        if (index + "--->".length >= annotatedChars.length) { // final annotated char is EOF
+        if (index + "--->".length > annotatedChars.length) {
             return false;
         }
         return annotatedChars.codePointAt(index + 0) === AsciiMap.MINUS
@@ -901,7 +902,7 @@ type AnnotatedChar = number;
      * which could reasonably be matched as [DBL_MINUS, DBL_MINUS, MINUS, RIGHT_ANGLE]
      */
     function scanToNextTagCommentToken() : void {
-        while (index < annotatedChars.length - 1) { // final annotated char is EOF
+        while (index < annotatedChars.length) {
             if (isTagCommentOpen() || isTagCommentClose()) {
                 return;
             }

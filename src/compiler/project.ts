@@ -301,8 +301,6 @@ export function Project(__const__projectRoot: string, fileSystem: FileSystem, op
             doParse();
             const parseElapsed = new Date().getTime() - parseStart;
 
-            console.log(`Parsed ${sourceFile.absPath} in ${parseElapsed}ms`);
-
             if (engineLib && engineLib !== sourceFile) {
                 sourceFile.libRefs.set("<<engine>>", engineLib);
             }

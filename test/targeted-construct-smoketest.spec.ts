@@ -2,7 +2,7 @@ import * as assert from "assert";
 
 import { Parser, Binder, CfFileType, SourceFile, NilCfm, flattenTree, NilCfc, DebugFileSystem, FileSystem, Project } from "../src/compiler";
 import { DiagnosticPhase, IndexedAccess, NodeKind, resetSourceFileInPlace } from "../src/compiler/node";
-import { findNodeInFlatSourceMap, getTriviallyComputableString } from "../src/compiler/utils";
+import { findNodeInFlatSourceMap_forCompletion, getTriviallyComputableString } from "../src/compiler/utils";
 import * as TestLoader from "./TestLoader";
 import { CompletionItem, getCompletions } from "../src/services/completions";
 import { ProjectOptions, FileSystemNode, pushFsNode } from "../src/compiler/project";
@@ -127,9 +127,8 @@ describe("general smoke test for particular constructs", () => {
         parser.parse(sourceFile);
         binder.bind(sourceFile);
         const flatSourceMap = flattenTree(sourceFile);
-        const nodeMap = sourceFile.nodeMap;
 
-        const node = findNodeInFlatSourceMap(flatSourceMap.sourceOrderedTerminals, nodeMap, completionsTestCase.index);
+        const node = findNodeInFlatSourceMap_forCompletion(flatSourceMap, completionsTestCase.index);
         assert.strictEqual(node?.kind, NodeKind.terminal, "found node is a terminal");
         assert.strictEqual(node?.parent?.kind, NodeKind.indexedAccessChainElement, "found node parent is an indexedAccessChainElement");
         assert.strictEqual(node?.parent?.parent?.kind, NodeKind.identifier, "found node parent.parent is an identifier");
@@ -240,9 +239,9 @@ describe("general smoke test for particular constructs", () => {
         parser.parse(sourceFile);
         binder.bind(sourceFile);
         const flatSourceMap = flattenTree(sourceFile);
-        const nodeMap = sourceFile.nodeMap;
+        const nodeMap = sourceFile;
 
-        const node = findNodeInFlatSourceMap(flatSourceMap.sourceOrderedTerminals, nodeMap, completionsTestCase.index);
+        const node = findNodeInFlatSourceMap_forCompletion(flatSourceMap, completionsTestCase.index);
         assert.strictEqual(node?.parent?.kind, NodeKind.dottedPath);
         assert.strictEqual(node?.parent?.parent?.kind, NodeKind.functionDefinition);
     });
@@ -1098,7 +1097,7 @@ describe("general smoke test for particular constructs", () => {
             assert.strictEqual(diagnostics.length, 0);
         }
     });
-    it.only("reparse 1", () => {
+    it.skip("reparse 1", () => {
         const HERE = "|<<<<"
         const REPLACED_WITH = "some_arg"
         // bleem()
@@ -1147,15 +1146,12 @@ describe("general smoke test for particular constructs", () => {
         const binder = Binder(commonProjectOptions)
         parser.parse(sourceFile)
         binder.bind(sourceFile)
-        sourceFile.indexableTree = flattenTree(sourceFile)
+        sourceFile.sourceOrderedTerminals = flattenTree(sourceFile)
 
-        const oldTree = sourceFile.indexableTree
-        const oldNodeMap = sourceFile.nodeMap
-        const retainedParserDiagnostics = sourceFile.diagnostics.filter(v => v.phase === DiagnosticPhase.parse)
+        const sourceOrderedTerminals = sourceFile.sourceOrderedTerminals
+        const oldDiagnostics = sourceFile.diagnostics.filter(v => v.phase === DiagnosticPhase.parse)
 
         resetSourceFileInPlace(sourceFile, text2)
-        debugger;
-        parser.reparse(sourceFile, oldTree, oldNodeMap, retainedParserDiagnostics, changeRange)
-        console.log(42);
+        parser.reparse(sourceFile, {changeRange: {sourceRange: changeRange, changeSize:REPLACED_WITH.length}, oldDiagnostics, sourceOrderedTerminals})
     })
 });

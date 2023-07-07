@@ -1177,11 +1177,6 @@ export function Parser(config: ProjectOptions) {
     function reparse(sourceFile: SourceFile, reparseConfig : ReparserInitConfig) {
         acquire(sourceFile, reparseConfig);
         parseWorker();
-
-        if (reparser) {
-            console.log("Reused " + reparser.__debug__reused + " nodes");
-        }
-
         release();
     }
 
