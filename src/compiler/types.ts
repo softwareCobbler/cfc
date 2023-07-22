@@ -1,7 +1,6 @@
 import type { ArrowFunctionDefinition, CfTag, DottedPath, FunctionDefinition, Script, SourceFile, SymbolTable, SymTabEntry, Tag, TagAttribute } from "./node";
 import { NodeKind } from "./node";
 import { exhaustiveCaseGuard, getAttributeValue, getTriviallyComputableString, Mutable } from "./utils";
-import * as path from "path"; // !! for stringifying CFC types...do we really want this dependency here?
 import { ComponentSpecifier } from "./project";
 
 let debugTypeModule = false;
@@ -947,8 +946,10 @@ export function stringifyType(type: Type) : string {
             }
             case TypeKind.boolean: return "boolean";
             case TypeKind.cfc: {
-                const baseNameNoExt = path.parse(type.cfc.absPath).base.replace(/\.cfc$/i, "");
-                return "cfc<" + baseNameNoExt + ">";
+                //const baseNameNoExt = path.parse(type.cfc.absPath).base.replace(/\.cfc$/i, "");
+                //return "cfc<" + baseNameNoExt + ">";
+                const FIXME_wantNoDepOnNodePathModule_name = type.cfc.absPath.replace(/\.cfc$/i, "");
+                return `cfc<${FIXME_wantNoDepOnNodePathModule_name}>`
             }
             case TypeKind.cfcLookup: {
                 return "cfc<" + type.cfcName + ">";

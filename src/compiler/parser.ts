@@ -30,7 +30,7 @@ import { allowTagBody, isLexemeLikeToken, requiresEndTag, getTriviallyComputable
 import { cfIndexedType, Interface, isStructLike, TypeConstructorParam, TypeConstructorInvocation, CfcLookup, createLiteralType, TypeConstructor, IndexSignature, TypeKind, isUninstantiatedArray, cfTypeConstructorParam, cfGenericFunctionSignature } from "./types";
 import { Type, UninstantiatedArray, Struct, cfFunctionSignature, cfTypeId, cfUnion, BuiltinType, cfFunctionSignatureParam } from "./types";
 import { Engine } from "./engines";
-import { ProjectOptions } from "./project";
+import type { ProjectOptions } from "./project";
 
 const enum ParseOptions {
     none     = 0,

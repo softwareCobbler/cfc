@@ -4,7 +4,7 @@
 // rebuild and then run the debugger
 import { Scanner, Parser, Binder, NilDCfm, NilCfc, NilCfm, SourceFile } from "../compiler";
 import { CfFileType } from "../compiler/scanner";
-import { binarySearch, cfmOrCfc, findNodeInFlatSourceMap, flattenTree, isExpressionContext, recursiveGetFiles } from "../compiler/utils";
+import { binarySearch, cfmOrCfc, flattenTree, isExpressionContext } from "../compiler/utils";
 import { Checker } from "../compiler/checker";
 import { DebugFileSystem, FileSystem, Project } from "../compiler/project";
 import { EngineVersions } from "../compiler/engines";
@@ -178,3 +178,15 @@ projectFiddle();
 
 xfiddle();*/
 
+export function recursiveGetFiles(root: string, pattern: RegExp) : string [] {
+	const result : string[] = [];
+	const fds = fs.readdirSync(root, {withFileTypes: true});
+	for (const fd of fds) {
+		if (fd.isDirectory()) result.push(...recursiveGetFiles(path.resolve(root, fd.name), pattern));
+		else if (pattern.test(fd.name)) {
+			const fspath = path.resolve(root, fd.name);
+			result.push(fspath);
+		}
+	}
+	return result;
+}

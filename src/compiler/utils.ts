@@ -1,5 +1,3 @@
-import * as path from "path";
-import * as fs from "fs";
 import { ArrayLiteralInitializerMemberSubtype, ArrowFunctionDefinition, Block, BlockType, CallArgument, CallExpression, CfTag, Comment, DestructuredElementType, DestructuredRecordElementKind, DottedPath, DUMMY_CONTAINER, ForSubType, FunctionDefinition, Identifier, IndexedAccess, IndexedAccessType, InterpolatedStringLiteral, isStaticallyKnownScopeName, NamedFunctionDefinition, Node, NodeFlags, ParamStatementSubType, ScopeDisplay, SimpleStringLiteral, SourceFile, StatementType, StaticallyKnownScopeName, StructLiteralInitializerMemberSubtype, SymbolResolution, SymbolTable, SymTabEntry, SymTabResolution, TagAttribute, Terminal, TextSpan, TypeShimKind, UnaryOperatorPos } from "./node";
 import { NodeKind } from "./node";
 import { Token, TokenType, CfFileType, SourceRange } from "./scanner";
@@ -1235,19 +1233,6 @@ export function getComponentAttrs(sourceFile: SourceFile) {
         return "bail"; // a component file should always be textspans/comments followed by a component block; if we don't match that pattern, we're not going to keep searching the entire file
     });
     return attrs;*/
-}
-
-export function recursiveGetFiles(root: string, pattern: RegExp) : string [] {
-	const result : string[] = [];
-	const fds = fs.readdirSync(root, {withFileTypes: true});
-	for (const fd of fds) {
-		if (fd.isDirectory()) result.push(...recursiveGetFiles(path.resolve(root, fd.name), pattern));
-		else if (pattern.test(fd.name)) {
-			const fspath = path.resolve(root, fd.name);
-			result.push(fspath);
-		}
-	}
-	return result;
 }
 
 export function isSimpleOrInterpolatedStringLiteral(node: Node | null) : node is SimpleStringLiteral | InterpolatedStringLiteral {
