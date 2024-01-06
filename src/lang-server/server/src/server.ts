@@ -222,26 +222,29 @@ function contentChangeToXContentChange(doc: TextDocument, incrementalChange: Tex
 	return {fromInclusive, toExclusive, sizeDelta}
 }
 
-function mergeContentChangeRange(mut_changes: MungedTextDocumentContentChangeEvent[]) : {affectedTextRange: SourceRange, changeSize: number} | undefined {
-	if (mut_changes.length === 0) {
+function mergeContentChangeRange(changes: readonly MungedTextDocumentContentChangeEvent[]) : {affectedTextRange: SourceRange, changeSize: number} | undefined {
+	if (changes.length === 0) {
 		return undefined;
 	}
-	else if (mut_changes.length === 1) {
-		const change = mut_changes[0];
+	else if (changes.length === 1) {
+		const change = changes[0];
 		return {
 			affectedTextRange: new SourceRange(change.fromInclusive, change.toExclusive),
 			changeSize: change.sizeDelta
 		}
 	}
 	else {
-		mut_changes.sort((l,r) => l.fromInclusive < r.fromInclusive ? -1 : l.fromInclusive === r.fromInclusive ? 0 : 1);
-		const fromInclusive = mut_changes[0].fromInclusive;
-		const toExclusive = mut_changes[0].toExclusive;
+		const fromInclusive = Math.min(...changes.map(v => v.fromInclusive));
+		const toExclusive = Math.max(...changes.map(v => v.toExclusive));
+
+		// change size is different from "affected range",
+		// ex. we changed range 100-200, by changeSize=-50, by deleting half of it
 		const changeSize = (() => {
 			let c = 0;
-			mut_changes.forEach(change => { c += change.sizeDelta; })
+			changes.forEach(change => { c += change.sizeDelta; })
 			return c;
 		})();
+
 		return {
 			affectedTextRange: new SourceRange(fromInclusive, toExclusive),
 			changeSize
