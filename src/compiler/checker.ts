@@ -803,6 +803,14 @@ export function Checker(options: ProjectOptions) {
                 // a type is a subtype of itself
                 if (l === r) return true;
 
+                if (l.kind === TypeKind.functionSignature && r === BuiltinType.anyFunction) {
+                    return true;
+                }
+
+                if (r.kind === TypeKind.functionSignature && l === BuiltinType.anyFunction) {
+                    return true;
+                }
+
                 // any is a subtype of every type; every type is a subtype of any
                 if (l === BuiltinType.any || r === BuiltinType.any) return true;
 

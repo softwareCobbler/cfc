@@ -1154,4 +1154,29 @@ describe("general smoke test for particular constructs", () => {
         resetSourceFileInPlace(sourceFile, text2)
         parser.reparse(sourceFile, {changeRange: {sourceRange: changeRange, changeSize:REPLACED_WITH.length}, oldDiagnostics, sourceOrderedTerminals})
     })
+    it("function assignability to 'any function' is not reported as an error", () => {
+        const fsRoot : FileSystemNode = {"/": {}};
+        const text = `
+            component {
+                function foo(required function f) {}
+
+                function bar() {
+                    foo(
+                        f = (a,b,c) => 42
+                    )
+                }
+            }
+        `
+
+        pushFsNode(fsRoot, "/a.cfc", text);
+
+        {
+            const dfs = DebugFileSystem(fsRoot);
+            const project = Project("/", /*filesystem*/dfs, {...commonProjectOptions, engineVersion: EngineVersions["acf.2018"]});
+            project.addFile("a.cfc");
+
+            const diagnostics = project.getDiagnostics("a.cfc");
+            assert.strictEqual(diagnostics.length, 0)
+        }
+    })
 });
